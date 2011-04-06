@@ -215,6 +215,8 @@ sub scmall {
     my $scm;
     my $upstream;
     my $line;
+    my $branch_name;
+    my $subcommand;
 
     my $path;
     my $wd_before = getcwd;
@@ -222,10 +224,44 @@ sub scmall {
     my @scm_args;
 
     my $pwd;
+    my @args;
 
     my ($repo_base, $checked_out_tree) = getrepo();
 
+    my $is_github_repo = $repo_base =~ m/(git@|git:\/\/|https:\/\/)github.com/;
+
     parsePackages;
+
+    @args = ();
+
+    if ($command =~ /^remote$/) {
+        while (@_ > 0 && $_[0] =~ /^-/) {
+            push(@args,shift);
+        }
+        if (@_ < 1) { help(); }
+        $subcommand = shift;
+        if ($subcommand ne 'add' && $subcommand ne 'rm' && $subcommand ne 'set-url') {
+            help();
+        }
+        while (@_ > 0 && $_[0] =~ /^-/) {
+            push(@args,shift);
+        }
+        if (($subcommand eq 'add' || $subcommand eq 'rm') && @_ < 1) {
+            help();
+        } elsif (@_ < 1) { # set-url
+            $branch_name = 'origin';
+        } else {
+            $branch_name = shift;
+        }
+    } elsif ($command eq 'new' || $command eq 'fetch') {
+        if (@_ < 1) {
+            $branch_name = 'origin';
+        } else {
+            $branch_name = shift;
+        }
+    }
+
+    push(@args, @_);
 
     for $line (@packages) {
 
@@ -234,6 +270,12 @@ sub scmall {
             $remotepath = $$line{"remotepath"};
             $scm        = $$line{"vcs"};
             $upstream   = $$line{"upstream"};
+
+            # We can't create directories on GitHub, so we translate
+            # "package/foo" into "package-foo".
+            if ($is_github_repo) {
+                $remotepath =~ s/\//-/;
+            }
 
             # Check the SCM is OK as early as possible
             die "Unknown SCM: $scm" if (($scm ne "darcs") and ($scm ne "git"));
@@ -247,7 +289,7 @@ sub scmall {
             }
 
             # Work out the arguments we should give to the SCM
-            if ($command =~ /^(?:w|wh|wha|what|whats|whatsn|whatsne|whatsnew)$/) {
+            if ($command =~ /^(?:w|wh|wha|what|whats|whatsn|whatsne|whatsnew|status)$/) {
                 @scm_args = (($scm eq "darcs" and "whatsnew")
                           or ($scm eq "git" and "status"));
                 
@@ -275,7 +317,7 @@ sub scmall {
                 }
                 
                 # The first time round the loop, default the get-mode
-                if (not defined($get_mode)) {
+                if ($scm eq "darcs" && not defined($get_mode)) {
                     warning("adding --partial, to override use --complete");
                     $get_mode = "--partial";
                 }
@@ -296,18 +338,25 @@ sub scmall {
                           or ($scm eq "git" and "send-email"));
                 $want_remote_repo = 1;
             }
-            elsif ($command =~ /^set-origin$/) {
-                @scm_args = ("remote", "set-url", "origin", $path);
-            }
-            elsif ($command =~ /^set-push$/) {
-                @scm_args = ("remote", "set-url", "--push", "origin", $path);
-                print "foo\n", @scm_args;
-            }
             elsif ($command =~ /^fetch$/) {
-                @scm_args = ("fetch", "origin");
+                @scm_args = ("fetch", "$branch_name");
             }
             elsif ($command =~ /^new$/) {
-                @scm_args = ("log", "origin..");
+                @scm_args = ("log", "$branch_name..");
+            }
+            elsif ($command =~ /^remote$/) {
+                if ($subcommand eq 'add') {
+                    @scm_args = ("remote", "add", $branch_name, $path);
+                } elsif ($subcommand eq 'rm') {
+                    @scm_args = ("remote", "rm", $branch_name);
+                } elsif ($subcommand eq 'set-url') {
+                    @scm_args = ("remote", "set-url", $branch_name, $path);
+                }
+            }
+            elsif ($command =~ /^grep$/) {
+              @scm_args = ("grep");
+              # Hack around 'git grep' failing if there are no matches
+              $ignore_failure = 1;
             }
             else {
                 die "Unknown command: $command";
@@ -317,20 +366,20 @@ sub scmall {
             if (repoexists ($scm, $localpath)) {
                 if ($want_remote_repo) {
                     if ($scm eq "darcs") {
-                        scm (".", $scm, @scm_args, @_, "--repodir=$localpath", $path);
+                        scm (".", $scm, @scm_args, @args, "--repodir=$localpath", $path);
                     } else {
                         # git pull doesn't like to be used with --work-dir
                         # I couldn't find an alternative to chdir() here
-                        scm ($localpath, $scm, @scm_args, @_, $path, "master");
+                        scm ($localpath, $scm, @scm_args, @args, $path, "master");
                     }
                 } else {
                     # git status *must* be used with --work-dir, if we don't chdir() to the dir
-                    scm ($localpath, $scm, @scm_args, @_);
+                    scm ($localpath, $scm, @scm_args, @args);
                 }
             }
             elsif ($local_repo_unnecessary) {
                 # Don't bother to change directory in this case
-                scm (".", $scm, @scm_args, @_);
+                scm (".", $scm, @scm_args, @args);
             }
             elsif ($tag eq "") {
                 message "== Required repo $localpath is missing! Skipping";
@@ -339,6 +388,54 @@ sub scmall {
                 message "== $localpath repo not present; skipping";
             }
     }
+}
+
+
+sub help()
+{
+        # Get the built in help
+        my $help = <<END;
+What do you want to do?
+Supported commands:
+
+ * whatsnew
+ * push
+ * pull
+ * get, with options:
+  * --<package-tag>
+  * --complete
+  * --partial
+ * fetch
+ * send
+ * new
+ * remote add <branch-name>
+ * remote rm <branch-name>
+ * remote set-url [--push] <branch-name>
+ * grep
+
+Available package-tags are:
+END
+
+        # Collect all the tags in the packages file
+        my %available_tags;
+        open IN, "< packages" or die "Can't open packages file";
+        while (<IN>) {
+            chomp;
+            if (/^([^# ]+) +(?:([^ ]+) +)?([^ ]+) +([^ ]+)/) {
+                if (defined($2) && $2 ne "-") {
+                    $available_tags{$2} = 1;
+                }
+            }
+            elsif (! /^(#.*)?$/) {
+                die "Bad line: $_";
+            }
+        }
+        close IN;
+        
+        # Show those tags and the help text
+        my @available_tags = keys %available_tags;
+        print "$help@available_tags\n";
+        exit 1;
 }
 
 sub main {
@@ -389,47 +486,7 @@ sub main {
     }
 
     if ($#_ eq -1) {
-        # Get the built in help
-        my $help = <<END;
-What do you want to do?
-Supported commands:
-
- * whatsnew
- * push
- * pull
- * get, with options:
-  * --<package-tag>
-  * --complete
-  * --partial
- * fetch
- * send
- * set-origin
- * set-push
- * new
-
-Available package-tags are:
-END
-
-        # Collect all the tags in the packages file
-        my %available_tags;
-        open IN, "< packages" or die "Can't open packages file";
-        while (<IN>) {
-            chomp;
-            if (/^([^# ]+) +(?:([^ ]+) +)?([^ ]+) +([^ ]+)/) {
-                if (defined($2) && $2 ne "-") {
-                    $available_tags{$2} = 1;
-                }
-            }
-            elsif (! /^(#.*)?$/) {
-                die "Bad line: $_";
-            }
-        }
-        close IN;
-        
-        # Show those tags and the help text
-        my @available_tags = keys %available_tags;
-        print "$help@available_tags\n";
-        exit 1;
+        help();
     }
     else {
         # Give the command and rest of the arguments to the main loop

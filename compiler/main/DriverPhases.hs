@@ -75,6 +75,7 @@ data Phase
         | Hsc   HscSource
         | Ccpp
         | Cc
+        | Cobjc
         | HCc           -- Haskellised C (as opposed to vanilla C) compilation
         | SplitMangle   -- after mangler if splitting
         | SplitAs
@@ -84,6 +85,7 @@ data Phase
         | LlvmMangle    -- Fix up TNTC by processing assembly produced by LLVM
         | CmmCpp        -- pre-process Cmm source
         | Cmm           -- parse & compile Cmm code
+        | MergeStub     -- merge in the stub object file
 
         -- The final phase is a pseudo-phase that tells the pipeline to stop.
         -- There is no runPhase case for it.
@@ -109,6 +111,7 @@ eqPhase (HsPp  _)   (HsPp  _)   = True
 eqPhase (Hsc   _)   (Hsc   _)   = True
 eqPhase Ccpp        Ccpp        = True
 eqPhase Cc          Cc          = True
+eqPhase Cobjc       Cobjc       = True
 eqPhase HCc         HCc         = True
 eqPhase SplitMangle SplitMangle = True
 eqPhase SplitAs     SplitAs     = True
@@ -118,6 +121,7 @@ eqPhase LlvmLlc	    LlvmLlc 	= True
 eqPhase LlvmMangle  LlvmMangle 	= True
 eqPhase CmmCpp      CmmCpp      = True
 eqPhase Cmm         Cmm         = True
+eqPhase MergeStub   MergeStub   = True
 eqPhase StopLn      StopLn      = True
 eqPhase _           _           = False
 
@@ -131,7 +135,7 @@ x      `happensBefore` y = after_x `eqPhase` y || after_x `happensBefore` y
           after_x = nextPhase x
 
 nextPhase :: Phase -> Phase
--- A conservative approximation the next phase, used in happensBefore
+-- A conservative approximation to the next phase, used in happensBefore
 nextPhase (Unlit sf)    = Cpp  sf
 nextPhase (Cpp   sf)    = HsPp sf
 nextPhase (HsPp  sf)    = Hsc  sf
@@ -145,12 +149,14 @@ nextPhase LlvmLlc       = LlvmMangle
 nextPhase LlvmLlc       = As
 #endif
 nextPhase LlvmMangle    = As
-nextPhase SplitAs       = StopLn
+nextPhase SplitAs       = MergeStub
 nextPhase Ccpp          = As
 nextPhase Cc            = As
+nextPhase Cobjc         = As
 nextPhase CmmCpp        = Cmm
 nextPhase Cmm           = HCc
 nextPhase HCc           = As
+nextPhase MergeStub     = StopLn
 nextPhase StopLn        = panic "nextPhase: nothing after StopLn"
 
 -- the first compilation phase for a given file is determined
@@ -167,6 +173,7 @@ startPhase "hc"       = HCc
 startPhase "c"        = Cc
 startPhase "cpp"      = Ccpp
 startPhase "C"        = Cc
+startPhase "m"        = Cobjc
 startPhase "cc"       = Ccpp
 startPhase "cxx"      = Ccpp
 startPhase "split_s"  = SplitMangle
@@ -195,6 +202,7 @@ phaseInputExt (Hsc   _)           = "hspp"      -- intermediate only
         --     output filename.  That could be fixed, but watch out.
 phaseInputExt HCc                 = "hc"
 phaseInputExt Ccpp                = "cpp"
+phaseInputExt Cobjc               = "m"
 phaseInputExt Cc                  = "c"
 phaseInputExt SplitMangle         = "split_s"   -- not really generated
 phaseInputExt As                  = "s"
@@ -204,6 +212,7 @@ phaseInputExt LlvmMangle          = "lm_s"
 phaseInputExt SplitAs             = "split_s"   -- not really generated
 phaseInputExt CmmCpp              = "cmm"
 phaseInputExt Cmm                 = "cmmcpp"
+phaseInputExt MergeStub           = "o"
 phaseInputExt StopLn              = "o"
 
 haskellish_src_suffixes, haskellish_suffixes, cish_suffixes,
@@ -212,7 +221,7 @@ haskellish_src_suffixes, haskellish_suffixes, cish_suffixes,
 haskellish_src_suffixes      = haskellish_user_src_suffixes ++
                                [ "hspp", "hscpp", "hcr", "cmm", "cmmcpp" ]
 haskellish_suffixes          = haskellish_src_suffixes ++ ["hc", "raw_s"]
-cish_suffixes                = [ "c", "cpp", "C", "cc", "cxx", "s", "S", "ll", "bc" ]
+cish_suffixes                = [ "c", "cpp", "C", "cc", "cxx", "s", "S", "ll", "bc", "m" ]
 extcoreish_suffixes          = [ "hcr" ]
 -- Will not be deleted as temp files:
 haskellish_user_src_suffixes = [ "hs", "lhs", "hs-boot", "lhs-boot" ]
