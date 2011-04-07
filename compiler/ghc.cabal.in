@@ -460,7 +460,10 @@ Library
         Util
         Supercompile.Core.Renaming
         Supercompile.Core.Syntax
+        Supercompile.Core.Tag
         Supercompile.Core.FreeVars
+        Supercompile.Evaluator.FreeVars
+        Supercompile.Evaluator.Syntax
         Supercompile.StaticFlags
         Supercompile.Utilities
         Supercompile
