@@ -513,6 +513,10 @@ ppUnless False doc = doc
 -- | Class designating that some type has an 'SDoc' representation
 class Outputable a where
 	ppr :: a -> SDoc
+	pprPrec :: Rational -> a -> SDoc
+	
+	ppr = pprPrec 0
+	pprPrec _ = ppr
 \end{code}
 
 \begin{code}

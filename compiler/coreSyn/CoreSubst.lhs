@@ -8,7 +8,7 @@ Utility functions on @Core@ syntax
 \begin{code}
 module CoreSubst (
 	-- * Main data types
-	Subst, TvSubstEnv, IdSubstEnv, InScopeSet,
+	Subst(..), TvSubstEnv, IdSubstEnv, InScopeSet,
 
         -- ** Substituting into expressions and related types
 	deShadowBinds, substSpec, substRulesForImportedIds,
