@@ -351,6 +351,7 @@ Library
         TysPrim
         TysWiredIn
         CostCentre
+        ProfInit
         SCCfinal
         RnBinds
         RnEnv

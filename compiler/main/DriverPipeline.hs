@@ -63,6 +63,7 @@ import Control.Monad
 import Data.List        ( isSuffixOf )
 import Data.Maybe
 import System.Environment
+import Data.Char
 
 -- ---------------------------------------------------------------------------
 -- Pre-process
@@ -383,7 +384,30 @@ linkingNeeded dflags linkables pkg_deps = do
         let (lib_errs,lib_times) = splitEithers e_lib_times
         if not (null lib_errs) || any (t <) lib_times
            then return True
-           else return False
+           else checkLinkInfo dflags pkg_deps exe_file
+
+-- Returns 'False' if it was, and we can avoid linking, because the
+-- previous binary was linked with "the same options".
+checkLinkInfo :: DynFlags -> [PackageId] -> FilePath -> IO Bool
+checkLinkInfo dflags pkg_deps exe_file
+ | isWindowsTarget || isDarwinTarget
+ -- ToDo: Windows and OS X do not use the ELF binary format, so
+ -- readelf does not work there.  We need to find another way to do
+ -- this.
+ = return False -- conservatively we should return True, but not
+                -- linking in this case was the behaviour for a long
+                -- time so we leave it as-is.
+ | otherwise
+ = do
+   link_info <- getLinkInfo dflags pkg_deps
+   debugTraceMsg dflags 3 $ text ("Link info: " ++ link_info)
+   m_exe_link_info <- readElfSection dflags ghcLinkInfoSectionName exe_file
+   debugTraceMsg dflags 3 $ text ("Exe link info: " ++ show m_exe_link_info)
+   return (Just link_info /= m_exe_link_info)
+
+ghcLinkInfoSectionName :: String
+ghcLinkInfoSectionName = ".debug-ghc-link-info"
+   -- if we use the ".debug" prefix, then strip will strip it by default
 
 findHSLib :: [String] -> String -> IO (Maybe FilePath)
 findHSLib dirs lib = do
@@ -1203,6 +1227,8 @@ runPhase SplitAs _input_fn dflags
                                   Just x -> x
 
         let split_s   n = split_s_prefix ++ "__" ++ show n <.> "s"
+
+            split_obj :: Int -> FilePath
             split_obj n = split_odir </>
                           takeFileName base_o ++ "__" ++ show n <.> osuf
 
@@ -1229,15 +1255,31 @@ runPhase SplitAs _input_fn dflags
 
         io $ mapM_ assemble_file [1..n]
 
-        -- If there's a stub_o file, then we make it the n+1th split object.
+        -- Note [pipeline-split-init]
+        -- If we have a stub file, it may contain constructor
+        -- functions for initialisation of this module.  We can't
+        -- simply leave the stub as a separate object file, because it
+        -- will never be linked in: nothing refers to it.  We need to
+        -- ensure that if we ever refer to the data in this module
+        -- that needs initialisation, then we also pull in the
+        -- initialisation routine.
+        --
+        -- To that end, we make a DANGEROUS ASSUMPTION here: the data
+        -- that needs to be initialised is all in the FIRST split
+        -- object.  See Note [codegen-split-init].
+
         PipeState{maybe_stub_o} <- getPipeState
-        n' <- case maybe_stub_o of
-                  Nothing     -> return n
-                  Just stub_o -> do io $ copyFile stub_o (split_obj (n+1))
-                                    return (n+1)
+        case maybe_stub_o of
+            Nothing     -> return ()
+            Just stub_o -> io $ do
+                     tmp_split_1 <- newTempName dflags osuf
+                     let split_1 = split_obj 1
+                     copyFile split_1 tmp_split_1
+                     removeFile split_1
+                     joinObjectFiles dflags [tmp_split_1, stub_o] split_1
 
         -- join them into a single .o file
-        io $ joinObjectFiles dflags (map split_obj [1..n']) output_fn
+        io $ joinObjectFiles dflags (map split_obj [1..n]) output_fn
 
         return (next_phase, output_fn)
 
@@ -1370,11 +1412,11 @@ runPhase_MoveBinary dflags input_fn
         return True
     | otherwise = return True
 
-mkExtraCObj :: DynFlags -> [String] -> IO FilePath
+mkExtraCObj :: DynFlags -> String -> IO FilePath
 mkExtraCObj dflags xs
  = do cFile <- newTempName dflags "c"
       oFile <- newTempName dflags "o"
-      writeFile cFile $ unlines xs
+      writeFile cFile xs
       let rtsDetails = getPackageDetails (pkgState dflags) rtsPackageId
           md_c_flags = machdepCCOpts dflags
       SysTools.runCc dflags
@@ -1386,19 +1428,66 @@ mkExtraCObj dflags xs
                       map Option md_c_flags)
       return oFile
 
-mkRtsOptionsLevelObj :: DynFlags -> IO [FilePath]
-mkRtsOptionsLevelObj dflags
- = do let mkRtsEnabledObj val
-              = do fn <- mkExtraCObj dflags
-                             ["#include \"Rts.h\"",
-                              "#include \"RtsOpts.h\"",
-                              "const rtsOptsEnabledEnum rtsOptsEnabled = "
-                                  ++ val ++ ";"]
-                   return [fn]
-      case rtsOptsEnabled dflags of
-          RtsOptsNone     -> mkRtsEnabledObj "rtsOptsNone"
-          RtsOptsSafeOnly -> return [] -- The default
-          RtsOptsAll      -> mkRtsEnabledObj "rtsOptsAll"
+mkExtraObjToLinkIntoBinary :: DynFlags -> [PackageId] -> IO FilePath
+mkExtraObjToLinkIntoBinary dflags dep_packages = do
+   link_info <- getLinkInfo dflags dep_packages
+   mkExtraCObj dflags (showSDoc (vcat [rts_opts_enabled,
+                                       extra_rts_opts,
+                                       link_opts link_info]))
+  where
+    mk_rts_opts_enabled val
+         = vcat [text "#include \"Rts.h\"",
+                 text "#include \"RtsOpts.h\"",
+                 text "const RtsOptsEnabledEnum rtsOptsEnabled = " <>
+                       text val <> semi ]
+
+    rts_opts_enabled = case rtsOptsEnabled dflags of
+          RtsOptsNone     -> mk_rts_opts_enabled "RtsOptsNone"
+          RtsOptsSafeOnly -> empty -- The default
+          RtsOptsAll      -> mk_rts_opts_enabled "RtsOptsAll"
+
+    extra_rts_opts = case rtsOpts dflags of
+          Nothing   -> empty
+          Just opts -> text "char *ghc_rts_opts = " <> text (show opts) <> semi
+
+    link_opts info
+      | isDarwinTarget  = empty
+      | isWindowsTarget = empty
+      | otherwise = hcat [
+          text "__asm__(\"\\t.section ", text ghcLinkInfoSectionName,
+                                    text ",\\\"\\\",@note\\n",
+                    text "\\t.ascii \\\"", info', text "\\\"\\n\");" ]
+          where
+            -- we need to escape twice: once because we're inside a C string,
+            -- and again because we're inside an asm string.
+            info' = text $ (escape.escape) info
+
+            escape :: String -> String
+            escape = concatMap (charToC.fromIntegral.ord)
+
+-- The "link info" is a string representing the parameters of the
+-- link.  We save this information in the binary, and the next time we
+-- link, if nothing else has changed, we use the link info stored in
+-- the existing binary to decide whether to re-link or not.
+getLinkInfo :: DynFlags -> [PackageId] -> IO String
+getLinkInfo dflags dep_packages = do
+   package_link_opts <- getPackageLinkOpts dflags dep_packages
+#ifdef darwin_TARGET_OS
+   pkg_frameworks <- getPackageFrameworks dflags dep_packages
+#endif
+   extra_ld_inputs <- readIORef v_Ld_inputs
+   let
+      link_info = (package_link_opts,
+#ifdef darwin_TARGET_OS
+                   pkg_frameworks,
+#endif
+                   rtsOpts dflags,
+                   rtsOptsEnabled dflags,
+                   dopt Opt_NoHsMain dflags,
+                   extra_ld_inputs,
+                   getOpts dflags opt_l)
+   --
+   return (show link_info)
 
 -- generates a Perl skript starting a parallel prg under PVM
 mk_pvm_wrapper_script :: String -> String -> String -> String
@@ -1510,15 +1599,8 @@ linkBinary dflags o_files dep_packages = do
     let no_hs_main = dopt Opt_NoHsMain dflags
     let main_lib | no_hs_main = []
                  | otherwise  = [ "-lHSrtsmain" ]
-    rtsEnabledObj <- mkRtsOptionsLevelObj dflags
-    rtsOptsObj <- case rtsOpts dflags of
-                  Just opts ->
-                      do fn <- mkExtraCObj dflags
-                                 -- We assume that the Haskell "show" does
-                                 -- the right thing here
-                                 ["char *ghc_rts_opts = " ++ show opts ++ ";"]
-                         return [fn]
-                  Nothing -> return []
+
+    extraLinkObj <- mkExtraObjToLinkIntoBinary dflags dep_packages
 
     pkg_link_opts <- getPackageLinkOpts dflags dep_packages
 
@@ -1593,8 +1675,7 @@ linkBinary dflags o_files dep_packages = do
 #endif
                       ++ pkg_lib_path_opts
                       ++ main_lib
-                      ++ rtsEnabledObj
-                      ++ rtsOptsObj
+                      ++ [extraLinkObj]
                       ++ pkg_link_opts
 #ifdef darwin_TARGET_OS
                       ++ pkg_framework_path_opts
@@ -1724,7 +1805,7 @@ linkDynLib dflags o_files dep_packages = do
     let md_c_flags = machdepCCOpts dflags
     let extra_ld_opts = getOpts dflags opt_l
 
-    rtsEnabledObj <- mkRtsOptionsLevelObj dflags
+    extraLinkObj <- mkExtraObjToLinkIntoBinary dflags dep_packages
 
 #if defined(mingw32_HOST_OS)
     -----------------------------------------------------------------------------
@@ -1753,7 +1834,7 @@ linkDynLib dflags o_files dep_packages = do
          ++ lib_path_opts
          ++ extra_ld_opts
          ++ pkg_lib_path_opts
-         ++ rtsEnabledObj
+         ++ [extraLinkObj]
          ++ pkg_link_opts
         ))
 #elif defined(darwin_TARGET_OS)
@@ -1810,7 +1891,7 @@ linkDynLib dflags o_files dep_packages = do
          ++ lib_path_opts
          ++ extra_ld_opts
          ++ pkg_lib_path_opts
-         ++ rtsEnabledObj
+         ++ [extraLinkObj]
          ++ pkg_link_opts
         ))
 #else
@@ -1845,7 +1926,7 @@ linkDynLib dflags o_files dep_packages = do
          ++ lib_path_opts
          ++ extra_ld_opts
          ++ pkg_lib_path_opts
-         ++ rtsEnabledObj
+         ++ [extraLinkObj]
          ++ pkg_link_opts
         ))
 #endif
@@ -1916,13 +1997,21 @@ joinObjectFiles dflags o_files output_fn = do
                             SysTools.Option "-nostdlib",
                             SysTools.Option "-nodefaultlibs",
                             SysTools.Option "-Wl,-r",
+                            SysTools.Option ld_build_id,
                             SysTools.Option ld_x_flag,
                             SysTools.Option "-o",
                             SysTools.FileOption "" output_fn ]
                          ++ map SysTools.Option md_c_flags
                          ++ args)
+
       ld_x_flag | null cLD_X = ""
                 | otherwise  = "-Wl,-x"
+
+      -- suppress the generation of the .note.gnu.build-id section,
+      -- which we don't need and sometimes causes ld to emit a
+      -- warning:
+      ld_build_id | cLdHasBuildId == "YES"  = "-Wl,--build-id=none"
+                  | otherwise               = ""
 
       md_c_flags = machdepCCOpts dflags
   

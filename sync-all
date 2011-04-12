@@ -296,13 +296,16 @@ sub scmall {
                 # Hack around 'darcs whatsnew' failing if there are no changes
                 $ignore_failure = 1;
             }
+            elsif ($command =~ /^commit$/) {
+                @scm_args = ("commit");
+                # git fails if there is nothing to commit, so ignore failures
+                $ignore_failure = 1;
+            }
             elsif ($command =~ /^(?:pus|push)$/) {
                 @scm_args = "push";
-                $want_remote_repo = 1;
             }
             elsif ($command =~ /^(?:pul|pull)$/) {
                 @scm_args = "pull";
-                $want_remote_repo = 1;
                 # Q: should we append the -a argument for darcs repos?
             }
             elsif ($command =~ /^(?:g|ge|get)$/) {
@@ -358,6 +361,12 @@ sub scmall {
               # Hack around 'git grep' failing if there are no matches
               $ignore_failure = 1;
             }
+            elsif ($command =~ /^reset$/) {
+                @scm_args = "reset";
+            }
+            elsif ($command =~ /^config$/) {
+                @scm_args = "config";
+            }
             else {
                 die "Unknown command: $command";
             }
@@ -399,6 +408,7 @@ What do you want to do?
 Supported commands:
 
  * whatsnew
+ * commit
  * push
  * pull
  * get, with options:
@@ -412,6 +422,8 @@ Supported commands:
  * remote rm <branch-name>
  * remote set-url [--push] <branch-name>
  * grep
+ * reset
+ * config
 
 Available package-tags are:
 END
