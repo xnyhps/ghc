@@ -137,8 +137,7 @@ data Var
 					-- Identical to the Unique in the name,
 					-- cached here for speed
 	varType       :: Kind,          -- ^ The type or kind of the 'Var' in question
-        isCoercionVar :: Bool
- }
+        isCoercionVar :: Bool }
 
   | TcTyVar { 				-- Used only during type inference
 					-- Used for kind variables during 
@@ -155,6 +154,7 @@ data Var
 	idScope    :: IdScope,
 	id_details :: IdDetails,	-- Stable, doesn't change
 	id_info    :: IdInfo }		-- Unstable, updated by simplifier
+    deriving Typeable
 
 data IdScope	-- See Note [GlobalId/LocalId]
   = GlobalId 
@@ -215,8 +215,6 @@ instance Ord Var where
     a >= b = realUnique a >=# realUnique b
     a >	 b = realUnique a >#  realUnique b
     a `compare` b = varUnique a `compare` varUnique b
-
-INSTANCE_TYPEABLE0(Var,varTc,"Var")
 
 instance Data Var where
   -- don't traverse?

@@ -781,11 +781,6 @@ updCtxt :: ([ErrCtxt] -> [ErrCtxt]) -> TcM a -> TcM a
 updCtxt upd = updLclEnv (\ env@(TcLclEnv { tcl_ctxt = ctxt }) -> 
 			   env { tcl_ctxt = upd ctxt })
 
--- Conditionally add an error context
-maybeAddErrCtxt :: Maybe Message -> TcM a -> TcM a
-maybeAddErrCtxt (Just msg) thing_inside = addErrCtxt msg thing_inside
-maybeAddErrCtxt Nothing    thing_inside = thing_inside
-
 popErrCtxt :: TcM a -> TcM a
 popErrCtxt = updCtxt (\ msgs -> case msgs of { [] -> []; (_ : ms) -> ms })
 
@@ -1152,7 +1147,7 @@ failIfM :: Message -> IfL a
 failIfM msg
   = do 	{ env <- getLclEnv
 	; let full_msg = (if_loc env <> colon) $$ nest 2 msg
-	; liftIO (printErrs (full_msg defaultErrStyle))
+	; liftIO (printErrs full_msg defaultErrStyle)
 	; failM }
 
 --------------------
@@ -1187,7 +1182,7 @@ forkM_maybe doc thing_inside
 	  	    ; return Nothing }
 	}}
   where
-    print_errs sdoc = liftIO (printErrs (sdoc defaultErrStyle))
+    print_errs sdoc = liftIO (printErrs sdoc defaultErrStyle)
 
 forkM :: SDoc -> IfL a -> IfL a
 forkM doc thing_inside

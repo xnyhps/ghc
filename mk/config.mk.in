@@ -97,6 +97,16 @@ GhcStage1HcOpts=
 GhcStage2HcOpts=-O2
 GhcStage3HcOpts=-O2
 
+# These options modify whether or not a built compiler for a bootstrap
+# stage defaults to using the new code generation path.  The new
+# code generation path is a bit slower, so for development just
+# GhcStage2DefaultNewCodegen=YES, but it's also a good idea to try
+# building all libraries and the stage2 compiler with the
+# new code generator, which involves GhcStage1DefaultNewCodegen=YES.
+GhcStage1DefaultNewCodegen=NO
+GhcStage2DefaultNewCodegen=NO
+GhcStage3DefaultNewCodegen=NO
+
 GhcDebugged=NO
 GhcDynamic=NO
 
@@ -530,18 +540,19 @@ endif
 # the flag --with-gcc=<blah> instead.  The reason is that the configure script
 # needs to know which gcc you're using in order to perform its tests.
 
-HaveGcc 	= @HaveGcc@
-UseGcc  	= YES
 WhatGccIsCalled = @WhatGccIsCalled@
 GccVersion      = @GccVersion@
-GccLT34		= @GccLT34@
-ifeq "$(strip $(HaveGcc))" "YES"
-ifneq "$(strip $(UseGcc))"  "YES"
-  CC	= cc
-else
-  CC	= $(WhatGccIsCalled)
-endif
-endif
+GccLT34         = @GccLT34@
+CC              = $(WhatGccIsCalled)
+CC_STAGE0       = @CC_STAGE0@
+CC_STAGE1       = $(CC)
+CC_STAGE2       = $(CC)
+CC_STAGE3       = $(CC)
+AS              = $(WhatGccIsCalled)
+AS_STAGE0       = @CC_STAGE0@
+AS_STAGE1       = $(AS)
+AS_STAGE2       = $(AS)
+AS_STAGE3       = $(AS)
 
 # C compiler and linker flags from configure (e.g. -m<blah> to select
 # correct C compiler backend). The stage number is the stage of GHC
@@ -591,10 +602,24 @@ DLLTOOL			= inplace/mingw/bin/dlltool.exe
 
 AR			= @ArCmd@
 AR_OPTS			= @ArArgs@
-ArSupportsInput		= @ArSupportsInput@
 ArSupportsAtFile = @ArSupportsAtFile@
-# Yuckage: for ghc/utils/parallel -- todo: nuke this dependency!!
-BASH                    = /usr/local/bin/bash
+
+AR_STAGE0 = @AR_STAGE0@
+AR_STAGE1 = $(AR)
+AR_STAGE2 = $(AR)
+AR_STAGE3 = $(AR)
+AR_OPTS_STAGE0 = @AR_OPTS_STAGE0@
+AR_OPTS_STAGE1 = $(AR_OPTS)
+AR_OPTS_STAGE2 = $(AR_OPTS)
+AR_OPTS_STAGE3 = $(AR_OPTS)
+EXTRA_AR_ARGS_STAGE0 = $(EXTRA_AR_ARGS)
+EXTRA_AR_ARGS_STAGE1 = $(EXTRA_AR_ARGS)
+EXTRA_AR_ARGS_STAGE2 = $(EXTRA_AR_ARGS)
+EXTRA_AR_ARGS_STAGE3 = $(EXTRA_AR_ARGS)
+ArSupportsAtFile_STAGE0 = @ArSupportsAtFile_STAGE0@
+ArSupportsAtFile_STAGE1 = $(ArSupportsAtFile)
+ArSupportsAtFile_STAGE2 = $(ArSupportsAtFile)
+ArSupportsAtFile_STAGE3 = $(ArSupportsAtFile)
 
 CONTEXT_DIFF		= @ContextDiffCmd@
 CP			= cp
@@ -627,7 +652,6 @@ NROFF			= nroff
 PERL 			= @PerlCmd@
 PYTHON			= @PythonCmd@
 PIC			= pic
-PREPROCESSCMD		= $(CC) -E
 RANLIB			= @RANLIB@
 SED			= @SedCmd@
 TR 			= tr
@@ -648,6 +672,10 @@ LD_X			= @LdXFlag@
 # GNU ld supports input via a linker script, which is useful to avoid
 # overflowing command-line length limits.
 LdIsGNULd		= @LdIsGNULd@
+
+# Set to YES if ld has the --build-id flag.  Sometimes we need to
+# disable it with --build-id=none.
+LdHasBuildId	        = @LdHasBuildId@
 
 # On MSYS, building with SplitObjs=YES fails with 
 #   ar: Bad file number
@@ -745,8 +773,6 @@ ALEX_VERSION		= @AlexVersion@
 # Options to pass to Happy when we're going to compile the output with GHC
 #
 SRC_ALEX_OPTS		= -g
-
-HSTAGS = @HstagsCmd@
 
 # Should we build haddock docs?
 HADDOCK_DOCS = YES

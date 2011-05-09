@@ -49,8 +49,6 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo '{-# LANGUAGE CPP #-}'                                        >> $@
 	@echo 'module Config where'                                         >> $@
 	@echo                                                               >> $@
-	@echo 'import Distribution.System'                                  >> $@
-	@echo                                                               >> $@
 	@echo '#include "ghc_boot_platform.h"'                              >> $@
 	@echo                                                               >> $@
 	@echo 'cBuildPlatformString :: String'                              >> $@
@@ -59,42 +57,6 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo 'cHostPlatformString = HostPlatform_NAME'                     >> $@
 	@echo 'cTargetPlatformString :: String'                             >> $@
 	@echo 'cTargetPlatformString = TargetPlatform_NAME'                 >> $@
-	@echo                                                               >> $@
-# Sync this with checkArch in configure.ac
-	@echo 'cTargetArch :: Arch'                                         >> $@
-	@echo '#if i386_TARGET_ARCH'                                        >> $@
-	@echo 'cTargetArch = I386'                                          >> $@
-	@echo '#elif x86_64_TARGET_ARCH'                                    >> $@
-	@echo 'cTargetArch = X86_64'                                        >> $@
-	@echo '#elif powerpc_TARGET_ARCH'                                   >> $@
-	@echo 'cTargetArch = PPC'                                           >> $@
-	@echo '#elif powerpc64_TARGET_ARCH'                                 >> $@
-	@echo 'cTargetArch = PPC64'                                         >> $@
-	@echo '#elif sparc_TARGET_ARCH || sparc64_TARGET_ARCH'              >> $@
-	@echo 'cTargetArch = Sparc'                                         >> $@
-	@echo '#elif arm_TARGET_ARCH'                                       >> $@
-	@echo 'cTargetArch = Arm'                                           >> $@
-	@echo '#elif mips_TARGET_ARCH || mipseb_TARGET_ARCH || mipsel_TARGET_ARCH' >> $@
-	@echo 'cTargetArch = Mips'                                          >> $@
-	@echo '#elif 0'                                                     >> $@
-	@echo 'cTargetArch = SH'                                            >> $@
-	@echo '#elif ia64_TARGET_ARCH'                                      >> $@
-	@echo 'cTargetArch = IA64'                                          >> $@
-	@echo '#elif s390_TARGET_ARCH'                                      >> $@
-	@echo 'cTargetArch = S390'                                          >> $@
-	@echo '#elif alpha_TARGET_ARCH'                                     >> $@
-	@echo 'cTargetArch = Alpha'                                         >> $@
-	@echo '#elif hppa_TARGET_ARCH || hppa1_1_TARGET_ARCH'               >> $@
-	@echo 'cTargetArch = Hppa'                                          >> $@
-	@echo '#elif rs6000_TARGET_ARCH'                                    >> $@
-	@echo 'cTargetArch = Rs6000'                                        >> $@
-	@echo '#elif m68k_TARGET_ARCH'                                      >> $@
-	@echo 'cTargetArch = M68k'                                          >> $@
-	@echo '#elif vax_TARGET_ARCH'                                       >> $@
-	@echo 'cTargetArch = Vax'                                           >> $@
-	@echo '#else'                                                       >> $@
-	@echo '#error Unknown target arch'                                  >> $@
-	@echo '#endif'                                                      >> $@
 	@echo                                                               >> $@
 	@echo 'cProjectName          :: String'                             >> $@
 	@echo 'cProjectName          = "$(ProjectName)"'                    >> $@
@@ -108,8 +70,6 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo 'cBooterVersion        = "$(GhcVersion)"'                     >> $@
 	@echo 'cStage                :: String'                             >> $@
 	@echo 'cStage                = show (STAGE :: Int)'                 >> $@
-	@echo 'cCcOpts               :: [String]'                           >> $@
-	@echo 'cCcOpts               = words "$(CONF_CC_OPTS_STAGE$*)"'     >> $@
 	@echo 'cGccLinkerOpts        :: [String]'                           >> $@
 	@echo 'cGccLinkerOpts        = words "$(CONF_GCC_LINKER_OPTS_STAGE$*)"' >> $@
 	@echo 'cLdLinkerOpts         :: [String]'                           >> $@
@@ -134,12 +94,12 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo 'cLeadingUnderscore    = "$(LeadingUnderscore)"'              >> $@
 	@echo 'cRAWCPP_FLAGS         :: String'                             >> $@
 	@echo 'cRAWCPP_FLAGS         = "$(RAWCPP_FLAGS)"'                   >> $@
-	@echo 'cGCC                  :: String'                             >> $@
-	@echo 'cGCC                  = "$(WhatGccIsCalled)"'                >> $@
 	@echo 'cMKDLL                :: String'                             >> $@
 	@echo 'cMKDLL                = "$(BLD_DLL)"'                        >> $@
 	@echo 'cLdIsGNULd            :: String'                             >> $@
 	@echo 'cLdIsGNULd            = "$(LdIsGNULd)"'                      >> $@
+	@echo 'cLdHasBuildId         :: String'                             >> $@
+	@echo 'cLdHasBuildId         = "$(LdHasBuildId)"'                   >> $@
 	@echo 'cLD_X                 :: String'                             >> $@
 	@echo 'cLD_X                 = "$(LD_X)"'                           >> $@
 	@echo 'cGHC_DRIVER_DIR       :: String'                             >> $@
@@ -160,8 +120,6 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo 'cGHC_SYSMAN_PGM       = "$(GHC_SYSMAN)"'                     >> $@
 	@echo 'cGHC_SYSMAN_DIR       :: String'                             >> $@
 	@echo 'cGHC_SYSMAN_DIR       = "$(GHC_SYSMAN_DIR)"'                 >> $@
-	@echo 'cGHC_PERL             :: String'                             >> $@
-	@echo 'cGHC_PERL             = "$(GHC_PERL)"'                       >> $@
 	@echo 'cDEFAULT_TMPDIR       :: String'                             >> $@
 	@echo 'cDEFAULT_TMPDIR       = "$(DEFAULT_TMPDIR)"'                 >> $@
 	@echo 'cRelocatableBuild     :: Bool'                               >> $@
@@ -375,12 +333,6 @@ endif
 
 endif
 
-ifeq "$(GhcWithNativeCodeGen)" "NO"
-# XXX This should logically be a CPP option, but there doesn't seem to
-# be a flag for that
-compiler_CONFIGURE_OPTS += --ghc-option=-DOMIT_NATIVE_CODEGEN
-endif
-
 ifeq "$(TargetOS_CPP)" "openbsd"
 compiler_CONFIGURE_OPTS += --ld-options=-E
 endif
@@ -490,6 +442,18 @@ compiler_stage3_CONFIGURE_OPTS += --disable-library-for-ghci
 compiler_stage1_HC_OPTS += $(GhcStage1HcOpts)
 compiler_stage2_HC_OPTS += $(GhcStage2HcOpts)
 compiler_stage3_HC_OPTS += $(GhcStage3HcOpts)
+
+ifeq "$(GhcStage1DefaultNewCodegen)" "YES"
+compiler_stage1_HC_OPTS += -DGHC_DEFAULT_NEW_CODEGEN
+endif
+
+ifeq "$(GhcStage2DefaultNewCodegen)" "YES"
+compiler_stage2_HC_OPTS += -DGHC_DEFAULT_NEW_CODEGEN
+endif
+
+ifeq "$(GhcStage3DefaultNewCodegen)" "YES"
+compiler_stage3_HC_OPTS += -DGHC_DEFAULT_NEW_CODEGEN
+endif
 
 ifneq "$(BINDIST)" "YES"
 
