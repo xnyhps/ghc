@@ -59,6 +59,7 @@ lookupVarSet	:: VarSet -> Var -> Maybe Var
 			-- Returns the set element, which may be
 			-- (==) to the argument, but not the same as
 mapVarSet 	:: (Var -> Var) -> VarSet -> VarSet
+concatMapVarSet :: (Var -> VarSet) -> VarSet -> VarSet
 sizeVarSet	:: VarSet -> Int
 filterVarSet	:: (Var -> Bool) -> VarSet -> VarSet
 extendVarSet_C  :: (Var->Var->Var) -> VarSet -> Var -> VarSet
@@ -91,6 +92,7 @@ mkVarSet	= mkUniqSet
 foldVarSet	= foldUniqSet
 lookupVarSet	= lookupUniqSet
 mapVarSet	= mapUniqSet
+concatMapVarSet = concatMapUniqSet
 sizeVarSet	= sizeUniqSet
 filterVarSet	= filterUniqSet
 extendVarSet_C = addOneToUniqSet_C
