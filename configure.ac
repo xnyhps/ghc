@@ -132,10 +132,15 @@ if test "$WithGhc" != ""; then
   GhcCanonVersion="$GhcMajVersion$GhcMinVersion2"
   if test $GhcCanonVersion -ge 613; then ghc_ge_613=YES; else ghc_ge_613=NO; fi
   AC_SUBST(ghc_ge_613)dnl
+
+  BOOTSTRAPPING_GHC_INFO_FIELD([CC_STAGE0],[C compiler command],['$(CC)'])
+  BOOTSTRAPPING_GHC_INFO_FIELD([AR_STAGE0],[ar command],['$(AR)'])
+  BOOTSTRAPPING_GHC_INFO_FIELD([AR_OPTS_STAGE0],[ar flags],['$(AR_OPTS)'])
+  BOOTSTRAPPING_GHC_INFO_FIELD([ArSupportsAtFile_STAGE0],[ar supports at file],['$(ArSupportsAtFile)'])
 fi
 
 dnl ** Must have GHC to build GHC, unless --enable-hc-boot is on
-if test "$BootingFromHc" = "NO" -a -d "$srcdir/compiler"; then
+if test "$BootingFromHc" = "NO"; then
   if test "$WithGhc" = ""; then
      AC_MSG_ERROR([GHC is required unless bootstrapping from .hc files.])
   fi
@@ -260,6 +265,7 @@ checkVendor() {
     esac
 }
 
+# Sync this with cTargetOS in compiler/ghc.mk
 checkOS() {
     case $1 in
     linux|freebsd|netbsd|openbsd|dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|solaris2|cygwin32|mingw32|darwin|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
@@ -303,12 +309,15 @@ checkOS "$TargetOS"
 
 # Verify that the installed (bootstrap) GHC is capable of generating
 # code for the requested build platform.
-if test "$BuildPlatform" != "$bootstrap_target"
+if test "$BootingFromHc" = "NO"
 then
-    echo "This GHC (${WithGhc}) does not generate code for the build platform"
-    echo "   GHC target platform    : $bootstrap_target"
-    echo "   Desired build platform : $BuildPlatform"
-    exit 1
+    if test "$BuildPlatform" != "$bootstrap_target"
+    then
+        echo "This GHC (${WithGhc}) does not generate code for the build platform"
+        echo "   GHC target platform    : $bootstrap_target"
+        echo "   Desired build platform : $BuildPlatform"
+        exit 1
+    fi
 fi
 
 echo "GHC build  : $BuildPlatform"
@@ -537,7 +546,7 @@ dnl ** look for GCC and find out which version
 dnl     Figure out which C compiler to use.  Gcc is preferred.
 dnl     If gcc, make sure it's at least 2.1
 dnl
-FP_HAVE_GCC
+FP_GCC_VERSION
 
 FPTOOLS_SET_C_LD_FLAGS([target],[CFLAGS],[LDFLAGS],[IGNORE_LINKER_LD_FLAGS],[CPPFLAGS])
 FPTOOLS_SET_C_LD_FLAGS([build],[CONF_CC_OPTS_STAGE0],[CONF_GCC_LINKER_OPTS_STAGE0],[CONF_LD_LINKER_OPTS_STAGE0],[CONF_CPP_OPTS_STAGE0])
@@ -578,7 +587,6 @@ AC_DEFINE([HAVE_BIN_SH], [1], [Define to 1 if you have /bin/sh.])
 dnl ** how to invoke `ar' and `ranlib'
 FP_PROG_AR_SUPPORTS_ATFILE
 FP_PROG_AR_NEEDS_RANLIB
-FP_PROG_AR_SUPPORTS_INPUT
 
 dnl ** Check to see whether ln -s works
 AC_PROG_LN_S
@@ -623,8 +631,6 @@ dnl ** check for DocBook toolchain
 FP_CHECK_DOCBOOK_DTD
 FP_DOCBOOK_XSL
 FP_PROG_DBLATEX
-
-FP_PROG_HSTAGS
 
 dnl ** check for ghc-pkg command
 FP_PROG_GHC_PKG
@@ -931,7 +937,7 @@ if grep '	' compiler/ghc.cabal.in 2>&1 >/dev/null; then
    AC_MSG_ERROR([compiler/ghc.cabal.in contains tab characters; please remove them])
 fi
 
-AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal ghc.spec extra-gcc-opts docs/users_guide/ug-book.xml docs/users_guide/ug-ent.xml docs/index.html libraries/prologue.txt distrib/ghc.iss distrib/configure.ac])
+AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal ghc.spec settings docs/users_guide/ug-book.xml docs/users_guide/ug-ent.xml docs/index.html libraries/prologue.txt distrib/ghc.iss distrib/configure.ac])
 AC_CONFIG_COMMANDS([mk/stamp-h],[echo timestamp > mk/stamp-h])
 AC_OUTPUT
 

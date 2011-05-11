@@ -42,7 +42,7 @@ module TcRnTypes(
 	CtOrigin(..), EqOrigin(..), 
         WantedLoc, GivenLoc, pushErrCtxt,
 
-        SkolemInfo(..),
+	SkolemInfo(..),
 
         CtFlavor(..), pprFlavorArising, isWanted, isGiven, isDerived,
         FlavoredEvVar,
@@ -62,6 +62,7 @@ module TcRnTypes(
 import HsSyn
 import HscTypes
 import Type
+import Id	( evVarPred )
 import Class    ( Class )
 import DataCon  ( DataCon, dataConUserType )
 import TcType
@@ -324,6 +325,7 @@ data IfLclEnv
 		-- plus which bit is currently being examined
 
 	if_tv_env  :: UniqFM TyVar,	-- Nested tyvar bindings
+		      	     		-- (and coercions)
 	if_id_env  :: UniqFM Id		-- Nested id binding
     }
 \end{code}
@@ -639,7 +641,7 @@ plusImportAvails
   (ImportAvails { imp_mods = mods2,
 		  imp_dep_mods = dmods2, imp_dep_pkgs = dpkgs2,
                   imp_orphs = orphs2, imp_finsts = finsts2 })
-  = ImportAvails { imp_mods     = plusModuleEnv_C (++) mods1 mods2,	
+  = ImportAvails { imp_mods     = plusModuleEnv_C (++) mods1 mods2,
 		   imp_dep_mods = plusUFM_C plus_mod_dep dmods1 dmods2,	
 		   imp_dep_pkgs = dpkgs1 `unionLists` dpkgs2,
 		   imp_orphs    = orphs1 `unionLists` orphs2,
@@ -674,7 +676,6 @@ instance Outputable WhereFrom where
 %************************************************************************
 %*									*
 		Wanted constraints
-
      These are forced to be in TcRnTypes because
      	   TcLclEnv mentions WantedConstraints
 	   WantedConstraint mentions CtLoc
@@ -901,7 +902,7 @@ pprEvVarTheta :: [EvVar] -> SDoc
 pprEvVarTheta ev_vars = pprTheta (map evVarPred ev_vars)
                               
 pprEvVarWithType :: EvVar -> SDoc
-pprEvVarWithType v = ppr v <+> dcolon <+> pprPred (evVarPred v)
+pprEvVarWithType v = ppr v <+> dcolon <+> pprPredTy (evVarPred v)
 
 pprWantedsWithLocs :: WantedConstraints -> SDoc
 pprWantedsWithLocs wcs
@@ -1038,9 +1039,6 @@ data SkolemInfo
                         -- polymorphic Ids, and are now checking that their RHS
                         -- constraints are satisfied.
 
-  | RuntimeUnkSkol      -- a type variable used to represent an unknown
-                        -- runtime type (used in the GHCi debugger)
-
   | BracketSkol         -- Template Haskell bracket
 
   | UnkSkol             -- Unhelpful info (until I improve it)
@@ -1075,8 +1073,7 @@ pprSkolInfo (InferSkol ids) = sep [ ptext (sLit "the inferred type of")
 -- UnkSkol
 -- For type variables the others are dealt with by pprSkolTvBinding.  
 -- For Insts, these cases should not happen
-pprSkolInfo UnkSkol        = WARN( True, text "pprSkolInfo: UnkSkol" ) ptext (sLit "UnkSkol")
-pprSkolInfo RuntimeUnkSkol = WARN( True, text "pprSkolInfo: RuntimeUnkSkol" ) ptext (sLit "RuntimeUnkSkol")
+pprSkolInfo UnkSkol = WARN( True, text "pprSkolInfo: UnkSkol" ) ptext (sLit "UnkSkol")
 \end{code}
 
 
@@ -1116,6 +1113,7 @@ data CtOrigin
   | StandAloneDerivOrigin -- Typechecking stand-alone deriving
   | DefaultOrigin	-- Typechecking a default decl
   | DoOrigin		-- Arising from a do expression
+  | MCompOrigin         -- Arising from a monad comprehension
   | IfOrigin            -- Arising from an if statement
   | ProcOrigin		-- Arising from a proc expression
   | AnnOrigin           -- An annotation
@@ -1151,6 +1149,7 @@ pprO DerivOrigin	   = ptext (sLit "the 'deriving' clause of a data type declarat
 pprO StandAloneDerivOrigin = ptext (sLit "a 'deriving' declaration")
 pprO DefaultOrigin	   = ptext (sLit "a 'default' declaration")
 pprO DoOrigin	           = ptext (sLit "a do statement")
+pprO MCompOrigin           = ptext (sLit "a statement in a monad comprehension")
 pprO ProcOrigin	           = ptext (sLit "a proc expression")
 pprO (TypeEqOrigin eq)     = ptext (sLit "an equality") <+> ppr eq
 pprO AnnOrigin             = ptext (sLit "an annotation")

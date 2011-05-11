@@ -171,7 +171,7 @@ module GHC (
 	pprParendType, pprTypeApp, 
 	Kind,
 	PredType,
-	ThetaType, pprForAll, pprThetaArrow,
+	ThetaType, pprForAll, pprThetaArrow, pprThetaArrowTy,
 
 	-- ** Entities
 	TyThing(..), 
@@ -258,7 +258,6 @@ import Type
 import Coercion		( synTyConResKind )
 import TcType		hiding( typeKind )
 import Id
-import Var
 import TysPrim		( alphaTyVars )
 import TyCon
 import Class
@@ -390,7 +389,7 @@ runGhc :: Maybe FilePath  -- ^ See argument to 'initGhcMonad'.
        -> Ghc a           -- ^ The action to perform.
        -> IO a
 runGhc mb_top_dir ghc = do
-  ref <- newIORef undefined
+  ref <- newIORef (panic "empty session")
   let session = Session ref
   flip unGhc session $ do
     initGhcMonad mb_top_dir
@@ -408,7 +407,7 @@ runGhcT :: (ExceptionMonad m, Functor m, MonadIO m) =>
         -> GhcT m a        -- ^ The action to perform.
         -> m a
 runGhcT mb_top_dir ghct = do
-  ref <- liftIO $ newIORef undefined
+  ref <- liftIO $ newIORef (panic "empty session")
   let session = Session ref
   flip unGhcT session $ do
     initGhcMonad mb_top_dir
@@ -433,8 +432,8 @@ initGhcMonad mb_top_dir = do
 
   liftIO $ StaticFlags.initStaticOpts
 
-  dflags0 <- liftIO $ initDynFlags defaultDynFlags
-  dflags <- liftIO $ initSysTools mb_top_dir dflags0
+  mySettings <- liftIO $ initSysTools mb_top_dir
+  dflags <- liftIO $ initDynFlags (defaultDynFlags mySettings)
   env <- liftIO $ newHscEnv dflags
   setSession env
 

@@ -24,7 +24,7 @@ module HsPat (
 
         isBangHsBind, isLiftedPatBind,
         isBangLPat, hsPatNeedsParens,
-	isIrrefutableHsPat,
+        isIrrefutableHsPat,
 
 	pprParendLPat
     ) where
@@ -65,7 +65,7 @@ data Pat id
 	-- support hsPatType :: Pat Id -> Type
 
   | VarPat	id			-- Variable
-  | LazyPat	(LPat id)		-- Lazy pattern
+  | LazyPat     (LPat id)               -- Lazy pattern
   | AsPat	(Located id) (LPat id)  -- As pattern
   | ParPat      (LPat id)		-- Parenthesised pattern
   | BangPat	(LPat id)		-- Bang pattern
@@ -122,7 +122,9 @@ data Pat id
   | LitPat	    HsLit		-- Used for *non-overloaded* literal patterns:
 					-- Int#, Char#, Int, Char, String, etc.
 
-  | NPat	    (HsOverLit id)		-- ALWAYS positive
+  | NPat		-- Used for all overloaded literals, 
+    			-- including overloaded strings with -XOverloadedStrings
+                    (HsOverLit id)		-- ALWAYS positive
 		    (Maybe (SyntaxExpr id))	-- Just (Name of 'negate') for negative
 						-- patterns, Nothing otherwise
 		    (SyntaxExpr id)		-- Equality checker, of type t->t->Bool
