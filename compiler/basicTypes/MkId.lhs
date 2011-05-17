@@ -242,7 +242,7 @@ mkDataConIds wrap_name wkr_name data_con
     wkr_arity = dataConRepArity data_con
     wkr_info  = noCafIdInfo
                 `setArityInfo`       wkr_arity
-                `setStrictnessInfo`  Just wkr_sig
+                `setStrictnessInfo`  wkr_sig
                 `setUnfoldingInfo`   evaldUnfolding  -- Record that it's evaluated,
                                                         -- even if arity = 0
 
@@ -264,10 +264,9 @@ mkDataConIds wrap_name wkr_name data_con
         -- but that's fine... dataConRepStrictness comes from the data con
         -- not from the worker Id.
 
-    cpr_info | isProductTyCon tycon && 
-               isDataTyCon tycon    &&
+    cpr_info | isDataTyCon tycon    &&
                wkr_arity > 0        &&
-               wkr_arity <= mAX_CPR_SIZE        = retCPR
+               wkr_arity <= mAX_CPR_SIZE        = retCPR data_con
              | otherwise                        = TopRes
         -- RetCPR is only true for products that are real data types;
         -- that is, not unboxed tuples or [non-recursive] newtypes
@@ -306,7 +305,7 @@ mkDataConIds wrap_name wkr_name data_con
                         -- applications are treated as values
 		    `setInlinePragInfo`    alwaysInlinePragma
                     `setUnfoldingInfo`     wrap_unf
-                    `setStrictnessInfo` Just wrap_sig
+                    `setStrictnessInfo`    wrap_sig
 
     all_strict_marks = dataConExStricts data_con ++ dataConStrictMarks data_con
     wrap_sig = mkStrictSig (mkTopDmdType wrap_arg_dmds cpr_info)
@@ -433,7 +432,7 @@ mkDictSelId no_unf name clas
 
     base_info = noCafIdInfo
                 `setArityInfo`      1
-                `setStrictnessInfo` Just strict_sig
+                `setStrictnessInfo` strict_sig
                 `setUnfoldingInfo`  (if no_unf then noUnfolding
 	                             else mkImplicitUnfolding rhs)
 		   -- In module where class op is defined, we must add
@@ -465,8 +464,8 @@ mkDictSelId no_unf name clas
         -- even if the selector isn't inlined
     strict_sig = mkStrictSig (mkTopDmdType [arg_dmd] TopRes)
     arg_dmd | new_tycon = evalDmd
-            | otherwise = Eval (Prod [ if the_arg_id == id then evalDmd else Abs
-                                     | id <- arg_ids ])
+            | otherwise = Eval (Prod data_con [ if the_arg_id == id then evalDmd else Abs
+                                              | id <- arg_ids ])
 
     tycon      	   = classTyCon clas
     new_tycon  	   = isNewTyCon tycon
@@ -537,7 +536,7 @@ unboxProduct i arg arg_ty body
     rhs = body i'' con_args
 
 mkUnpackCase ::  Id -> CoreExpr -> [Id] -> DataCon -> CoreExpr -> CoreExpr
--- (mkUnpackCase x e args Con body)
+-- (mkUnpackCase bndr e args Con body)
 --      returns
 -- case (e `cast` ...) of bndr { Con args -> body }
 -- 
@@ -724,9 +723,9 @@ mkPrimOpId prim_op
     id   = mkGlobalId (PrimOpId prim_op) name ty info
                 
     info = noCafIdInfo
-           `setSpecInfo`          mkSpecInfo (primOpRules prim_op name)
-           `setArityInfo`         arity
-           `setStrictnessInfo` Just strict_sig
+           `setSpecInfo`       mkSpecInfo (primOpRules prim_op name)
+           `setArityInfo`      arity
+           `setStrictnessInfo` strict_sig
 
 -- For each ccall we manufacture a separate CCallOpId, giving it
 -- a fresh unique, a type that is correct for this particular ccall,
@@ -751,8 +750,8 @@ mkFCallId uniq fcall ty
     name = mkFCallName uniq occ_str
 
     info = noCafIdInfo
-           `setArityInfo`         arity
-           `setStrictnessInfo` Just strict_sig
+           `setArityInfo`      arity
+           `setStrictnessInfo` strict_sig
 
     (_, tau)     = tcSplitForAllTys ty
     (arg_tys, _) = tcSplitFunTys tau

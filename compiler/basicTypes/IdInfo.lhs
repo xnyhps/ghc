@@ -27,7 +27,7 @@ module IdInfo (
 
 	-- ** Demand and strictness Info
  	strictnessInfo, setStrictnessInfo, 
-  	demandInfo, setDemandInfo, pprStrictness,
+  	demandInfo, setDemandInfo, 
 
 	-- ** Unfolding Info
 	unfoldingInfo, setUnfoldingInfo, setUnfoldingInfoLazily,
@@ -80,7 +80,6 @@ import Outputable
 import Module
 import FastString
 
-import Data.Maybe
 
 -- infixl so you can say (id `set` a `set` b)
 infixl 	1 `setSpecInfo`,
@@ -196,14 +195,8 @@ data IdInfo
 	inlinePragInfo	:: InlinePragma,	-- ^ Any inline pragma atached to the 'Id'
 	occInfo		:: OccInfo,		-- ^ How the 'Id' occurs in the program
 
-	strictnessInfo :: Maybe StrictSig,	-- ^ Id strictness information. Reason for Maybe: 
-	                                        -- the DmdAnal phase needs to know whether
-						-- this is the first visit, so it can assign botSig.
-						-- Other customers want topSig.  So @Nothing@ is good.
-
-	demandInfo	  :: Maybe Demand	-- ^ Id demand information. Similarly we want to know 
-	                                        -- if there's no known demand yet, for when we are looking
-						-- for CPR info
+	strictnessInfo  :: StrictSig,		-- ^ Id strictness information. 
+	demandInfo	:: Demand		-- ^ Id demand information. 
     }
 
 -- | Just evaluate the 'IdInfo' to WHNF
@@ -220,20 +213,12 @@ megaSeqIdInfo info
 -- some unfoldings are not calculated at all
 --    seqUnfolding (unfoldingInfo info)		`seq`
 
-    seqDemandInfo (demandInfo info)	`seq`
-    seqStrictnessInfo (strictnessInfo info) `seq`
+    seqDemand (demandInfo info)	                `seq`
+    seqStrictSig (strictnessInfo info)          `seq`
 
     seqCaf (cafInfo info)			`seq`
     seqLBVar (lbvarInfo info)			`seq`
     seqOccInfo (occInfo info) 
-
-seqStrictnessInfo :: Maybe StrictSig -> ()
-seqStrictnessInfo Nothing = ()
-seqStrictnessInfo (Just ty) = seqStrictSig ty
-
-seqDemandInfo :: Maybe Demand -> ()
-seqDemandInfo Nothing    = ()
-seqDemandInfo (Just dmd) = seqDemand dmd
 \end{code}
 
 Setters
@@ -268,10 +253,10 @@ setCafInfo        info caf = info { cafInfo = caf }
 setLBVarInfo :: IdInfo -> LBVarInfo -> IdInfo
 setLBVarInfo      info lb = {-lb `seq`-} info { lbvarInfo = lb }
 
-setDemandInfo :: IdInfo -> Maybe Demand -> IdInfo
+setDemandInfo :: IdInfo -> Demand -> IdInfo
 setDemandInfo     info dd = dd `seq` info { demandInfo = dd }
 
-setStrictnessInfo :: IdInfo -> Maybe StrictSig -> IdInfo
+setStrictnessInfo :: IdInfo -> StrictSig -> IdInfo
 setStrictnessInfo info dd = dd `seq` info { strictnessInfo = dd }
 \end{code}
 
@@ -288,8 +273,8 @@ vanillaIdInfo
 	    lbvarInfo		= NoLBVarInfo,
 	    inlinePragInfo 	= defaultInlinePragma,
 	    occInfo		= NoOccInfo,
-	    demandInfo	= Nothing,
-	    strictnessInfo   = Nothing
+	    demandInfo	        = topDmd,
+	    strictnessInfo      = topSig
 	   }
 
 -- | More informative 'IdInfo' we can use when we know the 'Id' has no CAF references
@@ -346,19 +331,6 @@ ppArityInfo n = hsep [ptext (sLit "Arity"), int n]
 -- The default 'InlinePragInfo' is 'AlwaysActive', so the info serves
 -- entirely as a way to inhibit inlining until we want it
 type InlinePragInfo = InlinePragma
-\end{code}
-
-
-%************************************************************************
-%*									*
-               Strictness
-%*									*
-%************************************************************************
-
-\begin{code}
-pprStrictness :: Maybe StrictSig -> SDoc
-pprStrictness Nothing    = empty
-pprStrictness (Just sig) = ppr sig
 \end{code}
 
 
@@ -520,7 +492,7 @@ zapLamInfo info@(IdInfo {occInfo = occ, demandInfo = demand})
   | is_safe_occ occ && is_safe_dmd demand
   = Nothing
   | otherwise
-  = Just (info {occInfo = safe_occ, demandInfo = Nothing})
+  = Just (info {occInfo = safe_occ, demandInfo = topDmd})
   where
 	-- The "unsafe" occ info is the ones that say I'm not in a lambda
 	-- because that might not be true for an unsaturated lambda
@@ -531,19 +503,16 @@ zapLamInfo info@(IdInfo {occInfo = occ, demandInfo = demand})
 		 OneOcc _ once int_cxt -> OneOcc insideLam once int_cxt
 		 _other	       	       -> occ
 
-    is_safe_dmd Nothing    = True
-    is_safe_dmd (Just dmd) = not (isStrictDmd dmd)
+    is_safe_dmd dmd = not (isStrictDmd dmd)
 \end{code}
 
 \begin{code}
 -- | Remove demand info on the 'IdInfo' if it is present, otherwise return @Nothing@
 zapDemandInfo :: IdInfo -> Maybe IdInfo
 zapDemandInfo info@(IdInfo {demandInfo = dmd})
-  | isJust dmd = Just (info {demandInfo = Nothing})
-  | otherwise  = Nothing
-\end{code}
+  | isTop dmd = Nothing 
+  | otherwise = Just (info {demandInfo = topDmd})
 
-\begin{code}
 zapFragileInfo :: IdInfo -> Maybe IdInfo
 -- ^ Zap info that depends on free variables
 zapFragileInfo info 

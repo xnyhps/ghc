@@ -695,8 +695,8 @@ pc_bottoming_Id :: Name -> Type -> Id
 pc_bottoming_Id name ty
  = mkVanillaGlobalWithInfo name ty bottoming_info
  where
-    bottoming_info = vanillaIdInfo `setStrictnessInfo` Just strict_sig
-				   `setArityInfo`         1
+    bottoming_info = vanillaIdInfo `setStrictnessInfo` strict_sig
+				   `setArityInfo`      1
 			-- Make arity and strictness agree
 
         -- Do *not* mark them as NoCafRefs, because they can indeed have

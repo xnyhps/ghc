@@ -1503,9 +1503,9 @@ toIfaceIdInfo id_info
 
     ------------  Strictness  --------------
 	-- No point in explicitly exporting TopSig
-    strict_hsinfo = case strictnessInfo id_info of
-			Just sig | not (isTopSig sig) -> Just (HsStrictness sig)
-			_other			      -> Nothing
+    strict_sig    = strictnessInfo id_info
+    strict_hsinfo | isTopSig strict_sig = Nothing
+                  | otherwise = Just (HsStrictness (toIfaceStrictSig strict_sig))
 
     ------------  Unfolding  --------------
     unfold_hsinfo = toIfUnfolding loop_breaker (unfoldingInfo id_info) 
@@ -1515,6 +1515,29 @@ toIfaceIdInfo id_info
     inline_prag = inlinePragInfo id_info
     inline_hsinfo | isDefaultInlinePragma inline_prag = Nothing
                   | otherwise = Just (HsInline inline_prag)
+
+--------------------------
+toIfaceStrictSig :: StrictSig -> IfaceDmdType
+toIfaceStrictSig (StrictSig (DmdType _ args_dmd res_dmd)) 
+  = DmdType emptyDmdEnv (map toIfaceDemand args_dmd) (toIfaceDmdResult res_dmd)
+
+toIfaceDmdResult :: DmdResult -> IfaceDmdResult
+toIfaceDmdResult TopRes      = TopRes
+toIfaceDmdResult (RetCPR dc) = RetCPR (getName dc)
+toIfaceDmdResult BotRes      = BotRes
+
+toIfaceDemand :: Demand -> IfaceDemand
+toIfaceDemand Top          = Top
+toIfaceDemand Abs          = Abs
+toIfaceDemand (Call dmd)   = Call (toIfaceDemand dmd)
+toIfaceDemand (Eval dmds)  = Eval (toIfaceDemands dmds)
+toIfaceDemand (Defer dmds) = Defer (toIfaceDemands dmds)
+toIfaceDemand (Box dmd)    = Box (toIfaceDemand dmd)
+toIfaceDemand Bot          = Bot
+
+toIfaceDemands :: Demands -> IfaceDemands
+toIfaceDemands (Poly dmd)     = Poly (toIfaceDemand dmd)
+toIfaceDemands (Prod dc dmds) = Prod (getName dc) (map toIfaceDemand dmds)
 
 --------------------------
 toIfUnfolding :: Bool -> Unfolding -> Maybe IfaceInfoItem

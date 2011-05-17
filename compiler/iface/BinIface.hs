@@ -16,13 +16,11 @@ import TcRnMonad
 import IfaceEnv
 import HscTypes
 import BasicTypes
-import Demand
 import Annotations
 import CoreSyn
 import IfaceSyn
 import Module
 import Name
-import VarEnv
 import DynFlags
 import UniqFM
 import UniqSupply
@@ -33,6 +31,7 @@ import Binary
 import SrcLoc
 import ErrUtils
 import Config
+import Demand
 import FastMutInt
 import Unique
 import Outputable
@@ -708,35 +707,25 @@ instance (Binary name) => Binary (IPName name) where
 --		Types from: Demand
 -------------------------------------------------------------------------
 
-instance Binary DmdType where
-	-- Ignore DmdEnv when spitting out the DmdType
-  put bh (DmdType _ ds dr) = do p <- put bh ds; put_ bh dr; return (castBin p)
-  get bh = do ds <- get bh; dr <- get bh; return (DmdType emptyVarEnv ds dr)
 
-instance Binary Demand where
-    put_ bh Top = do
-	    putByte bh 0
-    put_ bh Abs = do
-	    putByte bh 1
-    put_ bh (Call aa) = do
-	    putByte bh 2
-	    put_ bh aa
-    put_ bh (Eval ab) = do
-	    putByte bh 3
-	    put_ bh ab
-    put_ bh (Defer ac) = do
-	    putByte bh 4
-	    put_ bh ac
-    put_ bh (Box ad) = do
-	    putByte bh 5
-	    put_ bh ad
-    put_ bh Bot = do
-	    putByte bh 6
+ -- We ignore the DmdEnv from the original DmdType when spitting out the IfaceDmdType
+instance Binary (DmdTypeP IfExtName) where
+  put_ bh (DmdType _ ds dr) = do { put_ bh ds; put_ bh dr }
+  get bh = do { ds <- get bh; dr <- get bh; return (DmdType emptyDmdEnv ds dr) }
+
+instance Binary (DemandP IfExtName) where
+    put_ bh Top        = putByte bh 0
+    put_ bh Abs        = putByte bh 1
+    put_ bh (Call aa)  = putByte bh 2 >> put_ bh aa
+    put_ bh (Eval ab)  = putByte bh 3 >> put_ bh ab
+    put_ bh (Defer ac) = putByte bh 4 >> put_ bh ac
+    put_ bh (Box ad)   = do putByte bh 5 >>put_ bh ad
+    put_ bh Bot        = putByte bh 6
     get bh = do
 	    h <- getByte bh
 	    case h of
-	      0 -> do return Top
-	      1 -> do return Abs
+	      0 -> return Top
+	      1 -> return Abs
 	      2 -> do aa <- get bh
 		      return (Call aa)
 	      3 -> do ab <- get bh
@@ -747,43 +736,35 @@ instance Binary Demand where
 		      return (Box ad)
 	      _ -> do return Bot
 
-instance Binary Demands where
+instance Binary (DemandPs IfExtName) where
     put_ bh (Poly aa) = do
 	    putByte bh 0
 	    put_ bh aa
-    put_ bh (Prod ab) = do
+    put_ bh (Prod dc ab) = do
 	    putByte bh 1
+	    put_ bh dc
 	    put_ bh ab
     get bh = do
 	    h <- getByte bh
 	    case h of
 	      0 -> do aa <- get bh
 		      return (Poly aa)
-	      _ -> do ab <- get bh
-		      return (Prod ab)
+	      _ -> do dc <- get bh
+	              ab <- get bh
+		      return (Prod dc ab)
 
-instance Binary DmdResult where
-    put_ bh TopRes = do
-	    putByte bh 0
-    put_ bh RetCPR = do
-	    putByte bh 1
-    put_ bh BotRes = do
-	    putByte bh 2
+instance Binary (DmdResultP IfExtName) where
+    put_ bh TopRes      = putByte bh 0
+    put_ bh (RetCPR dc) = putByte bh 1 >> put_ bh dc
+    put_ bh BotRes      = putByte bh 2
     get bh = do
 	    h <- getByte bh
 	    case h of
 	      0 -> do return TopRes
-	      1 -> do return RetCPR	-- Really use RetCPR even if -fcpr-off
-					-- The wrapper was generated for CPR in 
-					-- the imported module!
+	      1 -> do fmap RetCPR (get bh)	-- Really use RetCPR even if -fcpr-off
+	        				-- The wrapper was generated for CPR in 
+	        				-- the imported module!
 	      _ -> do return BotRes
-
-instance Binary StrictSig where
-    put_ bh (StrictSig aa) = do
-	    put_ bh aa
-    get bh = do
-	  aa <- get bh
-	  return (StrictSig aa)
 
 
 -------------------------------------------------------------------------

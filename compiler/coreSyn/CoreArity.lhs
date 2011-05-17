@@ -536,14 +536,12 @@ type CheapFun = CoreExpr -> Maybe Type -> Bool
 
 arityType :: CheapFun -> CoreExpr -> ArityType
 arityType _ (Var v)
-  | Just strict_sig <- idStrictness_maybe v
-  , (ds, res) <- splitStrictSig strict_sig
-  , let arity = length ds
-  = if isBotRes res then ABot arity
-                    else ATop (take arity one_shots)
-  | otherwise
-  = ATop (take (idArity v) one_shots)
+  | isBotRes res = ABot arity
+  | otherwise    = ATop (take arity one_shots)
   where
+    arity    = idArity v
+    (_, res) = splitStrictSig (idStrictness v)
+
     one_shots :: [Bool]	    -- One-shot-ness derived from the type
     one_shots = typeArity (idType v)
 

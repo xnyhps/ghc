@@ -9,21 +9,20 @@ module WwLib ( mkWwBodies, mkWWstr, mkWorkerArgs ) where
 #include "HsVersions.h"
 
 import CoreSyn
-import CoreUtils	( exprType )
+import CoreUtils	( exprType, mkCoerce )
 import Id		( Id, idType, mkSysLocal, idDemandInfo, setIdDemandInfo,
 			  isOneShotLambda, setOneShotLambda, setIdUnfolding,
-                          setIdInfo
+                          setIdInfo, setIdType
 			)
 import IdInfo		( vanillaIdInfo )
 import DataCon
-import Demand		( Demand(..), DmdResult(..), Demands(..) ) 
+import Demand
 import MkCore		( mkRuntimeErrorApp, aBSENT_ERROR_ID )
-import MkId		( realWorldPrimId, voidArgId, 
-                          mkUnpackCase, mkProductBox )
+import MkId		( realWorldPrimId, voidArgId )
 import TysPrim		( realWorldStatePrimTy )
 import TysWiredIn	( tupleCon )
 import Type
-import Coercion         ( mkSymCo, splitNewTypeRepCo_maybe )
+import Coercion         ( Coercion, mkSymCo, splitNewTypeRepCo_maybe )
 import BasicTypes	( Boxity(..) )
 import Literal		( absentLiteralOf )
 import UniqSupply
@@ -345,16 +344,19 @@ mkWWstr_one arg
           -> return ([], nop_fn, work_fn)
 
 	-- Unpack case
-      Eval (Prod cs)
-	| Just (_arg_tycon, _tycon_arg_tys, data_con, inst_con_arg_tys) 
-		<- deepSplitProductType_maybe (idType arg)
+      Eval (Prod data_con cs)
+	| Just (tycon_args, inst_con_arg_tys, raw_data_ty, co) 
+           <- cprableDataConInstOrigArgTys_maybe (idType arg) data_con
 	-> do uniqs <- getUniquesM
 	      let
 	        unpk_args      = zipWith mk_ww_local uniqs inst_con_arg_tys
 	        unpk_args_w_ds = zipWithEqual "mkWWstr" set_worker_arg_info unpk_args cs
-	        unbox_fn       = mkUnpackCase (sanitiseCaseBndr arg) (Var arg) unpk_args data_con
+	        unbox_fn       = mkUnpackCase (sanitiseCaseBndr arg) (Var arg) 
+                                              raw_data_ty co unpk_args data_con
 	        rebox_fn       = Let (NonRec arg con_app) 
-	        con_app        = mkProductBox unpk_args (idType arg)
+	        con_app        = mkCoerce co $
+                                 mkConApp data_con 
+                                          (map Type tycon_args ++ map Var unpk_args)
 	      (worker_args, wrap_fn, work_fn) <- mkWWstr unpk_args_w_ds
 	      return (worker_args, unbox_fn . wrap_fn, work_fn . rebox_fn) 
 	  		   -- Don't pass the arg, rebox instead
@@ -422,13 +424,18 @@ mkWWcpr :: Type                              -- function body type
                    CoreExpr -> CoreExpr,	     -- New worker
 		   Type)			-- Type of worker's body 
 
-mkWWcpr body_ty RetCPR
-    | not (isClosedAlgType body_ty)
-    = WARN( True, 
+mkWWcpr body_ty (RetCPR data_con)
+  = case cprableDataConInstOrigArgTys_maybe body_ty data_con of
+      -- Un-CPRable types can creep in. For example, existential
+      -- packages are products and so we often get to this stage, but
+      -- we can't CPR them. We just give up in that case:
+    Nothing ->
+      WARN( True, 
             text "mkWWcpr: non-algebraic or open body type" <+> ppr body_ty )
       return (id, id, body_ty)
 
-    | n_con_args == 1 && isUnLiftedType con_arg_ty1 = do
+    Just (tycon_args, con_arg_tys, raw_data_ty, co)
+     | [con_arg_ty1] <- con_arg_tys, isUnLiftedType con_arg_ty1 -> do
 	-- Special case when there is a single result of unlifted type
 	--
 	-- Wrapper:	case (..call worker..) of x -> C x
@@ -437,31 +444,32 @@ mkWWcpr body_ty RetCPR
       let
 	work_wild = mk_ww_local work_uniq body_ty
 	arg	  = mk_ww_local arg_uniq  con_arg_ty1
-	con_app   = mkProductBox [arg] body_ty
+	con_app   = mkCoerce co (mkConApp data_con $ map Type tycon_args ++ [Var arg])
 
       return (\ wkr_call -> Case wkr_call (arg) (exprType con_app) [(DEFAULT, [], con_app)],
-		\ body     -> workerCase (work_wild) body [arg] data_con (Var arg),
+		\ body     -> workerCase work_wild body raw_data_ty co [arg] data_con (Var arg),
 		con_arg_ty1)
 
-    | otherwise = do	-- The general case
+     | otherwise -> do	-- The general case
 	-- Wrapper: case (..call worker..) of (# a, b #) -> C a b
 	-- Worker:  case (   ...body...  ) of C a b -> (# a, b #)     
       uniqs <- getUniquesM
       let
-        (wrap_wild : work_wild : args) = zipWith mk_ww_local uniqs (ubx_tup_ty : body_ty : con_arg_tys)
+        (wrap_wild : work_wild : args) = zipWith mk_ww_local uniqs 
+                                                 (ubx_tup_ty : body_ty : con_arg_tys)
 	arg_vars		       = map Var args
-	ubx_tup_con		       = tupleCon Unboxed n_con_args
+	ubx_tup_con		       = tupleCon Unboxed (length con_arg_tys)
 	ubx_tup_ty		       = exprType ubx_tup_app
-	ubx_tup_app		       = mkConApp ubx_tup_con (map Type con_arg_tys   ++ arg_vars)
-        con_app			       = mkProductBox args body_ty
+	ubx_tup_app		       = mkConApp ubx_tup_con (map Type con_arg_tys ++ arg_vars)
+        con_app			       = mkCoerce co $ 
+                                         mkConApp data_con    
+                                                  (map Type tycon_args  ++ map Var args)
 
-      return (\ wkr_call -> Case wkr_call (wrap_wild) (exprType con_app)  [(DataAlt ubx_tup_con, args, con_app)],
-		\ body     -> workerCase (work_wild) body args data_con ubx_tup_app,
-		ubx_tup_ty)
-    where
-      (_arg_tycon, _tycon_arg_tys, data_con, con_arg_tys) = deepSplitProductType "mkWWcpr" body_ty
-      n_con_args  = length con_arg_tys
-      con_arg_ty1 = head con_arg_tys
+      return (\ wkr_call -> Case wkr_call (wrap_wild) (exprType con_app)
+                                 [(DataAlt ubx_tup_con, args, con_app)],
+	      \ body     -> workerCase work_wild body raw_data_ty co args 
+                                       data_con ubx_tup_app,
+	      ubx_tup_ty)
 
 mkWWcpr body_ty _other		-- No CPR info
     = return (id, id, body_ty)
@@ -476,9 +484,21 @@ mkWWcpr body_ty _other		-- No CPR info
 --
 -- This transform doesn't move work or allocation
 -- from one cost centre to another
-workerCase :: Id -> CoreExpr -> [Id] -> DataCon -> CoreExpr -> CoreExpr
-workerCase bndr (Note (SCC cc) e) args con body = Note (SCC cc) (mkUnpackCase bndr e args con body)
-workerCase bndr e args con body = mkUnpackCase bndr e args con body
+workerCase :: Id -> CoreExpr -> Type -> Coercion -> [Id] -> DataCon -> CoreExpr -> CoreExpr
+workerCase bndr (Note (SCC cc) e) raw_arg_ty co args con body 
+  = Note (SCC cc) (mkUnpackCase bndr e raw_arg_ty co args con body)
+workerCase bndr e raw_arg_ty co args con body 
+  = mkUnpackCase bndr e raw_arg_ty co args con body
+
+mkUnpackCase ::  Id -> CoreExpr -> Type -> Coercion -> [Id] -> DataCon -> CoreExpr -> CoreExpr
+-- (mkUnpackCase bndr e raw_e_ty co args Con body)
+--      returns
+-- case (e `cast` sym co) of (bndr :: raw_e_ty) { Con args -> body }
+-- 
+-- the type of the bndr passed in is irrelevent
+mkUnpackCase bndr arg raw_arg_ty co unpk_args boxing_con body
+  = Case (mkCoerce (mkSymCo co) arg) (setIdType bndr raw_arg_ty) 
+         (exprType body) [(DataAlt boxing_con, unpk_args, body)]
 \end{code}
 
 

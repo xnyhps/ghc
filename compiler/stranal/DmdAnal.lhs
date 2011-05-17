@@ -22,12 +22,12 @@ import Coercion		( isCoVarType )
 import CoreUtils	( exprIsHNF, exprIsTrivial )
 import CoreArity	( exprArity )
 import DataCon		( dataConTyCon, dataConRepStrictness )
-import TyCon		( isProductTyCon, isRecursiveTyCon )
+import TyCon		( isRecursiveTyCon )
 import Id		( Id, idType, idInlineActivation,
 			  isDataConWorkId, isGlobalId, idArity,
-			  idStrictness, 
-			  setIdStrictness, idDemandInfo, idUnfolding,
-			  idDemandInfo_maybe, setIdDemandInfo
+			  idStrictness, setIdStrictness, 
+                          idDemandInfo, setIdDemandInfo,
+                          idUnfolding			  
 			)
 import Var		( Var, isTyVar )
 import VarEnv
@@ -215,14 +215,13 @@ dmdAnal env dmd (Lam var body)
 
 dmdAnal env dmd (Case scrut case_bndr ty [alt@(DataAlt dc, _, _)])
   | let tycon = dataConTyCon dc
-  , isProductTyCon tycon
   , not (isRecursiveTyCon tycon)
   = let
 	env_alt	      = extendAnalEnv NotTopLevel env case_bndr case_bndr_sig
 	(alt_ty, alt')	      = dmdAnalAlt env_alt dmd alt
 	(alt_ty1, case_bndr') = annotateBndr alt_ty case_bndr
 	(_, bndrs', _)	      = alt'
-	case_bndr_sig	      = cprSig
+	case_bndr_sig	      = cprSig dc
 		-- Inside the alternative, the case binder has the CPR property.
 		-- Meaning that a case on it will successfully cancel.
 		-- Example:
@@ -253,7 +252,7 @@ dmdAnal env dmd (Case scrut case_bndr ty [alt@(DataAlt dc, _, _)])
 	-- The insight is, of course, that a demand on y is a demand on the
 	-- scrutinee, so we need to `both` it with the scrut demand
 
-	alt_dmd 	   = Eval (Prod [idDemandInfo b | b <- bndrs', isId b])
+	alt_dmd 	   = Eval (Prod dc [idDemandInfo b | b <- bndrs', isId b])
         scrut_dmd 	   = alt_dmd `both`
 			     idDemandInfo case_bndr'
 
@@ -427,7 +426,7 @@ dmdTransform env var dmd
 		-- If so we must make up a suitable bunch of demands
 	   arg_ds = case dmd_ds of
 		      Poly d  -> replicate arity d
-		      Prod ds -> ASSERT( ds `lengthIs` arity ) ds
+		      Prod _ ds -> ASSERT( ds `lengthIs` arity ) ds
 
 	in
 	mkDmdType emptyDmdEnv arg_ds con_res
@@ -550,7 +549,7 @@ dmdAnalRhs top_lvl rec_flag env (id, rhs)
   (lazy_fv, sig_ty)  = WARN( arity /= dmdTypeDepth rhs_dmd_ty && not (exprIsTrivial rhs), ppr id )
 				-- The RHS can be eta-reduced to just a variable, 
 				-- in which case we should not complain. 
-		       mkSigTy top_lvl rec_flag id rhs rhs_dmd_ty
+		       mkSigTy top_lvl rec_flag env id rhs rhs_dmd_ty
   id'		     = id `setIdStrictness` sig_ty
   sigs'		     = extendSigEnv top_lvl (sigEnv env) id sig_ty
 \end{code}
@@ -568,25 +567,24 @@ mkTopSigTy :: CoreExpr -> DmdType -> StrictSig
 	-- NB: not used for never-inline things; hence False
 mkTopSigTy rhs dmd_ty = snd (mk_sig_ty False False rhs dmd_ty)
 
-mkSigTy :: TopLevelFlag -> RecFlag -> Id -> CoreExpr -> DmdType -> (DmdEnv, StrictSig)
-mkSigTy top_lvl rec_flag id rhs dmd_ty 
+mkSigTy :: TopLevelFlag -> RecFlag -> AnalEnv 
+        -> Id -> CoreExpr -> DmdType -> (DmdEnv, StrictSig)
+mkSigTy top_lvl rec_flag env id rhs dmd_ty 
   = mk_sig_ty never_inline thunk_cpr_ok rhs dmd_ty
   where
     never_inline = isNeverActive (idInlineActivation id)
-    maybe_id_dmd = idDemandInfo_maybe id
-	-- Is Nothing the first time round
 
     thunk_cpr_ok
-	| isTopLevel top_lvl       = False	-- Top level things don't get
-						-- their demandInfo set at all
-	| isRec rec_flag	   = False	-- Ditto recursive things
-	| Just dmd <- maybe_id_dmd = isStrictDmd dmd
-	| otherwise 		   = True	-- Optimistic, first time round
-						-- See notes below
+	| isTopLevel top_lvl = False	-- Top level things don't get
+					-- their demandInfo set at all
+	| isRec rec_flag     = False	-- Ditto recursive things
+        | ae_virgin env	     = True	-- Optimistic, first time round
+					-- See Note [CPR-AND-STRICTNESS]
+	| otherwise          = isStrictDmd (idDemandInfo id)
 \end{code}
 
-The thunk_cpr_ok stuff [CPR-AND-STRICTNESS]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The thunk_cpr_ok stuff: Note [CPR-AND-STRICTNESS]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 If the rhs is a thunk, we usually forget the CPR info, because
 it is presumably shared (else it would have been inlined, and 
 so we'd lose sharing if w/w'd it into a function).  E.g.
@@ -755,8 +753,8 @@ mk_sig_ty _never_inline thunk_cpr_ok rhs (DmdType fv dmds res)
 	-- Set the unpacking strategy
 	
     res' = case res of
-		RetCPR | ignore_cpr_info -> TopRes
-		_	 		 -> res
+		RetCPR _ | ignore_cpr_info -> TopRes
+		_	 		   -> res
     ignore_cpr_info = not (exprIsHNF rhs || thunk_cpr_ok)
 \end{code}
 
@@ -773,9 +771,9 @@ setUnpackStrategy ds
        -> [Demand]
        -> (Int, [Demand])	-- Args remaining after subcomponents of [Demand] are unpacked
 
-    go n (Eval (Prod cs) : ds) 
-	| n' >= 0   = Eval (Prod cs') `cons` go n'' ds
-        | otherwise = Box (Eval (Prod cs)) `cons` go n ds
+    go n (Eval (Prod dc cs) : ds) 
+	| n' >= 0   = Eval (Prod dc cs') `cons` go n'' ds
+        | otherwise = Box (Eval (Prod dc cs)) `cons` go n ds
 	where
 	  (n'',cs') = go n' cs
 	  n' = n + 1 - non_abs_args
@@ -992,12 +990,13 @@ extendSigsWithLam :: AnalEnv -> Id -> AnalEnv
 -- CPR results (e.g. from \x -> x!).
 
 extendSigsWithLam env id
-  = case idDemandInfo_maybe id of
-	Nothing	             -> extendAnalEnv NotTopLevel env id cprSig
-		-- Optimistic in the Nothing case;
-		-- See notes [CPR-AND-STRICTNESS]
-	Just (Eval (Prod _)) -> extendAnalEnv NotTopLevel env id cprSig
-	_                    -> env
+  | ae_virgin env
+  = extendAnalEnv NotTopLevel env id botSig  -- Optimistic first time round
+    		  	      	             -- See notes [CPR-AND-STRICTNESS]
+  | Eval (Prod dc _) <- idDemandInfo id
+  = extendAnalEnv NotTopLevel env id (cprSig dc)
+  | otherwise
+  = env
 \end{code}
 
 Note [Initialising strictness]
@@ -1106,10 +1105,10 @@ bothType (DmdType fv1 ds1 r1) (DmdType fv2 _ r2)
 
 \begin{code}
 lubRes :: DmdResult -> DmdResult -> DmdResult
-lubRes BotRes r      = r
-lubRes r      BotRes = r
-lubRes RetCPR RetCPR = RetCPR
-lubRes _      _      = TopRes
+lubRes BotRes       r                         = r
+lubRes r            BotRes                    = r   
+lubRes (RetCPR dc1) (RetCPR dc2) | dc1 == dc2 = RetCPR dc1
+lubRes _            _                         = TopRes
 
 bothRes :: DmdResult -> DmdResult -> DmdResult
 -- If either diverges, the whole thing does

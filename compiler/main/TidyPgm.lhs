@@ -704,7 +704,7 @@ addExternal expose_all id = (new_needed_ids, show_unfold)
     idinfo	   = idInfo id
     never_active   = isNeverActive (inlinePragmaActivation (inlinePragInfo idinfo))
     loop_breaker   = isNonRuleLoopBreaker (occInfo idinfo)
-    bottoming_fn   = isBottomingSig (strictnessInfo idinfo `orElse` topSig)
+    bottoming_fn   = isBottomingSig (strictnessInfo idinfo)
     spec_ids	   = specInfoFreeVars (specInfo idinfo)
 
 	-- Stuff to do with the Id's unfolding
@@ -1056,13 +1056,15 @@ tidyTopIdInfo rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_info
     -- when we are doing -fexpose-all-unfoldings
 
     --------- Strictness ------------
-    final_sig | Just sig <- strictnessInfo idinfo
-              = WARN( _bottom_hidden sig, ppr name ) Just sig
-              | Just (_, sig) <- mb_bot_str = Just sig
-              | otherwise                   = Nothing
+    strict_sig = strictnessInfo idinfo
+    final_sig = WARN( _bottom_hidden strict_sig, ppr name ) 
+                strict_sig
 
     -- If the cheap-and-cheerful bottom analyser can see that
     -- the RHS is bottom, it should jolly well be exposed
+    -- (If we are running without -O, no strictness analysis,
+    -- then the cheap-and-cheerful bottom analyser won't work either.
+    -- Other flag combinations may make this warning trigger, though.)
     _bottom_hidden id_sig = case mb_bot_str of
                                Nothing         -> False
                                Just (arity, _) -> not (appIsBottom id_sig arity)
@@ -1074,9 +1076,8 @@ tidyTopIdInfo rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_info
     unfold_info | show_unfold = tidyUnfolding rhs_tidy_env unf_info unf_from_rhs
 		| otherwise   = noUnfolding
     unf_from_rhs = mkTopUnfolding is_bot tidy_rhs
-    is_bot = case final_sig of 
-                Just sig -> isBottomingSig sig
-                Nothing  -> False
+    is_bot = isBottomingSig final_sig
+
     -- NB: do *not* expose the worker if show_unfold is off,
     --     because that means this thing is a loop breaker or
     --     marked NOINLINE or something like that

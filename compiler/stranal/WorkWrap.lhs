@@ -18,7 +18,6 @@ import Demand
 import UniqSupply
 import BasicTypes
 import VarEnv		( isEmptyVarEnv )
-import Maybes		( orElse )
 import WwLib
 import Util		( lengthIs, notNull )
 import Outputable
@@ -248,7 +247,7 @@ tryWW is_rec fn_id rhs
 	-- Furthermore, don't even expose strictness info
   = return [ (fn_id, rhs) ]
 
-  | is_thunk && worthSplittingThunk maybe_fn_dmd res_info
+  | is_thunk && worthSplittingThunk fn_dmd res_info
   	-- See Note [Thunk splitting]
   = ASSERT2( isNonRec is_rec, ppr new_fn_id )	-- The thunk must be non-recursive
     checkSize new_fn_id rhs $ 
@@ -262,13 +261,13 @@ tryWW is_rec fn_id rhs
   = return [ (new_fn_id, rhs) ]
 
   where
-    fn_info   	 = idInfo fn_id
-    maybe_fn_dmd = demandInfo fn_info
-    inline_act   = inlinePragmaActivation (inlinePragInfo fn_info)
+    fn_info    = idInfo fn_id
+    fn_dmd     = demandInfo fn_info
+    inline_act = inlinePragmaActivation (inlinePragInfo fn_info)
 
 	-- In practice it always will have a strictness 
 	-- signature, even if it's a uninformative one
-    strict_sig  = strictnessInfo fn_info `orElse` topSig
+    strict_sig  = strictnessInfo fn_info
     StrictSig (DmdType env wrap_dmds res_info) = strict_sig
 
 	-- new_fn_id has the DmdEnv zapped.  
@@ -454,19 +453,19 @@ worthSplittingFun ds res
 	-- and hence do_strict_ww is False if arity is zero and there is no CPR
   -- See Note [Worker-wrapper for bottoming functions]
   where
-    worth_it Abs	      = True	-- Absent arg
-    worth_it (Eval (Prod _)) = True	-- Product arg to evaluate
-    worth_it _    	      = False
+    worth_it Abs               = True	-- Absent arg
+    worth_it (Eval (Prod _ _)) = True	-- Product arg to evaluate
+    worth_it _                 = False
 
-worthSplittingThunk :: Maybe Demand	-- Demand on the thunk
-		    -> DmdResult	-- CPR info for the thunk
+worthSplittingThunk :: Demand	  -- Demand on the thunk
+		    -> DmdResult  -- CPR info for the thunk
 		    -> Bool
-worthSplittingThunk maybe_dmd res
-  = worth_it maybe_dmd || returnsCPR res
+worthSplittingThunk dmd res
+  = worth_it dmd || returnsCPR res
   where
 	-- Split if the thing is unpacked
-    worth_it (Just (Eval (Prod ds))) = not (all isAbsent ds)
-    worth_it _    	   	     = False
+    worth_it (Eval (Prod _ ds)) = not (all isAbsent ds)
+    worth_it _    	   	= False
 \end{code}
 
 Note [Worker-wrapper for bottoming functions]

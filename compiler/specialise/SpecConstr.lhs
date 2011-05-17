@@ -1428,7 +1428,7 @@ calcSpecStrictness fn qvars pats
 
     go_one env d   (Var v) = extendVarEnv_C both env v d
     go_one env (Box d)   e = go_one env d e
-    go_one env (Eval (Prod ds)) e 
+    go_one env (Eval (Prod _dc ds)) e 
     	   | (Var _, args) <- collectArgs e = go env ds args
     go_one env _         _ = env
 

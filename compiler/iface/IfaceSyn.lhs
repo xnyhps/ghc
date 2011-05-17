@@ -11,6 +11,7 @@ module IfaceSyn (
         IfaceExpr(..), IfaceAlt, IfaceNote(..), IfaceLetBndr(..),
         IfaceBinding(..), IfaceConAlt(..),
         IfaceIdInfo(..), IfaceIdDetails(..), IfaceUnfolding(..),
+	IfaceDmdType, IfaceDmdResult, IfaceDemands, IfaceDemand,
         IfaceInfoItem(..), IfaceRule(..), IfaceAnnotation(..), IfaceAnnTarget,
         IfaceInst(..), IfaceFamInst(..),
 
@@ -201,9 +202,14 @@ data IfaceIdInfo
 --   * The version comparsion sees that new (=NoInfo) differs from old (=HasInfo *)
 --      and so gives a new version.
 
+type IfaceDmdType   = DmdTypeP   IfExtName
+type IfaceDemand    = DemandP    IfExtName
+type IfaceDemands   = DemandPs   IfExtName
+type IfaceDmdResult = DmdResultP IfExtName
+
 data IfaceInfoItem
   = HsArity      Arity
-  | HsStrictness StrictSig
+  | HsStrictness IfaceDmdType
   | HsInline     InlinePragma
   | HsUnfold     Bool             -- True <=> isNonRuleLoopBreaker is true
                  IfaceUnfolding   -- See Note [Expose recursive functions]
@@ -697,7 +703,7 @@ instance Outputable IfaceInfoItem where
                            <> colon <+> ppr unf
   ppr (HsInline prag)    = ptext (sLit "Inline:") <+> ppr prag
   ppr (HsArity arity)    = ptext (sLit "Arity:") <+> int arity
-  ppr (HsStrictness str) = ptext (sLit "Strictness:") <+> pprIfaceStrictSig str
+  ppr (HsStrictness str) = ptext (sLit "Strictness:") <+> pprDmdType str
   ppr HsNoCafRefs        = ptext (sLit "HasNoCafRefs")
 
 instance Outputable IfaceUnfolding where
@@ -829,8 +835,28 @@ freeNamesIfIdInfo NoInfo      = emptyNameSet
 freeNamesIfIdInfo (HasInfo i) = fnList freeNamesItem i
 
 freeNamesItem :: IfaceInfoItem -> NameSet
-freeNamesItem (HsUnfold _ u) = freeNamesIfUnfold u
-freeNamesItem _              = emptyNameSet
+freeNamesItem (HsStrictness s) = freeNamesIfDmdType s
+freeNamesItem (HsUnfold _ u)   = freeNamesIfUnfold u
+freeNamesItem _                = emptyNameSet
+
+freeNamesIfDemand :: IfaceDemand -> NameSet
+freeNamesIfDemand (Call dmd)   = freeNamesIfDemand dmd
+freeNamesIfDemand (Eval dmds)  = freeNamesIfDemands dmds
+freeNamesIfDemand (Defer dmds) = freeNamesIfDemands dmds
+freeNamesIfDemand (Box dmd)    = freeNamesIfDemand dmd
+freeNamesIfDemand _ = emptyNameSet
+
+freeNamesIfDemands :: IfaceDemands -> NameSet
+freeNamesIfDemands (Poly dmd)    = freeNamesIfDemand dmd
+freeNamesIfDemands (Prod n dmds) = unitNameSet n &&& fnList freeNamesIfDemand dmds
+
+freeNamesIfDmdResult :: IfaceDmdResult -> NameSet
+freeNamesIfDmdResult (RetCPR n) = unitNameSet n
+freeNamesIfDmdResult _          = emptyNameSet
+
+freeNamesIfDmdType :: IfaceDmdType -> NameSet
+freeNamesIfDmdType (DmdType _ dmd_args dmd_res)
+  = fnList freeNamesIfDemand dmd_args &&& freeNamesIfDmdResult dmd_res
 
 freeNamesIfUnfold :: IfaceUnfolding -> NameSet
 freeNamesIfUnfold (IfCoreUnfold _ e)     = freeNamesIfExpr e

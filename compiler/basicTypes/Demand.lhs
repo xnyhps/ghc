@@ -6,25 +6,30 @@
 
 \begin{code}
 module Demand(
-	Demand(..), 
+	DemandP(..), Demand,
 	topDmd, lazyDmd, seqDmd, evalDmd, errDmd, isStrictDmd, 
 	isTop, isAbsent, seqDemand,
 
-	DmdType(..), topDmdType, botDmdType, mkDmdType, mkTopDmdType, 
-		dmdTypeDepth, seqDmdType,
+	DmdTypeP(..), DmdType, 
+        topDmdType, botDmdType, mkDmdType, 
+        mkTopDmdType, dmdTypeDepth, seqDmdType,
+
+	DmdResultP(..), DmdResult,
+        retCPR, isBotRes, returnsCPR, resTypeArgDmd,
+
 	DmdEnv, emptyDmdEnv,
-	DmdResult(..), retCPR, isBotRes, returnsCPR, resTypeArgDmd,
 	
-	Demands(..), mapDmds, zipWithDmds, allTop, seqDemands,
+	DemandPs(..), Demands, mapDmds, zipWithDmds, allTop, seqDemands,
 
 	StrictSig(..), mkStrictSig, topSig, botSig, cprSig,
-        isTopSig,
+        isTopSig, pprStrictSig, pprDmdType,
 	splitStrictSig, increaseStrictSigArity,
-	pprIfaceStrictSig, appIsBottom, isBottomingSig, seqStrictSig,
+	appIsBottom, isBottomingSig, seqStrictSig,
      ) where
 
 #include "HsVersions.h"
 
+import {-# SOURCE #-} DataCon (DataCon)
 import StaticFlags
 import BasicTypes
 import VarEnv
@@ -41,30 +46,37 @@ import Outputable
 %************************************************************************
 
 \begin{code}
-data Demand
-  = Top			-- T; used for unlifted types too, so that
-			--	A `lub` T = T
-  | Abs			-- A
+type DmdType   = DmdTypeP DataCon
+type DmdResult = DmdResultP DataCon
+type Demand    = DemandP DataCon
+type Demands   = DemandPs DataCon
 
-  | Call Demand		-- C(d)
+data DemandP con
+  = Top			  -- T; used for unlifted types too, so that
+			  --	A `lub` T = T
+  | Abs			  -- A
 
-  | Eval Demands	-- U(ds)
+  | Call (DemandP con)	  -- C(d)
 
-  | Defer Demands	-- D(ds)
+  | Eval (DemandPs con)	  -- U(ds)
 
-  | Box Demand		-- B(d)
+  | Defer (DemandPs con)  -- D(ds)
 
-  | Bot			-- B
+  | Box (DemandP con)     -- B(d)
+
+  | Bot			  -- B
   deriving( Eq )
 	-- Equality needed for fixpoints in DmdAnal
 
-data Demands = Poly Demand	-- Polymorphic case
-	     | Prod [Demand]	-- Product case
-	     deriving( Eq )
+data DemandPs con
+  = Poly (DemandP con)      -- Polymorphic case
+  | Prod con [DemandP con]  -- "Product" case. Actually says that we demanded 
+                            -- components of this *particular* DataCon
+  deriving( Eq )
 
 allTop :: Demands -> Bool
-allTop (Poly d)  = isTop d
-allTop (Prod ds) = all isTop ds
+allTop (Poly d)    = isTop d
+allTop (Prod _ ds) = all isTop ds
 
 isTop :: Demand -> Bool
 isTop Top = True
@@ -75,16 +87,17 @@ isAbsent Abs = True
 isAbsent _   = False 
 
 mapDmds :: (Demand -> Demand) -> Demands -> Demands
-mapDmds f (Poly d)  = Poly (f d)
-mapDmds f (Prod ds) = Prod (map f ds)
+mapDmds f (Poly d)     = Poly (f d)
+mapDmds f (Prod dc ds) = Prod dc (map f ds)
 
 zipWithDmds :: (Demand -> Demand -> Demand)
 	    -> Demands -> Demands -> Demands
-zipWithDmds f (Poly d1)  (Poly d2)  = Poly (d1 `f` d2)
-zipWithDmds f (Prod ds1) (Poly d2)  = Prod [d1 `f` d2 | d1 <- ds1]
-zipWithDmds f (Poly d1)  (Prod ds2) = Prod [d1 `f` d2 | d2 <- ds2]
-zipWithDmds f (Prod ds1) (Prod ds2) 
-  | length ds1 == length ds2 = Prod (zipWithEqual "zipWithDmds" f ds1 ds2)
+zipWithDmds f (Poly d1)  (Poly d2)      = Poly (d1 `f` d2)
+zipWithDmds f (Prod dc1 ds1) (Poly d2)  = Prod dc1 [d1 `f` d2 | d1 <- ds1]
+zipWithDmds f (Poly d1)  (Prod dc2 ds2) = Prod dc2 [d1 `f` d2 | d2 <- ds2]
+zipWithDmds f (Prod dc1 ds1) (Prod dc2 ds2) 
+  | dc1 == dc2
+  , length ds1 == length ds2 = Prod dc1 (zipWithEqual "zipWithDmds" f ds1 ds2)
   | otherwise		     = Poly topDmd
 	-- This really can happen with polymorphism
 	-- \f. case f x of (a,b) -> ...
@@ -113,14 +126,14 @@ seqDemand (Box d)    = seqDemand d
 seqDemand _          = ()
 
 seqDemands :: Demands -> ()
-seqDemands (Poly d)  = seqDemand d
-seqDemands (Prod ds) = seqDemandList ds
+seqDemands (Poly d)     = seqDemand d
+seqDemands (Prod dc ds) = dc `seq` seqDemandList ds
 
 seqDemandList :: [Demand] -> ()
 seqDemandList [] = ()
 seqDemandList (d:ds) = seqDemand d `seq` seqDemandList ds
 
-instance Outputable Demand where
+instance Outputable con => Outputable (DemandP con) where
     ppr Top  = char 'T'
     ppr Abs  = char 'A'
     ppr Bot  = char 'B'
@@ -136,10 +149,10 @@ instance Outputable Demand where
     ppr (Call d)	= char 'C' <> parens (ppr d)
 
 
-instance Outputable Demands where
-    ppr (Poly Abs) = empty
-    ppr (Poly d)   = parens (ppr d <> char '*')
-    ppr (Prod ds)  = parens (hcat (map ppr ds))
+instance Outputable con => Outputable (DemandPs con) where
+    ppr (Poly Abs)   = empty
+    ppr (Poly d)     = parens (ppr d <> char '*')
+    ppr (Prod _ ds)  = parens (hcat (map ppr ds))
 	-- At one time I printed U(AAA) as U, but that
 	-- confuses (Poly Abs) with (Prod AAA), and the
 	-- worker/wrapper generation differs slightly for these two
@@ -155,11 +168,12 @@ instance Outputable Demands where
 %************************************************************************
 
 \begin{code}
-data DmdType = DmdType 
-		    DmdEnv	-- Demand on explicitly-mentioned 
-				--	free variables
-		    [Demand]	-- Demand on arguments
-		    DmdResult	-- Nature of result
+data DmdTypeP con 
+  = DmdType 
+	DmdEnv	-- Demand on explicitly-mentioned 
+		-- free variables
+	[DemandP con]	  -- Demand on arguments
+	(DmdResultP con)  -- Nature of result
 
 	-- 		IMPORTANT INVARIANT
 	-- The default demand on free variables not in the DmdEnv is:
@@ -176,10 +190,10 @@ data DmdType = DmdType
 -- This guy lets us switch off CPR analysis
 -- by making sure that everything uses TopRes instead of RetCPR
 -- Assuming, of course, that they don't mention RetCPR by name.
--- They should onlyu use retCPR
-retCPR :: DmdResult
-retCPR | opt_CprOff = TopRes
-       | otherwise  = RetCPR
+-- They should only use retCPR
+retCPR :: DataCon -> DmdResult
+retCPR dc | opt_CprOff = TopRes
+          | otherwise  = RetCPR dc
 
 seqDmdType :: DmdType -> ()
 seqDmdType (DmdType _env ds res) = 
@@ -187,10 +201,17 @@ seqDmdType (DmdType _env ds res) =
 
 type DmdEnv = VarEnv Demand
 
-data DmdResult = TopRes	-- Nothing known	
-	       | RetCPR	-- Returns a constructed product
-	       | BotRes	-- Diverges or errors
-	       deriving( Eq, Show )
+data DmdResultP con 
+  = TopRes      -- Nothing known	
+
+  | RetCPR con  -- Returns constructed data, built with dc.
+  	        -- Because we record the actual constructor
+	        -- that we construct, we can actually optimise
+	        -- sum-types as well, as long as the function only returns
+	        -- *one* of the possible constructors
+
+  | BotRes      -- Diverges or errors
+  deriving( Eq, Show )
 	-- Equality for fixpoints
 	-- Show needed for Show in Lex.Token (sigh)
 
@@ -200,29 +221,32 @@ instance Eq DmdType where
        (DmdType fv2 ds2 res2) =  ufmToList fv1 == ufmToList fv2
 			      && ds1 == ds2 && res1 == res2
 
-instance Outputable DmdType where
-  ppr (DmdType fv ds res) 
-    = hsep [text "DmdType",
-	    hcat (map ppr ds) <> ppr res,
+instance Outputable con => Outputable (DmdTypeP con) where
+  ppr dmd_ty = text "DmdType" <+> pprDmdType dmd_ty
+	    
+pprDmdType :: Outputable con => DmdTypeP con -> SDoc
+pprDmdType (DmdType fv ds res) 
+    = hsep [hcat (map ppr ds) <> ppr res,
 	    if null fv_elts then empty
 	    else braces (fsep (map pp_elt fv_elts))]
     where
       pp_elt (uniq, dmd) = ppr uniq <> text "->" <> ppr dmd
       fv_elts = ufmToList fv
 
-instance Outputable DmdResult where
-  ppr TopRes = empty	  -- Keep these distinct from Demand letters
-  ppr RetCPR = char 'm'	  -- so that we can print strictness sigs as
-  ppr BotRes = char 'b'   --    dddr
-			  -- without ambiguity
+instance Outputable con => Outputable (DmdResultP con) where
+  ppr TopRes      = empty	       -- Keep these distinct from Demand letters
+  ppr (RetCPR dc) = brackets (ppr dc)  -- so that we can print strictness sigs as
+  ppr BotRes      = char 'b'           --    dddr
+	                               -- without ambiguity
 
 emptyDmdEnv :: VarEnv Demand
 emptyDmdEnv = emptyVarEnv
 
-topDmdType, botDmdType, cprDmdType :: DmdType
+topDmdType, botDmdType :: DmdType
+cprDmdType :: DataCon -> DmdType
 topDmdType = DmdType emptyDmdEnv [] TopRes
 botDmdType = DmdType emptyDmdEnv [] BotRes
-cprDmdType = DmdType emptyVarEnv [] retCPR
+cprDmdType dc = DmdType emptyVarEnv [] (retCPR dc)
 
 isTopDmdType :: DmdType -> Bool
 -- Only used on top-level types, hence the assert
@@ -241,13 +265,13 @@ resTypeArgDmd :: DmdResult -> Demand
 -- We can get a RetCPR, because of the way in which we are (now)
 -- giving CPR info to strict arguments.  On the first pass, when
 -- nothing has demand info, we optimistically give CPR info or RetCPR to all args
-resTypeArgDmd TopRes = Top
-resTypeArgDmd RetCPR = Top
-resTypeArgDmd BotRes = Bot
+resTypeArgDmd TopRes     = Top
+resTypeArgDmd (RetCPR _) = Top
+resTypeArgDmd BotRes     = Bot
 
 returnsCPR :: DmdResult -> Bool
-returnsCPR RetCPR = True
-returnsCPR _      = False
+returnsCPR (RetCPR _) = True
+returnsCPR _          = False
 
 mkDmdType :: DmdEnv -> [Demand] -> DmdResult -> DmdType
 mkDmdType fv ds res = DmdType fv ds res
@@ -296,10 +320,13 @@ newtype StrictSig = StrictSig DmdType
 		  deriving( Eq )
 
 instance Outputable StrictSig where
-   ppr (StrictSig ty) = ppr ty
+   ppr = pprStrictSig
 
 instance Show StrictSig where
    show (StrictSig ty) = showSDoc (ppr ty)
+
+pprStrictSig :: StrictSig -> SDoc
+pprStrictSig (StrictSig dmd_ty) = pprDmdType dmd_ty
 
 mkStrictSig :: DmdType -> StrictSig
 mkStrictSig dmd_ty = StrictSig dmd_ty
@@ -315,10 +342,11 @@ increaseStrictSigArity arity_increase (StrictSig (DmdType env dmds res))
 isTopSig :: StrictSig -> Bool
 isTopSig (StrictSig ty) = isTopDmdType ty
 
-topSig, botSig, cprSig :: StrictSig
+topSig, botSig :: StrictSig
+cprSig :: DataCon -> StrictSig
 topSig = StrictSig topDmdType
 botSig = StrictSig botDmdType
-cprSig = StrictSig cprDmdType
+cprSig dc = StrictSig (cprDmdType dc)
 	
 
 -- appIsBottom returns true if an application to n args would diverge
@@ -332,11 +360,6 @@ isBottomingSig _				= False
 
 seqStrictSig :: StrictSig -> ()
 seqStrictSig (StrictSig ty) = seqDmdType ty
-
-pprIfaceStrictSig :: StrictSig -> SDoc
--- Used for printing top-level strictness pragmas in interface files
-pprIfaceStrictSig (StrictSig (DmdType _ dmds res))
-  = hcat (map ppr dmds) <> ppr res
 \end{code}
     
 

@@ -70,8 +70,7 @@ module Id (
 
 	-- ** Reading 'IdInfo' fields
 	idArity, 
-	idDemandInfo, idDemandInfo_maybe,
-	idStrictness, idStrictness_maybe, 
+	idDemandInfo, idStrictness, 
 	idUnfolding, realIdUnfolding,
 	idSpecialisation, idCoreRules, idHasRules,
 	idCafInfo,
@@ -484,17 +483,14 @@ setIdArity id arity = modifyIdInfo (`setArityInfo` arity) id
 isBottomingId :: Id -> Bool
 isBottomingId id = isBottomingSig (idStrictness id)
 
-idStrictness_maybe :: Id -> Maybe StrictSig
 idStrictness :: Id -> StrictSig
-
-idStrictness_maybe id = strictnessInfo (idInfo id)
-idStrictness       id = idStrictness_maybe id `orElse` topSig
+idStrictness id = strictnessInfo (idInfo id)
 
 setIdStrictness :: Id -> StrictSig -> Id
-setIdStrictness id sig = modifyIdInfo (`setStrictnessInfo` Just sig) id
+setIdStrictness id sig = modifyIdInfo (`setStrictnessInfo` sig) id
 
 zapIdStrictness :: Id -> Id
-zapIdStrictness id = modifyIdInfo (`setStrictnessInfo` Nothing) id
+zapIdStrictness id = modifyIdInfo (`setStrictnessInfo` topSig) id
 
 -- | This predicate says whether the 'Id' has a strict demand placed on it or
 -- has a type such that it can always be evaluated strictly (e.g., an
@@ -528,14 +524,11 @@ setIdUnfoldingLazily id unfolding = modifyIdInfo (`setUnfoldingInfoLazily` unfol
 setIdUnfolding :: Id -> Unfolding -> Id
 setIdUnfolding id unfolding = modifyIdInfo (`setUnfoldingInfo` unfolding) id
 
-idDemandInfo_maybe :: Id -> Maybe Demand
-idDemandInfo       :: Id -> Demand
-
-idDemandInfo_maybe id = demandInfo (idInfo id)
-idDemandInfo       id = demandInfo (idInfo id) `orElse` topDmd
+idDemandInfo :: Id -> Demand
+idDemandInfo id = demandInfo (idInfo id)
 
 setIdDemandInfo :: Id -> Demand -> Id
-setIdDemandInfo id dmd = modifyIdInfo (`setDemandInfo` Just dmd) id
+setIdDemandInfo id dmd = modifyIdInfo (`setDemandInfo` dmd) id
 
 	---------------------------------
 	-- SPECIALISATION
@@ -746,7 +739,7 @@ transferPolyIdInfo old_id abstract_wrt new_id
     old_occ_info    = occInfo old_info
     new_arity       = old_arity + arity_increase
     old_strictness  = strictnessInfo old_info
-    new_strictness  = fmap (increaseStrictSigArity arity_increase) old_strictness
+    new_strictness  = increaseStrictSigArity arity_increase old_strictness
 
     transfer new_info = new_info `setStrictnessInfo` new_strictness
 			         `setArityInfo` new_arity

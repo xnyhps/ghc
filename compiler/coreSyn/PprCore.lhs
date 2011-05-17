@@ -27,7 +27,6 @@ import BasicTypes
 import Util
 import Outputable
 import FastString
-import Data.Maybe
 \end{code}
 
 %************************************************************************
@@ -332,7 +331,7 @@ pprIdBndrInfo info
 
     has_prag = not (isDefaultInlinePragma prag_info)
     has_occ  = not (isNoOcc occ_info)
-    has_dmd  = case dmd_info of { Nothing -> False; Just d -> not (isTop d) }
+    has_dmd  = not (isTop dmd_info)
     has_lbv  = not (hasNoLBVarInfo lbv_info)
 
     doc = showAttributes 
@@ -357,7 +356,7 @@ ppIdInfo id info
     [ (True, pp_scope <> ppr (idDetails id))
     , (has_arity,      ptext (sLit "Arity=") <> int arity)
     , (has_caf_info,   ptext (sLit "Caf=") <> ppr caf_info)
-    , (has_strictness, ptext (sLit "Str=") <> pprStrictness str_info)
+    , (has_strictness, ptext (sLit "Str=") <> pprStrictSig str_info)
     , (has_unf,        ptext (sLit "Unf=") <> ppr unf_info)
     , (not (null rules), ptext (sLit "RULES:") <+> vcat (map pprRule rules))
     ]	-- Inline pragma, occ, demand, lbvar info
@@ -375,7 +374,7 @@ ppIdInfo id info
     has_caf_info = not (mayHaveCafRefs caf_info)
 
     str_info = strictnessInfo info
-    has_strictness = isJust str_info
+    has_strictness = not (isTopSig str_info)
 
     unf_info = unfoldingInfo info
     has_unf = hasSomeUnfolding unf_info

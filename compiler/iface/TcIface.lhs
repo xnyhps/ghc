@@ -46,7 +46,7 @@ import VarEnv
 import Name
 import NameEnv
 import OccurAnal	( occurAnalyseExpr )
-import Demand		( isBottomingSig )
+import Demand
 import Module
 import UniqFM
 import UniqSupply
@@ -1044,7 +1044,7 @@ tcIdInfo ignore_prags name ty info
     tcPrag :: IdInfo -> IfaceInfoItem -> IfL IdInfo
     tcPrag info HsNoCafRefs        = return (info `setCafInfo`   NoCafRefs)
     tcPrag info (HsArity arity)    = return (info `setArityInfo` arity)
-    tcPrag info (HsStrictness str) = return (info `setStrictnessInfo` Just str)
+    tcPrag info (HsStrictness str) = fmap (info `setStrictnessInfo`) $ tcStrictSig str
     tcPrag info (HsInline prag)    = return (info `setInlinePragInfo` prag)
 
 	-- The next two are lazy, so they don't transitively suck stuff in
@@ -1053,6 +1053,30 @@ tcIdInfo ignore_prags name ty info
     	   ; let info1 | lb        = info `setOccInfo` nonRuleLoopBreaker
 	     	       | otherwise = info
 	   ; return (info1 `setUnfoldingInfoLazily` unf) }
+
+tcStrictSig :: IfaceDmdType -> IfL StrictSig
+tcStrictSig (DmdType _ if_arg_dmds if_res_dmd)
+  = liftM2 (\arg_dmds res_dmd -> StrictSig (DmdType emptyDmdEnv arg_dmds res_dmd))
+           (mapM tcDemand if_arg_dmds)
+           (tcDmdResult if_res_dmd)
+
+tcDemand :: IfaceDemand -> IfL Demand
+tcDemand Top 	      = return Top
+tcDemand Abs 	      = return Abs
+tcDemand (Call dmd)   = fmap Call (tcDemand dmd)
+tcDemand (Eval dmds)  = fmap Eval (tcDemands dmds)
+tcDemand (Defer dmds) = fmap Defer (tcDemands dmds)
+tcDemand (Box dmd)    = fmap Box (tcDemand dmd)
+tcDemand Bot          = return Bot
+
+tcDemands :: IfaceDemands -> IfL Demands
+tcDemands (Poly dmd) = fmap Poly (tcDemand dmd)
+tcDemands (Prod data_occ dmds) = liftM2 Prod (tcIfaceDataCon data_occ) (mapM tcDemand dmds)
+
+tcDmdResult :: IfaceDmdResult -> IfL DmdResult
+tcDmdResult TopRes            = return TopRes
+tcDmdResult (RetCPR data_occ) = fmap RetCPR $ tcIfaceDataCon data_occ
+tcDmdResult BotRes            = return BotRes
 \end{code}
 
 \begin{code}
@@ -1067,9 +1091,7 @@ tcUnfolding name _ info (IfCoreUnfold stable if_expr)
                                              is_bottoming expr) }
   where
      -- Strictness should occur before unfolding!
-    is_bottoming = case strictnessInfo info of
-    		     Just sig -> isBottomingSig sig
- 		     Nothing  -> False
+    is_bottoming = isBottomingSig (strictnessInfo info)
 
 tcUnfolding name _ _ (IfCompulsory if_expr)
   = do 	{ mb_expr <- tcPragExpr name if_expr
@@ -1119,9 +1141,7 @@ tcIfaceWrapper name ty info arity get_worker
 
     	-- Again we rely here on strictness info always appearing 
 	-- before unfolding
-    strict_sig = case strictnessInfo info of
-		   Just sig -> sig
-		   Nothing  -> pprPanic "Worker info but no strictness for" (ppr name)
+    strict_sig = strictnessInfo info
 \end{code}
 
 For unfoldings we try to do the job lazily, so that we never type check

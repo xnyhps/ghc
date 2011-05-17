@@ -962,7 +962,7 @@ newLvlVar vars body_ty mb_bot
 		Nothing               -> vanillaIdInfo
 		Just (bot_arity, sig) -> vanillaIdInfo 
 					   `setArityInfo`      (arity + bot_arity)
-					   `setStrictnessInfo` Just (increaseStrictSigArity arity sig)
+					   `setStrictnessInfo` increaseStrictSigArity arity sig
     
 -- The deeply tiresome thing is that we have to apply the substitution
 -- to the rules inside each Id.  Grr.  But it matters.

@@ -1,8 +1,14 @@
 \begin{code}
 module DataCon where
 import Name( Name )
+import Outputable( Outputable )
 
 data DataCon
+
+instance Eq DataCon
+instance Show DataCon
+instance Outputable DataCon
+
 dataConName      :: DataCon -> Name
 isVanillaDataCon :: DataCon -> Bool
 \end{code}

@@ -35,7 +35,10 @@ module DataCon (
 
         -- * Splitting product types
 	splitProductType_maybe, splitProductType, deepSplitProductType,
-        deepSplitProductType_maybe
+        deepSplitProductType_maybe,
+        
+        -- * Splitting types for CPR
+        cprableDataConInstOrigArgTys_maybe
     ) where
 
 #include "HsVersions.h"
@@ -321,7 +324,7 @@ data DataCon
 					-- (before unboxing and flattening of strict fields)
 	dcOrigResTy :: Type,		-- Original result type, as seen by the user
 		-- NB: for a data instance, the original user result type may 
-		-- differ from the DataCon's representation TyCon.  Example
+		-- differ from the DataCon's representation TyCon, dcRepTyCon. 
 		--	data instance T [a] where MkT :: a -> T [a]
 		-- The OrigResTy is T [a], but the dcRepTyCon might be :T123
 
@@ -346,7 +349,8 @@ data DataCon
 		-- See also Note [Data-con worker strictness] in MkId.lhs
 
 	-- Result type of constructor is T t1..tn
-	dcRepTyCon  :: TyCon,		-- Result tycon, T
+	dcRepTyCon  :: TyCon,	-- Representation tycon, T.   The data con
+		       		-- is one of the tyConDataCons of this TyCon
 
 	dcRepType   :: Type,	-- Type of the constructor
 				-- 	forall a x y. (a~(x,y), x~y, Ord x) =>
@@ -889,6 +893,36 @@ splitProductType_maybe ty
 	      data_con = ASSERT( not (null (tyConDataCons tycon)) ) 
 			 head (tyConDataCons tycon)
 	_other -> Nothing
+
+cprableDataConInstOrigArgTys_maybe
+   :: Type        -- ^ Type of expression, t
+   -> DataCon     -- ^ Data constructor (dc :: \forall a1 .. am. t1 -> .. -> tn -> t') 
+                  --   we found constructing thing of this type
+   -> Maybe ([Type], [Type], Type, Coercion) 
+            -- ^ Universal types (s1, ..., sm), argument types
+            -- (t1[si/ai], ..., tn[si/ai]), raw type t'[si/ai]
+            -- and overall coercion co :: (t'[si/ai] ~ t)
+-- If (cprableDataConInstOrigArgTys_maybe ty dc = Just (tys, arg_tys, rep_ty, co)
+-- then
+--	dc tys :: arg_tys -> T tys 
+--      co :: T tys ~ ty
+--      rep_ty = T tys
+cprableDataConInstOrigArgTys_maybe ty dc
+  = case splitTyConApp_maybe ty of
+      Just (tycon, tycon_args)
+       	| Just (ty', co) <- instNewTyCon_maybe tycon tycon_args
+       	, not (isRecursiveTyCon tycon)
+       	, Just (tycon_args, arg_tys, raw_ty, rebuild_co) 
+       	     <- cprableDataConInstOrigArgTys_maybe ty' dc
+       	-> Just (tycon_args, arg_tys, raw_ty, rebuild_co `mkTransCo` mkSymCo co)
+       
+       	-- We can't (yet) unbox existentials, and we don't *want* to
+       	-- unbox unboxed tuples, so this is OK:
+       	| tycon == dataConTyCon dc
+        , isVanillaDataCon dc
+       	-> Just (tycon_args, dataConInstArgTys dc tycon_args, ty, mkReflCo ty)
+      
+      _ -> Nothing
 
 -- | As 'splitProductType_maybe', but panics if the 'Type' is not a product type
 splitProductType :: String -> Type -> (TyCon, [Type], DataCon, [Type])
