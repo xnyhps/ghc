@@ -274,7 +274,6 @@ data DynFlag
    -- misc opts
    | Opt_Pp
    | Opt_ForceRecomp
-   | Opt_DryRun
    | Opt_ExcessPrecision
    | Opt_EagerBlackHoling
    | Opt_ReadUserPackageConf
@@ -337,7 +336,6 @@ data ExtensionFlag
    | Opt_TemplateHaskell
    | Opt_QuasiQuotes
    | Opt_ImplicitParams
-   | Opt_Generics			-- "Derivable type classes"
    | Opt_ImplicitPrelude
    | Opt_ScopedTypeVariables
    | Opt_UnboxedTuples
@@ -359,6 +357,9 @@ data ExtensionFlag
    | Opt_DeriveFunctor
    | Opt_DeriveTraversable
    | Opt_DeriveFoldable
+   | Opt_DeriveGeneric            -- Allow deriving Generic/1
+   | Opt_DefaultSignatures        -- Allow extra signatures for defmeths
+   | Opt_Generics                 -- Old generic classes, now deprecated
 
    | Opt_TypeSynonymInstances
    | Opt_FlexibleContexts
@@ -763,9 +764,9 @@ defaultDynFlags mySettings =
         maxSimplIterations      = 4,
         shouldDumpSimplPhase    = Nothing,
         ruleCheck               = Nothing,
-        specConstrThreshold     = Just 200,
+        specConstrThreshold     = Just 2000,
         specConstrCount         = Just 3,
-        liberateCaseThreshold   = Just 200,
+        liberateCaseThreshold   = Just 2000,
         floatLamArgs            = Just 0,	-- Default: float only if no fvs
         strictnessBefore        = [],
 
@@ -874,7 +875,11 @@ languageExtensions Nothing
       -- But NB it's implied by GADTs etc
       -- SLPJ September 2010
     : Opt_NondecreasingIndentation -- This has been on by default for some time
-    : languageExtensions (Just Haskell2010)
+    : delete Opt_DatatypeContexts  -- The Haskell' committee decided to
+                                   -- remove datatype contexts from the
+                                   -- language:
+   -- http://www.haskell.org/pipermail/haskell-prime/2011-January/003335.html
+      (languageExtensions (Just Haskell2010))
 
 languageExtensions (Just Haskell98)
     = [Opt_ImplicitPrelude,
@@ -1150,7 +1155,7 @@ allFlags = map ('-':) $
 --------------- The main flags themselves ------------------
 dynamic_flags :: [Flag (CmdLineP DynFlags)]
 dynamic_flags = [
-    Flag "n"        (NoArg (setDynFlag Opt_DryRun))
+    Flag "n"        (NoArg (addWarn "The -n flag is deprecated and no longer has any effect"))
   , Flag "cpp"      (NoArg (setExtensionFlag Opt_Cpp)) 
   , Flag "F"        (NoArg (setDynFlag Opt_Pp)) 
   , Flag "#include" 
@@ -1663,7 +1668,8 @@ xFlags = [
   ( "ParallelArrays",                   Opt_ParallelArrays, nop ),
   ( "TemplateHaskell",                  Opt_TemplateHaskell, checkTemplateHaskellOk ),
   ( "QuasiQuotes",                      Opt_QuasiQuotes, nop ),
-  ( "Generics",                         Opt_Generics, nop ),
+  ( "Generics",                         Opt_Generics,
+    \ _ -> deprecate "it does nothing; look into -XDefaultSignatures and -XDeriveGeneric for generic programming support." ),
   ( "ImplicitPrelude",                  Opt_ImplicitPrelude, nop ),
   ( "RecordWildCards",                  Opt_RecordWildCards, nop ),
   ( "NamedFieldPuns",                   Opt_RecordPuns, nop ),
@@ -1705,6 +1711,8 @@ xFlags = [
   ( "DeriveFunctor",                    Opt_DeriveFunctor, nop ),
   ( "DeriveTraversable",                Opt_DeriveTraversable, nop ),
   ( "DeriveFoldable",                   Opt_DeriveFoldable, nop ),
+  ( "DeriveGeneric",                    Opt_DeriveGeneric, nop ),
+  ( "DefaultSignatures",                Opt_DefaultSignatures, nop ),
   ( "TypeSynonymInstances",             Opt_TypeSynonymInstances, nop ),
   ( "FlexibleContexts",                 Opt_FlexibleContexts, nop ),
   ( "FlexibleInstances",                Opt_FlexibleInstances, nop ),
@@ -1885,6 +1893,7 @@ glasgowExtsFlags = [
            , Opt_DeriveFunctor
            , Opt_DeriveFoldable
            , Opt_DeriveTraversable
+           , Opt_DeriveGeneric
            , Opt_FlexibleContexts
            , Opt_FlexibleInstances
            , Opt_ConstrainedClassMethods
