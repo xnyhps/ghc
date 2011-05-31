@@ -7,7 +7,8 @@
 -- in source files, and allow tagging of those things with locations
 module SrcLoc (
 	-- * SrcLoc
-	SrcLoc,			-- Abstract
+	RealSrcLoc,			-- Abstract
+	SrcLoc(..),
 
         -- ** Constructing SrcLoc
 	mkSrcLoc, mkGeneralSrcLoc,
@@ -26,12 +27,10 @@ module SrcLoc (
 	
 	-- ** Misc. operations on SrcLoc
 	pprDefnLoc,
-	
-        -- ** Predicates on SrcLoc
-        isGoodSrcLoc,
 
         -- * SrcSpan
-	SrcSpan,		-- Abstract
+	RealSrcSpan,		-- Abstract
+	SrcSpan(..),
 
         -- ** Constructing SrcSpan
 	mkGeneralSrcSpan, mkSrcSpan, 
@@ -51,7 +50,7 @@ module SrcLoc (
         srcSpanStartCol, srcSpanEndCol,
 
         -- ** Predicates on SrcSpan
-        isGoodSrcSpan, isOneLineSpan,
+        {- XXX isGoodSrcSpan, -} isOneLineSpan,
 
         -- * Located
 	Located(..), 
@@ -66,7 +65,7 @@ module SrcLoc (
 	-- ** Combining and comparing Located values
 	eqLocated, cmpLocated, combineLocs, addCLoc,
         leftmost_smallest, leftmost_largest, rightmost, 
-        spans, isSubspanOf
+        {- XXX spans, -} isSubspanOf
     ) where
 
 #include "Typeable.h"
@@ -89,10 +88,13 @@ We keep information about the {\em definition} point for each entity;
 this is the obvious stuff:
 \begin{code}
 -- | Represents a single point within a file
-data SrcLoc
+data RealSrcLoc
   = SrcLoc	FastString	-- A precise location (file name)
 		{-# UNPACK #-} !Int		-- line number, begins at 1
 		{-# UNPACK #-} !Int		-- column number, begins at 1
+
+data SrcLoc
+  = RealSrcLoc !RealSrcLoc
   | UnhelpfulLoc FastString	-- Just a general indication
 \end{code}
 
@@ -104,7 +106,7 @@ data SrcLoc
 
 \begin{code}
 mkSrcLoc :: FastString -> Int -> Int -> SrcLoc
-mkSrcLoc x line col = SrcLoc x line col
+mkSrcLoc x line col = RealSrcLoc (SrcLoc x line col)
 
 -- | Built-in "bad" 'SrcLoc' values for particular locations
 noSrcLoc, generatedSrcLoc, interactiveSrcLoc :: SrcLoc
@@ -116,35 +118,27 @@ interactiveSrcLoc = UnhelpfulLoc (fsLit "<interactive session>")
 mkGeneralSrcLoc :: FastString -> SrcLoc
 mkGeneralSrcLoc = UnhelpfulLoc 
 
--- | "Good" 'SrcLoc's have precise information about their location
-isGoodSrcLoc :: SrcLoc -> Bool
-isGoodSrcLoc (SrcLoc _ _ _) = True
-isGoodSrcLoc _other         = False
-
 -- | Gives the filename of the 'SrcLoc' if it is available, otherwise returns a dummy value
-srcLocFile :: SrcLoc -> FastString
+srcLocFile :: RealSrcLoc -> FastString
 srcLocFile (SrcLoc fname _ _) = fname
-srcLocFile _other	      = (fsLit "<unknown file")
+-- XXX srcLocFile _other	      = (fsLit "<unknown file")
 
 -- | Raises an error when used on a "bad" 'SrcLoc'
-srcLocLine :: SrcLoc -> Int
+srcLocLine :: RealSrcLoc -> Int
 srcLocLine (SrcLoc _ l _) = l
-srcLocLine (UnhelpfulLoc s) = pprPanic "srcLocLine" (ftext s)
 
 -- | Raises an error when used on a "bad" 'SrcLoc'
-srcLocCol :: SrcLoc -> Int
+srcLocCol :: RealSrcLoc -> Int
 srcLocCol (SrcLoc _ _ c) = c
-srcLocCol (UnhelpfulLoc s) = pprPanic "srcLocCol" (ftext s)
 
 -- | Move the 'SrcLoc' down by one line if the character is a newline,
 -- to the next 8-char tabstop if it is a tab, and across by one
 -- character in any other case
-advanceSrcLoc :: SrcLoc -> Char -> SrcLoc
+advanceSrcLoc :: RealSrcLoc -> Char -> RealSrcLoc
 advanceSrcLoc (SrcLoc f l _) '\n' = SrcLoc f  (l + 1) 1
 advanceSrcLoc (SrcLoc f l c) '\t' = SrcLoc f  l (((((c - 1) `shiftR` 3) + 1)
                                                   `shiftL` 3) + 1)
 advanceSrcLoc (SrcLoc f l c) _    = SrcLoc f  l (c + 1)
-advanceSrcLoc loc            _    = loc -- Better than nothing
 \end{code}
 
 %************************************************************************
@@ -157,21 +151,31 @@ advanceSrcLoc loc            _    = loc -- Better than nothing
 -- SrcLoc is an instance of Ord so that we can sort error messages easily
 instance Eq SrcLoc where
   loc1 == loc2 = case loc1 `cmpSrcLoc` loc2 of
-		   EQ     -> True
-		   _other -> False
+                 EQ     -> True
+                 _other -> False
+
+instance Eq RealSrcLoc where
+  loc1 == loc2 = case loc1 `cmpRealSrcLoc` loc2 of
+                 EQ     -> True
+                 _other -> False
 
 instance Ord SrcLoc where
   compare = cmpSrcLoc
-   
+
+instance Ord RealSrcLoc where
+  compare = cmpRealSrcLoc
+
 cmpSrcLoc :: SrcLoc -> SrcLoc -> Ordering
 cmpSrcLoc (UnhelpfulLoc s1) (UnhelpfulLoc s2) = s1 `compare` s2
-cmpSrcLoc (UnhelpfulLoc _)  (SrcLoc _ _ _)    = GT
-cmpSrcLoc (SrcLoc _ _ _)    (UnhelpfulLoc _)  = LT
+cmpSrcLoc (UnhelpfulLoc _)  (RealSrcLoc _)    = GT
+cmpSrcLoc (RealSrcLoc _)    (UnhelpfulLoc _)  = LT
+cmpSrcLoc (RealSrcLoc l1)   (RealSrcLoc l2)   = (l1 `compare` l2)
 
-cmpSrcLoc (SrcLoc s1 l1 c1) (SrcLoc s2 l2 c2)      
+cmpRealSrcLoc :: RealSrcLoc -> RealSrcLoc -> Ordering
+cmpRealSrcLoc (SrcLoc s1 l1 c1) (SrcLoc s2 l2 c2)
   = (s1 `compare` s2) `thenCmp` (l1 `compare` l2) `thenCmp` (c1 `compare` c2)
 
-instance Outputable SrcLoc where
+instance Outputable RealSrcLoc where
     ppr (SrcLoc src_path src_line src_col)
       = getPprStyle $ \ sty ->
         if userStyle sty || debugStyle sty then
@@ -183,7 +187,15 @@ instance Outputable SrcLoc where
             hcat [text "{-# LINE ", int src_line, space,
                   char '\"', pprFastFilePath src_path, text " #-}"]
 
+instance Outputable SrcLoc where
+    ppr (RealSrcLoc l) = ppr l
     ppr (UnhelpfulLoc s)  = ftext s
+
+instance Data RealSrcSpan where
+  -- don't traverse?
+  toConstr _   = abstractConstr "RealSrcSpan"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "RealSrcSpan"
 
 instance Data SrcSpan where
   -- don't traverse?
@@ -209,7 +221,7 @@ The end position is defined to be the column /after/ the end of the
 span.  That is, a span of (1,1)-(1,2) is one character long, and a
 span of (1,1)-(1,1) is zero characters long.
 -}
-data SrcSpan
+data RealSrcSpan
   = SrcSpanOneLine 		-- a common case: a single line
 	{ srcSpanFile     :: !FastString,
 	  srcSpanLine     :: {-# UNPACK #-} !Int,
@@ -230,7 +242,15 @@ data SrcSpan
 	  srcSpanLine	  :: {-# UNPACK #-} !Int,
 	  srcSpanCol      :: {-# UNPACK #-} !Int
 	}
+#ifdef DEBUG
+  deriving (Eq, Typeable, Show) -- Show is used by Lexer.x, becuase we
+                                -- derive Show for Token
+#else
+  deriving (Eq, Typeable)
+#endif
 
+data SrcSpan =
+    RealSrcSpan !RealSrcSpan
   | UnhelpfulSpan !FastString	-- Just a general indication
 				-- also used to indicate an empty span
 
@@ -253,13 +273,12 @@ mkGeneralSrcSpan = UnhelpfulSpan
 -- | Create a 'SrcSpan' corresponding to a single point
 srcLocSpan :: SrcLoc -> SrcSpan
 srcLocSpan (UnhelpfulLoc str) = UnhelpfulSpan str
-srcLocSpan (SrcLoc file line col) = SrcSpanPoint file line col
+srcLocSpan (RealSrcLoc (SrcLoc file line col))
+    = RealSrcSpan (SrcSpanPoint file line col)
 
 -- | Create a 'SrcSpan' between two points in a file
-mkSrcSpan :: SrcLoc -> SrcLoc -> SrcSpan
-mkSrcSpan (UnhelpfulLoc str) _ = UnhelpfulSpan str
-mkSrcSpan _ (UnhelpfulLoc str) = UnhelpfulSpan str
-mkSrcSpan loc1 loc2
+mkRealSrcSpan :: RealSrcLoc -> RealSrcLoc -> RealSrcSpan
+mkRealSrcSpan loc1 loc2
   | line1 == line2 = if col1 == col2
 			then SrcSpanPoint file line1 col1
 			else SrcSpanOneLine file line1 col1 col2
@@ -271,12 +290,32 @@ mkSrcSpan loc1 loc2
 	col2 = srcLocCol loc2
 	file = srcLocFile loc1
 
+-- | Create a 'SrcSpan' between two points in a file
+mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> SrcSpan
+mkSrcSpan loc1 loc2 = RealSrcSpan (mkRealSrcSpan loc1 loc2)
+
+{-
+XXX
+-- | Create a 'SrcSpan' between two points in a file
+mkSrcSpan :: SrcLoc -> SrcLoc -> SrcSpan
+mkSrcSpan (UnhelpfulLoc str) _ = UnhelpfulSpan str
+mkSrcSpan _ (UnhelpfulLoc str) = UnhelpfulSpan str
+mkSrcSpan (RealSrcLoc loc1) (RealSrcLoc loc2)
+    = RealSrcSpan (mkRealSrcSpan loc1 loc2)
+-}
+
 -- | Combines two 'SrcSpan' into one that spans at least all the characters
 -- within both spans. Assumes the "file" part is the same in both inputs
 combineSrcSpans	:: SrcSpan -> SrcSpan -> SrcSpan
 combineSrcSpans	(UnhelpfulSpan _) r = r -- this seems more useful
 combineSrcSpans	l (UnhelpfulSpan _) = l
-combineSrcSpans	span1 span2
+combineSrcSpans	(RealSrcSpan span1) (RealSrcSpan span2)
+    = RealSrcSpan (combineRealSrcSpans span1 span2)
+
+-- | Combines two 'SrcSpan' into one that spans at least all the characters
+-- within both spans. Assumes the "file" part is the same in both inputs
+combineRealSrcSpans :: RealSrcSpan -> RealSrcSpan -> RealSrcSpan
+combineRealSrcSpans span1 span2
  = if line_start == line_end 
    then if col_start == col_end
         then SrcSpanPoint     file line_start col_start
@@ -298,18 +337,20 @@ combineSrcSpans	span1 span2
 
 \begin{code}
 -- | Test if a 'SrcSpan' is "good", i.e. has precise location information
+{-
+XXX
 isGoodSrcSpan :: SrcSpan -> Bool
 isGoodSrcSpan SrcSpanOneLine{} = True
 isGoodSrcSpan SrcSpanMultiLine{} = True
 isGoodSrcSpan SrcSpanPoint{} = True
 isGoodSrcSpan _ = False
+-}
 
 isOneLineSpan :: SrcSpan -> Bool
 -- ^ True if the span is known to straddle only one line.
 -- For "bad" 'SrcSpan', it returns False
-isOneLineSpan s
-  | isGoodSrcSpan s = srcSpanStartLine s == srcSpanEndLine s
-  | otherwise	    = False		
+isOneLineSpan (RealSrcSpan s) = srcSpanStartLine s == srcSpanEndLine s
+isOneLineSpan (UnhelpfulSpan _) = False
 
 \end{code}
 
@@ -322,33 +363,29 @@ isOneLineSpan s
 \begin{code}
 
 -- | Raises an error when used on a "bad" 'SrcSpan'
-srcSpanStartLine :: SrcSpan -> Int
+srcSpanStartLine :: RealSrcSpan -> Int
 -- | Raises an error when used on a "bad" 'SrcSpan'
-srcSpanEndLine :: SrcSpan -> Int
+srcSpanEndLine :: RealSrcSpan -> Int
 -- | Raises an error when used on a "bad" 'SrcSpan'
-srcSpanStartCol :: SrcSpan -> Int
+srcSpanStartCol :: RealSrcSpan -> Int
 -- | Raises an error when used on a "bad" 'SrcSpan'
-srcSpanEndCol :: SrcSpan -> Int
+srcSpanEndCol :: RealSrcSpan -> Int
 
 srcSpanStartLine SrcSpanOneLine{ srcSpanLine=l } = l
 srcSpanStartLine SrcSpanMultiLine{ srcSpanSLine=l } = l
 srcSpanStartLine SrcSpanPoint{ srcSpanLine=l } = l
-srcSpanStartLine _ = panic "SrcLoc.srcSpanStartLine"
 
 srcSpanEndLine SrcSpanOneLine{ srcSpanLine=l } = l
 srcSpanEndLine SrcSpanMultiLine{ srcSpanELine=l } = l
 srcSpanEndLine SrcSpanPoint{ srcSpanLine=l } = l
-srcSpanEndLine _ = panic "SrcLoc.srcSpanEndLine"
 
 srcSpanStartCol SrcSpanOneLine{ srcSpanSCol=l } = l
 srcSpanStartCol SrcSpanMultiLine{ srcSpanSCol=l } = l
 srcSpanStartCol SrcSpanPoint{ srcSpanCol=l } = l
-srcSpanStartCol _ = panic "SrcLoc.srcSpanStartCol"
 
 srcSpanEndCol SrcSpanOneLine{ srcSpanECol=c } = c
 srcSpanEndCol SrcSpanMultiLine{ srcSpanECol=c } = c
 srcSpanEndCol SrcSpanPoint{ srcSpanCol=c } = c
-srcSpanEndCol _ = panic "SrcLoc.srcSpanEndCol"
 
 \end{code}
 
@@ -366,22 +403,20 @@ srcSpanStart :: SrcSpan -> SrcLoc
 srcSpanEnd :: SrcSpan -> SrcLoc
 
 srcSpanStart (UnhelpfulSpan str) = UnhelpfulLoc str
-srcSpanStart s = mkSrcLoc (srcSpanFile s) 
+srcSpanStart (RealSrcSpan s) = mkSrcLoc (srcSpanFile s) 
 			  (srcSpanStartLine s)
 		 	  (srcSpanStartCol s)
 
 srcSpanEnd (UnhelpfulSpan str) = UnhelpfulLoc str
-srcSpanEnd s = 
+srcSpanEnd (RealSrcSpan s) = 
   mkSrcLoc (srcSpanFile s) 
 	   (srcSpanEndLine s)
  	   (srcSpanEndCol s)
 
 -- | Obtains the filename for a 'SrcSpan' if it is "good"
 srcSpanFileName_maybe :: SrcSpan -> Maybe FastString
-srcSpanFileName_maybe (SrcSpanOneLine { srcSpanFile = nm })   = Just nm
-srcSpanFileName_maybe (SrcSpanMultiLine { srcSpanFile = nm }) = Just nm
-srcSpanFileName_maybe (SrcSpanPoint { srcSpanFile = nm})      = Just nm
-srcSpanFileName_maybe _                                       = Nothing
+srcSpanFileName_maybe (RealSrcSpan s)   = Just (srcSpanFile s)
+srcSpanFileName_maybe (UnhelpfulSpan _) = Nothing
 
 \end{code}
 
@@ -400,15 +435,30 @@ instance Ord SrcSpan where
      (srcSpanEnd   a `compare` srcSpanEnd   b)
 
 
-instance Outputable SrcSpan where
+instance Outputable RealSrcSpan where
     ppr span
       = getPprStyle $ \ sty ->
         if userStyle sty || debugStyle sty then
-           pprUserSpan True span
+           error "XXX" -- pprUserSpan True span
         else
            hcat [text "{-# LINE ", int (srcSpanStartLine span), space,
                  char '\"', pprFastFilePath $ srcSpanFile span, text " #-}"]
 
+-- XXX Remove this instance?
+instance Outputable SrcSpan where
+    ppr _span
+      = getPprStyle $ \ sty ->
+        if userStyle sty || debugStyle sty then
+           error "XXX" -- pprUserSpan True span
+        else
+           error "XXX"
+           {-
+           hcat [text "{-# LINE ", int (srcSpanStartLine span), space,
+                 char '\"', pprFastFilePath $ srcSpanFile span, text " #-}"]
+           -}
+
+{-
+XXX
 pprUserSpan :: Bool -> SrcSpan -> SDoc
 pprUserSpan show_path (SrcSpanOneLine src_path line start_col end_col)
   = hcat [ ppWhen show_path (pprFastFilePath src_path <> colon)
@@ -433,12 +483,11 @@ pprUserSpan show_path (SrcSpanPoint src_path line col)
          , int line, char ':', int col ]
 
 pprUserSpan _ (UnhelpfulSpan s)  = ftext s
+-}
 
-pprDefnLoc :: SrcSpan -> SDoc
+pprDefnLoc :: RealSrcSpan -> SDoc
 -- ^ Pretty prints information about the 'SrcSpan' in the style "defined at ..."
-pprDefnLoc loc
-  | isGoodSrcSpan loc = ptext (sLit "Defined at") <+> ppr loc
-  | otherwise	      = ppr loc
+pprDefnLoc loc = ptext (sLit "Defined at") <+> ppr loc
 \end{code}
 
 %************************************************************************
@@ -487,7 +536,7 @@ instance Functor Located where
   fmap f (L l e) = L l (f e)
 
 instance Outputable e => Outputable (Located e) where
-  ppr (L l e) = ifPprDebug (braces (pprUserSpan False l)) $$ ppr e
+  ppr (L _l _e) = error "XXX" -- ifPprDebug (braces (pprUserSpan False l)) $$ ppr e
 		-- Print spans without the file name etc
 \end{code}
 
@@ -507,10 +556,13 @@ leftmost_largest a b = (srcSpanStart a `compare` srcSpanStart b)
                        (srcSpanEnd b `compare` srcSpanEnd a)
 
 
+{-
+XXX
 -- | Determines whether a span encloses a given line and column index
 spans :: SrcSpan -> (Int, Int) -> Bool
 spans span (l,c) = srcSpanStart span <= loc && loc <= srcSpanEnd span
    where loc = mkSrcLoc (srcSpanFile span) l c
+-}
 
 -- | Determines whether a span is enclosed by another one
 isSubspanOf :: SrcSpan -- ^ The span that may be enclosed by the other

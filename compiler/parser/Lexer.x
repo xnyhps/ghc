@@ -721,7 +721,7 @@ reservedSymsFM = listToUFM $
 -- -----------------------------------------------------------------------------
 -- Lexer actions
 
-type Action = SrcSpan -> StringBuffer -> Int -> P (Located Token)
+type Action = RealSrcSpan -> StringBuffer -> Int -> P (Located Token)
 
 special :: Token -> Action
 special tok span _buf _len = return (L span tok)
@@ -1154,7 +1154,7 @@ setLine code span buf len = do
 setFile :: Int -> Action
 setFile code span buf len = do
   let file = lexemeToFastString (stepOn buf) (len-2)
-  setAlrLastLoc noSrcSpan
+  -- XXX setAlrLastLoc noSrcSpan
   setSrcLoc (mkSrcLoc file (srcSpanEndLine span) (srcSpanEndCol span))
   _ <- popLexState
   pushLexState code
@@ -1293,7 +1293,7 @@ lex_char_tok span _buf _len = do	-- We've seen '
 			if th_exts then return (L (mkSrcSpan loc end) ITvarQuote)
 				   else lit_error i2
 
-finish_char_tok :: SrcLoc -> Char -> P (Located Token)
+finish_char_tok :: RealSrcLoc -> Char -> P (Located Token)
 finish_char_tok loc ch	-- We've already seen the closing quote
 			-- Just need to check for trailing #
   = do	magicHash <- extension magicHashEnabled
@@ -1502,7 +1502,7 @@ data PState = PState {
         messages   :: Messages,
         last_loc   :: SrcSpan,	-- pos of previous token
 	last_len   :: !Int,	-- len of previous token
-        loc        :: SrcLoc,   -- current loc (end of prev token + 1)
+        loc        :: RealSrcLoc,   -- current loc (end of prev token + 1)
 	extsBitmap :: !Int,	-- bitmap that determines permitted extensions
 	context	   :: [LayoutContext],
 	lex_state  :: [Int],
@@ -1561,7 +1561,7 @@ failP msg = P $ \s -> PFailed (last_loc s) (text msg)
 failMsgP :: String -> P a
 failMsgP msg = P $ \s -> PFailed (last_loc s) (text msg)
 
-failLocMsgP :: SrcLoc -> SrcLoc -> String -> P a
+failLocMsgP :: RealSrcLoc -> RealSrcLoc -> String -> P a
 failLocMsgP loc1 loc2 str = P $ \_ -> PFailed (mkSrcSpan loc1 loc2) (text str)
 
 failSpanMsgP :: SrcSpan -> SDoc -> P a
@@ -1587,10 +1587,10 @@ getExts = P $ \s -> POk s (extsBitmap s)
 setExts :: (Int -> Int) -> P ()
 setExts f = P $ \s -> POk s{ extsBitmap = f (extsBitmap s) } ()
 
-setSrcLoc :: SrcLoc -> P ()
+setSrcLoc :: RealSrcLoc -> P ()
 setSrcLoc new_loc = P $ \s -> POk s{loc=new_loc} ()
 
-getSrcLoc :: P SrcLoc
+getSrcLoc :: P RealSrcLoc
 getSrcLoc = P $ \s@(PState{ loc=loc }) -> POk s loc
 
 setLastToken :: SrcSpan -> Int -> P ()
@@ -1599,7 +1599,7 @@ setLastToken loc len = P $ \s -> POk s {
   last_len=len
   } ()
 
-data AlexInput = AI SrcLoc StringBuffer
+data AlexInput = AI RealSrcLoc StringBuffer
 
 alexInputPrevChar :: AlexInput -> Char
 alexInputPrevChar (AI _ buf) = prevChar buf '\n'
@@ -1844,14 +1844,14 @@ nondecreasingIndentation flags = testBit flags nondecreasingIndentationBit
 
 -- PState for parsing options pragmas
 --
-pragState :: DynFlags -> StringBuffer -> SrcLoc -> PState
+pragState :: DynFlags -> StringBuffer -> RealSrcLoc -> PState
 pragState dynflags buf loc = (mkPState dynflags buf loc) {
                                  lex_state = [bol, option_prags, 0]
                              }
 
 -- create a parse state
 --
-mkPState :: DynFlags -> StringBuffer -> SrcLoc -> PState
+mkPState :: DynFlags -> StringBuffer -> RealSrcLoc -> PState
 mkPState flags buf loc =
   PState {
       buffer        = buf,
@@ -1865,7 +1865,7 @@ mkPState flags buf loc =
       lex_state     = [bol, 0],
       alr_pending_implicit_tokens = [],
       alr_next_token = Nothing,
-      alr_last_loc = noSrcSpan,
+      alr_last_loc = error "XXX", -- noSrcSpan,
       alr_context = [],
       alr_expecting_ocurly = Nothing,
       alr_justClosedExplicitLetBlock = False
@@ -2015,8 +2015,9 @@ alternativeLayoutRuleToken t
          let transitional = xopt Opt_AlternativeLayoutRuleTransitional dflags
              thisLoc = getLoc t
              thisCol = srcSpanStartCol thisLoc
-             newLine = (lastLoc == noSrcSpan)
-                    || (srcSpanStartLine thisLoc > srcSpanEndLine lastLoc)
+             newLine = -- XXX (lastLoc == noSrcSpan)
+                    -- XXX ||
+                       (srcSpanStartLine thisLoc > srcSpanEndLine lastLoc)
          case (unLoc t, context, mExpectingOCurly) of
              -- This case handles a GHC extension to the original H98
              -- layout rule...
@@ -2225,7 +2226,7 @@ lexToken = do
         span `seq` setLastToken span bytes
         t span buf bytes
 
-reportLexError :: SrcLoc -> SrcLoc -> StringBuffer -> [Char] -> P a
+reportLexError :: RealSrcLoc -> RealSrcLoc -> StringBuffer -> [Char] -> P a
 reportLexError loc1 loc2 buf str
   | atEnd buf = failLocMsgP loc1 loc2 (str ++ " at end of input")
   | otherwise =
@@ -2236,7 +2237,7 @@ reportLexError loc1 loc2 buf str
     then failLocMsgP loc2 loc2 (str ++ " (UTF-8 decoding error)")
     else failLocMsgP loc1 loc2 (str ++ " at character " ++ show c)
 
-lexTokenStream :: StringBuffer -> SrcLoc -> DynFlags -> ParseResult [Located Token]
+lexTokenStream :: StringBuffer -> RealSrcLoc -> DynFlags -> ParseResult [Located Token]
 lexTokenStream buf loc dflags = unP go initState
     where dflags' = dopt_set (dopt_unset dflags Opt_Haddock) Opt_KeepRawTokenStream
           initState = mkPState dflags' buf loc
