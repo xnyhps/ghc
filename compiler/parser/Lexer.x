@@ -765,7 +765,7 @@ hopefully_open_brace span buf len
                  Layout prev_off : _ -> prev_off < offset
                  _                   -> True
       if isOK then pop_and open_brace span buf len
-              else failSpanMsgP span (text "Missing block")
+              else failSpanMsgP (RealSrcSpan span) (text "Missing block")
 
 pop_and :: Action -> Action
 pop_and act span buf len = do _ <- popLexState
@@ -931,7 +931,7 @@ docCommentEnd input commentAcc docType buf span = do
   setInput input
   let (AI loc nextBuf) = input
       comment = reverse commentAcc
-      span' = mkSrcSpan (realSrcSpanStart span) loc
+      span' = mkRealSrcSpan (realSrcSpanStart span) loc
       last_len = byteDiff buf nextBuf
       
   span `seq` setLastToken span' last_len
@@ -1171,7 +1171,7 @@ lex_string_prag mkTok span _buf _len
          start <- getSrcLoc
          tok <- go [] input
          end <- getSrcLoc
-         return (L (mkSrcSpan start end) tok)
+         return (L (mkRealSrcSpan start end) tok)
     where go acc input
               = if isString input "#-}"
                    then do setInput input
@@ -1196,7 +1196,7 @@ lex_string_tok :: Action
 lex_string_tok span _buf _len = do
   tok <- lex_string ""
   end <- getSrcLoc 
-  return (L (mkSrcSpan (realSrcSpanStart span) end) tok)
+  return (L (mkRealSrcSpan (realSrcSpanStart span) end) tok)
 
 lex_string :: String -> P Token
 lex_string s = do
@@ -1265,7 +1265,7 @@ lex_char_tok span _buf _len = do	-- We've seen '
 		  th_exts <- extension thEnabled
 		  if th_exts then do
 			setInput i2
-			return (L (mkSrcSpan loc end2)  ITtyQuote)
+			return (L (mkRealSrcSpan loc end2)  ITtyQuote)
 		   else lit_error i1
 
 	Just ('\\', i2@(AI _end2 _)) -> do 	-- We've seen 'backslash
@@ -1291,7 +1291,7 @@ lex_char_tok span _buf _len = do	-- We've seen '
 					-- If TH is on, just parse the quote only
 			th_exts <- extension thEnabled	
 			let (AI end _) = i1
-			if th_exts then return (L (mkSrcSpan loc end) ITvarQuote)
+			if th_exts then return (L (mkRealSrcSpan loc end) ITvarQuote)
 				   else lit_error i2
 
 finish_char_tok :: RealSrcLoc -> Char -> P (RealLocated Token)
@@ -1303,11 +1303,11 @@ finish_char_tok loc ch	-- We've already seen the closing quote
 		case alexGetChar' i of
 			Just ('#',i@(AI end _)) -> do
 				setInput i
-				return (L (mkSrcSpan loc end) (ITprimchar ch))
+				return (L (mkRealSrcSpan loc end) (ITprimchar ch))
 			_other ->
-				return (L (mkSrcSpan loc end) (ITchar ch))
+				return (L (mkRealSrcSpan loc end) (ITchar ch))
 	    else do
-		   return (L (mkSrcSpan loc end) (ITchar ch))
+		   return (L (mkRealSrcSpan loc end) (ITchar ch))
 
 isAny :: Char -> Bool
 isAny c | c > '\x7f' = isPrint c
@@ -1442,10 +1442,10 @@ lex_quasiquote_tok span buf len = do
   quoteStart <- getSrcLoc              
   quote <- lex_quasiquote ""
   end <- getSrcLoc 
-  return (L (mkSrcSpan (realSrcSpanStart span) end)
+  return (L (mkRealSrcSpan (realSrcSpanStart span) end)
            (ITquasiQuote (mkFastString quoter,
                           mkFastString (reverse quote),
-                          mkSrcSpan quoteStart end)))
+                          mkRealSrcSpan quoteStart end)))
 
 lex_quasiquote :: String -> P String
 lex_quasiquote s = do
@@ -1473,12 +1473,12 @@ lex_quasiquote s = do
 
 warn :: DynFlag -> SDoc -> Action
 warn option warning srcspan _buf _len = do
-    addWarning option srcspan warning
+    addWarning option (RealSrcSpan srcspan) warning
     lexToken
 
 warnThen :: DynFlag -> SDoc -> Action -> Action
 warnThen option warning action srcspan buf len = do
-    addWarning option srcspan warning
+    addWarning option (RealSrcSpan srcspan) warning
     action srcspan buf len
 
 -- -----------------------------------------------------------------------------
@@ -1492,7 +1492,7 @@ data LayoutContext
 data ParseResult a
   = POk PState a
   | PFailed 
-	RealSrcSpan		-- The start and end of the text span related to
+	SrcSpan		-- The start and end of the text span related to
 			-- the error.  Might be used in environments which can 
 			-- show this span, e.g. by highlighting it.
 	Message		-- The error message
@@ -1557,15 +1557,15 @@ thenP :: P a -> (a -> P b) -> P b
 		PFailed span err -> PFailed span err
 
 failP :: String -> P a
-failP msg = P $ \s -> PFailed (last_loc s) (text msg)
+failP msg = P $ \s -> PFailed (RealSrcSpan (last_loc s)) (text msg)
 
 failMsgP :: String -> P a
-failMsgP msg = P $ \s -> PFailed (last_loc s) (text msg)
+failMsgP msg = P $ \s -> PFailed (RealSrcSpan (last_loc s)) (text msg)
 
 failLocMsgP :: RealSrcLoc -> RealSrcLoc -> String -> P a
-failLocMsgP loc1 loc2 str = P $ \_ -> PFailed (mkSrcSpan loc1 loc2) (text str)
+failLocMsgP loc1 loc2 str = P $ \_ -> PFailed (RealSrcSpan (mkRealSrcSpan loc1 loc2)) (text str)
 
-failSpanMsgP :: RealSrcSpan -> SDoc -> P a
+failSpanMsgP :: SrcSpan -> SDoc -> P a
 failSpanMsgP span msg = P $ \_ -> PFailed span msg
 
 getPState :: P PState
@@ -1858,7 +1858,7 @@ mkPState flags buf loc =
       buffer        = buf,
       dflags        = flags,
       messages      = emptyMessages,
-      last_loc      = mkSrcSpan loc loc,
+      last_loc      = mkRealSrcSpan loc loc,
       last_len      = 0,
       loc           = loc,
       extsBitmap    = fromIntegral bitmap,
@@ -1901,10 +1901,10 @@ mkPState flags buf loc =
       b `setBitIf` cond | cond      = bit b
                         | otherwise = 0
 
-addWarning :: DynFlag -> RealSrcSpan -> SDoc -> P ()
+addWarning :: DynFlag -> SrcSpan -> SDoc -> P ()
 addWarning option srcspan warning
  = P $ \s@PState{messages=(ws,es), dflags=d} ->
-       let warning' = mkWarnMsg (RealSrcSpan srcspan) alwaysQualify warning
+       let warning' = mkWarnMsg srcspan alwaysQualify warning
            ws' = if dopt option d then ws `snocBag` warning' else ws
        in POk s{messages=(ws', es)} ()
 
@@ -1922,7 +1922,7 @@ popContext = P $ \ s@(PState{ buffer = buf, context = ctx,
                               last_len = len, last_loc = last_loc }) ->
   case ctx of
 	(_:tl) -> POk s{ context = tl } ()
-	[]     -> PFailed last_loc (srcParseErr buf len)
+	[]     -> PFailed (RealSrcSpan last_loc) (srcParseErr buf len)
 
 -- Push a new layout context at the indentation of the last token read.
 -- This is only used at the outer level of a module when the 'module'
@@ -1961,7 +1961,7 @@ srcParseErr buf len
 srcParseFail :: P a
 srcParseFail = P $ \PState{ buffer = buf, last_len = len, 	
 			    last_loc = last_loc } ->
-    PFailed last_loc (srcParseErr buf len)
+    PFailed (RealSrcSpan last_loc) (srcParseErr buf len)
 
 -- A lexical error is reported at a particular position in the source file,
 -- not over a token range.
@@ -1975,13 +1975,13 @@ lexError str = do
 -- This is the top-level function: called from the parser each time a
 -- new token is to be read from the input.
 
-lexer :: (RealLocated Token -> P a) -> P a
+lexer :: (Located Token -> P a) -> P a
 lexer cont = do
   alr <- extension alternativeLayoutRule
   let lexTokenFun = if alr then lexTokenAlr else lexToken
-  tok@(L _span _tok__) <- lexTokenFun
-  --trace ("token: " ++ show _tok__) $ do
-  cont tok
+  (L span tok) <- lexTokenFun
+  --trace ("token: " ++ show tok) $ do
+  cont (L (RealSrcSpan span) tok)
 
 lexTokenAlr :: P (RealLocated Token)
 lexTokenAlr = do mPending <- popPendingImplicitToken
@@ -2078,7 +2078,7 @@ alternativeLayoutRuleToken t
              (ITwhere, ALRLayout _ col : ls, _)
               | newLine && thisCol == col && transitional ->
                  do addWarning Opt_WarnAlternativeLayoutRuleTransitional
-                               thisLoc
+                               (RealSrcSpan thisLoc)
                                (transitionalAlternativeLayoutWarning
                                     "`where' clause at the same depth as implicit layout block")
                     setALRContext ls
@@ -2090,7 +2090,7 @@ alternativeLayoutRuleToken t
              (ITvbar, ALRLayout _ col : ls, _)
               | newLine && thisCol == col && transitional ->
                  do addWarning Opt_WarnAlternativeLayoutRuleTransitional
-                               thisLoc
+                               (RealSrcSpan thisLoc)
                                (transitionalAlternativeLayoutWarning
                                     "`|' at the same depth as implicit layout block")
                     setALRContext ls
@@ -2212,7 +2212,7 @@ lexToken = do
   exts <- getExts
   case alexScanUser exts inp sc of
     AlexEOF -> do
-        let span = mkSrcSpan loc1 loc1
+        let span = mkRealSrcSpan loc1 loc1
         setLastToken span 0
         return (L span ITeof)
     AlexError (AI loc2 buf) ->
@@ -2222,7 +2222,7 @@ lexToken = do
         lexToken
     AlexToken inp2@(AI end buf2) _ t -> do
         setInput inp2
-        let span = mkSrcSpan loc1 end
+        let span = mkRealSrcSpan loc1 end
         let bytes = byteDiff buf buf2
         span `seq` setLastToken span bytes
         t span buf bytes
@@ -2238,7 +2238,7 @@ reportLexError loc1 loc2 buf str
     then failLocMsgP loc2 loc2 (str ++ " (UTF-8 decoding error)")
     else failLocMsgP loc1 loc2 (str ++ " at character " ++ show c)
 
-lexTokenStream :: StringBuffer -> RealSrcLoc -> DynFlags -> ParseResult [RealLocated Token]
+lexTokenStream :: StringBuffer -> RealSrcLoc -> DynFlags -> ParseResult [Located Token]
 lexTokenStream buf loc dflags = unP go initState
     where dflags' = dopt_set (dopt_unset dflags Opt_Haddock) Opt_KeepRawTokenStream
           initState = mkPState dflags' buf loc

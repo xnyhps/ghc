@@ -187,17 +187,17 @@ module GHC (
 
 	-- ** Source locations
 	SrcLoc, pprDefnLoc,
-        mkSrcLoc, isGoodSrcLoc, noSrcLoc,
+        mkSrcLoc, {- XXX isGoodSrcLoc, -} noSrcLoc,
 	srcLocFile, srcLocLine, srcLocCol,
         SrcSpan,
-        mkSrcSpan, srcLocSpan, isGoodSrcSpan, noSrcSpan,
+        mkSrcSpan, srcLocSpan, {- XXX isGoodSrcSpan, -} noSrcSpan,
         srcSpanStart, srcSpanEnd,
 	srcSpanFile, 
         srcSpanStartLine, srcSpanEndLine, 
         srcSpanStartCol, srcSpanEndCol,
 
         -- ** Located
-	Located(..),
+	GenLocated(..), Located,
 
 	-- *** Constructing Located
 	noLoc, mkGeneralLocated,
@@ -207,8 +207,8 @@ module GHC (
 
 	-- *** Combining and comparing Located values
 	eqLocated, cmpLocated, combineLocs, addCLoc,
-        leftmost_smallest, leftmost_largest, rightmost,
-        spans, isSubspanOf,
+        -- XXX leftmost_smallest, leftmost_largest, rightmost,
+        -- XXX spans, isSubspanOf,
 
 	-- * Exceptions
 	GhcException(..), showGhcException,
@@ -1101,7 +1101,7 @@ getModuleSourceAndFlags mod = do
 getTokenStream :: GhcMonad m => Module -> m [Located Token]
 getTokenStream mod = do
   (sourceFile, source, flags) <- getModuleSourceAndFlags mod
-  let startLoc = mkSrcLoc (mkFastString sourceFile) 1 1
+  let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts  -> return ts
     PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
@@ -1112,7 +1112,7 @@ getTokenStream mod = do
 getRichTokenStream :: GhcMonad m => Module -> m [(Located Token, String)]
 getRichTokenStream mod = do
   (sourceFile, source, flags) <- getModuleSourceAndFlags mod
-  let startLoc = mkSrcLoc (mkFastString sourceFile) 1 1
+  let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts -> return $ addSourceToTokens startLoc source ts
     PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
@@ -1120,43 +1120,49 @@ getRichTokenStream mod = do
 -- | Given a source location and a StringBuffer corresponding to this
 -- location, return a rich token stream with the source associated to the
 -- tokens.
-addSourceToTokens :: SrcLoc -> StringBuffer -> [Located Token]
+addSourceToTokens :: RealSrcLoc -> StringBuffer -> [Located Token]
                   -> [(Located Token, String)]
 addSourceToTokens _ _ [] = []
 addSourceToTokens loc buf (t@(L span _) : ts)
-    | not (isGoodSrcSpan span) = (t,"") : addSourceToTokens loc buf ts
-    | otherwise = (t,str) : addSourceToTokens newLoc newBuf ts
-    where
-      (newLoc, newBuf, str) = go "" loc buf
-      start = srcSpanStart span
-      end = srcSpanEnd span
-      go acc loc buf | loc < start = go acc nLoc nBuf
-                     | start <= loc && loc < end = go (ch:acc) nLoc nBuf
-                     | otherwise = (loc, buf, reverse acc)
-          where (ch, nBuf) = nextChar buf
-                nLoc = advanceSrcLoc loc ch
+    = case span of
+      UnhelpfulSpan _ -> (t,"") : addSourceToTokens loc buf ts
+      RealSrcSpan s   -> (t,str) : addSourceToTokens newLoc newBuf ts
+        where
+          (newLoc, newBuf, str) = go "" loc buf
+          start = realSrcSpanStart s
+          end = realSrcSpanEnd s
+          go acc loc buf | loc < start = go acc nLoc nBuf
+                         | start <= loc && loc < end = go (ch:acc) nLoc nBuf
+                         | otherwise = (loc, buf, reverse acc)
+              where (ch, nBuf) = nextChar buf
+                    nLoc = advanceSrcLoc loc ch
 
 
 -- | Take a rich token stream such as produced from 'getRichTokenStream' and
 -- return source code almost identical to the original code (except for
 -- insignificant whitespace.)
 showRichTokenStream :: [(Located Token, String)] -> String
+showRichTokenStream = error "XXX"
+{-
 showRichTokenStream ts = go startLoc ts ""
-    where sourceFile = srcSpanFile (getLoc . fst . head $ ts)
-          startLoc = mkSrcLoc sourceFile 1 1
+    where sourceFile = error "XXX" -- XXX srcSpanFile (getLoc . fst . head $ ts)
+          startLoc = mkRealSrcLoc sourceFile 1 1
           go _ [] = id
           go loc ((L span _, str):ts)
-              | not (isGoodSrcSpan span) = go loc ts
-              | locLine == tokLine = ((replicate (tokCol - locCol) ' ') ++)
-                                     . (str ++)
-                                     . go tokEnd ts
-              | otherwise = ((replicate (tokLine - locLine) '\n') ++)
-                            . ((replicate tokCol ' ') ++)
-                            . (str ++)
-                            . go tokEnd ts
+              = case span of
+                UnhelpfulSpan _ -> go loc ts
+                RealSrcSpan _
+                 | locLine == tokLine -> ((replicate (tokCol - locCol) ' ') ++)
+                                       . (str ++)
+                                       . go tokEnd ts
+                 | otherwise -> ((replicate (tokLine - locLine) '\n') ++)
+                              . ((replicate tokCol ' ') ++)
+                              . (str ++)
+                              . go tokEnd ts
               where (locLine, locCol) = (srcLocLine loc, srcLocCol loc)
                     (tokLine, tokCol) = (srcSpanStartLine span, srcSpanStartCol span)
                     tokEnd = srcSpanEnd span
+-}
 
 -- -----------------------------------------------------------------------------
 -- Interactive evaluation
@@ -1254,7 +1260,7 @@ parser :: String         -- ^ Haskell module source text (full Unicode is suppor
 
 parser str dflags filename = 
    let
-       loc  = mkSrcLoc (mkFastString filename) 1 1
+       loc  = mkRealSrcLoc (mkFastString filename) 1 1
        buf  = stringToStringBuffer str
    in
    case unP Parser.parseModule (mkPState dflags buf loc) of

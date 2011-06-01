@@ -41,9 +41,7 @@ import ForeignCall	( Safety(..), CExportSpec(..), CLabelString,
 			)
 import OccName		( varName, dataName, tcClsName, tvName )
 import DataCon		( DataCon, dataConName )
-import SrcLoc		( Located(..), unLoc, getLoc, noLoc, combineSrcSpans,
-			  SrcSpan, combineLocs, srcLocFile, 
-			  mkSrcLoc, mkSrcSpan )
+import SrcLoc
 import Module
 import StaticFlags	( opt_SccProfilingOn, opt_Hpc )
 import Type		( Kind, liftedTypeKind, unliftedTypeKind )
@@ -1262,7 +1260,7 @@ quasiquote :: { Located (HsQuasiQuote RdrName) }
 	: TH_QUASIQUOTE   { let { loc = getLoc $1
                                 ; ITquasiQuote (quoter, quote, quoteSpan) = unLoc $1
                                 ; quoterId = mkUnqual varName quoter }
-                            in L1 (mkHsQuasiQuote quoterId quoteSpan quote) }
+                            in L1 (mkHsQuasiQuote quoterId (RealSrcSpan quoteSpan) quote) }
 
 exp   :: { LHsExpr RdrName }
 	: infixexp '::' sigtype		{ LL $ ExprWithTySig $1 $3 }
@@ -2036,5 +2034,5 @@ fileSrcSpan :: P SrcSpan
 fileSrcSpan = do 
   l <- getSrcLoc; 
   let loc = mkSrcLoc (srcLocFile l) 1 1;
-  return (mkSrcSpan loc loc)
+  error "XXX" -- return (mkSrcSpan loc loc)
 }

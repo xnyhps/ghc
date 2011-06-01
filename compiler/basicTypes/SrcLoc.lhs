@@ -21,6 +21,7 @@ module SrcLoc (
 
 	-- ** Unsafely deconstructing SrcLoc
 	-- These are dubious exports, because they crash on some inputs
+	-- XXX realSrcLocFile,
 	srcLocFile,		-- return the file name part
 	srcLocLine,		-- return the line part
 	srcLocCol,		-- return the column part
@@ -33,7 +34,7 @@ module SrcLoc (
 	SrcSpan(..),
 
         -- ** Constructing SrcSpan
-	mkGeneralSrcSpan, mkSrcSpan, 
+	mkGeneralSrcSpan, mkSrcSpan, mkRealSrcSpan,
 	noSrcSpan, 
 	wiredInSrcSpan,		-- Something wired into the compiler
 	srcLocSpan,
@@ -127,7 +128,17 @@ mkGeneralSrcLoc = UnhelpfulLoc
 -- | Gives the filename of the 'SrcLoc' if it is available, otherwise returns a dummy value
 srcLocFile :: RealSrcLoc -> FastString
 srcLocFile (SrcLoc fname _ _) = fname
--- XXX srcLocFile _other	      = (fsLit "<unknown file")
+
+-- XXX
+-- | Gives the filename of the 'SrcLoc' if it is available, otherwise returns a dummy value
+-- realSrcLocFile :: RealSrcLoc -> FastString
+-- realSrcLocFile (SrcLoc fname _ _) = fname
+
+-- XXX
+-- | Gives the filename of the 'SrcLoc' if it is available, otherwise returns a dummy value
+-- srcLocFile :: SrcLoc -> FastString
+-- srcLocFile (RealSrcLoc l) = realSrcLocFile l
+-- srcLocFile (UnhelpfulLoc _) = fsLit "<unknown file>"
 
 -- | Raises an error when used on a "bad" 'SrcLoc'
 srcLocLine :: RealSrcLoc -> Int
@@ -296,25 +307,12 @@ mkRealSrcSpan loc1 loc2
 	col2 = srcLocCol loc2
 	file = srcLocFile loc1
 
--- XXX Pointless wrapper:
--- | Create a 'SrcSpan' between two points in a file
-mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> RealSrcSpan
-mkSrcSpan loc1 loc2 = mkRealSrcSpan loc1 loc2
-
--- XXX
--- -- | Create a 'SrcSpan' between two points in a file
--- mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> SrcSpan
--- mkSrcSpan loc1 loc2 = RealSrcSpan (mkRealSrcSpan loc1 loc2)
-
-{-
-XXX
 -- | Create a 'SrcSpan' between two points in a file
 mkSrcSpan :: SrcLoc -> SrcLoc -> SrcSpan
 mkSrcSpan (UnhelpfulLoc str) _ = UnhelpfulSpan str
 mkSrcSpan _ (UnhelpfulLoc str) = UnhelpfulSpan str
 mkSrcSpan (RealSrcLoc loc1) (RealSrcLoc loc2)
     = RealSrcSpan (mkRealSrcSpan loc1 loc2)
--}
 
 -- | Combines two 'SrcSpan' into one that spans at least all the characters
 -- within both spans. Assumes the "file" part is the same in both inputs

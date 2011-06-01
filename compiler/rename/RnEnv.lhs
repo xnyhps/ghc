@@ -1052,10 +1052,13 @@ unknownNameSuggestErr where_look tried_rdr_name
        ; return extra_err }
   where
     pp_item :: (RdrName, HowInScope) -> SDoc
+    pp_item = error "XXX"
+    {-
     pp_item (rdr, Left loc) = quotes (ppr rdr) <+>   -- Locally defined
                               parens (ptext (sLit "line") <+> int (srcSpanStartLine loc))
     pp_item (rdr, Right is) = quotes (ppr rdr) <+>   -- Imported
                               parens (ptext (sLit "imported from") <+> ppr (is_mod is))
+    -}
 
     tried_occ     = rdrNameOcc tried_rdr_name
     tried_is_sym  = isSymOcc tried_occ
