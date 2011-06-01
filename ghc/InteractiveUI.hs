@@ -12,6 +12,15 @@
 
 module InteractiveUI ( interactiveUI, ghciWelcomeMsg ) where
 
+interactiveUI :: a
+interactiveUI = error "XXX"
+
+ghciWelcomeMsg :: a
+ghciWelcomeMsg = error "XXX"
+
+-- XXX
+#if 0
+
 #include "HsVersions.h"
 
 import qualified GhciMonad
@@ -2469,3 +2478,5 @@ setBreakFlag :: Bool -> GHC.BreakArray -> Int -> IO Bool
 setBreakFlag toggle array index
    | toggle    = GHC.setBreakOn array index 
    | otherwise = GHC.setBreakOff array index
+#endif
+
