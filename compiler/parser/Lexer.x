@@ -7,7 +7,8 @@
 -- definition, with some hand-coded bits.
 --
 -- Completely accurate information about token-spans within the source
--- file is maintained.  Every token has a start and end SrcLoc attached to it.
+-- file is maintained.  Every token has a start and end RealSrcLoc
+-- attached to it.
 --
 -----------------------------------------------------------------------------
 
@@ -555,7 +556,7 @@ data Token
   | ITparenEscape		--  $( 
   | ITvarQuote			--  '
   | ITtyQuote			--  ''
-  | ITquasiQuote (FastString,FastString,SrcSpan) --  [:...|...|]
+  | ITquasiQuote (FastString,FastString,RealSrcSpan) --  [:...|...|]
 
   -- Arrow notation extension
   | ITproc
@@ -721,7 +722,7 @@ reservedSymsFM = listToUFM $
 -- -----------------------------------------------------------------------------
 -- Lexer actions
 
-type Action = RealSrcSpan -> StringBuffer -> Int -> P (Located Token)
+type Action = RealSrcSpan -> StringBuffer -> Int -> P (RealLocated Token)
 
 special :: Token -> Action
 special tok span _buf _len = return (L span tok)
@@ -846,7 +847,7 @@ lineCommentToken span buf len = do
   nested comments require traversing by hand, they can't be parsed
   using regular expressions.
 -}
-nested_comment :: P (Located Token) -> Action
+nested_comment :: P (RealLocated Token) -> Action
 nested_comment cont span _str _len = do
   input <- getInput
   go "" (1::Int) input
@@ -887,8 +888,8 @@ nested_doc_comment span buf _len = withLexedDocType (go "")
         Just (_,_) -> go ('\123':commentAcc) input docType False
       Just (c,input) -> go (c:commentAcc) input docType False
 
-withLexedDocType :: (AlexInput -> (String -> Token) -> Bool -> P (Located Token))
-                 -> P (Located Token)
+withLexedDocType :: (AlexInput -> (String -> Token) -> Bool -> P (RealLocated Token))
+                 -> P (RealLocated Token)
 withLexedDocType lexDocComment = do
   input@(AI _ buf) <- getInput
   case prevChar buf ' ' of
@@ -925,19 +926,19 @@ endPrag span _buf _len = do
 -- called afterwards, so it can just update the state. 
 
 docCommentEnd :: AlexInput -> String -> (String -> Token) -> StringBuffer ->
-                 SrcSpan -> P (Located Token) 
+                 RealSrcSpan -> P (RealLocated Token) 
 docCommentEnd input commentAcc docType buf span = do
   setInput input
   let (AI loc nextBuf) = input
       comment = reverse commentAcc
-      span' = mkSrcSpan (srcSpanStart span) loc
+      span' = mkSrcSpan (realSrcSpanStart span) loc
       last_len = byteDiff buf nextBuf
       
   span `seq` setLastToken span' last_len
   return (L span' (docType comment))
  
-errBrace :: AlexInput -> SrcSpan -> P a
-errBrace (AI end _) span = failLocMsgP (srcSpanStart span) end "unterminated `{-'"
+errBrace :: AlexInput -> RealSrcSpan -> P a
+errBrace (AI end _) span = failLocMsgP (realSrcSpanStart span) end "unterminated `{-'"
 
 open_brace, close_brace :: Action
 open_brace span _str _len = do 
@@ -1012,8 +1013,8 @@ varsym, consym :: Action
 varsym = sym ITvarsym
 consym = sym ITconsym
 
-sym :: (FastString -> Token) -> SrcSpan -> StringBuffer -> Int
-    -> P (Located Token)
+sym :: (FastString -> Token) -> RealSrcSpan -> StringBuffer -> Int
+    -> P (RealLocated Token)
 sym con span buf len = 
   case lookupUFM reservedSymsFM fs of
 	Just (keyword,exts) -> do
@@ -1145,7 +1146,7 @@ do_layout_left span _buf _len = do
 setLine :: Int -> Action
 setLine code span buf len = do
   let line = parseUnsignedInteger buf len 10 octDecDigit
-  setSrcLoc (mkSrcLoc (srcSpanFile span) (fromIntegral line - 1) 1)
+  setSrcLoc (mkRealSrcLoc (srcSpanFile span) (fromIntegral line - 1) 1)
 	-- subtract one: the line number refers to the *following* line
   _ <- popLexState
   pushLexState code
@@ -1155,7 +1156,7 @@ setFile :: Int -> Action
 setFile code span buf len = do
   let file = lexemeToFastString (stepOn buf) (len-2)
   -- XXX setAlrLastLoc noSrcSpan
-  setSrcLoc (mkSrcLoc file (srcSpanEndLine span) (srcSpanEndCol span))
+  setSrcLoc (mkRealSrcLoc file (srcSpanEndLine span) (srcSpanEndCol span))
   _ <- popLexState
   pushLexState code
   lexToken
@@ -1183,7 +1184,7 @@ lex_string_prag mkTok span _buf _len
               = case alexGetChar i of
                   Just (c,i') | c == x    -> isString i' xs
                   _other -> False
-          err (AI end _) = failLocMsgP (srcSpanStart span) end "unterminated options pragma"
+          err (AI end _) = failLocMsgP (realSrcSpanStart span) end "unterminated options pragma"
 
 
 -- -----------------------------------------------------------------------------
@@ -1195,7 +1196,7 @@ lex_string_tok :: Action
 lex_string_tok span _buf _len = do
   tok <- lex_string ""
   end <- getSrcLoc 
-  return (L (mkSrcSpan (srcSpanStart span) end) tok)
+  return (L (mkSrcSpan (realSrcSpanStart span) end) tok)
 
 lex_string :: String -> P Token
 lex_string s = do
@@ -1256,7 +1257,7 @@ lex_char_tok :: Action
 -- see if there's a trailing quote
 lex_char_tok span _buf _len = do	-- We've seen '
    i1 <- getInput	-- Look ahead to first character
-   let loc = srcSpanStart span
+   let loc = realSrcSpanStart span
    case alexGetChar' i1 of
 	Nothing -> lit_error  i1
 
@@ -1293,7 +1294,7 @@ lex_char_tok span _buf _len = do	-- We've seen '
 			if th_exts then return (L (mkSrcSpan loc end) ITvarQuote)
 				   else lit_error i2
 
-finish_char_tok :: RealSrcLoc -> Char -> P (Located Token)
+finish_char_tok :: RealSrcLoc -> Char -> P (RealLocated Token)
 finish_char_tok loc ch	-- We've already seen the closing quote
 			-- Just need to check for trailing #
   = do	magicHash <- extension magicHashEnabled
@@ -1441,7 +1442,7 @@ lex_quasiquote_tok span buf len = do
   quoteStart <- getSrcLoc              
   quote <- lex_quasiquote ""
   end <- getSrcLoc 
-  return (L (mkSrcSpan (srcSpanStart span) end)
+  return (L (mkSrcSpan (realSrcSpanStart span) end)
            (ITquasiQuote (mkFastString quoter,
                           mkFastString (reverse quote),
                           mkSrcSpan quoteStart end)))
@@ -1491,7 +1492,7 @@ data LayoutContext
 data ParseResult a
   = POk PState a
   | PFailed 
-	SrcSpan		-- The start and end of the text span related to
+	RealSrcSpan		-- The start and end of the text span related to
 			-- the error.  Might be used in environments which can 
 			-- show this span, e.g. by highlighting it.
 	Message		-- The error message
@@ -1500,7 +1501,7 @@ data PState = PState {
 	buffer	   :: StringBuffer,
         dflags     :: DynFlags,
         messages   :: Messages,
-        last_loc   :: SrcSpan,	-- pos of previous token
+        last_loc   :: RealSrcSpan,	-- pos of previous token
 	last_len   :: !Int,	-- len of previous token
         loc        :: RealSrcLoc,   -- current loc (end of prev token + 1)
 	extsBitmap :: !Int,	-- bitmap that determines permitted extensions
@@ -1509,13 +1510,13 @@ data PState = PState {
         -- Used in the alternative layout rule:
         -- These tokens are the next ones to be sent out. They are
         -- just blindly emitted, without the rule looking at them again:
-        alr_pending_implicit_tokens :: [Located Token],
+        alr_pending_implicit_tokens :: [RealLocated Token],
         -- This is the next token to be considered or, if it is Nothing,
         -- we need to get the next token from the input stream:
-        alr_next_token :: Maybe (Located Token),
+        alr_next_token :: Maybe (RealLocated Token),
         -- This is what we consider to be the locatino of the last token
         -- emitted:
-        alr_last_loc :: SrcSpan,
+        alr_last_loc :: RealSrcSpan,
         -- The stack of layout contexts:
         alr_context :: [ALRContext],
         -- Are we expecting a '{'? If it's Just, then the ALRLayout tells
@@ -1564,7 +1565,7 @@ failMsgP msg = P $ \s -> PFailed (last_loc s) (text msg)
 failLocMsgP :: RealSrcLoc -> RealSrcLoc -> String -> P a
 failLocMsgP loc1 loc2 str = P $ \_ -> PFailed (mkSrcSpan loc1 loc2) (text str)
 
-failSpanMsgP :: SrcSpan -> SDoc -> P a
+failSpanMsgP :: RealSrcSpan -> SDoc -> P a
 failSpanMsgP span msg = P $ \_ -> PFailed span msg
 
 getPState :: P PState
@@ -1593,7 +1594,7 @@ setSrcLoc new_loc = P $ \s -> POk s{loc=new_loc} ()
 getSrcLoc :: P RealSrcLoc
 getSrcLoc = P $ \s@(PState{ loc=loc }) -> POk s loc
 
-setLastToken :: SrcSpan -> Int -> P ()
+setLastToken :: RealSrcSpan -> Int -> P ()
 setLastToken loc len = P $ \s -> POk s { 
   last_loc=loc, 
   last_len=len
@@ -1685,7 +1686,7 @@ popLexState = P $ \s@PState{ lex_state=ls:l } -> POk s{ lex_state=l } ls
 getLexState :: P Int
 getLexState = P $ \s@PState{ lex_state=ls:_ } -> POk s ls
 
-popNextToken :: P (Maybe (Located Token))
+popNextToken :: P (Maybe (RealLocated Token))
 popNextToken
     = P $ \s@PState{ alr_next_token = m } ->
               POk (s {alr_next_token = Nothing}) m
@@ -1699,10 +1700,10 @@ activeContext = do
     ([],Nothing) -> return impt
     _other       -> return True
 
-setAlrLastLoc :: SrcSpan -> P ()
+setAlrLastLoc :: RealSrcSpan -> P ()
 setAlrLastLoc l = P $ \s -> POk (s {alr_last_loc = l}) ()
 
-getAlrLastLoc :: P SrcSpan
+getAlrLastLoc :: P RealSrcSpan
 getAlrLastLoc = P $ \s@(PState {alr_last_loc = l}) -> POk s l
 
 getALRContext :: P [ALRContext]
@@ -1719,7 +1720,7 @@ setJustClosedExplicitLetBlock :: Bool -> P ()
 setJustClosedExplicitLetBlock b
  = P $ \s -> POk (s {alr_justClosedExplicitLetBlock = b}) ()
 
-setNextToken :: Located Token -> P ()
+setNextToken :: RealLocated Token -> P ()
 setNextToken t = P $ \s -> POk (s {alr_next_token = Just t}) ()
 
 implicitTokenPending :: P Bool
@@ -1729,14 +1730,14 @@ implicitTokenPending
               [] -> POk s False
               _  -> POk s True
 
-popPendingImplicitToken :: P (Maybe (Located Token))
+popPendingImplicitToken :: P (Maybe (RealLocated Token))
 popPendingImplicitToken
     = P $ \s@PState{ alr_pending_implicit_tokens = ts } ->
               case ts of
               [] -> POk s Nothing
               (t : ts') -> POk (s {alr_pending_implicit_tokens = ts'}) (Just t)
 
-setPendingImplicitTokens :: [Located Token] -> P ()
+setPendingImplicitTokens :: [RealLocated Token] -> P ()
 setPendingImplicitTokens ts = P $ \s -> POk (s {alr_pending_implicit_tokens = ts}) ()
 
 getAlrExpectingOCurly :: P (Maybe ALRLayout)
@@ -1900,10 +1901,10 @@ mkPState flags buf loc =
       b `setBitIf` cond | cond      = bit b
                         | otherwise = 0
 
-addWarning :: DynFlag -> SrcSpan -> SDoc -> P ()
+addWarning :: DynFlag -> RealSrcSpan -> SDoc -> P ()
 addWarning option srcspan warning
  = P $ \s@PState{messages=(ws,es), dflags=d} ->
-       let warning' = mkWarnMsg srcspan alwaysQualify warning
+       let warning' = mkWarnMsg (RealSrcSpan srcspan) alwaysQualify warning
            ws' = if dopt option d then ws `snocBag` warning' else ws
        in POk s{messages=(ws', es)} ()
 
@@ -1974,7 +1975,7 @@ lexError str = do
 -- This is the top-level function: called from the parser each time a
 -- new token is to be read from the input.
 
-lexer :: (Located Token -> P a) -> P a
+lexer :: (RealLocated Token -> P a) -> P a
 lexer cont = do
   alr <- extension alternativeLayoutRule
   let lexTokenFun = if alr then lexTokenAlr else lexToken
@@ -1982,7 +1983,7 @@ lexer cont = do
   --trace ("token: " ++ show _tok__) $ do
   cont tok
 
-lexTokenAlr :: P (Located Token)
+lexTokenAlr :: P (RealLocated Token)
 lexTokenAlr = do mPending <- popPendingImplicitToken
                  t <- case mPending of
                       Nothing ->
@@ -2004,7 +2005,7 @@ lexTokenAlr = do mPending <- popPendingImplicitToken
                      _       -> return ()
                  return t
 
-alternativeLayoutRuleToken :: Located Token -> P (Located Token)
+alternativeLayoutRuleToken :: RealLocated Token -> P (RealLocated Token)
 alternativeLayoutRuleToken t
     = do context <- getALRContext
          lastLoc <- getAlrLastLoc
@@ -2204,7 +2205,7 @@ topNoLayoutContainsCommas [] = False
 topNoLayoutContainsCommas (ALRLayout _ _ : ls) = topNoLayoutContainsCommas ls
 topNoLayoutContainsCommas (ALRNoLayout b _ : _) = b
 
-lexToken :: P (Located Token)
+lexToken :: P (RealLocated Token)
 lexToken = do
   inp@(AI loc1 buf) <- getInput
   sc <- getLexState
@@ -2237,7 +2238,7 @@ reportLexError loc1 loc2 buf str
     then failLocMsgP loc2 loc2 (str ++ " (UTF-8 decoding error)")
     else failLocMsgP loc1 loc2 (str ++ " at character " ++ show c)
 
-lexTokenStream :: StringBuffer -> RealSrcLoc -> DynFlags -> ParseResult [Located Token]
+lexTokenStream :: StringBuffer -> RealSrcLoc -> DynFlags -> ParseResult [RealLocated Token]
 lexTokenStream buf loc dflags = unP go initState
     where dflags' = dopt_set (dopt_unset dflags Opt_Haddock) Opt_KeepRawTokenStream
           initState = mkPState dflags' buf loc

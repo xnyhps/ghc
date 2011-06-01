@@ -11,7 +11,7 @@ module SrcLoc (
 	SrcLoc(..),
 
         -- ** Constructing SrcLoc
-	mkSrcLoc, mkGeneralSrcLoc,
+	mkSrcLoc, mkRealSrcLoc, mkGeneralSrcLoc,
 
 	noSrcLoc, 		-- "I'm sorry, I haven't a clue"
 	generatedSrcLoc,	-- Code generated within the compiler
@@ -41,6 +41,7 @@ module SrcLoc (
 	
 	-- ** Deconstructing SrcSpan
 	srcSpanStart, srcSpanEnd,
+	realSrcSpanStart, realSrcSpanEnd,
 	srcSpanFileName_maybe,
 
 	-- ** Unsafely deconstructing SrcSpan
@@ -53,7 +54,9 @@ module SrcLoc (
         {- XXX isGoodSrcSpan, -} isOneLineSpan,
 
         -- * Located
-	Located(..), 
+	Located, 
+	RealLocated, 
+	GenLocated(..), 
 	
 	-- ** Constructing Located
 	noLoc,
@@ -64,8 +67,8 @@ module SrcLoc (
 	
 	-- ** Combining and comparing Located values
 	eqLocated, cmpLocated, combineLocs, addCLoc,
-        leftmost_smallest, leftmost_largest, rightmost, 
-        {- XXX spans, -} isSubspanOf
+        -- XXX leftmost_smallest, leftmost_largest, rightmost, 
+        {- XXX spans, -} -- XXX isSubspanOf
     ) where
 
 #include "Typeable.h"
@@ -106,7 +109,10 @@ data SrcLoc
 
 \begin{code}
 mkSrcLoc :: FastString -> Int -> Int -> SrcLoc
-mkSrcLoc x line col = RealSrcLoc (SrcLoc x line col)
+mkSrcLoc x line col = RealSrcLoc (mkRealSrcLoc x line col)
+
+mkRealSrcLoc :: FastString -> Int -> Int -> RealSrcLoc
+mkRealSrcLoc x line col = SrcLoc x line col
 
 -- | Built-in "bad" 'SrcLoc' values for particular locations
 noSrcLoc, generatedSrcLoc, interactiveSrcLoc :: SrcLoc
@@ -290,9 +296,15 @@ mkRealSrcSpan loc1 loc2
 	col2 = srcLocCol loc2
 	file = srcLocFile loc1
 
+-- XXX Pointless wrapper:
 -- | Create a 'SrcSpan' between two points in a file
-mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> SrcSpan
-mkSrcSpan loc1 loc2 = RealSrcSpan (mkRealSrcSpan loc1 loc2)
+mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> RealSrcSpan
+mkSrcSpan loc1 loc2 = mkRealSrcSpan loc1 loc2
+
+-- XXX
+-- -- | Create a 'SrcSpan' between two points in a file
+-- mkSrcSpan :: RealSrcLoc -> RealSrcLoc -> SrcSpan
+-- mkSrcSpan loc1 loc2 = RealSrcSpan (mkRealSrcSpan loc1 loc2)
 
 {-
 XXX
@@ -399,19 +411,23 @@ srcSpanEndCol SrcSpanPoint{ srcSpanCol=c } = c
 
 -- | Returns the location at the start of the 'SrcSpan' or a "bad" 'SrcSpan' if that is unavailable
 srcSpanStart :: SrcSpan -> SrcLoc
+srcSpanStart (UnhelpfulSpan str) = UnhelpfulLoc str
+srcSpanStart (RealSrcSpan s) = RealSrcLoc (realSrcSpanStart s)
+
 -- | Returns the location at the end of the 'SrcSpan' or a "bad" 'SrcSpan' if that is unavailable
 srcSpanEnd :: SrcSpan -> SrcLoc
-
-srcSpanStart (UnhelpfulSpan str) = UnhelpfulLoc str
-srcSpanStart (RealSrcSpan s) = mkSrcLoc (srcSpanFile s) 
-			  (srcSpanStartLine s)
-		 	  (srcSpanStartCol s)
-
 srcSpanEnd (UnhelpfulSpan str) = UnhelpfulLoc str
-srcSpanEnd (RealSrcSpan s) = 
-  mkSrcLoc (srcSpanFile s) 
-	   (srcSpanEndLine s)
- 	   (srcSpanEndCol s)
+srcSpanEnd (RealSrcSpan s) = RealSrcLoc (realSrcSpanEnd s)
+
+realSrcSpanStart :: RealSrcSpan -> RealSrcLoc
+realSrcSpanStart s = mkRealSrcLoc (srcSpanFile s)
+                                  (srcSpanStartLine s)
+                                  (srcSpanStartCol s)
+
+realSrcSpanEnd :: RealSrcSpan -> RealSrcLoc
+realSrcSpanEnd s = mkRealSrcLoc (srcSpanFile s)
+                                (srcSpanEndLine s)
+                                (srcSpanEndCol s)
 
 -- | Obtains the filename for a 'SrcSpan' if it is "good"
 srcSpanFileName_maybe :: SrcSpan -> Maybe FastString
@@ -498,13 +514,16 @@ pprDefnLoc loc = ptext (sLit "Defined at") <+> ppr loc
 
 \begin{code}
 -- | We attach SrcSpans to lots of things, so let's have a datatype for it.
-data Located e = L SrcSpan e
+data GenLocated l e = L l e
   deriving (Eq, Ord, Typeable, Data)
 
-unLoc :: Located e -> e
+type Located e = GenLocated SrcSpan e
+type RealLocated e = GenLocated RealSrcSpan e
+
+unLoc :: GenLocated l e -> e
 unLoc (L _ e) = e
 
-getLoc :: Located e -> SrcSpan
+getLoc :: GenLocated l e -> l
 getLoc (L l _) = l
 
 noLoc :: e -> Located e
@@ -532,10 +551,10 @@ eqLocated a b = unLoc a == unLoc b
 cmpLocated :: Ord a => Located a -> Located a -> Ordering
 cmpLocated a b = unLoc a `compare` unLoc b
 
-instance Functor Located where
+instance Functor (GenLocated l) where
   fmap f (L l e) = L l (f e)
 
-instance Outputable e => Outputable (Located e) where
+instance Outputable e => Outputable (GenLocated l e) where
   ppr (L _l _e) = error "XXX" -- ifPprDebug (braces (pprUserSpan False l)) $$ ppr e
 		-- Print spans without the file name etc
 \end{code}
@@ -547,6 +566,8 @@ instance Outputable e => Outputable (Located e) where
 %************************************************************************
 
 \begin{code}
+{-
+XXX
 -- | Alternative strategies for ordering 'SrcSpan's
 leftmost_smallest, leftmost_largest, rightmost :: SrcSpan -> SrcSpan -> Ordering
 rightmost            = flip compare
@@ -554,7 +575,7 @@ leftmost_smallest    = compare
 leftmost_largest a b = (srcSpanStart a `compare` srcSpanStart b)
                                 `thenCmp`
                        (srcSpanEnd b `compare` srcSpanEnd a)
-
+-}
 
 {-
 XXX
@@ -564,6 +585,8 @@ spans span (l,c) = srcSpanStart span <= loc && loc <= srcSpanEnd span
    where loc = mkSrcLoc (srcSpanFile span) l c
 -}
 
+{-
+XXX
 -- | Determines whether a span is enclosed by another one
 isSubspanOf :: SrcSpan -- ^ The span that may be enclosed by the other
             -> SrcSpan -- ^ The span it may be enclosed by
@@ -572,5 +595,6 @@ isSubspanOf src parent
     | srcSpanFileName_maybe parent /= srcSpanFileName_maybe src = False
     | otherwise = srcSpanStart parent <= srcSpanStart src &&
                   srcSpanEnd parent   >= srcSpanEnd src
+-}
 
 \end{code}

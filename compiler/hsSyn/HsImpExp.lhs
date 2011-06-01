@@ -15,7 +15,7 @@ import HsDoc		( HsDocString )
 
 import Outputable
 import FastString
-import SrcLoc		( Located(..) )
+import SrcLoc
 
 import Data.Data
 \end{code}
