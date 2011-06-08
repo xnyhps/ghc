@@ -125,15 +125,26 @@ mkWwBodies fun_ty demands res_info one_shots
 	; (wrap_args, wrap_fn_args, work_fn_args, res_ty) <- mkWWargs emptyTvSubst fun_ty arg_info
 	; (work_args, wrap_fn_str,  work_fn_str) <- mkWWstr wrap_args
 
+	; (wrap_fn_cpr, work_fn_cpr, cpr_res_ty)
+	       <- mkWWcpr res_ty res_info
+
+{- Commenting out the special case when the worker has no arguments
+   For a start, it's not necessary: if the worker gets no arguments
+   then mkWorkerArgs will add one.  And it loses CPR in important
+   cases: I got a significant win by not special-casing here.
+   We can delete this entire code in a while.
+
         -- Don't do CPR if the worker doesn't have any value arguments
         -- Then the worker is just a constant, so we don't want to unbox it.
-	; (wrap_fn_cpr, work_fn_cpr,  _cpr_res_ty)
+	; (wrap_fn_cpr, work_fn_cpr, cpr_res_ty)
 	       <- if any isId work_args then
 	             mkWWcpr res_ty res_info
 	          else
 	             return (id, id, res_ty)
+-}
 
-	; let (work_lam_args, work_call_args) = mkWorkerArgs work_args res_ty
+	; let (work_lam_args, work_call_args) = mkWorkerArgs work_args cpr_res_ty
+
 	; return ([idDemandInfo v | v <- work_call_args, isId v],
                   wrap_fn_args . wrap_fn_cpr . wrap_fn_str . applyToVars work_call_args . Var,
                   mkLams work_lam_args. work_fn_str . work_fn_cpr . work_fn_args) }
