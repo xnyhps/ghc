@@ -205,10 +205,10 @@ data DmdResultP con
   = TopRes      -- Nothing known	
 
   | RetCPR con  -- Returns constructed data, built with dc.
-  	        -- Because we record the actual constructor
-	        -- that we construct, we can actually optimise
-	        -- sum-types as well, as long as the function only returns
-	        -- *one* of the possible constructors
+  	        -- Because we record the actual constructor that we
+	        -- construct, we can actually optimise sum-types as
+	        -- well, as long as the function only returns one of
+	        -- the possible constructors
 
   | BotRes      -- Diverges or errors
   deriving( Eq, Show )
