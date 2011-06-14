@@ -689,15 +689,7 @@ machOps = listToUFM $
 	( "gtu",	MO_U_Gt ),
 	( "ltu",	MO_U_Lt ),
 
-	( "flt",	MO_S_Lt ),
-	( "fle",	MO_S_Le ),
-	( "feq",	MO_Eq ),
-	( "fne",	MO_Ne ),
-	( "fgt",	MO_S_Gt ),
-	( "fge",	MO_S_Ge ),
-	( "fneg",	MO_S_Neg ),
-
-	( "and",	MO_And ),
+        ( "and",        MO_And ),
 	( "or",		MO_Or ),
 	( "xor",	MO_Xor ),
 	( "com",	MO_Not ),
@@ -705,7 +697,20 @@ machOps = listToUFM $
 	( "shrl",	MO_U_Shr ),
 	( "shra",	MO_S_Shr ),
 
-	( "lobits8",  flip MO_UU_Conv W8  ),
+        ( "fadd",       MO_F_Add ),
+        ( "fsub",       MO_F_Sub ),
+        ( "fneg",       MO_F_Neg ),
+        ( "fmul",       MO_F_Mul ),
+        ( "fquot",      MO_F_Quot ),
+
+        ( "feq",        MO_F_Eq ),
+        ( "fne",        MO_F_Ne ),
+        ( "fge",        MO_F_Ge ),
+        ( "fle",        MO_F_Le ),
+        ( "fgt",        MO_F_Gt ),
+        ( "flt",        MO_F_Lt ),
+
+        ( "lobits8",  flip MO_UU_Conv W8  ),
 	( "lobits16", flip MO_UU_Conv W16 ),
 	( "lobits32", flip MO_UU_Conv W32 ),
 	( "lobits64", flip MO_UU_Conv W64 ),
@@ -730,7 +735,10 @@ machOps = listToUFM $
 
 callishMachOps = listToUFM $
 	map (\(x, y) -> (mkFastString x, y)) [
-        ( "write_barrier", MO_WriteBarrier )
+        ( "write_barrier", MO_WriteBarrier ),
+        ( "memcpy", MO_Memcpy ),
+        ( "memset", MO_Memset ),
+        ( "memmove", MO_Memmove )
         -- ToDo: the rest, maybe
     ]
 
@@ -1054,7 +1062,7 @@ parseCmmFile dflags filename = do
   showPass dflags "ParseCmm"
   buf <- hGetStringBuffer filename
   let
-	init_loc = mkSrcLoc (mkFastString filename) 1 1
+	init_loc = mkRealSrcLoc (mkFastString filename) 1 1
 	init_state = (mkPState dflags buf init_loc) { lex_state = [0] }
 		-- reset the lex_state: the Lexer monad leaves some stuff
 		-- in there we don't want.

@@ -329,7 +329,7 @@ char *ghc_rts_opts = "-H128m -K1m";
            with a message like &ldquo;<literal>failed to mmap() memory below 2Gb</literal>&rdquo;.  If you need to use this option to get GHCi working
            on your machine, please file a bug.
          </para>
-         
+
          <para>
            On 64-bit machines, the RTS needs to allocate memory in the
            low 2Gb of the address space.  Support for this across
@@ -495,7 +495,7 @@ char *ghc_rts_opts = "-H128m -K1m";
             generation <replaceable>gen</replaceable> and higher.
             Omitting <replaceable>gen</replaceable> turns off the
             parallel GC completely, reverting to sequential GC.</para>
-          
+
           <para>The default parallel GC settings are usually suitable
             for parallel programs (i.e. those
             using <literal>par</literal>, Strategies, or with multiple
@@ -509,7 +509,7 @@ char *ghc_rts_opts = "-H128m -K1m";
             restrict parallel GC to the old generation
             with <literal>-qg1</literal>.</para>
         </listitem>
-      </varlistentry>        
+      </varlistentry>
 
       <varlistentry>
         <term>
@@ -524,7 +524,7 @@ char *ghc_rts_opts = "-H128m -K1m";
             generation <replaceable>gen</replaceable> and higher.
             Omitting <replaceable>gen</replaceable> disables
             load-balancing entirely.</para>
-          
+
           <para>
             Load-balancing shares out the work of GC between the
             available cores.  This is a good idea when the heap is
@@ -817,7 +817,7 @@ char *ghc_rts_opts = "-H128m -K1m";
       </listitem>
       <listitem>
         <para>
-          The peak memory the RTS has allocated from the OS. 
+          The peak memory the RTS has allocated from the OS.
         </para>
       </listitem>
       <listitem>
@@ -1012,12 +1012,12 @@ char *ghc_rts_opts = "-H128m -K1m";
       </listitem>
       <listitem>
         <para>
-          How many page faults occured this garbage collection.
+          How many page faults occurred this garbage collection.
         </para>
       </listitem>
       <listitem>
         <para>
-          How many page faults occured since the end of the last garbage
+          How many page faults occurred since the end of the last garbage
           collection.
         </para>
       </listitem>
@@ -1209,7 +1209,7 @@ char *ghc_rts_opts = "-H128m -K1m";
         </term>
 	<listitem>
 	  <para>
-            An RTS debugging flag; only availble if the program was
+            An RTS debugging flag; only available if the program was
 	    linked with the <option>-debug</option> option.  Various
 	    values of <replaceable>x</replaceable> are provided to
 	    enable debug messages and additional runtime sanity checks

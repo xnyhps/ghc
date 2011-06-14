@@ -1,8 +1,8 @@
-{-# LANGUAGE GADTs,NoMonoLocalBinds #-}
+{-# LANGUAGE GADTs, NoMonoLocalBinds, FlexibleContexts #-}
 -- Norman likes local bindings
 -- If this module lives on I'd like to get rid of this flag in due course
 
-{-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
+{-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
 #if __GLASGOW_HASKELL__ >= 701
 -- GHC 7.0.1 improved incomplete pattern warnings with GADTs
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
@@ -14,9 +14,6 @@ module CmmSpillReload
   --, insertSpillsAndReloads  --- XXX todo check live-in at entry against formals
   , dualLivenessWithInsertion
 
-  , availRegsLattice
-  , cmmAvailableReloads
-  , insertLateReloads
   , removeDeadAssignmentsAndReloads
   )
 where
@@ -32,7 +29,7 @@ import Outputable hiding (empty)
 import qualified Outputable as PP
 import UniqSet
 
-import Compiler.Hoopl
+import Compiler.Hoopl hiding (Unique)
 import Data.Maybe
 import Prelude hiding (succ, zip)
 
@@ -172,11 +169,6 @@ insertSpillAndReloadRewrites graph procPoints = deepBwdRw3 first middle nothing
                                                text "after"{-, ppr m-}]) $
                    Just $ mkMiddles $ [m, spill reg]
               else Nothing
-          middle m@(CmmUnsafeForeignCall _ fs _) live = return $
-            case map spill  (filter (flip elemRegSet (on_stack live)) fs) ++
-                 map reload (uniqSetToList (kill fs (in_regs live))) of
-              []      -> Nothing
-              reloads -> Just $ mkMiddles (m : reloads)
           middle _ _ = return Nothing
 
           nothing _ _ = return Nothing
@@ -188,91 +180,6 @@ spill, reload :: LocalReg -> CmmNode O O
 spill  r = CmmStore  (regSlot r) (CmmReg $ CmmLocal r)
 reload r = CmmAssign (CmmLocal r) (CmmLoad (regSlot r) $ localRegType r)
 
-----------------------------------------------------------------
---- sinking reloads
-
--- The idea is to compute at each point the set of registers such that
--- on every path to the point, the register is defined by a Reload
--- instruction.  Then, if a use appears at such a point, we can safely
--- insert a Reload right before the use.  Finally, we can eliminate
--- the early reloads along with other dead assignments.
-
-data AvailRegs = UniverseMinus RegSet
-               | AvailRegs     RegSet
-
-
-availRegsLattice :: DataflowLattice AvailRegs
-availRegsLattice = DataflowLattice "register gotten from reloads" empty add
-    where empty = UniverseMinus emptyRegSet
-          -- | compute in the Tx monad to track whether anything has changed
-          add _ (OldFact old) (NewFact new) =
-            if join `smallerAvail` old then (SomeChange, join) else (NoChange, old)
-            where join = interAvail new old
-
-
-interAvail :: AvailRegs -> AvailRegs -> AvailRegs
-interAvail (UniverseMinus s) (UniverseMinus s') = UniverseMinus (s `plusRegSet`  s')
-interAvail (AvailRegs     s) (AvailRegs     s') = AvailRegs (s `timesRegSet` s')
-interAvail (AvailRegs     s) (UniverseMinus s') = AvailRegs (s  `minusRegSet` s')
-interAvail (UniverseMinus s) (AvailRegs     s') = AvailRegs (s' `minusRegSet` s )
-
-smallerAvail :: AvailRegs -> AvailRegs -> Bool
-smallerAvail (AvailRegs     _) (UniverseMinus _)  = True
-smallerAvail (UniverseMinus _) (AvailRegs     _)  = False
-smallerAvail (AvailRegs     s) (AvailRegs    s')  = sizeUniqSet s < sizeUniqSet s'
-smallerAvail (UniverseMinus s) (UniverseMinus s') = sizeUniqSet s > sizeUniqSet s'
-
-extendAvail :: AvailRegs -> LocalReg -> AvailRegs
-extendAvail (UniverseMinus s) r = UniverseMinus (deleteFromRegSet s r)
-extendAvail (AvailRegs     s) r = AvailRegs (extendRegSet s r)
-
-delFromAvail :: AvailRegs -> LocalReg -> AvailRegs
-delFromAvail (UniverseMinus s) r = UniverseMinus (extendRegSet s r)
-delFromAvail (AvailRegs     s) r = AvailRegs (deleteFromRegSet s r)
-
-elemAvail :: AvailRegs -> LocalReg -> Bool
-elemAvail (UniverseMinus s) r = not $ elemRegSet r s
-elemAvail (AvailRegs     s) r = elemRegSet r s
-
-cmmAvailableReloads :: CmmGraph -> FuelUniqSM (BlockEnv AvailRegs)
-cmmAvailableReloads g =
-  liftM snd $ dataflowPassFwd g [(g_entry g, fact_bot availRegsLattice)] $
-                              analFwd availRegsLattice availReloadsTransfer
-
-availReloadsTransfer :: FwdTransfer CmmNode AvailRegs
-availReloadsTransfer = mkFTransfer3 (flip const) middleAvail ((mkFactBase availRegsLattice .) . lastAvail)
-
-middleAvail :: CmmNode O O -> AvailRegs -> AvailRegs
-middleAvail (CmmAssign (CmmLocal r) (CmmLoad l _)) avail
-               | l `isStackSlotOf` r = extendAvail avail r
-middleAvail (CmmAssign lhs _)        avail = foldRegsDefd delFromAvail avail lhs
-middleAvail (CmmStore l (CmmReg (CmmLocal r))) avail
-               | l `isStackSlotOf` r = avail
-middleAvail (CmmStore (CmmStackSlot (RegSlot r) _) _) avail = delFromAvail avail r
-middleAvail (CmmStore {})            avail = avail
-middleAvail (CmmUnsafeForeignCall {}) _    = AvailRegs emptyRegSet
-middleAvail (CmmComment {})          avail = avail
-
-lastAvail :: CmmNode O C -> AvailRegs -> [(Label, AvailRegs)]
-lastAvail (CmmCall _ (Just k) _ _ _) _ = [(k, AvailRegs emptyRegSet)]
-lastAvail (CmmForeignCall {succ=k})  _ = [(k, AvailRegs emptyRegSet)]
-lastAvail l avail = map (\id -> (id, avail)) $ successors l
-
-insertLateReloads :: CmmGraph -> FuelUniqSM CmmGraph
-insertLateReloads g =
-  liftM fst $ dataflowPassFwd g [(g_entry g, fact_bot availRegsLattice)] $
-                              analRewFwd availRegsLattice availReloadsTransfer rewrites
-  where rewrites = mkFRewrite3 first middle last
-        first _ _ = return Nothing
-        middle m avail = return $ maybe_reload_before avail m (mkMiddle m)
-        last   l avail = return $ maybe_reload_before avail l (mkLast l)
-        maybe_reload_before avail node tail =
-            let used = filterRegsUsed (elemAvail avail) node
-            in  if isEmptyUniqSet used then Nothing
-                                       else Just $ reloadTail used tail
-        reloadTail regset t = foldl rel t $ uniqSetToList regset
-          where rel t r = mkMiddle (reload r) <*> t
-
 removeDeadAssignmentsAndReloads :: BlockSet -> CmmGraph -> FuelUniqSM CmmGraph
 removeDeadAssignmentsAndReloads procPoints g =
    liftM fst $ dataflowPassBwd g [] $ analRewBwd dualLiveLattice
@@ -283,10 +190,12 @@ removeDeadAssignmentsAndReloads procPoints g =
          -- but GHC panics while compiling, see bug #4045.
          middle :: CmmNode O O -> Fact O DualLive -> CmmReplGraph O O
          middle (CmmAssign (CmmLocal reg') _) live | not (reg' `elemRegSet` in_regs live) = return $ Just emptyGraph
+         -- XXX maybe this should be somewhere else...
+         middle (CmmAssign lhs (CmmReg rhs))   _ | lhs == rhs = return $ Just emptyGraph
+         middle (CmmStore lhs (CmmLoad rhs _)) _ | lhs == rhs = return $ Just emptyGraph
          middle _ _ = return Nothing
 
          nothing _ _ = return Nothing
-
 
 ---------------------
 -- prettyprinting
@@ -304,12 +213,6 @@ instance Outputable DualLive where
                          else (ppr_regs "live in regs =" regs),
                          if isEmptyUniqSet stack then PP.empty
                          else (ppr_regs "live on stack =" stack)]
-
-instance Outputable AvailRegs where
-  ppr (UniverseMinus s) = if isEmptyUniqSet s then text "<everything available>"
-                          else ppr_regs "available = all but" s
-  ppr (AvailRegs     s) = if isEmptyUniqSet s then text "<nothing available>"
-                          else ppr_regs "available = " s
 
 my_trace :: String -> SDoc -> a -> a
 my_trace = if False then pprTrace else \_ _ a -> a

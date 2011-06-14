@@ -39,14 +39,16 @@ import Class
 import TyCon
 import DataCon
 import TysWiredIn
-import TysPrim		( anyTyConOfKind )
-import BasicTypes	( Arity, nonRuleLoopBreaker )
+import TysPrim          ( anyTyConOfKind )
+import BasicTypes       ( Arity, nonRuleLoopBreaker )
 import qualified Var
 import VarEnv
+import VarSet
 import Name
 import NameEnv
-import OccurAnal	( occurAnalyseExpr )
-import Demand		( isBottomingSig )
+import NameSet
+import OccurAnal        ( occurAnalyseExpr )
+import Demand           ( isBottomingSig )
 import Module
 import UniqFM
 import UniqSupply
@@ -433,7 +435,6 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
 			  ifCtxt = ctxt, ifGadtSyntax = gadt_syn,
 			  ifCons = rdr_cons, 
 			  ifRec = is_rec, 
-			  ifGeneric = want_generic,
 			  ifFamInst = mb_family })
   = bindIfaceTyVars_AT tv_bndrs $ \ tyvars -> do
     { tc_name <- lookupIfaceTop occ_name
@@ -442,7 +443,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
 	    ; cons <- tcIfaceDataCons tc_name tycon tyvars rdr_cons
 	    ; mb_fam_inst  <- tcFamInst mb_family
 	    ; buildAlgTyCon tc_name tyvars stupid_theta cons is_rec
-			    want_generic gadt_syn parent mb_fam_inst
+			    gadt_syn parent mb_fam_inst
 	    })
     ; traceIf (text "tcIfaceDecl4" <+> ppr tycon)
     ; return (ATyCon tycon) }
@@ -690,28 +691,32 @@ tcIfaceAnnTarget (ModuleTarget mod) = do
 
 
 %************************************************************************
-%*									*
-		Vectorisation information
-%*									*
+%*                                                                      *
+                Vectorisation information
+%*                                                                      *
 %************************************************************************
 
 \begin{code}
 tcIfaceVectInfo :: Module -> TypeEnv  -> IfaceVectInfo -> IfL VectInfo
 tcIfaceVectInfo mod typeEnv (IfaceVectInfo 
-                             { ifaceVectInfoVar        = vars
-                             , ifaceVectInfoTyCon      = tycons
-                             , ifaceVectInfoTyConReuse = tyconsReuse
+                             { ifaceVectInfoVar          = vars
+                             , ifaceVectInfoTyCon        = tycons
+                             , ifaceVectInfoTyConReuse   = tyconsReuse
+                             , ifaceVectInfoScalarVars   = scalarVars
+                             , ifaceVectInfoScalarTyCons = scalarTyCons
                              })
   = do { vVars     <- mapM vectVarMapping vars
        ; tyConRes1 <- mapM vectTyConMapping      tycons
        ; tyConRes2 <- mapM vectTyConReuseMapping tyconsReuse
        ; let (vTyCons, vDataCons, vPAs, vIsos) = unzip4 (tyConRes1 ++ tyConRes2)
        ; return $ VectInfo 
-                  { vectInfoVar     = mkVarEnv  vVars
-                  , vectInfoTyCon   = mkNameEnv vTyCons
-                  , vectInfoDataCon = mkNameEnv (concat vDataCons)
-                  , vectInfoPADFun  = mkNameEnv vPAs
-                  , vectInfoIso     = mkNameEnv vIsos
+                  { vectInfoVar          = mkVarEnv     vVars
+                  , vectInfoTyCon        = mkNameEnv    vTyCons
+                  , vectInfoDataCon      = mkNameEnv    (concat vDataCons)
+                  , vectInfoPADFun       = mkNameEnv    vPAs
+                  , vectInfoIso          = mkNameEnv    vIsos
+                  , vectInfoScalarVars   = mkVarSet  (map lookupVar scalarVars)
+                  , vectInfoScalarTyCons = mkNameSet scalarTyCons
                   }
        }
   where
@@ -779,9 +784,9 @@ tcIfaceVectInfo mod typeEnv (IfaceVectInfo
 \end{code}
 
 %************************************************************************
-%*									*
-			Types
-%*									*
+%*                                                                      *
+                        Types
+%*                                                                      *
 %************************************************************************
 
 \begin{code}
@@ -826,7 +831,8 @@ tcIfaceCo (IfaceTyConApp tc ts) = mkTyConAppCo <$> tcIfaceTyCon tc <*> mapM tcIf
 tcIfaceCo (IfaceCoConApp tc ts) = tcIfaceCoApp tc ts
 tcIfaceCo (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' ->
                                   mkForAllCo tv' <$> tcIfaceCo t
-tcIfaceCo (IfacePredTy co)      = mkPredCo <$> tcIfacePred tcIfaceCo co
+-- tcIfaceCo (IfacePredTy co)      = mkPredCo <$> tcIfacePred tcIfaceCo co
+tcIfaceCo (IfacePredTy _)      = panic "tcIfaceCo"
 
 tcIfaceCoApp :: IfaceCoCon -> [IfaceType] -> IfL Coercion
 tcIfaceCoApp IfaceReflCo    [t]     = Refl         <$> tcIfaceType t

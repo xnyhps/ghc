@@ -72,7 +72,6 @@ import Outputable
 import DataCon
 import Type
 import Class
-import Pair
 import TcType   ( orphNamesOfDFunHead )
 import Inst	( tcGetInstEnvs )
 import Data.List ( sortBy )
@@ -246,9 +245,8 @@ tcRnImports hsc_env this_mod import_decls
 		-- interfaces, so that their rules and instance decls will be
 		-- found.
 	; loadOrphanModules (imp_orphs  imports) False
-	; loadOrphanModules (imp_finsts imports) True 
 
-		-- Check type-familily consistency
+                -- Check type-family consistency
 	; traceRn (text "rn1: checking family instance consistency")
 	; let { dir_imp_mods = moduleEnvKeys
 			     . imp_mods 
@@ -300,7 +298,7 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
 	-- any mutually recursive types are done right
 	-- Just discard the auxiliary bindings; they are generated 
 	-- only for Haskell source code, and should already be in Core
-   (tcg_env, _aux_binds, _dm_ids) <- tcTyAndClassDecls emptyModDetails rn_decls ;
+   (tcg_env, _aux_binds) <- tcTyAndClassDecls emptyModDetails rn_decls ;
 
    setGblEnv tcg_env $ do {
 	-- Make the new type env available to stuff slurped from interface files
@@ -501,10 +499,9 @@ tcRnHsBootDecls decls
 
 		-- Typecheck type/class decls
 	; traceTc "Tc2" empty
-	; (tcg_env, aux_binds, dm_ids) 
+	; (tcg_env, aux_binds) 
                <- tcTyAndClassDecls emptyModDetails tycl_decls
-	; setGblEnv tcg_env    $ 
-          tcExtendIdEnv dm_ids $ do {
+	; setGblEnv tcg_env    $ do {
 
 		-- Typecheck instance decls
 		-- Family instance declarations are rejected here
@@ -838,11 +835,10 @@ tcTopSrcDecls boot_details
 		-- The latter come in via tycl_decls
         traceTc "Tc2" empty ;
 
-	(tcg_env, aux_binds, dm_ids) <- tcTyAndClassDecls boot_details tycl_decls ;
+	(tcg_env, aux_binds) <- tcTyAndClassDecls boot_details tycl_decls ;
 		-- If there are any errors, tcTyAndClassDecls fails here
 	
-	setGblEnv tcg_env	$
-        tcExtendIdEnv dm_ids    $ do {
+	setGblEnv tcg_env	$ do {
 
 		-- Source-language instances, including derivings,
 		-- and import the supporting declarations
@@ -876,6 +872,7 @@ tcTopSrcDecls boot_details
         setLclTypeEnv tcl_env $ do {	-- Environment doesn't change now
 
                 -- Second pass over class and instance declarations, 
+                -- now using the kind-checked decls
         traceTc "Tc6" empty ;
         inst_binds <- tcInstDecls2 (concat tycl_decls) inst_infos ;
 
@@ -1369,29 +1366,20 @@ tcRnType hsc_env ictxt rdr_type
 -- could not be found.
 getModuleExports :: HscEnv -> Module -> IO (Messages, Maybe [AvailInfo])
 getModuleExports hsc_env mod
-  = let
-      ic        = hsc_IC hsc_env
-      checkMods = ic_toplev_scope ic ++ map fst (ic_exports ic)
-    in
-    initTc hsc_env HsSrcFile False iNTERACTIVE (tcGetModuleExports mod checkMods)
+  = initTc hsc_env HsSrcFile False iNTERACTIVE (tcGetModuleExports mod)
 
 -- Get the export avail info and also load all orphan and family-instance
 -- modules.  Finally, check that the family instances of all modules in the
 -- interactive context are consistent (these modules are in the second
 -- argument).
-tcGetModuleExports :: Module -> [Module] -> TcM [AvailInfo]
-tcGetModuleExports mod directlyImpMods
+tcGetModuleExports :: Module -> TcM [AvailInfo]
+tcGetModuleExports mod
   = do { let doc = ptext (sLit "context for compiling statements")
        ; iface <- initIfaceTcRn $ loadSysInterface doc mod
 
   		-- Load any orphan-module and family instance-module
   		-- interfaces, so their instances are visible.
        ; loadOrphanModules (dep_orphs (mi_deps iface)) False 
-       ; loadOrphanModules (dep_finsts (mi_deps iface)) True
-
-                -- Check that the family instances of all directly loaded
-                -- modules are consistent.
-       ; checkFamInstConsistency (dep_finsts (mi_deps iface)) directlyImpMods
 
        ; ifaceExportNames (mi_exports iface)
        }
@@ -1574,7 +1562,6 @@ pprTcGblEnv (TcGblEnv { tcg_type_env  = type_env,
          , ppr_fam_insts fam_insts
          , vcat (map ppr rules)
          , vcat (map ppr vects)
-         , ppr_gen_tycons (typeEnvTyCons type_env)
          , ptext (sLit "Dependent modules:") <+> 
                 ppr (sortBy cmp_mp $ eltsUFM (imp_dep_mods imports))
 	 , ptext (sLit "Dependent packages:") <+> 
@@ -1612,7 +1599,7 @@ ppr_tycons fam_insts type_env
   = vcat [ text "TYPE CONSTRUCTORS"
          ,   nest 2 (ppr_tydecls tycons)
          , text "COERCION AXIOMS" 
-         ,   nest 2 (ppr_axioms (typeEnvCoAxioms type_env)) ]
+         ,   nest 2 (vcat (map pprCoAxiom (typeEnvCoAxioms type_env))) ]
   where
     fi_tycons = map famInstTyCon fam_insts
     tycons = [tycon | tycon <- typeEnvTyCons type_env, want_tycon tycon]
@@ -1645,24 +1632,10 @@ ppr_tydecls tycons
   where
     le_sig tycon1 tycon2 = getOccName tycon1 <= getOccName tycon2
     ppr_tycon tycon = ppr (tyThingToIfaceDecl (ATyCon tycon))
-      where
-
-ppr_axioms :: [CoAxiom] -> SDoc
-ppr_axioms axs
-  = vcat (map ppr_ax axs)
-  where
-    ppr_ax ax = sep [ ptext (sLit "coercion") <+> ppr ax <+> ppr (co_ax_tvs ax)
-                    , nest 2 (dcolon <+> pprEqPred 
-                                           (Pair (co_ax_lhs ax) (co_ax_rhs ax))) ]
 
 ppr_rules :: [CoreRule] -> SDoc
 ppr_rules [] = empty
 ppr_rules rs = vcat [ptext (sLit "{-# RULES"),
 		      nest 2 (pprRules rs),
 		      ptext (sLit "#-}")]
-
-ppr_gen_tycons :: [TyCon] -> SDoc
-ppr_gen_tycons []  = empty
-ppr_gen_tycons tcs = vcat [ptext (sLit "Tycons with generics:"),
-			   nest 2 (fsep (map ppr (filter tyConHasGenerics tcs)))]
 \end{code}

@@ -52,7 +52,7 @@ import SrcLoc
 import Bag
 import FastString
 import Outputable
-import Data.Traversable( traverse )
+-- import Data.Traversable( traverse )
 \end{code}
 
 \begin{code}
@@ -121,7 +121,7 @@ shortCutLit (HsIntegral i) ty
   | isIntTy ty && inIntRange i   = Just (HsLit (HsInt i))
   | isWordTy ty && inWordRange i = Just (mkLit wordDataCon (HsWordPrim i))
   | isIntegerTy ty 	       	 = Just (HsLit (HsInteger i ty))
-  | otherwise		       	 = shortCutLit (HsFractional (fromInteger i)) ty
+  | otherwise		       	 = shortCutLit (HsFractional (integralFractionalLit i)) ty
 	-- The 'otherwise' case is important
 	-- Consider (3 :: Float).  Syntactically it looks like an IntLit,
 	-- so we'll call shortCutIntLit, but of course it's a float
@@ -1027,6 +1027,10 @@ zonkVect env (HsVect v (Just e))
        ; e' <- zonkLExpr env e
        ; return $ HsVect v' (Just e')
        }
+zonkVect env (HsNoVect v)
+  = do { v' <- wrapLocM (zonkIdBndr env) v
+       ; return $ HsNoVect v'
+       }
 \end{code}
 
 %************************************************************************
@@ -1129,7 +1133,6 @@ zonkTcCoToCo env co
     go (AxiomInstCo ax cos) = do { cos' <- mapM go cos; return (AxiomInstCo ax cos') }
     go (AppCo co1 co2)      = do { co1' <- go co1; co2' <- go co2
                                  ; return (mkAppCo co1' co2') }
-    go (PredCo pco)         = do { pco' <- go `traverse` pco; return (mkPredCo pco') }
     go (UnsafeCo t1 t2)     = do { t1' <- zonkTcTypeToType env t1
                                  ; t2' <- zonkTcTypeToType env t2
                                  ; return (mkUnsafeCo t1' t2') }

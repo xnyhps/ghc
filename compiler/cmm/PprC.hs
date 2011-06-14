@@ -64,10 +64,6 @@ import Data.Word
 import Data.Array.ST
 import Control.Monad.ST
 
-#if x86_64_TARGET_ARCH
-import StaticFlags	( opt_Unregisterised )
-#endif
-
 #if defined(alpha_TARGET_ARCH) || defined(mips_TARGET_ARCH) || defined(mipsel_TARGET_ARCH) || defined(arm_TARGET_ARCH)
 #define BEWARE_LOAD_STORE_ALIGNMENT
 #endif
@@ -270,7 +266,7 @@ pprStmt stmt = case stmt of
     CmmJump lbl _params      -> mkJMP_(pprExpr lbl) <> semi
     CmmSwitch arg ids        -> pprSwitch arg ids
 
-pprCFunType :: SDoc -> CCallConv -> HintedCmmFormals -> HintedCmmActuals -> SDoc
+pprCFunType :: SDoc -> CCallConv -> [HintedCmmFormal] -> [HintedCmmActual] -> SDoc
 pprCFunType ppr_fn cconv ress args
   = res_type ress <+>
     parens (text (ccallConvAttribute cconv) <>  ppr_fn) <>
@@ -811,7 +807,7 @@ pprLocalReg (LocalReg uniq _) = char '_' <> ppr uniq
 -- -----------------------------------------------------------------------------
 -- Foreign Calls
 
-pprCall :: SDoc -> CCallConv -> HintedCmmFormals -> HintedCmmActuals -> CmmSafety
+pprCall :: SDoc -> CCallConv -> [HintedCmmFormal] -> [HintedCmmActual] -> CmmSafety
 	-> SDoc
 
 pprCall ppr_fn cconv results args _
@@ -820,17 +816,6 @@ pprCall ppr_fn cconv results args _
 
   | otherwise
   =
-#if x86_64_TARGET_ARCH
-	-- HACK around gcc optimisations.
-	-- x86_64 needs a __DISCARD__() here, to create a barrier between
-	-- putting the arguments into temporaries and passing the arguments
-	-- to the callee, because the argument expressions may refer to
-	-- machine registers that are also used for passing arguments in the
-	-- C calling convention.
-    (if (not opt_Unregisterised) 
-	then ptext (sLit "__DISCARD__();") 
-	else empty) $$
-#endif
     ppr_assign results (ppr_fn <> parens (commafy (map pprArg args))) <> semi
   where 
      ppr_assign []           rhs = rhs

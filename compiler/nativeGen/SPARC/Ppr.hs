@@ -12,7 +12,6 @@ module SPARC.Ppr (
 	pprSectionHeader,
 	pprData,
 	pprInstr,
-	pprUserReg,
 	pprSize,
 	pprImm,
 	pprDataItem
@@ -102,9 +101,7 @@ pprData (CmmStaticLit lit)       = pprDataItem lit
 pprGloblDecl :: CLabel -> Doc
 pprGloblDecl lbl
   | not (externallyVisibleCLabel lbl) = empty
-  | otherwise = ptext IF_ARCH_sparc((sLit ".global "), 
-				    (sLit ".globl ")) <>
-		pprCLabel_asm lbl
+  | otherwise = ptext (sLit ".global ") <> pprCLabel_asm lbl
 
 pprTypeAndSizeDecl :: CLabel -> Doc
 #if linux_TARGET_OS
@@ -138,12 +135,6 @@ pprAlign bytes =
 
 instance Outputable Instr where
     ppr	 instr	= Outputable.docToSDoc $ pprInstr instr
-
-
--- | Pretty print a register.
---	This is an alias of pprReg for legacy reasons, should remove it.
-pprUserReg :: Reg -> Doc
-pprUserReg = pprReg
 
 
 -- | Pretty print a register.

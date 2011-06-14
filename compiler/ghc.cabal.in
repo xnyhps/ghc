@@ -183,7 +183,7 @@ Library
         CLabel
         Cmm
         CmmBuildInfoTables
-        CmmCPS
+        CmmPipeline
         CmmCallConv
         CmmCommonBlockElim
         CmmContFlowOpt
@@ -200,6 +200,7 @@ Library
         CmmParse
         CmmProcPoint
         CmmSpillReload
+        CmmRewriteAssignments
         CmmStackLayout
         CmmType
         CmmUtils
@@ -566,7 +567,6 @@ Library
             TcSplice
             Convert
             ByteCodeAsm
-            ByteCodeFFI
             ByteCodeGen
             ByteCodeInstr
             ByteCodeItbls

@@ -1,10 +1,3 @@
-{-# OPTIONS -w #-}
--- The above warning supression flag is a temporary kludge.
--- While working on this module you are encouraged to remove it and fix
--- any warnings in the module. See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#Warnings
--- for details
-
 -----------------------------------------------------------------------------
 --
 -- Generating machine code (instruction selection)
@@ -35,30 +28,25 @@ import X86.Instr
 import X86.Cond
 import X86.Regs
 import X86.RegInfo
-import X86.Ppr
 import Instruction
 import PIC
 import NCGMonad
 import Size
 import Reg
-import RegClass
 import Platform
 
 -- Our intermediate code:
 import BasicTypes
 import BlockId
-import PprCmm		( pprExpr )
+import PprCmm		()
 import OldCmm
-import OldPprCmm
+import OldPprCmm        ()
 import CLabel
-import ClosureInfo	( C_SRT(..) )
 
 -- The rest:
 import StaticFlags	( opt_PIC )
 import ForeignCall	( CCallConv(..) )
 import OrdList
-import Pretty
-import qualified Outputable as O
 import Outputable
 import Unique
 import FastString
@@ -66,13 +54,15 @@ import FastBool		( isFastTrue )
 import Constants	( wORD_SIZE )
 import DynFlags
 
-import Debug.Trace	( trace )
-
-import Control.Monad	( mapAndUnzipM )
-import Data.Maybe	( fromJust )
-import Data.Bits
-import Data.Word
+import Control.Monad    ( mapAndUnzipM )
+import Data.Maybe       ( catMaybes )
 import Data.Int
+
+#if WORD_SIZE_IN_BITS==32
+import Data.Maybe       ( fromJust )
+import Data.Word
+import Data.Bits
+#endif
 
 sse2Enabled :: NatM Bool
 #if x86_64_TARGET_ARCH
@@ -92,22 +82,22 @@ if_sse2 sse2 x87 = do
   if b then sse2 else x87
 
 cmmTopCodeGen 
-	:: DynFlags
-	-> RawCmmTop
+	:: RawCmmTop
 	-> NatM [NatCmmTop Instr]
 
-cmmTopCodeGen dynflags (CmmProc info lab (ListGraph blocks)) = do
+cmmTopCodeGen (CmmProc info lab (ListGraph blocks)) = do
   (nat_blocks,statics) <- mapAndUnzipM basicBlockCodeGen blocks
   picBaseMb <- getPicBaseMaybeNat
+  dflags <- getDynFlagsNat
   let proc = CmmProc info lab (ListGraph $ concat nat_blocks)
       tops = proc : concat statics
-      os   = platformOS $ targetPlatform dynflags
+      os   = platformOS $ targetPlatform dflags
 
   case picBaseMb of
       Just picBase -> initializePicBase_x86 ArchX86 os picBase tops
       Nothing -> return tops
   
-cmmTopCodeGen _ (CmmData sec dat) = do
+cmmTopCodeGen (CmmData sec dat) = do
   return [CmmData sec dat]  -- no translation, we just use CmmStatic
 
 
@@ -170,8 +160,8 @@ stmtToInstrs stmt = case stmt of
     CmmBranch id	  -> genBranch id
     CmmCondBranch arg id  -> genCondJump id arg
     CmmSwitch arg ids     -> genSwitch arg ids
-    CmmJump arg params	  -> genJump arg
-    CmmReturn params	  ->
+    CmmJump arg _         -> genJump arg
+    CmmReturn _           ->
       panic "stmtToInstrs: return statement should have been cps'd away"
 
 
@@ -190,6 +180,7 @@ data CondCode
 	= CondCode Bool Cond InstrBlock
 
 
+#if WORD_SIZE_IN_BITS==32
 -- | a.k.a "Register64"
 --	Reg is the lower 32-bit temporary which contains the result. 
 --	Use getHiVRegFromLo to find the other VRegUnique.  
@@ -201,6 +192,7 @@ data ChildCode64
    = ChildCode64 
         InstrBlock
         Reg	 	
+#endif
 
 
 -- | Register's passed up the tree.  If the stix code forces the register
@@ -282,8 +274,8 @@ jumpTableEntry (Just blockid) = CmmStaticLit (CmmLabel blockLabel)
 
 -- Expand CmmRegOff.  ToDo: should we do it this way around, or convert
 -- CmmExprs into CmmRegOff?
-mangleIndexTree :: CmmExpr -> CmmExpr
-mangleIndexTree (CmmRegOff reg off)
+mangleIndexTree :: CmmReg -> Int -> CmmExpr
+mangleIndexTree reg off
   = CmmMachOp (MO_Add width) [CmmReg reg, CmmLit (CmmInt (fromIntegral off) width)]
   where width = typeWidth (cmmRegType reg)
 
@@ -300,9 +292,7 @@ getSomeReg expr = do
 	return (reg, code)
 
 
-
-
-
+#if WORD_SIZE_IN_BITS==32
 assignMem_I64Code :: CmmExpr -> CmmExpr -> NatM InstrBlock
 assignMem_I64Code addrTree valueTree = do
   Amode addr addr_code <- getAmode addrTree
@@ -318,7 +308,7 @@ assignMem_I64Code addrTree valueTree = do
 
 
 assignReg_I64Code :: CmmReg  -> CmmExpr -> NatM InstrBlock
-assignReg_I64Code (CmmLocal (LocalReg u_dst pk)) valueTree = do
+assignReg_I64Code (CmmLocal (LocalReg u_dst _)) valueTree = do
    ChildCode64 vcode r_src_lo <- iselExpr64 valueTree
    let 
          r_dst_lo = RegVirtual $ mkVirtualReg u_dst II32
@@ -331,10 +321,8 @@ assignReg_I64Code (CmmLocal (LocalReg u_dst pk)) valueTree = do
         vcode `snocOL` mov_lo `snocOL` mov_hi
      )
 
-assignReg_I64Code lvalue valueTree
+assignReg_I64Code _ _
    = panic "assignReg_I64Code(i386): invalid lvalue"
-
-
 
 
 iselExpr64        :: CmmExpr -> NatM ChildCode64
@@ -410,7 +398,7 @@ iselExpr64 (CmmMachOp (MO_UU_Conv _ W64) [expr]) = do
 
 iselExpr64 expr
    = pprPanic "iselExpr64(i386)" (ppr expr)
-
+#endif
 
 
 --------------------------------------------------------------------------------
@@ -435,8 +423,8 @@ getRegister (CmmReg reg)
        return (Fixed size (getRegisterReg use_sse2 reg) nilOL)
   
 
-getRegister tree@(CmmRegOff _ _) 
-  = getRegister (mangleIndexTree tree)
+getRegister (CmmRegOff r n) 
+  = getRegister $ mangleIndexTree r n
 
 
 #if WORD_SIZE_IN_BITS==32
@@ -611,7 +599,7 @@ getRegister (CmmMachOp mop [x]) = do -- unary MachOps
       MO_FS_Conv from to -> coerceFP2Int from to x
       MO_SF_Conv from to -> coerceInt2FP from to x
 
-      other -> pprPanic "getRegister" (pprMachOp mop)
+      _other -> pprPanic "getRegister" (pprMachOp mop)
    where
 	triv_ucode :: (Size -> Operand -> Instr) -> Size -> NatM Register
 	triv_ucode instr size = trivialUCode size (instr size) x
@@ -648,37 +636,37 @@ getRegister (CmmMachOp mop [x]) = do -- unary MachOps
                  return (swizzleRegisterRep e_code new_size)
 
 
-getRegister e@(CmmMachOp mop [x, y]) = do -- dyadic MachOps
+getRegister (CmmMachOp mop [x, y]) = do -- dyadic MachOps
   sse2 <- sse2Enabled
   case mop of
-      MO_F_Eq w -> condFltReg EQQ x y
-      MO_F_Ne w -> condFltReg NE x y
-      MO_F_Gt w -> condFltReg GTT x y
-      MO_F_Ge w -> condFltReg GE x y
-      MO_F_Lt w -> condFltReg LTT x y
-      MO_F_Le w -> condFltReg LE x y
+      MO_F_Eq _ -> condFltReg EQQ x y
+      MO_F_Ne _ -> condFltReg NE  x y
+      MO_F_Gt _ -> condFltReg GTT x y
+      MO_F_Ge _ -> condFltReg GE  x y
+      MO_F_Lt _ -> condFltReg LTT x y
+      MO_F_Le _ -> condFltReg LE  x y
 
-      MO_Eq rep   -> condIntReg EQQ x y
-      MO_Ne rep   -> condIntReg NE x y
+      MO_Eq _   -> condIntReg EQQ x y
+      MO_Ne _   -> condIntReg NE  x y
 
-      MO_S_Gt rep -> condIntReg GTT x y
-      MO_S_Ge rep -> condIntReg GE x y
-      MO_S_Lt rep -> condIntReg LTT x y
-      MO_S_Le rep -> condIntReg LE x y
+      MO_S_Gt _ -> condIntReg GTT x y
+      MO_S_Ge _ -> condIntReg GE  x y
+      MO_S_Lt _ -> condIntReg LTT x y
+      MO_S_Le _ -> condIntReg LE  x y
 
-      MO_U_Gt rep -> condIntReg GU  x y
-      MO_U_Ge rep -> condIntReg GEU x y
-      MO_U_Lt rep -> condIntReg LU  x y
-      MO_U_Le rep -> condIntReg LEU x y
+      MO_U_Gt _ -> condIntReg GU  x y
+      MO_U_Ge _ -> condIntReg GEU x y
+      MO_U_Lt _ -> condIntReg LU  x y
+      MO_U_Le _ -> condIntReg LEU x y
 
       MO_F_Add w  | sse2      -> trivialFCode_sse2 w ADD  x y
-                  | otherwise -> trivialFCode_x87  w GADD x y
+                  | otherwise -> trivialFCode_x87    GADD x y
       MO_F_Sub w  | sse2      -> trivialFCode_sse2 w SUB  x y
-                  | otherwise -> trivialFCode_x87  w GSUB x y
+                  | otherwise -> trivialFCode_x87    GSUB x y
       MO_F_Quot w | sse2      -> trivialFCode_sse2 w FDIV x y
-                  | otherwise -> trivialFCode_x87  w GDIV x y
+                  | otherwise -> trivialFCode_x87    GDIV x y
       MO_F_Mul w  | sse2      -> trivialFCode_sse2 w MUL x y
-                  | otherwise -> trivialFCode_x87  w GMUL x y
+                  | otherwise -> trivialFCode_x87    GMUL x y
 
       MO_Add rep -> add_code rep x y
       MO_Sub rep -> sub_code rep x y
@@ -703,7 +691,7 @@ getRegister e@(CmmMachOp mop [x, y]) = do -- dyadic MachOps
       MO_U_Shr rep -> shift_code rep SHR x y {-False-}
       MO_S_Shr rep -> shift_code rep SAR x y {-False-}
 
-      other -> pprPanic "getRegister(x86) - binary CmmMachOp (1)" (pprMachOp mop)
+      _other -> pprPanic "getRegister(x86) - binary CmmMachOp (1)" (pprMachOp mop)
   where
     --------------------
     triv_op width instr = trivialCode width op (Just op) x y
@@ -740,7 +728,7 @@ getRegister e@(CmmMachOp mop [x, y]) = do -- dyadic MachOps
 	       -> NatM Register
 
     {- Case1: shift length as immediate -}
-    shift_code width instr x y@(CmmLit lit) = do
+    shift_code width instr x (CmmLit lit) = do
 	  x_code <- getAnyReg x
 	  let
 	       size = intSize width
@@ -866,8 +854,7 @@ getRegister (CmmLit (CmmInt 0 width))
 	size = intSize width
 
 	-- x86_64: 32-bit xor is one byte shorter, and zero-extends to 64 bits
-	adj_size = case size of II64 -> II32; _ -> size
-	size1 = IF_ARCH_i386( size, adj_size ) 
+	size1 = IF_ARCH_i386( size, case size of II64 -> II32; _ -> size )
     	code dst 
            = unitOL (XOR size1 (OpReg dst) (OpReg dst))
     in
@@ -971,7 +958,7 @@ reg2reg size src dst
 
 --------------------------------------------------------------------------------
 getAmode :: CmmExpr -> NatM Amode
-getAmode tree@(CmmRegOff _ _) = getAmode (mangleIndexTree tree)
+getAmode (CmmRegOff r n) = getAmode $ mangleIndexTree r n
 
 #if x86_64_TARGET_ARCH
 
@@ -984,14 +971,14 @@ getAmode (CmmMachOp (MO_Add W64) [CmmReg (CmmGlobal PicBaseReg),
 
 -- This is all just ridiculous, since it carefully undoes 
 -- what mangleIndexTree has just done.
-getAmode (CmmMachOp (MO_Sub rep) [x, CmmLit lit@(CmmInt i _)])
+getAmode (CmmMachOp (MO_Sub _rep) [x, CmmLit lit@(CmmInt i _)])
   | is32BitLit lit
   -- ASSERT(rep == II32)???
   = do (x_reg, x_code) <- getSomeReg x
        let off = ImmInt (-(fromInteger i))
        return (Amode (AddrBaseIndex (EABaseReg x_reg) EAIndexNone off) x_code)
   
-getAmode (CmmMachOp (MO_Add rep) [x, CmmLit lit])
+getAmode (CmmMachOp (MO_Add _rep) [x, CmmLit lit])
   | is32BitLit lit
   -- ASSERT(rep == II32)???
   = do (x_reg, x_code) <- getSomeReg x
@@ -1004,12 +991,12 @@ getAmode (CmmMachOp (MO_Add rep) [a@(CmmMachOp (MO_Shl _) _),
 				  b@(CmmLit _)])
   = getAmode (CmmMachOp (MO_Add rep) [b,a])
 
-getAmode (CmmMachOp (MO_Add rep) [x, CmmMachOp (MO_Shl _) 
+getAmode (CmmMachOp (MO_Add _) [x, CmmMachOp (MO_Shl _) 
 					[y, CmmLit (CmmInt shift _)]])
   | shift == 0 || shift == 1 || shift == 2 || shift == 3
   = x86_complex_amode x y shift 0
 
-getAmode (CmmMachOp (MO_Add rep) 
+getAmode (CmmMachOp (MO_Add _) 
                 [x, CmmMachOp (MO_Add _)
                         [CmmMachOp (MO_Shl _) [y, CmmLit (CmmInt shift _)],
                          CmmLit (CmmInt offset _)]])
@@ -1017,7 +1004,7 @@ getAmode (CmmMachOp (MO_Add rep)
   && is32BitInteger offset
   = x86_complex_amode x y shift offset
 
-getAmode (CmmMachOp (MO_Add rep) [x,y])
+getAmode (CmmMachOp (MO_Add _) [x,y])
   = x86_complex_amode x y 0 0
 
 getAmode (CmmLit lit) | is32BitLit lit
@@ -1036,7 +1023,8 @@ x86_complex_amode base index shift offset
        (y_reg, y_code) <- getSomeReg index
        let
     	   code = x_code `appOL` y_code
-           base = case shift of 0 -> 1; 1 -> 2; 2 -> 4; 3 -> 8
+           base = case shift of 0 -> 1; 1 -> 2; 2 -> 4; 3 -> 8;
+                                n -> panic $ "x86_complex_amode: unhandled shift! (" ++ show n ++ ")"
        return (Amode (AddrBaseIndex (EABaseReg x_reg) (EAIndex y_reg base) (ImmInt (fromIntegral offset)))
                code)
 
@@ -1093,6 +1081,7 @@ getNonClobberedOperand_generic e = do
 amodeCouldBeClobbered :: AddrMode -> Bool
 amodeCouldBeClobbered amode = any regClobbered (addrModeRegs amode)
 
+regClobbered :: Reg -> Bool
 regClobbered (RegReal (RealRegSingle rr)) = isFastTrue (freeReg rr)
 regClobbered _ = False
 
@@ -1124,6 +1113,7 @@ getOperand (CmmLoad mem pk) = do
 
 getOperand e = getOperand_generic e
 
+getOperand_generic :: CmmExpr -> NatM (Operand, InstrBlock)
 getOperand_generic e = do
     (reg, code) <- getSomeReg e
     return (OpReg reg, code)
@@ -1170,6 +1160,7 @@ loadFloatAmode use_sse2 w addr addr_code = do
 -- use it directly from memory.  However, if the literal is
 -- zero, we're better off generating it into a register using
 -- xor.
+isSuitableFloatingPointLit :: CmmLit -> Bool
 isSuitableFloatingPointLit (CmmFloat f _) = f /= 0.0
 isSuitableFloatingPointLit _ = False
 
@@ -1187,12 +1178,13 @@ getRegOrMem e = do
     (reg, code) <- getNonClobberedReg e
     return (OpReg reg, code)
 
+is32BitLit :: CmmLit -> Bool
 #if x86_64_TARGET_ARCH
 is32BitLit (CmmInt i W64) = is32BitInteger i
    -- assume that labels are in the range 0-2^31-1: this assumes the
    -- small memory model (see gcc docs, -mcmodel=small).
 #endif
-is32BitLit x = True
+is32BitLit _ = True
 
 
 
@@ -1220,20 +1212,20 @@ getCondCode (CmmMachOp mop [x, y])
       MO_F_Lt W64 -> condFltCode LTT x y
       MO_F_Le W64 -> condFltCode LE  x y
 
-      MO_Eq rep -> condIntCode EQQ  x y
-      MO_Ne rep -> condIntCode NE   x y
+      MO_Eq _ -> condIntCode EQQ x y
+      MO_Ne _ -> condIntCode NE  x y
 
-      MO_S_Gt rep -> condIntCode GTT  x y
-      MO_S_Ge rep -> condIntCode GE   x y
-      MO_S_Lt rep -> condIntCode LTT  x y
-      MO_S_Le rep -> condIntCode LE   x y
+      MO_S_Gt _ -> condIntCode GTT x y
+      MO_S_Ge _ -> condIntCode GE  x y
+      MO_S_Lt _ -> condIntCode LTT x y
+      MO_S_Le _ -> condIntCode LE  x y
 
-      MO_U_Gt rep -> condIntCode GU   x y
-      MO_U_Ge rep -> condIntCode GEU  x y
-      MO_U_Lt rep -> condIntCode LU   x y
-      MO_U_Le rep -> condIntCode LEU  x y
+      MO_U_Gt _ -> condIntCode GU  x y
+      MO_U_Ge _ -> condIntCode GEU x y
+      MO_U_Lt _ -> condIntCode LU  x y
+      MO_U_Le _ -> condIntCode LEU x y
 
-      other -> pprPanic "getCondCode(x86,x86_64,sparc)" (ppr (CmmMachOp mop [x,y]))
+      _other -> pprPanic "getCondCode(x86,x86_64,sparc)" (ppr (CmmMachOp mop [x,y]))
 
 getCondCode other =  pprPanic "getCondCode(2)(x86,sparc)" (ppr other)
 
@@ -1257,8 +1249,8 @@ condIntCode cond (CmmLoad x pk) (CmmLit lit) | is32BitLit lit = do
 
 -- anything vs zero, using a mask
 -- TODO: Add some sanity checking!!!!
-condIntCode cond (CmmMachOp (MO_And rep) [x,o2]) (CmmLit (CmmInt 0 pk))
-    | (CmmLit lit@(CmmInt mask pk2)) <- o2, is32BitLit lit
+condIntCode cond (CmmMachOp (MO_And _) [x,o2]) (CmmLit (CmmInt 0 pk))
+    | (CmmLit lit@(CmmInt mask _)) <- o2, is32BitLit lit
     = do
       (x_reg, x_code) <- getSomeReg x
       let
@@ -1310,7 +1302,6 @@ condFltCode cond x y
     = ASSERT(cond `elem` ([EQQ, NE, LE, LTT, GE, GTT])) do
     (x_reg, x_code) <- getNonClobberedReg x
     (y_reg, y_code) <- getSomeReg y
-    use_sse2 <- sse2Enabled
     let
   	code = x_code `appOL` y_code `snocOL`
   		GCMP cond x_reg y_reg
@@ -1400,7 +1391,7 @@ assignReg_IntCode pk reg (CmmLoad src _) = do
   return (load_code (getRegisterReg False{-no sse2-} reg))
 
 -- dst is a reg, but src could be anything
-assignReg_IntCode pk reg src = do
+assignReg_IntCode _ reg src = do
   code <- getAnyReg src
   return (code (getRegisterReg False{-no sse2-} reg))
 
@@ -1418,7 +1409,7 @@ assignMem_FltCode pk addr src = do
   return code
 
 -- Floating point assignment to a register/temporary
-assignReg_FltCode pk reg src = do
+assignReg_FltCode _ reg src = do
   use_sse2 <- sse2Enabled
   src_code <- getAnyReg src
   return (src_code (getRegisterReg use_sse2 reg))
@@ -1426,7 +1417,7 @@ assignReg_FltCode pk reg src = do
 
 genJump :: CmmExpr{-the branch target-} -> NatM InstrBlock
 
-genJump (CmmLoad mem pk) = do
+genJump (CmmLoad mem _) = do
   Amode target code <- getAmode mem
   return (code `snocOL` JMP (OpAddr target))
 
@@ -1506,9 +1497,9 @@ genCondJump id bool = do
 -- register allocator.
 
 genCCall
-    :: CmmCallTarget		-- function to call
-    -> HintedCmmFormals		-- where to put the result
-    -> HintedCmmActuals		-- arguments (of mixed type)
+    :: CmmCallTarget            -- function to call
+    -> [HintedCmmFormal]        -- where to put the result
+    -> [HintedCmmActual]        -- arguments (of mixed type)
     -> NatM InstrBlock
 
 -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1519,14 +1510,18 @@ genCCall (CmmPrim MO_WriteBarrier) _ _ = return nilOL
 	-- write barrier compiles to no code on x86/x86-64; 
 	-- we keep it this long in order to prevent earlier optimisations.
 
+-- void return type prim op
+genCCall (CmmPrim op) [] args =
+    outOfLineCmmOp op Nothing args
+
 -- we only cope with a single result for foreign calls
-genCCall (CmmPrim op) [CmmHinted r _] args = do
+genCCall (CmmPrim op) [r_hinted@(CmmHinted r _)] args = do
   l1 <- getNewLabelNat
   l2 <- getNewLabelNat
   sse2 <- sse2Enabled
   if sse2
     then
-      outOfLineFloatOp op r args
+      outOfLineCmmOp op (Just r_hinted) args
     else case op of
 	MO_F32_Sqrt -> actuallyInlineFloatOp GSQRT FF32 args
 	MO_F64_Sqrt -> actuallyInlineFloatOp GSQRT FF64 args
@@ -1540,13 +1535,17 @@ genCCall (CmmPrim op) [CmmHinted r _] args = do
 	MO_F32_Tan  -> actuallyInlineFloatOp (\s -> GTAN s l1 l2) FF32 args
 	MO_F64_Tan  -> actuallyInlineFloatOp (\s -> GTAN s l1 l2) FF64 args
 	
-	other_op    -> outOfLineFloatOp op r args
+	_other_op   -> outOfLineCmmOp op (Just r_hinted) args
 
  where
   actuallyInlineFloatOp instr size [CmmHinted x _]
-	= do res <- trivialUFCode size (instr size) x
+        = do res <- trivialUFCode size (instr size) x
 	     any <- anyReg res
  	     return (any (getRegisterReg False (CmmLocal r)))
+
+  actuallyInlineFloatOp _ _ args
+        = panic $ "genCCall.actuallyInlineFloatOp: bad number of arguments! ("
+                ++ show (length args) ++ ")"
 
 genCCall target dest_regs args = do
     let
@@ -1569,7 +1568,6 @@ genCCall target dest_regs args = do
     -- deal with static vs dynamic call targets
     (callinsns,cconv) <-
       case target of
-	-- CmmPrim -> ...
         CmmCallee (CmmLit (CmmLabel lbl)) conv
            -> -- ToDo: stdcall arg sizes
 	      return (unitOL (CALL (Left fn_imm) []), conv)
@@ -1578,6 +1576,9 @@ genCCall target dest_regs args = do
            -> do { (dyn_r, dyn_c) <- getSomeReg expr
                  ; ASSERT( isWord32 (cmmExprType expr) )
                    return (dyn_c `snocOL` CALL (Right dyn_r) [], conv) }
+        CmmPrim _
+            -> panic $ "genCCall: Can't handle CmmPrim call type here, error "
+                        ++ "probably because too many return values."
 
     let	push_code
 #if darwin_TARGET_OS
@@ -1646,9 +1647,10 @@ genCCall target dest_regs args = do
     arg_size :: CmmType -> Int	-- Width in bytes
     arg_size ty = widthInBytes (typeWidth ty)
 
+#if darwin_TARGET_OS        
     roundTo a x | x `mod` a == 0 = x
                 | otherwise = x + a - (x `mod` a)
-
+#endif
 
     push_arg :: Bool -> HintedCmmActual {-current argument-}
                     -> NatM InstrBlock  -- code
@@ -1703,9 +1705,13 @@ genCCall (CmmPrim MO_WriteBarrier) _ _ = return nilOL
 	-- write barrier compiles to no code on x86/x86-64; 
 	-- we keep it this long in order to prevent earlier optimisations.
 
+-- void return type prim op
+genCCall (CmmPrim op) [] args =
+  outOfLineCmmOp op Nothing args
 
-genCCall (CmmPrim op) [CmmHinted r _] args = 
-  outOfLineFloatOp op r args
+-- we only cope with a single result for foreign calls
+genCCall (CmmPrim op) [res] args =
+  outOfLineCmmOp op (Just res) args
 
 genCCall target dest_regs args = do
 
@@ -1749,7 +1755,6 @@ genCCall target dest_regs args = do
     -- deal with static vs dynamic call targets
     (callinsns,cconv) <-
       case target of
-	-- CmmPrim -> ...
         CmmCallee (CmmLit (CmmLabel lbl)) conv
            -> -- ToDo: stdcall arg sizes
 	      return (unitOL (CALL (Left fn_imm) arg_regs), conv)
@@ -1757,6 +1762,9 @@ genCCall target dest_regs args = do
         CmmCallee expr conv
            -> do (dyn_r, dyn_c) <- getSomeReg expr
 		 return (dyn_c `snocOL` CALL (Right dyn_r) arg_regs, conv)
+        CmmPrim _
+            -> panic $ "genCCall: Can't handle CmmPrim call type here, error "
+                        ++ "probably because too many return values."
 
     let
 	-- The x86_64 ABI requires us to set %al to the number of SSE2
@@ -1792,7 +1800,7 @@ genCCall target dest_regs args = do
 	  where 
 		rep = localRegType dest
 		r_dest = getRegisterReg True (CmmLocal dest)
-	assign_code many = panic "genCCall.assign_code many"
+	assign_code _many = panic "genCCall.assign_code many"
 
     return (load_args_code 	`appOL` 
 	    adjust_rsp 		`appOL`
@@ -1834,7 +1842,7 @@ genCCall target dest_regs args = do
 	    return ((CmmHinted arg hint):args', ars, frs, code')
 
     push_args [] code = return code
-    push_args ((CmmHinted arg hint):rest) code
+    push_args ((CmmHinted arg _):rest) code
        | isFloatType arg_rep = do
 	 (arg_reg, arg_code) <- getSomeReg arg
          delta <- getDeltaNat
@@ -1867,21 +1875,25 @@ genCCall	= panic "X86.genCCAll: not defined"
 #endif /* x86_64_TARGET_ARCH */
 
 
-
-
-outOfLineFloatOp :: CallishMachOp -> CmmFormal -> HintedCmmActuals -> NatM InstrBlock
-outOfLineFloatOp mop res args
+outOfLineCmmOp :: CallishMachOp -> Maybe HintedCmmFormal -> [HintedCmmActual] -> NatM InstrBlock
+outOfLineCmmOp mop res args
   = do
       dflags <- getDynFlagsNat
       targetExpr <- cmmMakeDynamicReference dflags addImportNat CallReference lbl
       let target = CmmCallee targetExpr CCallConv
      
-      stmtToInstrs (CmmCall target [CmmHinted res NoHint] args CmmUnsafe CmmMayReturn)
+      stmtToInstrs (CmmCall target (catMaybes [res]) args' CmmUnsafe CmmMayReturn)
   where
 	-- Assume we can call these functions directly, and that they're not in a dynamic library.
 	-- TODO: Why is this ok? Under linux this code will be in libm.so
 	--	 Is is because they're really implemented as a primitive instruction by the assembler??  -- BL 2009/12/31 
 	lbl = mkForeignLabel fn Nothing ForeignLabelInThisPackage IsFunction
+
+        args' = case mop of
+                    MO_Memcpy    -> init args
+                    MO_Memset    -> init args
+                    MO_Memmove   -> init args
+                    _            -> args
 
 	fn = case mop of
 	      MO_F32_Sqrt  -> fsLit "sqrtf"
@@ -1916,8 +1928,11 @@ outOfLineFloatOp mop res args
 	      MO_F64_Tanh  -> fsLit "tanh"
 	      MO_F64_Pwr   -> fsLit "pow"
 
+	      MO_Memcpy    -> fsLit "memcpy"
+	      MO_Memset    -> fsLit "memset"
+	      MO_Memmove   -> fsLit "memmove"
 
-
+              other -> panic $ "outOfLineCmmOp: unmatched op! (" ++ show other ++ ")"
 
 
 -- -----------------------------------------------------------------------------
@@ -1956,10 +1971,7 @@ genSwitch expr ids
     -- conjunction with the hack in PprMach.hs/pprDataItem once
     -- binutils 2.17 is standard.
             code = e_code `appOL` t_code `appOL` toOL [
-			    MOVSxL II32
-				   (OpAddr (AddrBaseIndex (EABaseReg tableReg)
-							  (EAIndex reg wORD_SIZE) (ImmInt 0)))
-				   (OpReg reg),
+			    MOVSxL II32 op (OpReg reg),
 			    ADD (intSize wordWidth) (OpReg reg) (OpReg tableReg),
 			    JMP_TBL (OpReg tableReg) ids ReadOnlyData lbl
 		   ]
@@ -1975,8 +1987,7 @@ genSwitch expr ids
   = do
         (reg,e_code) <- getSomeReg expr
         lbl <- getNewLabelNat
-        let
-            op = OpAddr (AddrBaseIndex EABaseNone (EAIndex reg wORD_SIZE) (ImmCLbl lbl))
+        let op = OpAddr (AddrBaseIndex EABaseNone (EAIndex reg wORD_SIZE) (ImmCLbl lbl))
             code = e_code `appOL` toOL [
                     JMP_TBL op ids ReadOnlyData lbl
                  ]
@@ -1987,6 +1998,7 @@ generateJumpTableForInstr :: Instr -> Maybe (NatCmmTop Instr)
 generateJumpTableForInstr (JMP_TBL _ ids section lbl) = Just (createJumpTable ids section lbl)
 generateJumpTableForInstr _ = Nothing
 
+createJumpTable :: [Maybe BlockId] -> Section -> CLabel -> GenCmmTop CmmStatic h g
 createJumpTable ids section lbl
     = let jumpTable
             | opt_PIC =
@@ -2142,7 +2154,10 @@ SDM's version of The Rules:
   register happens to be the destination register.
 -}
 
-trivialCode width instr (Just revinstr) (CmmLit lit_a) b
+trivialCode :: Width -> (Operand -> Operand -> Instr)
+            -> Maybe (Operand -> Operand -> Instr)
+            -> CmmExpr -> CmmExpr -> NatM Register
+trivialCode width _ (Just revinstr) (CmmLit lit_a) b
   | is32BitLit lit_a = do
   b_code <- getAnyReg b
   let
@@ -2152,10 +2167,12 @@ trivialCode width instr (Just revinstr) (CmmLit lit_a) b
   -- in
   return (Any (intSize width) code)
 
-trivialCode width instr maybe_revinstr a b
+trivialCode width instr _ a b
   = genTrivialCode (intSize width) instr a b
 
 -- This is re-used for floating pt instructions too.
+genTrivialCode :: Size -> (Operand -> Operand -> Instr)
+               -> CmmExpr -> CmmExpr -> NatM Register
 genTrivialCode rep instr a b = do
   (b_op, b_code) <- getNonClobberedOperand b
   a_code <- getAnyReg a
@@ -2180,12 +2197,15 @@ genTrivialCode rep instr a b = do
   -- in
   return (Any rep code)
 
+regClashesWithOp :: Reg -> Operand -> Bool
 reg `regClashesWithOp` OpReg reg2   = reg == reg2
 reg `regClashesWithOp` OpAddr amode = any (==reg) (addrModeRegs amode)
-reg `regClashesWithOp` _            = False
+_   `regClashesWithOp` _            = False
 
 -----------
 
+trivialUCode :: Size -> (Operand -> Instr)
+             -> CmmExpr -> NatM Register
 trivialUCode rep instr x = do
   x_code <- getAnyReg x
   let
@@ -2196,7 +2216,9 @@ trivialUCode rep instr x = do
 
 -----------
 
-trivialFCode_x87 width instr x y = do
+trivialFCode_x87 :: (Size -> Reg -> Reg -> Reg -> Instr)
+                 -> CmmExpr -> CmmExpr -> NatM Register
+trivialFCode_x87 instr x y = do
   (x_reg, x_code) <- getNonClobberedReg x -- these work for float regs too
   (y_reg, y_code) <- getSomeReg y
   let
@@ -2207,11 +2229,14 @@ trivialFCode_x87 width instr x y = do
 	instr size x_reg y_reg dst
   return (Any size code)
 
+trivialFCode_sse2 :: Width -> (Size -> Operand -> Operand -> Instr)
+                  -> CmmExpr -> CmmExpr -> NatM Register
 trivialFCode_sse2 pk instr x y
     = genTrivialCode size (instr size) x y
     where size = floatSize pk
 
 
+trivialUFCode :: Size -> (Reg -> Reg -> Instr) -> CmmExpr -> NatM Register
 trivialUFCode size instr x = do
   (x_reg, x_code) <- getSomeReg x
   let
@@ -2229,7 +2254,9 @@ coerceInt2FP from to x = if_sse2 coerce_sse2 coerce_x87
    coerce_x87 = do
      (x_reg, x_code) <- getSomeReg x
      let
-           opc  = case to of W32 -> GITOF; W64 -> GITOD
+           opc  = case to of W32 -> GITOF; W64 -> GITOD;
+                             n -> panic $ "coerceInt2FP.x87: unhandled width ("
+                                         ++ show n ++ ")"
            code dst = x_code `snocOL` opc x_reg dst
    	-- ToDo: works for non-II32 reps?
      return (Any FF80 code)
@@ -2238,6 +2265,8 @@ coerceInt2FP from to x = if_sse2 coerce_sse2 coerce_x87
      (x_op, x_code) <- getOperand x  -- ToDo: could be a safe operand
      let
            opc  = case to of W32 -> CVTSI2SS; W64 -> CVTSI2SD
+                             n -> panic $ "coerceInt2FP.sse: unhandled width ("
+                                         ++ show n ++ ")"
            code dst = x_code `snocOL` opc (intSize from) x_op dst
      -- in
      return (Any (floatSize to) code)
@@ -2251,6 +2280,8 @@ coerceFP2Int from to x = if_sse2 coerceFP2Int_sse2 coerceFP2Int_x87
      (x_reg, x_code) <- getSomeReg x
      let
            opc  = case from of W32 -> GFTOI; W64 -> GDTOI
+                               n -> panic $ "coerceFP2Int.x87: unhandled width ("
+                                           ++ show n ++ ")"
            code dst = x_code `snocOL` opc x_reg dst
    	-- ToDo: works for non-II32 reps?
      -- in
@@ -2259,7 +2290,9 @@ coerceFP2Int from to x = if_sse2 coerceFP2Int_sse2 coerceFP2Int_x87
    coerceFP2Int_sse2 = do
      (x_op, x_code) <- getOperand x  -- ToDo: could be a safe operand
      let
-           opc  = case from of W32 -> CVTTSS2SIQ; W64 -> CVTTSD2SIQ
+           opc  = case from of W32 -> CVTTSS2SIQ; W64 -> CVTTSD2SIQ;
+                               n -> panic $ "coerceFP2Init.sse: unhandled width ("
+                                           ++ show n ++ ")"
            code dst = x_code `snocOL` opc (intSize to) x_op dst
      -- in
      return (Any (intSize to) code)
@@ -2272,7 +2305,9 @@ coerceFP2FP to x = do
   use_sse2 <- sse2Enabled
   (x_reg, x_code) <- getSomeReg x
   let
-        opc | use_sse2  = case to of W32 -> CVTSD2SS; W64 -> CVTSS2SD
+        opc | use_sse2  = case to of W32 -> CVTSD2SS; W64 -> CVTSS2SD;
+                                     n -> panic $ "coerceFP2FP: unhandled width ("
+                                                 ++ show n ++ ")"
             | otherwise = GDTOF
         code dst = x_code `snocOL` opc x_reg dst
   -- in

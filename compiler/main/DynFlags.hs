@@ -108,7 +108,8 @@ import Data.Char
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Distribution.System
+import Data.Set (Set)
+import qualified Data.Set as Set
 import System.FilePath
 import System.IO        ( stderr, hPutChar )
 
@@ -123,6 +124,21 @@ data DynFlag
    | Opt_D_dump_raw_cmm
    | Opt_D_dump_cmmz
    | Opt_D_dump_cmmz_pretty
+   -- All of the cmmz subflags (there are a lot!)  Automatically
+   -- enabled if you run -ddump-cmmz
+   | Opt_D_dump_cmmz_cbe
+   | Opt_D_dump_cmmz_proc
+   | Opt_D_dump_cmmz_spills
+   | Opt_D_dump_cmmz_rewrite
+   | Opt_D_dump_cmmz_dead
+   | Opt_D_dump_cmmz_stub
+   | Opt_D_dump_cmmz_sp
+   | Opt_D_dump_cmmz_procmap
+   | Opt_D_dump_cmmz_split
+   | Opt_D_dump_cmmz_lower
+   | Opt_D_dump_cmmz_info
+   | Opt_D_dump_cmmz_cafs
+   -- end cmmz subflags
    | Opt_D_dump_cps_cmm
    | Opt_D_dump_cvt_cmm
    | Opt_D_dump_asm
@@ -258,7 +274,6 @@ data DynFlag
    -- misc opts
    | Opt_Pp
    | Opt_ForceRecomp
-   | Opt_DryRun
    | Opt_ExcessPrecision
    | Opt_EagerBlackHoling
    | Opt_ReadUserPackageConf
@@ -321,7 +336,6 @@ data ExtensionFlag
    | Opt_TemplateHaskell
    | Opt_QuasiQuotes
    | Opt_ImplicitParams
-   | Opt_Generics			-- "Derivable type classes"
    | Opt_ImplicitPrelude
    | Opt_ScopedTypeVariables
    | Opt_UnboxedTuples
@@ -343,6 +357,9 @@ data ExtensionFlag
    | Opt_DeriveFunctor
    | Opt_DeriveTraversable
    | Opt_DeriveFoldable
+   | Opt_DeriveGeneric            -- Allow deriving Generic/1
+   | Opt_DefaultSignatures        -- Allow extra signatures for defmeths
+   | Opt_Generics                 -- Old generic classes, now deprecated
 
    | Opt_TypeSynonymInstances
    | Opt_FlexibleContexts
@@ -479,6 +496,11 @@ data DynFlags = DynFlags {
   -- know what to clean when an exception happens
   filesToClean          :: IORef [FilePath],
   dirsToClean           :: IORef (Map FilePath FilePath),
+
+  -- Names of files which were generated from -ddump-to-file; used to
+  -- track which ones we need to truncate because it's our first run
+  -- through
+  generatedDumps        :: IORef (Set FilePath),
 
   -- hsc dynamic flags
   flags                 :: [DynFlag],
@@ -622,7 +644,6 @@ data HscTarget
   = HscC           -- ^ Generate C code.
   | HscAsm         -- ^ Generate assembly using the native code generator.
   | HscLlvm        -- ^ Generate assembly using the llvm code generator.
-  | HscJava        -- ^ Generate Java bytecode.
   | HscInterpreted -- ^ Generate bytecode.  (Requires 'LinkInMemory')
   | HscNothing     -- ^ Don't generate any code.  See notes above.
   deriving (Eq, Show)
@@ -631,7 +652,6 @@ showHscTargetFlag :: HscTarget -> String
 showHscTargetFlag HscC           = "-fvia-c"
 showHscTargetFlag HscAsm         = "-fasm"
 showHscTargetFlag HscLlvm        = "-fllvm"
-showHscTargetFlag HscJava        = panic "No flag for HscJava"
 showHscTargetFlag HscInterpreted = "-fbyte-code"
 showHscTargetFlag HscNothing     = "-fno-code"
 
@@ -716,12 +736,14 @@ initDynFlags dflags = do
  ways <- readIORef v_Ways
  refFilesToClean <- newIORef []
  refDirsToClean <- newIORef Map.empty
+ refGeneratedDumps <- newIORef Set.empty
  return dflags{
         ways            = ways,
         buildTag        = mkBuildTag (filter (not . wayRTSOnly) ways),
         rtsBuildTag     = mkBuildTag ways,
         filesToClean    = refFilesToClean,
-        dirsToClean     = refDirsToClean
+        dirsToClean     = refDirsToClean,
+        generatedDumps   = refGeneratedDumps
         }
 
 -- | The normal 'DynFlags'. Note that they is not suitable for use in this form
@@ -740,9 +762,9 @@ defaultDynFlags mySettings =
         maxSimplIterations      = 4,
         shouldDumpSimplPhase    = Nothing,
         ruleCheck               = Nothing,
-        specConstrThreshold     = Just 200,
+        specConstrThreshold     = Just 2000,
         specConstrCount         = Just 3,
-        liberateCaseThreshold   = Just 200,
+        liberateCaseThreshold   = Just 2000,
         floatLamArgs            = Just 0,	-- Default: float only if no fvs
         strictnessBefore        = [],
 
@@ -797,6 +819,7 @@ defaultDynFlags mySettings =
         -- end of ghc -M values
         filesToClean   = panic "defaultDynFlags: No filesToClean",
         dirsToClean    = panic "defaultDynFlags: No dirsToClean",
+        generatedDumps = panic "defaultDynFlags: No generatedDumps",
         haddockOptions = Nothing,
         flags = defaultFlags,
         language = Nothing,
@@ -805,12 +828,12 @@ defaultDynFlags mySettings =
 
         log_action = \severity srcSpan style msg ->
                         case severity of
-                          SevOutput -> printOutput (msg style)
-                          SevInfo   -> printErrs (msg style)
-                          SevFatal  -> printErrs (msg style)
-                          _         -> do
+                          SevOutput -> printSDoc msg style
+                          SevInfo   -> printErrs msg style
+                          SevFatal  -> printErrs msg style
+                          _         -> do 
                                 hPutChar stderr '\n'
-                                printErrs ((mkLocMessage srcSpan msg) style)
+                                printErrs (mkLocMessage srcSpan msg) style
                      -- careful (#2302): printErrs prints in UTF-8, whereas
                      -- converting to string first and using hPutStr would
                      -- just emit the low 8 bits of each unicode char.
@@ -850,7 +873,11 @@ languageExtensions Nothing
       -- But NB it's implied by GADTs etc
       -- SLPJ September 2010
     : Opt_NondecreasingIndentation -- This has been on by default for some time
-    : languageExtensions (Just Haskell2010)
+    : delete Opt_DatatypeContexts  -- The Haskell' committee decided to
+                                   -- remove datatype contexts from the
+                                   -- language:
+   -- http://www.haskell.org/pipermail/haskell-prime/2011-January/003335.html
+      (languageExtensions (Just Haskell2010))
 
 languageExtensions (Just Haskell98)
     = [Opt_ImplicitPrelude,
@@ -1102,18 +1129,7 @@ parseDynamicFlags_ dflags0 args pkg_flags = do
           = runCmdLine (processArgs flag_spec args') dflags0
   when (not (null errs)) $ ghcError $ errorsToGhcException errs
 
-  let (pic_warns, dflags2)
-        | not (cTargetArch == X86_64 && (cTargetOS == Linux || cTargetOS == OSX)) &&
-          (not opt_Static || opt_PIC) &&
-          hscTarget dflags1 == HscLlvm
-        = ([L noSrcSpan $ "Warning: -fllvm is incompatible with -fPIC and "
-                       ++ "-dynamic on this platform;\n"
-                       ++ "         using "
-                       ++ showHscTargetFlag defaultObjectTarget ++ " instead"],
-                dflags1{ hscTarget = defaultObjectTarget })
-        | otherwise = ([], dflags1)
-
-  return (dflags2, leftover, pic_warns ++ warns)
+  return (dflags1, leftover, warns)
 
 
 {- **********************************************************************
@@ -1137,7 +1153,7 @@ allFlags = map ('-':) $
 --------------- The main flags themselves ------------------
 dynamic_flags :: [Flag (CmdLineP DynFlags)]
 dynamic_flags = [
-    Flag "n"        (NoArg (setDynFlag Opt_DryRun))
+    Flag "n"        (NoArg (addWarn "The -n flag is deprecated and no longer has any effect"))
   , Flag "cpp"      (NoArg (setExtensionFlag Opt_Cpp)) 
   , Flag "F"        (NoArg (setDynFlag Opt_Pp)) 
   , Flag "#include" 
@@ -1197,8 +1213,8 @@ dynamic_flags = [
   , Flag "dylib-install-name" (hasArg setDylibInstallName)
 
         ------- Libraries ---------------------------------------------------
-  , Flag "L"   (Prefix    addLibraryPath)
-  , Flag "l"   (AnySuffix (upd . addOptl))
+  , Flag "L"   (Prefix addLibraryPath)
+  , Flag "l"   (hasArg (addOptl . ("-l" ++)))
 
         ------- Frameworks --------------------------------------------------
         -- -framework-path should really be -F ...
@@ -1266,6 +1282,18 @@ dynamic_flags = [
   , Flag "ddump-raw-cmm"           (setDumpFlag Opt_D_dump_raw_cmm)
   , Flag "ddump-cmmz"              (setDumpFlag Opt_D_dump_cmmz)
   , Flag "ddump-cmmz-pretty"       (setDumpFlag Opt_D_dump_cmmz_pretty)
+  , Flag "ddump-cmmz-cbe"          (setDumpFlag Opt_D_dump_cmmz_cbe)
+  , Flag "ddump-cmmz-spills"       (setDumpFlag Opt_D_dump_cmmz_spills)
+  , Flag "ddump-cmmz-proc"         (setDumpFlag Opt_D_dump_cmmz_proc)
+  , Flag "ddump-cmmz-rewrite"      (setDumpFlag Opt_D_dump_cmmz_rewrite)
+  , Flag "ddump-cmmz-dead"         (setDumpFlag Opt_D_dump_cmmz_dead)
+  , Flag "ddump-cmmz-stub"         (setDumpFlag Opt_D_dump_cmmz_stub)
+  , Flag "ddump-cmmz-sp"           (setDumpFlag Opt_D_dump_cmmz_sp)
+  , Flag "ddump-cmmz-procmap"      (setDumpFlag Opt_D_dump_cmmz_procmap)
+  , Flag "ddump-cmmz-split"        (setDumpFlag Opt_D_dump_cmmz_split)
+  , Flag "ddump-cmmz-lower"        (setDumpFlag Opt_D_dump_cmmz_lower)
+  , Flag "ddump-cmmz-info"         (setDumpFlag Opt_D_dump_cmmz_info)
+  , Flag "ddump-cmmz-cafs"         (setDumpFlag Opt_D_dump_cmmz_cafs)
   , Flag "ddump-core-stats"        (setDumpFlag Opt_D_dump_core_stats)
   , Flag "ddump-cps-cmm"           (setDumpFlag Opt_D_dump_cps_cmm)
   , Flag "ddump-cvt-cmm"           (setDumpFlag Opt_D_dump_cvt_cmm)
@@ -1638,7 +1666,8 @@ xFlags = [
   ( "ParallelArrays",                   Opt_ParallelArrays, nop ),
   ( "TemplateHaskell",                  Opt_TemplateHaskell, checkTemplateHaskellOk ),
   ( "QuasiQuotes",                      Opt_QuasiQuotes, nop ),
-  ( "Generics",                         Opt_Generics, nop ),
+  ( "Generics",                         Opt_Generics,
+    \ _ -> deprecate "it does nothing; look into -XDefaultSignatures and -XDeriveGeneric for generic programming support." ),
   ( "ImplicitPrelude",                  Opt_ImplicitPrelude, nop ),
   ( "RecordWildCards",                  Opt_RecordWildCards, nop ),
   ( "NamedFieldPuns",                   Opt_RecordPuns, nop ),
@@ -1680,6 +1709,8 @@ xFlags = [
   ( "DeriveFunctor",                    Opt_DeriveFunctor, nop ),
   ( "DeriveTraversable",                Opt_DeriveTraversable, nop ),
   ( "DeriveFoldable",                   Opt_DeriveFoldable, nop ),
+  ( "DeriveGeneric",                    Opt_DeriveGeneric, nop ),
+  ( "DefaultSignatures",                Opt_DefaultSignatures, nop ),
   ( "TypeSynonymInstances",             Opt_TypeSynonymInstances, nop ),
   ( "FlexibleContexts",                 Opt_FlexibleContexts, nop ),
   ( "FlexibleInstances",                Opt_FlexibleInstances, nop ),
@@ -1860,6 +1891,7 @@ glasgowExtsFlags = [
            , Opt_DeriveFunctor
            , Opt_DeriveFoldable
            , Opt_DeriveTraversable
+           , Opt_DeriveGeneric
            , Opt_FlexibleContexts
            , Opt_FlexibleInstances
            , Opt_ConstrainedClassMethods
@@ -2048,21 +2080,28 @@ setObjTarget l = updM set
        = case l of
          HscC
           | cGhcUnregisterised /= "YES" ->
-             do addWarn ("Compiler not unregisterised, so ignoring " ++
-                         showHscTargetFlag l)
+             do addWarn ("Compiler not unregisterised, so ignoring " ++ flag)
                 return dflags
          HscAsm
           | cGhcWithNativeCodeGen /= "YES" ->
              do addWarn ("Compiler has no native codegen, so ignoring " ++
-                         showHscTargetFlag l)
+                         flag)
                 return dflags
          HscLlvm
           | cGhcUnregisterised == "YES" ->
-             do addWarn ("Compiler unregisterised, so ignoring " ++
-                         showHscTargetFlag l)
+             do addWarn ("Compiler unregisterised, so ignoring " ++ flag)
+                return dflags
+          | not ((arch == ArchX86_64) && (os == OSLinux || os == OSDarwin)) &&
+            (not opt_Static || opt_PIC)
+            ->
+             do addWarn ("Ignoring " ++ flag ++ " as it is incompatible with -fPIC and -dynamic on this platform")
                 return dflags
          _ -> return $ dflags { hscTarget = l }
      | otherwise = return dflags
+     where platform = targetPlatform dflags
+           arch = platformArch platform
+           os   = platformOS   platform
+           flag = showHscTargetFlag l
 
 setOptLevel :: Int -> DynFlags -> DynP DynFlags
 setOptLevel n dflags

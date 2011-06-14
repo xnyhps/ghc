@@ -53,13 +53,14 @@ import Data.List
 Here's the externally-callable interface:
 
 \begin{code}
-occurAnalysePgm :: Maybe (Activation -> Bool) -> [CoreRule]
+occurAnalysePgm :: Maybe (Activation -> Bool) -> [CoreRule] -> [CoreVect]
                 -> [CoreBind] -> [CoreBind]
-occurAnalysePgm active_rule imp_rules binds
+occurAnalysePgm active_rule imp_rules vects binds
   = snd (go (initOccEnv active_rule imp_rules) binds)
   where
-    initial_uds = addIdOccs emptyDetails (rulesFreeVars imp_rules)
-    -- The RULES keep things alive!
+    initial_uds = addIdOccs emptyDetails 
+                            (rulesFreeVars imp_rules `unionVarSet` vectsFreeVars vects)
+    -- The RULES and VECTORISE declarations keep things alive!
 
     go :: OccEnv -> [CoreBind] -> (UsageDetails, [CoreBind])
     go _ []
@@ -99,11 +100,6 @@ occAnalBind :: OccEnv 		-- The incoming OccEnv
 
 occAnalBind env _ (NonRec binder rhs) body_usage
   | isTyVar binder	-- A type let; we don't gather usage info
-  = (body_usage, [NonRec binder rhs])
-
-  | isCoVar binder	 -- A coercion let; again no usage info
-    	    		 -- We trust that it'll get inlined away
-			 -- as soon as it takes form (cv = Coercion co)
   = (body_usage, [NonRec binder rhs])
 
   | not (binder `usedIn` body_usage)    -- It's not mentioned

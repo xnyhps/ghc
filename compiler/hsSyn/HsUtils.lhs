@@ -27,7 +27,7 @@ module HsUtils(
   nlHsDo, nlHsOpApp, nlHsLam, nlHsPar, nlHsIf, nlHsCase, nlList,
   mkLHsTupleExpr, mkLHsVarTuple, missingTupArg,
 
-  -- Bindigns
+  -- Bindings
   mkFunBind, mkVarBind, mkHsVarBind, mk_easy_FunBind, 
 
   -- Literals
@@ -84,7 +84,6 @@ import NameSet
 import BasicTypes
 import SrcLoc
 import FastString
-import Outputable
 import Util
 import Bag
 
@@ -188,7 +187,7 @@ mkSimpleHsAlt pat expr
 -- See RnEnv.lookupSyntaxName
 
 mkHsIntegral   :: Integer -> PostTcType -> HsOverLit id
-mkHsFractional :: Rational -> PostTcType -> HsOverLit id
+mkHsFractional :: FractionalLit -> PostTcType -> HsOverLit id
 mkHsIsString   :: FastString -> PostTcType -> HsOverLit id
 mkHsDo         :: HsStmtContext Name -> [LStmt id] -> HsExpr id
 mkHsComp       :: HsStmtContext Name -> [LStmt id] -> LHsExpr id -> HsExpr id
@@ -548,7 +547,6 @@ collect_lpat (L _ pat) bndrs
     go (SigPatIn pat _)	 	  = collect_lpat pat bndrs
     go (SigPatOut pat _)	  = collect_lpat pat bndrs
     go (QuasiQuotePat _)          = bndrs
-    go (TypePat _)                = bndrs
     go (CoPat _ pat _)            = go pat
 \end{code}
 
@@ -665,11 +663,15 @@ lStmtsImplicits = hs_lstmts
 
 hsValBindsImplicits :: HsValBindsLR Name idR -> NameSet
 hsValBindsImplicits (ValBindsOut binds _)
-  = unionManyNameSets [foldBag unionNameSets (hs_bind . unLoc) emptyNameSet hs_binds | (_rec, hs_binds) <- binds]
+  = foldr (unionNameSets . lhsBindsImplicits . snd) emptyNameSet binds
+hsValBindsImplicits (ValBindsIn binds _) 
+  = lhsBindsImplicits binds
+
+lhsBindsImplicits :: LHsBindsLR Name idR -> NameSet
+lhsBindsImplicits = foldBag unionNameSets lhs_bind emptyNameSet
   where
-    hs_bind (PatBind { pat_lhs = lpat }) = lPatImplicits lpat
-    hs_bind _ = emptyNameSet
-hsValBindsImplicits (ValBindsIn {}) = pprPanic "hsValBindsImplicits: ValBindsIn" empty
+    lhs_bind (L _ (PatBind { pat_lhs = lpat })) = lPatImplicits lpat
+    lhs_bind _ = emptyNameSet
 
 lPatImplicits :: LPat Name -> NameSet
 lPatImplicits = hs_lpat
@@ -724,7 +726,6 @@ collect_sig_lpat pat acc = collect_sig_pat (unLoc pat) acc
 
 collect_sig_pat :: Pat name -> [LHsType name] -> [LHsType name]
 collect_sig_pat (SigPatIn pat ty)  	acc = collect_sig_lpat pat (ty:acc)
-collect_sig_pat (TypePat ty)       	acc = ty:acc
 
 collect_sig_pat (LazyPat pat)       acc = collect_sig_lpat pat acc
 collect_sig_pat (BangPat pat)       acc = collect_sig_lpat pat acc

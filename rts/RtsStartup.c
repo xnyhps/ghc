@@ -144,14 +144,17 @@ hs_init(int *argc, char **argv[])
 #ifdef TRACING
     initTracing();
 #endif
-    /* Dtrace events are always enabled
+    /* Trace the startup event
      */
-    dtraceEventStartup();
+    traceEventStartup();
 
     /* initialise scheduler data structures (needs to be done before
      * initStorage()).
      */
     initScheduler();
+
+    /* Trace some basic information about the process */
+    traceOSProcessInfo();
 
     /* initialize the storage manager */
     initStorage();
@@ -297,9 +300,6 @@ hs_exit_(rtsBool wait_foreign)
     checkFPUStack();
 #endif
 
-    // Free the full argv storage
-    freeFullProgArgv();
-
 #if defined(THREADED_RTS)
     ioManagerDie();
 #endif
@@ -402,6 +402,8 @@ hs_exit_(rtsBool wait_foreign)
     // heap memory (e.g. by being passed a ByteArray#).
     freeStorage(wait_foreign);
 
+    // Free the various argvs
+    freeRtsArgs();
 }
 
 // The real hs_exit():

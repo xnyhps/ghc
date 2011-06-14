@@ -417,14 +417,16 @@ Representation of desugared vectorisation declarations that are fed to the vecto
 'ModGuts').
 
 \begin{code}
-data CoreVect = Vect Id (Maybe CoreExpr)
+data CoreVect = Vect   Id (Maybe CoreExpr)
+              | NoVect Id
+
 \end{code}
 
 
 %************************************************************************
-%*									*
-		Unfoldings
-%*									*
+%*                                                                      *
+                Unfoldings
+%*                                                                      *
 %************************************************************************
 
 The @Unfolding@ type is declared here to avoid numerous loops
@@ -1191,7 +1193,8 @@ data AnnExpr' bndr annot
   | AnnApp	(AnnExpr bndr annot) (AnnExpr bndr annot)
   | AnnCase	(AnnExpr bndr annot) bndr Type [AnnAlt bndr annot]
   | AnnLet	(AnnBind bndr annot) (AnnExpr bndr annot)
-  | AnnCast     (AnnExpr bndr annot) Coercion
+  | AnnCast     (AnnExpr bndr annot) (annot, Coercion)
+    		   -- Put an annotation on the (root of) the coercion
   | AnnNote	Note (AnnExpr bndr annot)
   | AnnType	Type
   | AnnCoercion Coercion
@@ -1227,7 +1230,7 @@ deAnnotate' (AnnVar  v)           = Var v
 deAnnotate' (AnnLit  lit)         = Lit lit
 deAnnotate' (AnnLam  binder body) = Lam binder (deAnnotate body)
 deAnnotate' (AnnApp  fun arg)     = App (deAnnotate fun) (deAnnotate arg)
-deAnnotate' (AnnCast e co)        = Cast (deAnnotate e) co
+deAnnotate' (AnnCast e (_,co))    = Cast (deAnnotate e) co
 deAnnotate' (AnnNote note body)   = Note note (deAnnotate body)
 
 deAnnotate' (AnnLet bind body)

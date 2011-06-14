@@ -30,6 +30,7 @@ import Type
 import SrcLoc
 import UniqSet
 import Util
+import BasicTypes
 import Outputable
 import FastString
 \end{code}
@@ -436,14 +437,14 @@ get_lit :: Pat id -> Maybe HsLit
 -- It doesn't matter which one, because they will only be compared
 -- with other HsLits gotten in the same way
 get_lit (LitPat lit)				          = Just lit
-get_lit (NPat (OverLit { ol_val = HsIntegral i})    mb _) = Just (HsIntPrim   (mb_neg mb i))
-get_lit (NPat (OverLit { ol_val = HsFractional f }) mb _) = Just (HsFloatPrim (mb_neg mb f))
+get_lit (NPat (OverLit { ol_val = HsIntegral i})    mb _) = Just (HsIntPrim   (mb_neg negate              mb i))
+get_lit (NPat (OverLit { ol_val = HsFractional f }) mb _) = Just (HsFloatPrim (mb_neg negateFractionalLit mb f))
 get_lit (NPat (OverLit { ol_val = HsIsString s })   _  _) = Just (HsStringPrim s)
 get_lit _                                	          = Nothing
 
-mb_neg :: Num a => Maybe b -> a -> a
-mb_neg Nothing  v = v
-mb_neg (Just _) v = -v
+mb_neg :: (a -> a) -> Maybe b -> a -> a
+mb_neg _      Nothing  v = v
+mb_neg negate (Just _) v = negate v
 
 get_unused_cons :: [Pat Id] -> [DataCon]
 get_unused_cons used_cons = ASSERT( not (null used_cons) ) unused_cons
@@ -643,7 +644,7 @@ might_fail_pat (ConPatOut { pat_args = ps }) = any might_fail_lpat (hsConPatArgs
 
 -- Finally the ones that are sure to succeed, or which are covered by the checking algorithm
 might_fail_pat (LazyPat _)                   = False -- Always succeeds
-might_fail_pat _                             = False -- VarPat, WildPat, LitPat, NPat, TypePat
+might_fail_pat _                             = False -- VarPat, WildPat, LitPat, NPat
 
 --------------
 might_fail_lpat :: LPat Id -> Bool

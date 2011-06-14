@@ -55,7 +55,7 @@ module HscTypes (
         -- * TyThings and type environments
 	TyThing(..),
 	tyThingClass, tyThingTyCon, tyThingDataCon, tyThingId, tyThingCoAxiom,
-	implicitTyThings, isImplicitTyThing,
+	implicitTyThings, implicitTyConThings, implicitClassThings, isImplicitTyThing,
 	
 	TypeEnv, lookupType, lookupTypeHscEnv, mkTypeEnv, emptyTypeEnv,
 	extendTypeEnv, extendTypeEnvList, extendTypeEnvWithIds, lookupTypeEnv,
@@ -100,7 +100,7 @@ module HscTypes (
 #include "HsVersions.h"
 
 #ifdef GHCI
-import ByteCodeAsm	( CompiledByteCode )
+import ByteCodeAsm      ( CompiledByteCode )
 import {-# SOURCE #-}  InteractiveEval ( Resume )
 #endif
 
@@ -108,16 +108,17 @@ import HsSyn
 import RdrName
 import Name
 import NameEnv
-import NameSet	
+import NameSet  
 import Module
-import InstEnv		( InstEnv, Instance )
-import FamInstEnv	( FamInstEnv, FamInst )
-import Rules		( RuleBase )
-import CoreSyn		( CoreBind )
+import InstEnv          ( InstEnv, Instance )
+import FamInstEnv       ( FamInstEnv, FamInst )
+import Rules            ( RuleBase )
+import CoreSyn          ( CoreBind )
 import VarEnv
+import VarSet
 import Var
 import Id
-import Type		
+import Type             
 
 import Annotations
 import Class		( Class, classAllSelIds, classATs, classTyCon )
@@ -135,7 +136,7 @@ import CoreSyn		( CoreRule, CoreVect )
 import Maybes		( orElse, expectJust, catMaybes )
 import Outputable
 import BreakArray
-import SrcLoc		( SrcSpan, Located(..) )
+import SrcLoc
 import UniqFM		( lookupUFM, eltsUFM, emptyUFM )
 import UniqSupply	( UniqSupply )
 import FastString
@@ -863,37 +864,47 @@ emptyModIface mod
 %************************************************************************
 
 \begin{code}
--- | Interactive context, recording information relevant to GHCi
+-- | Interactive context, recording information about the state of the
+-- context in which statements are executed in a GHC session.
+--
 data InteractiveContext 
   = InteractiveContext { 
-          ic_toplev_scope :: [Module]   -- ^ The context includes the "top-level" scope of
-					-- these modules
+         -- These two fields are only stored here so that the client
+         -- can retrieve them with GHC.getContext.  GHC itself doesn't
+         -- use them, but it does reset them to empty sometimes (such
+         -- as before a GHC.load).  The context is set with GHC.setContext.
+         ic_toplev_scope :: [Module],
+             -- ^ The context includes the "top-level" scope of
+             -- these modules
+         ic_imports :: [ImportDecl RdrName],
+             -- ^ The context is extended with these import declarations
 
-        , ic_exports :: [(Module, Maybe (ImportDecl RdrName))]    -- ^ The context includes just the exported parts of these
-					-- modules
+         ic_rn_gbl_env :: GlobalRdrEnv,
+             -- ^ The contexts' cached 'GlobalRdrEnv', built by
+             -- 'InteractiveEval.setContext'
 
-        , ic_rn_gbl_env :: GlobalRdrEnv -- ^ The contexts' cached 'GlobalRdrEnv', built from
-					-- 'ic_toplev_scope' and 'ic_exports'
-
-        , ic_tmp_ids :: [Id]   -- ^ Names bound during interaction with the user.
-                               -- Later Ids shadow earlier ones with the same OccName
-                               -- Expressions are typed with these Ids in the envt
-                               -- For runtime-debugging, these Ids may have free
-                               -- TcTyVars of RuntimUnkSkol flavour, but no free TyVars
-                               -- (because the typechecker doesn't expect that)
+         ic_tmp_ids :: [Id],
+             -- ^ Names bound during interaction with the user.  Later
+             -- Ids shadow earlier ones with the same OccName
+             -- Expressions are typed with these Ids in the envt For
+             -- runtime-debugging, these Ids may have free TcTyVars of
+             -- RuntimUnkSkol flavour, but no free TyVars (because the
+             -- typechecker doesn't expect that)
 
 #ifdef GHCI
-        , ic_resume :: [Resume]         -- ^ The stack of breakpoint contexts
+         ic_resume :: [Resume],
+             -- ^ The stack of breakpoint contexts
 #endif
 
-        , ic_cwd :: Maybe FilePath      -- virtual CWD of the program
+         ic_cwd :: Maybe FilePath
+             -- virtual CWD of the program
     }
 
 
 emptyInteractiveContext :: InteractiveContext
 emptyInteractiveContext
   = InteractiveContext { ic_toplev_scope = [],
-			 ic_exports = [],
+                         ic_imports = [],
 			 ic_rn_gbl_env = emptyGlobalRdrEnv,
 			 ic_tmp_ids = []
 #ifdef GHCI
@@ -1027,22 +1038,18 @@ mkPrintUnqualified dflags env = (qual_name, qual_mod)
 -- This invariant is used in LoadIface.loadDecl (see note [Tricky iface loop])
 -- The order of the list does not matter.
 implicitTyThings :: TyThing -> [TyThing]
-
--- For data and newtype declarations:
-implicitTyThings (ATyCon tc)
-  =   -- fields (names of selectors)
-      -- (possibly) implicit coercion and family coercion
-      --   depending on whether it's a newtype or a family instance or both
-    implicitCoTyCon tc ++
-      -- for each data constructor in order,
-      --   the contructor, worker, and (possibly) wrapper
-    concatMap (extras_plus . ADataCon) (tyConDataCons tc)
-
-implicitTyThings (ACoAxiom _cc)
-  = []
-	     
-implicitTyThings (AClass cl) 
-  = -- dictionary datatype:
+implicitTyThings (AnId _)       = []
+implicitTyThings (ACoAxiom _cc) = []
+implicitTyThings (ATyCon tc)    = implicitTyConThings tc
+implicitTyThings (AClass cl)    = implicitClassThings cl
+implicitTyThings (ADataCon dc)  = map AnId (dataConImplicitIds dc)
+    -- For data cons add the worker and (possibly) wrapper
+    
+implicitClassThings :: Class -> [TyThing]
+implicitClassThings cl 
+  = -- Does not include default methods, because those Ids may have
+    --    their own pragmas, unfoldings etc, not derived from the Class object
+    -- Dictionary datatype:
     --    [extras_plus:]
     --      type constructor 
     --    [recursive call:]
@@ -1058,11 +1065,16 @@ implicitTyThings (AClass cl)
     -- superclass and operation selectors
     map AnId (classAllSelIds cl)
 
-implicitTyThings (ADataCon dc) = 
-    -- For data cons add the worker and (possibly) wrapper
-    map AnId (dataConImplicitIds dc)
+implicitTyConThings :: TyCon -> [TyThing]
+implicitTyConThings tc 
+  =   -- fields (names of selectors)
+      -- (possibly) implicit coercion and family coercion
+      --   depending on whether it's a newtype or a family instance or both
+    implicitCoTyCon tc ++
+      -- for each data constructor in order,
+      --   the contructor, worker, and (possibly) wrapper
+    concatMap (extras_plus . ADataCon) (tyConDataCons tc)
 
-implicitTyThings (AnId _)   = []
 
 -- add a thing and recursive call
 extras_plus :: TyThing -> [TyThing]
@@ -1711,9 +1723,9 @@ isHpcUsed (NoHpcInfo { hpcUsed = used }) = used
 \end{code}
 
 %************************************************************************
-%*									*
+%*                                                                      *
 \subsection{Vectorisation Support}
-%*									*
+%*                                                                      *
 %************************************************************************
 
 The following information is generated and consumed by the vectorisation
@@ -1726,49 +1738,58 @@ vectorisation, we need to know `f_v', whose `Var' we cannot lookup based
 on just the OccName easily in a Core pass.
 
 \begin{code}
--- | Vectorisation information for 'ModGuts', 'ModDetails' and 'ExternalPackageState'.
+-- |Vectorisation information for 'ModGuts', 'ModDetails' and 'ExternalPackageState'; see also
+-- documentation at 'Vectorise.Env.GlobalEnv'.
 data VectInfo      
-  = VectInfo {
-      vectInfoVar     :: VarEnv  (Var    , Var  ),   -- ^ @(f, f_v)@ keyed on @f@
-      vectInfoTyCon   :: NameEnv (TyCon  , TyCon),   -- ^ @(T, T_v)@ keyed on @T@
-      vectInfoDataCon :: NameEnv (DataCon, DataCon), -- ^ @(C, C_v)@ keyed on @C@
-      vectInfoPADFun  :: NameEnv (TyCon  , Var),     -- ^ @(T_v, paT)@ keyed on @T_v@
-      vectInfoIso     :: NameEnv (TyCon  , Var)      -- ^ @(T, isoT)@ keyed on @T@
+  = VectInfo
+    { vectInfoVar          :: VarEnv  (Var    , Var  )    -- ^ @(f, f_v)@ keyed on @f@
+    , vectInfoTyCon        :: NameEnv (TyCon  , TyCon)    -- ^ @(T, T_v)@ keyed on @T@
+    , vectInfoDataCon      :: NameEnv (DataCon, DataCon)  -- ^ @(C, C_v)@ keyed on @C@
+    , vectInfoPADFun       :: NameEnv (TyCon  , Var)      -- ^ @(T_v, paT)@ keyed on @T_v@
+    , vectInfoIso          :: NameEnv (TyCon  , Var)      -- ^ @(T, isoT)@ keyed on @T@
+    , vectInfoScalarVars   :: VarSet                      -- ^ set of purely scalar variables
+    , vectInfoScalarTyCons :: NameSet                     -- ^ set of scalar type constructors
     }
 
--- | Vectorisation information for 'ModIface': a slightly less low-level view
+-- |Vectorisation information for 'ModIface'; i.e, the vectorisation information propagated 
+-- across module boundaries.
+--
 data IfaceVectInfo 
-  = IfaceVectInfo {
-      ifaceVectInfoVar        :: [Name],
-        -- ^ All variables in here have a vectorised variant
-      ifaceVectInfoTyCon      :: [Name],
-        -- ^ All 'TyCon's in here have a vectorised variant;
-        -- the name of the vectorised variant and those of its
-        -- data constructors are determined by 'OccName.mkVectTyConOcc'
-        -- and 'OccName.mkVectDataConOcc'; the names of
-        -- the isomorphisms are determined by 'OccName.mkVectIsoOcc'
-      ifaceVectInfoTyConReuse :: [Name]              
-        -- ^ The vectorised form of all the 'TyCon's in here coincides with
-        -- the unconverted form; the name of the isomorphisms is determined
-        -- by 'OccName.mkVectIsoOcc'
+  = IfaceVectInfo 
+    { ifaceVectInfoVar          :: [Name]  -- ^ All variables in here have a vectorised variant
+    , ifaceVectInfoTyCon        :: [Name]  -- ^ All 'TyCon's in here have a vectorised variant;
+                                           -- the name of the vectorised variant and those of its
+                                           -- data constructors are determined by
+                                           -- 'OccName.mkVectTyConOcc' and 
+                                           -- 'OccName.mkVectDataConOcc'; the names of the
+                                           -- isomorphisms are determined by 'OccName.mkVectIsoOcc'
+    , ifaceVectInfoTyConReuse   :: [Name]  -- ^ The vectorised form of all the 'TyCon's in here
+                                           -- coincides with the unconverted form; the name of the
+                                           -- isomorphisms is determined by 'OccName.mkVectIsoOcc'
+    , ifaceVectInfoScalarVars   :: [Name]  -- iface version of 'vectInfoScalarVar'
+    , ifaceVectInfoScalarTyCons :: [Name]  -- iface version of 'vectInfoScalarTyCon'
     }
 
 noVectInfo :: VectInfo
-noVectInfo = VectInfo emptyVarEnv emptyNameEnv emptyNameEnv emptyNameEnv emptyNameEnv
+noVectInfo 
+  = VectInfo emptyVarEnv emptyNameEnv emptyNameEnv emptyNameEnv emptyNameEnv emptyVarSet
+             emptyNameSet
 
 plusVectInfo :: VectInfo -> VectInfo -> VectInfo
 plusVectInfo vi1 vi2 = 
-  VectInfo (vectInfoVar     vi1 `plusVarEnv`  vectInfoVar     vi2)
-           (vectInfoTyCon   vi1 `plusNameEnv` vectInfoTyCon   vi2)
-           (vectInfoDataCon vi1 `plusNameEnv` vectInfoDataCon vi2)
-           (vectInfoPADFun  vi1 `plusNameEnv` vectInfoPADFun  vi2)
-           (vectInfoIso     vi1 `plusNameEnv` vectInfoIso     vi2)
+  VectInfo (vectInfoVar          vi1 `plusVarEnv`    vectInfoVar          vi2)
+           (vectInfoTyCon        vi1 `plusNameEnv`   vectInfoTyCon        vi2)
+           (vectInfoDataCon      vi1 `plusNameEnv`   vectInfoDataCon      vi2)
+           (vectInfoPADFun       vi1 `plusNameEnv`   vectInfoPADFun       vi2)
+           (vectInfoIso          vi1 `plusNameEnv`   vectInfoIso          vi2)
+           (vectInfoScalarVars   vi1 `unionVarSet`   vectInfoScalarVars   vi2)
+           (vectInfoScalarTyCons vi1 `unionNameSets` vectInfoScalarTyCons vi2)
 
 concatVectInfo :: [VectInfo] -> VectInfo
 concatVectInfo = foldr plusVectInfo noVectInfo
 
 noIfaceVectInfo :: IfaceVectInfo
-noIfaceVectInfo = IfaceVectInfo [] [] []
+noIfaceVectInfo = IfaceVectInfo [] [] [] [] []
 \end{code}
 
 %************************************************************************

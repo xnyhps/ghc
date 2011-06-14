@@ -35,13 +35,7 @@
 	      <entry>mode</entry>
 	      <entry>-</entry>
 	    </row>
-	    <row>
-	      <entry><option>-n</option></entry>
-	      <entry>do a dry run</entry>
-	      <entry>dynamic</entry>
-	      <entry>-</entry>
-	    </row>
-	    <row>
+            <row>
 	      <entry><option>-v</option></entry>
 	      <entry>verbose mode (equivalent to <option>-v3</option>)</entry>
 	      <entry>dynamic</entry>
@@ -114,7 +108,7 @@
     </sect2>
     <sect2>
       <title>Which phases to run</title>
-      
+
       <para><xref linkend="options-order"/></para>
 
       <informaltable>
@@ -165,7 +159,7 @@
 
      <sect2>
       <title>Alternative modes of operation</title>
-      
+
       <para><xref linkend="modes"/></para>
 
       <informaltable>
@@ -214,7 +208,7 @@
 
     <sect2>
       <title>Redirecting output</title>
-      
+
       <para><xref linkend="options-output"/></para>
 
       <informaltable>
@@ -289,9 +283,9 @@
 
     <sect2>
       <title>Keeping intermediate files</title>
-      
+
       <para><xref linkend="keeping-intermediates"/></para>
-      
+
       <informaltable>
 	<tgroup cols="4" align="left" colsep="1" rowsep="1">
 	  <thead>
@@ -337,7 +331,7 @@
 
     <sect2>
       <title>Temporary files</title>
-      
+
       <para><xref linkend="temp-files"/></para>
 
       <informaltable>
@@ -440,7 +434,7 @@
 	</tgroup>
       </informaltable>
     </sect2>
-    
+
     <sect2>
       <title>Recompilation checking</title>
 
@@ -472,7 +466,7 @@
 
     <sect2 id="interactive-mode-options">
       <title>Interactive-mode options</title>
-      
+
       <para><xref linkend="ghci-dot-files"/></para>
 
       <informaltable>
@@ -515,7 +509,7 @@
 	      <entry><link linkend="breakpoints">Enable usage of Show instances in <literal>:print</literal></link></entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-fno-print-evld-with-show</option></entry>
-	    </row>	    
+	    </row>
 	    <row>
 	      <entry><option>-fprint-bind-result</option></entry>
 	      <entry><link linkend="ghci-stmts">Turn on printing of binding results in GHCi</link></entry>
@@ -613,7 +607,7 @@
     <sect2>
       <title>Language options</title>
 
-      <para>Language options can be enabled either by a command-line option 
+      <para>Language options can be enabled either by a command-line option
       <option>-Xblah</option>, or by a <literal>{-# LANGUAGE blah #-}</literal>
       pragma in the file itself.  See <xref linkend="options-language"/></para>
 
@@ -642,7 +636,7 @@
 	    </row>
 	    <row>
 	      <entry><option>-XIncoherentInstances</option></entry>
-	      <entry>Enable <link linkend="instance-overlap">incoherent instances</link>.  
+	      <entry>Enable <link linkend="instance-overlap">incoherent instances</link>.
 	      Implies <option>-XOverlappingInstances</option> </entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-XNoIncoherentInstances</option></entry>
@@ -668,7 +662,7 @@
 	    </row>
 	    <row>
 	      <entry><option>-XDisambiguateRecordFields</option></entry>
-	      <entry>Enable <link linkend="disambiguate-fields">record 
+	      <entry>Enable <link linkend="disambiguate-fields">record
 	      field disambiguation</link></entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-XNoDisambiguateRecordFields</option></entry>
@@ -682,7 +676,9 @@
 	    </row>
 	    <row>
 	      <entry><option>-XGenerics</option></entry>
-	      <entry>Enable <link linkend="generic-classes">generic classes</link></entry>
+	      <entry>Deprecated, does nothing. No longer enables <link linkend="generic-classes">generic classes</link>.
+               See also GHC's support for
+               <link linkend="generic-programming">generic programming</link>.</entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-XNoGenerics</option></entry>
 	    </row>
@@ -784,7 +780,7 @@
 	    </row>
 	    <row>
 	      <entry><option>-XTemplateHaskell</option></entry>
-	      <entry>Enable <link linkend="template-haskell">Template Haskell</link>. 
+	      <entry>Enable <link linkend="template-haskell">Template Haskell</link>.
 		No longer implied by <option>-fglasgow-exts</option>.</entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-XNoTemplateHaskell</option></entry>
@@ -832,7 +828,7 @@
 	      <entry><option>-XNoMagicHash</option></entry>
 	    </row>
 	    <row>
-	      <entry><option>-XExplicitForALl</option></entry>
+	      <entry><option>-XExplicitForAll</option></entry>
 	      <entry>Enable <link linkend="explicit-foralls">explicit universal quantification</link>.
               Implied by <option>-XScopedTypeVariables</option>,
 	    <option>-XLiberalTypeSynonyms</option>,
@@ -977,6 +973,12 @@
 	      <entry><option>-XNoDeriveDataTypeable</option></entry>
 	    </row>
 	    <row>
+	      <entry><option>-XDeriveGeneric</option></entry>
+	      <entry>Enable <link linkend="deriving-typeable">deriving for the Generic class</link>.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-XNoDeriveGeneric</option></entry>
+	    </row>
+	    <row>
 	      <entry><option>-XGeneralizedNewtypeDeriving</option></entry>
 	      <entry>Enable <link linkend="newtype-deriving">newtype deriving</link>.</entry>
 	      <entry>dynamic</entry>
@@ -1008,6 +1010,12 @@
 	      <entry><option>-XNoConstrainedClassMethods</option></entry>
 	    </row>
 	    <row>
+	      <entry><option>-XDefaultSignatures</option></entry>
+	      <entry>Enable <link linkend="class-default-signatures">default signatures</link>.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-XNoDefaultSignatures</option></entry>
+	    </row>
+	    <row>
 	      <entry><option>-XMultiParamTypeClasses</option></entry>
 	      <entry>Enable <link linkend="multi-param-type-classes">multi parameter type classes</link>.</entry>
 	      <entry>dynamic</entry>
@@ -1032,7 +1040,7 @@
 
     <sect2>
       <title>Warnings</title>
-      
+
       <para><xref linkend="options-sanity"/></para>
 
     <informaltable>
@@ -1165,7 +1173,7 @@
 
 	  <row>
 	    <entry><option>-fwarn-missing-import-lists</option></entry>
-	    <entry>warn when an import declaration does not explicitly 
+	    <entry>warn when an import declaration does not explicitly
                    list all the names brought into scope</entry>
 	    <entry>dynamic</entry>
 	    <entry><option>-fnowarn-missing-import-lists</option></entry>
@@ -1306,7 +1314,7 @@
 	  </tbody>
 	</tgroup>
       </informaltable>
-	      
+
     </sect2>
     <sect2>
       <title>Individual optimisations</title>
@@ -1486,7 +1494,7 @@ phase <replaceable>n</replaceable></entry>
 
 	    <row>
 	      <entry><option>-fspec-constr-count</option>=<replaceable>n</replaceable></entry>
-	      <entry>Set to <replaceable>n</replaceable> (default: 3) the maximum number of 
+	      <entry>Set to <replaceable>n</replaceable> (default: 3) the maximum number of
 		specialisations that will be created for any one function
 		by the SpecConstr transformation</entry>
 	      <entry>static</entry>
@@ -1576,7 +1584,7 @@ phase <replaceable>n</replaceable></entry>
 
     <sect2>
       <title>Profiling options</title>
-      
+
       <para><xref linkend="profiling"/></para>
 
       <informaltable>
@@ -1629,7 +1637,7 @@ phase <replaceable>n</replaceable></entry>
 
     <sect2>
       <title>Program coverage options</title>
-      
+
       <para><xref linkend="hpc"/></para>
 
       <informaltable>
@@ -2148,7 +2156,7 @@ phase <replaceable>n</replaceable></entry>
 
     <sect2>
       <title>Platform-specific options</title>
-      
+
       <para><xref linkend="options-platform"/></para>
 
       <informaltable>
@@ -2181,7 +2189,7 @@ phase <replaceable>n</replaceable></entry>
       </informaltable>
     </sect2>
 
-         
+
     <sect2>
       <title>External core file options</title>
 
@@ -2229,6 +2237,12 @@ phase <replaceable>n</replaceable></entry>
 	    <row>
 	      <entry><option>-dcore-lint</option></entry>
 	      <entry>Turn on internal sanity checking</entry>
+	      <entry>dynamic</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-ddump-to-file</option></entry>
+	      <entry>Dump to files instead of stdout</entry>
 	      <entry>dynamic</entry>
 	      <entry>-</entry>
 	    </row>
@@ -2591,7 +2605,7 @@ phase <replaceable>n</replaceable></entry>
 	</tgroup>
       </informaltable>
     </sect2>
-      
+
     <sect2>
       <title>Misc compiler options</title>
 
@@ -2632,7 +2646,7 @@ phase <replaceable>n</replaceable></entry>
 	    </row>
 	    <row>
 	      <entry><option>-fno-ghci-sandbox</option></entry>
-	      <entry>Turn off the GHCi sandbox. Means computations are run in teh main thread, rather than a forked thread.</entry>
+	      <entry>Turn off the GHCi sandbox. Means computations are run in the main thread, rather than a forked thread.</entry>
 	      <entry>dynamic</entry>
 	      <entry>-</entry>
 	    </row>

@@ -21,6 +21,7 @@ module SysTools (
         runWindres,
         runLlvmOpt,
         runLlvmLlc,
+        figureLlvmVersion,
         readElfSection,
 
         touch,                  -- String -> String -> IO ()
@@ -416,15 +417,53 @@ runAs dflags args = do
   mb_env <- getGccEnv args1
   runSomethingFiltered dflags id "Assembler" p args1 mb_env
 
+-- | Run the LLVM Optimiser
 runLlvmOpt :: DynFlags -> [Option] -> IO ()
 runLlvmOpt dflags args = do
   let (p,args0) = pgm_lo dflags
   runSomething dflags "LLVM Optimiser" p (args0++args)
 
+-- | Run the LLVM Compiler
 runLlvmLlc :: DynFlags -> [Option] -> IO ()
 runLlvmLlc dflags args = do
   let (p,args0) = pgm_lc dflags
   runSomething dflags "LLVM Compiler" p (args0++args)
+
+-- | Figure out which version of LLVM we are running this session
+figureLlvmVersion :: DynFlags -> IO (Maybe Int)
+figureLlvmVersion dflags = do
+  let (pgm,opts) = pgm_lc dflags
+      args = filter notNull (map showOpt opts)
+      -- we grab the args even though they should be useless just in
+      -- case the user is using a customised 'llc' that requires some
+      -- of the options they've specified. llc doesn't care what other
+      -- options are specified when '-version' is used.
+      args' = args ++ ["-version"]
+  ver <- catchIO (do
+             (pin, pout, perr, _) <- runInteractiveProcess pgm args'
+                                             Nothing Nothing
+             {- > llc -version
+                  Low Level Virtual Machine (http://llvm.org/):
+                    llvm version 2.8 (Ubuntu 2.8-0Ubuntu1)
+                    ...
+             -}
+             hSetBinaryMode pout False
+             _     <- hGetLine pout
+             vline <- hGetLine pout
+             v     <- case filter isDigit vline of
+                            []      -> fail "no digits!"
+                            [x]     -> fail $ "only 1 digit! (" ++ show x ++ ")"
+                            (x:y:_) -> return ((read [x,y]) :: Int)
+             hClose pin
+             hClose pout
+             hClose perr
+             return $ Just v
+            )
+            (\err -> do
+                putMsg dflags $ text $ "Warning: " ++ show err
+                return Nothing)
+  return ver
+  
 
 runLink :: DynFlags -> [Option] -> IO ()
 runLink dflags args = do
@@ -788,20 +827,16 @@ data BuildMessage
   | EOF
 
 traceCmd :: DynFlags -> String -> String -> IO () -> IO ()
--- a) trace the command (at two levels of verbosity)
--- b) don't do it at all if dry-run is set
+-- trace the command (at two levels of verbosity)
 traceCmd dflags phase_name cmd_line action
  = do   { let verb = verbosity dflags
         ; showPass dflags phase_name
         ; debugTraceMsg dflags 3 (text cmd_line)
         ; hFlush stderr
 
-           -- Test for -n flag
-        ; unless (dopt Opt_DryRun dflags) $ do {
-
            -- And run it!
         ; action `catchIO` handle_exn verb
-        }}
+        }
   where
     handle_exn _verb exn = do { debugTraceMsg dflags 2 (char '\n')
                               ; debugTraceMsg dflags 2 (ptext (sLit "Failed:") <+> text cmd_line <+> text (show exn))
@@ -822,14 +857,15 @@ getBaseDir :: IO (Maybe String)
 #if defined(mingw32_HOST_OS)
 -- Assuming we are running ghc, accessed by path  $(stuff)/bin/ghc.exe,
 -- return the path $(stuff)/lib.
-getBaseDir = do let len = (2048::Int) -- plenty, PATH_MAX is 512 under Win32.
-                buf <- mallocArray len
-                ret <- getModuleFileName nullPtr buf len
-                if ret == 0 then free buf >> return Nothing
-                            else do s <- peekCString buf
-                                    free buf
-                                    return (Just (rootDir s))
+getBaseDir = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
   where
+    try_size size = allocaArray (fromIntegral size) $ \buf -> do
+        ret <- c_GetModuleFileName nullPtr buf size
+        case ret of
+          0 -> return Nothing
+          _ | ret < size -> fmap (Just . rootDir) $ peekCWString buf
+            | otherwise  -> try_size (size * 2)
+    
     rootDir s = case splitFileName $ normalise s of
                 (d, ghc_exe)
                  | lower ghc_exe `elem` ["ghc.exe",
@@ -844,8 +880,8 @@ getBaseDir = do let len = (2048::Int) -- plenty, PATH_MAX is 512 under Win32.
         where fail = panic ("can't decompose ghc.exe path: " ++ show s)
               lower = map toLower
 
-foreign import stdcall unsafe "GetModuleFileNameA"
-  getModuleFileName :: Ptr () -> CString -> Int -> IO Int32
+foreign import stdcall unsafe "windows.h GetModuleFileNameW"
+  c_GetModuleFileName :: Ptr () -> CWString -> Word32 -> IO Word32
 #else
 getBaseDir = return Nothing
 #endif

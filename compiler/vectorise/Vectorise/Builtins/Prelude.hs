@@ -25,36 +25,18 @@ preludeVars :: Modules
 	-> [( Module, FastString	--   Maps the original variable to the one in the DPH 
 	    , Module, FastString)]      --   packages that it should be rewritten to.
 preludeVars (Modules { dph_Combinators    = _dph_Combinators
-                     , dph_PArray         = _dph_PArray
                      , dph_Prelude_Int    = dph_Prelude_Int
                      , dph_Prelude_Word8  = dph_Prelude_Word8
-                     , dph_Prelude_Double = dph_Prelude_Double
+                     -- , dph_Prelude_Double = dph_Prelude_Double
                      , dph_Prelude_Bool   = dph_Prelude_Bool 
-                     , dph_Prelude_PArr   = _dph_Prelude_PArr
                      })
 
-    -- Functions that work on whole PArrays, defined in GHC.PArr
-  = [ {- mk gHC_PARR' (fsLit "mapP")       dph_Combinators (fsLit "mapPA")
-    , mk gHC_PARR' (fsLit "zipWithP")   dph_Combinators (fsLit "zipWithPA")
-    , mk gHC_PARR' (fsLit "zipP")       dph_Combinators (fsLit "zipPA")
-    , mk gHC_PARR' (fsLit "unzipP")     dph_Combinators (fsLit "unzipPA")
-    , mk gHC_PARR' (fsLit "filterP")    dph_Combinators (fsLit "filterPA")
-    , mk gHC_PARR' (fsLit "lengthP")    dph_Combinators (fsLit "lengthPA")
-    , mk gHC_PARR' (fsLit "replicateP") dph_Combinators (fsLit "replicatePA")
-    , mk gHC_PARR' (fsLit "!:")         dph_Combinators (fsLit "indexPA")
-    , mk gHC_PARR' (fsLit "sliceP")     dph_Combinators (fsLit "slicePA")
-    , mk gHC_PARR' (fsLit "crossMapP")  dph_Combinators (fsLit "crossMapPA")
-    , mk gHC_PARR' (fsLit "singletonP") dph_Combinators (fsLit "singletonPA")
-    , mk gHC_PARR' (fsLit "concatP")    dph_Combinators (fsLit "concatPA")
-    , mk gHC_PARR' (fsLit "+:+")        dph_Combinators (fsLit "appPA")
-    , mk gHC_PARR' (fsLit "emptyP")     dph_PArray      (fsLit "emptyPA")
-
+  = [ 
     -- Map scalar functions to versions using closures. 
-    , -} mk' dph_Prelude_Int "div"         "divV"
+      mk' dph_Prelude_Int "div"         "divV"
     , mk' dph_Prelude_Int "mod"         "modV"
     , mk' dph_Prelude_Int "sqrt"        "sqrtV"
     , mk' dph_Prelude_Int "enumFromToP" "enumFromToPA"
-    -- , mk' dph_Prelude_Int "upToP" "upToPA"
     ]
     ++ vars_Ord dph_Prelude_Int
     ++ vars_Num dph_Prelude_Int
@@ -68,11 +50,11 @@ preludeVars (Modules { dph_Combinators    = _dph_Combinators
     , mk' dph_Prelude_Word8 "toInt"   "toIntV"
     ]
 
-    ++ vars_Ord        dph_Prelude_Double
-    ++ vars_Num        dph_Prelude_Double
-    ++ vars_Fractional dph_Prelude_Double
-    ++ vars_Floating   dph_Prelude_Double
-    ++ vars_RealFrac   dph_Prelude_Double
+    -- ++ vars_Ord        dph_Prelude_Double
+    -- ++ vars_Num        dph_Prelude_Double
+    -- ++ vars_Fractional dph_Prelude_Double
+    -- ++ vars_Floating   dph_Prelude_Double
+    -- ++ vars_RealFrac   dph_Prelude_Double
     ++
     [ mk dph_Prelude_Bool  (fsLit "andP")  dph_Prelude_Bool (fsLit "andPA")
     , mk dph_Prelude_Bool  (fsLit "orP")   dph_Prelude_Bool (fsLit "orPA")
@@ -80,17 +62,7 @@ preludeVars (Modules { dph_Combinators    = _dph_Combinators
     , mk gHC_CLASSES (fsLit "not")         dph_Prelude_Bool (fsLit "notV")
     , mk gHC_CLASSES (fsLit "&&")          dph_Prelude_Bool (fsLit "andV")
     , mk gHC_CLASSES (fsLit "||")          dph_Prelude_Bool (fsLit "orV")
-
-{-
-    -- FIXME: temporary
-    , mk dph_Prelude_PArr (fsLit "fromPArrayP")       dph_Prelude_PArr (fsLit "fromPArrayPA")
-    , mk dph_Prelude_PArr (fsLit "toPArrayP")         dph_Prelude_PArr (fsLit "toPArrayPA")
-    , mk dph_Prelude_PArr (fsLit "fromNestedPArrayP") dph_Prelude_PArr (fsLit "fromNestedPArrayPA")
-    , mk dph_Prelude_PArr (fsLit "combineP")          dph_Combinators  (fsLit "combine2PA")
-    , mk dph_Prelude_PArr (fsLit "updateP")           dph_Combinators  (fsLit "updatePA")
-    , mk dph_Prelude_PArr (fsLit "bpermuteP")         dph_Combinators  (fsLit "bpermutePA")
-    , mk dph_Prelude_PArr (fsLit "indexedP")          dph_Combinators  (fsLit "indexedPA")
--}    ]
+    ]
   where
     mk  = (,,,)
     mk' mod v v' = mk mod (fsLit v) mod (fsLit v')
@@ -120,40 +92,40 @@ preludeVars (Modules { dph_Combinators    = _dph_Combinators
        , mk' mod "productP" "productPA"
        ]
 
-    vars_Fractional mod 
-     = [ mk' mod "/"     "divideV"
-       , mk' mod "recip" "recipV"
-       ]
-
-    vars_Floating mod 
-     = [ mk' mod "pi"      "pi"
-       , mk' mod "exp"     "expV"
-       , mk' mod "sqrt"    "sqrtV"
-       , mk' mod "log"     "logV"
-       , mk' mod "sin"     "sinV"
-       , mk' mod "tan"     "tanV"
-       , mk' mod "cos"     "cosV"
-       , mk' mod "asin"    "asinV"
-       , mk' mod "atan"    "atanV"
-       , mk' mod "acos"    "acosV"
-       , mk' mod "sinh"    "sinhV"
-       , mk' mod "tanh"    "tanhV"
-       , mk' mod "cosh"    "coshV"
-       , mk' mod "asinh"   "asinhV"
-       , mk' mod "atanh"   "atanhV"
-       , mk' mod "acosh"   "acoshV"
-       , mk' mod "**"      "powV"
-       , mk' mod "logBase" "logBaseV"
-       ]
-
-    vars_RealFrac mod
-     = [ mk' mod "fromInt"  "fromIntV"
-       , mk' mod "truncate" "truncateV"
-       , mk' mod "round"    "roundV"
-       , mk' mod "ceiling"  "ceilingV"
-       , mk' mod "floor"    "floorV"
-       ]
-
+    -- vars_Fractional mod 
+    --  = [ mk' mod "/"     "divideV"
+    --    , mk' mod "recip" "recipV"
+    --    ]
+    -- 
+    -- vars_Floating mod 
+    --  = [ mk' mod "pi"      "pi"
+    --    , mk' mod "exp"     "expV"
+    --    , mk' mod "sqrt"    "sqrtV"
+    --    , mk' mod "log"     "logV"
+    --    , mk' mod "sin"     "sinV"
+    --    , mk' mod "tan"     "tanV"
+    --    , mk' mod "cos"     "cosV"
+    --    , mk' mod "asin"    "asinV"
+    --    , mk' mod "atan"    "atanV"
+    --    , mk' mod "acos"    "acosV"
+    --    , mk' mod "sinh"    "sinhV"
+    --    , mk' mod "tanh"    "tanhV"
+    --    , mk' mod "cosh"    "coshV"
+    --    , mk' mod "asinh"   "asinhV"
+    --    , mk' mod "atanh"   "atanhV"
+    --    , mk' mod "acosh"   "acoshV"
+    --    , mk' mod "**"      "powV"
+    --    , mk' mod "logBase" "logBaseV"
+    --    ]
+    -- 
+    -- vars_RealFrac mod
+    --  = [ mk' mod "fromInt"  "fromIntV"
+    --    , mk' mod "truncate" "truncateV"
+    --    , mk' mod "round"    "roundV"
+    --    , mk' mod "ceiling"  "ceilingV"
+    --    , mk' mod "floor"    "floorV"
+    --    ]
+    -- 
 preludeScalars :: Modules -> [(Module, FastString)]
 preludeScalars (Modules { dph_Prelude_Int    = dph_Prelude_Int
                         , dph_Prelude_Word8  = dph_Prelude_Word8

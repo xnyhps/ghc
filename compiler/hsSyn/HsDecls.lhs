@@ -28,6 +28,7 @@ module HsDecls (
   collectRuleBndrSigTys,
   -- ** @VECTORISE@ declarations
   VectDecl(..), LVectDecl,
+  lvectDeclName,
   -- ** @default@ declarations
   DefaultDecl(..), LDefaultDecl,
   -- ** Top-level template haskell splice
@@ -834,7 +835,7 @@ instDeclATs inst_decls = [at | L _ (InstDecl _ _ _ ats) <- inst_decls, at <- ats
 \begin{code}
 type LDerivDecl name = Located (DerivDecl name)
 
-data DerivDecl name = DerivDecl (LHsType name)
+data DerivDecl name = DerivDecl { deriv_type :: LHsType name }
   deriving (Data, Typeable)
 
 instance (OutputableBndr name) => Outputable (DerivDecl name) where
@@ -1005,10 +1006,11 @@ instance OutputableBndr name => Outputable (RuleBndr name) where
 %*                                                                      *
 %************************************************************************
 
-A vectorisation pragma
+A vectorisation pragma, one of
 
-  {-# VECTORISE f = closure1 g (scalar_map g) #-} OR
+  {-# VECTORISE f = closure1 g (scalar_map g) #-}
   {-# VECTORISE SCALAR f #-}
+  {-# NOVECTORISE f #-}
   
 Note [Typechecked vectorisation pragmas]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1029,14 +1031,23 @@ data VectDecl name
   = HsVect
       (Located name)
       (Maybe (LHsExpr name))    -- 'Nothing' => SCALAR declaration
+  | HsNoVect
+      (Located name)
   deriving (Data, Typeable)
-      
+
+lvectDeclName :: LVectDecl name -> name
+lvectDeclName (L _ (HsVect   (L _ name) _)) = name
+lvectDeclName (L _ (HsNoVect (L _ name)))   = name
+
 instance OutputableBndr name => Outputable (VectDecl name) where
-  ppr (HsVect v rhs)
+  ppr (HsVect v Nothing)
+    = sep [text "{-# VECTORISE SCALAR" <+> ppr v <+> text "#-}" ]
+  ppr (HsVect v (Just rhs))
     = sep [text "{-# VECTORISE" <+> ppr v,
-           nest 4 (case rhs of
-                     Nothing  -> text "SCALAR #-}"
-                     Just rhs -> pprExpr (unLoc rhs) <+> text "#-}") ]
+           nest 4 $ 
+             pprExpr (unLoc rhs) <+> text "#-}" ]
+  ppr (HsNoVect v)
+    = sep [text "{-# NOVECTORISE" <+> ppr v <+> text "#-}" ]
 \end{code}
 
 %************************************************************************
