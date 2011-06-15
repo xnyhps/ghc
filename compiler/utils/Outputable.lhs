@@ -670,6 +670,17 @@ instance (Outputable a, Outputable b, Outputable c, Outputable d, Outputable e, 
 		   ppr e <> comma,
 		   ppr f])
 
+instance (Outputable a, Outputable b, Outputable c, Outputable d, Outputable e, Outputable f, Outputable g) =>
+	 Outputable (a, b, c, d, e, f, g) where
+    ppr (a,b,c,d,e,f,g) =
+      parens (sep [ppr a <> comma,
+		   ppr b <> comma,
+		   ppr c <> comma,
+		   ppr d <> comma,
+		   ppr e <> comma,
+		   ppr f <> comma,
+		   ppr g])
+
 instance Outputable FastString where
     ppr fs = ftext fs		-- Prints an unadorned string,
 				-- no double quotes or anything
