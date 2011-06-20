@@ -66,6 +66,7 @@ import Compiler.Hoopl   hiding (Unique)
 
 import Data.Function (on)
 import qualified Data.IntMap as M
+import qualified Data.Foldable as Foldable
 \end{code}
 
 %************************************************************************
@@ -166,6 +167,9 @@ newtype UniqFM ele = UFM { unUFM :: M.IntMap ele }
 
 instance Eq ele => Eq (UniqFM ele) where
     (==) = (==) `on` unUFM
+
+instance Foldable.Foldable UniqFM where
+    foldMap f = Foldable.foldMap f . unUFM
 
 emptyUFM = UFM M.empty
 isNullUFM (UFM m) = M.null m
