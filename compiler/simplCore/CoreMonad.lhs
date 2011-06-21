@@ -215,6 +215,7 @@ data CoreToDo           -- These are diff core-to-core passes,
   | CoreDoWorkerWrapper
   | CoreDoSpecialising
   | CoreDoSpecConstr
+  | CoreDoSupercomp
   | CoreDoGlomBinds
   | CoreCSE
   | CoreDoRuleCheck CompilerPhase String   -- Check for non-application of rules
@@ -239,6 +240,7 @@ coreDumpFlag CoreDoStrictness 	      = Just Opt_D_dump_stranal
 coreDumpFlag CoreDoWorkerWrapper      = Just Opt_D_dump_worker_wrapper
 coreDumpFlag CoreDoSpecialising       = Just Opt_D_dump_spec
 coreDumpFlag CoreDoSpecConstr         = Just Opt_D_dump_spec
+coreDumpFlag CoreDoSupercomp          = Just Opt_D_dump_supercomp
 coreDumpFlag CoreCSE                  = Just Opt_D_dump_cse 
 coreDumpFlag CoreDoVectorisation      = Just Opt_D_dump_vect
 coreDumpFlag CoreDesugar              = Just Opt_D_dump_ds 
@@ -263,6 +265,7 @@ instance Outputable CoreToDo where
   ppr CoreDoWorkerWrapper      = ptext (sLit "Worker Wrapper binds")
   ppr CoreDoSpecialising       = ptext (sLit "Specialise")
   ppr CoreDoSpecConstr         = ptext (sLit "SpecConstr")
+  ppr CoreDoSupercomp          = ptext (sLit "Supercompilation")
   ppr CoreCSE                  = ptext (sLit "Common sub-expression")
   ppr CoreDoVectorisation      = ptext (sLit "Vectorisation")
   ppr CoreDesugar              = ptext (sLit "Desugar")
@@ -351,6 +354,7 @@ getCoreToDo dflags
     do_float_in   = dopt Opt_FloatIn      		  dflags          
     cse           = dopt Opt_CSE                          dflags
     spec_constr   = dopt Opt_SpecConstr                   dflags
+    supercomp     = dopt Opt_Supercompilation             dflags
     liberate_case = dopt Opt_LiberateCase                 dflags
     static_args   = dopt Opt_StaticArgumentTransformation dflags
     rules_on      = dopt Opt_EnableRewriteRules           dflags
@@ -426,6 +430,8 @@ getCoreToDo dflags
     -- up the output of the transformation we need at do at least one simplify
     -- after this before anything else
         runWhen static_args (CoreDoPasses [ simpl_gently, CoreDoStaticArgs ]),
+
+        runWhen supercomp CoreDoSupercomp,
 
         -- We run vectorisation here for now, but we might also try to run
         -- it later

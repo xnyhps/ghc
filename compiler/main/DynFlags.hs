@@ -167,6 +167,7 @@ data DynFlag
    | Opt_D_dump_simpl_iterations
    | Opt_D_dump_simpl_phases
    | Opt_D_dump_spec
+   | Opt_D_dump_supercomp
    | Opt_D_dump_prep
    | Opt_D_dump_stg
    | Opt_D_dump_stranal
@@ -249,6 +250,7 @@ data DynFlag
    | Opt_CSE
    | Opt_LiberateCase
    | Opt_SpecConstr
+   | Opt_Supercompilation
    | Opt_DoLambdaEtaExpansion
    | Opt_IgnoreAsserts
    | Opt_DoEtaReduction
@@ -1323,6 +1325,7 @@ dynamic_flags = [
   , Flag "ddump-simpl-iterations"  (setDumpFlag Opt_D_dump_simpl_iterations)
   , Flag "ddump-simpl-phases"      (OptPrefix setDumpSimplPhases)
   , Flag "ddump-spec"              (setDumpFlag Opt_D_dump_spec)
+  , Flag "ddump-supercomp"         (setDumpFlag Opt_D_dump_supercomp)
   , Flag "ddump-prep"              (setDumpFlag Opt_D_dump_prep)
   , Flag "ddump-stg"               (setDumpFlag Opt_D_dump_stg)
   , Flag "ddump-stranal"           (setDumpFlag Opt_D_dump_stranal)
@@ -1539,6 +1542,7 @@ fFlags = [
   ( "full-laziness",                    Opt_FullLaziness, nop ),
   ( "liberate-case",                    Opt_LiberateCase, nop ),
   ( "spec-constr",                      Opt_SpecConstr, nop ),
+  ( "supercompilation",                 Opt_Supercompilation, nop ),
   ( "cse",                              Opt_CSE, nop ),
   ( "ignore-interface-pragmas",         Opt_IgnoreInterfacePragmas, nop ),
   ( "omit-interface-pragmas",           Opt_OmitInterfacePragmas, nop ),

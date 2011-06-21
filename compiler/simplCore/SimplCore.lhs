@@ -36,6 +36,7 @@ import LiberateCase	( liberateCase )
 import SAT		( doStaticArgs )
 import Specialise	( specProgram)
 import SpecConstr	( specConstrProgram)
+import Supercompile     ( supercompileProgram )
 import DmdAnal		( dmdAnalPgm )
 import WorkWrap	        ( wwTopBinds )
 import Vectorise        ( vectorise )
@@ -122,6 +123,9 @@ doCorePass CoreDoSpecialising        = {-# SCC "Specialise" #-}
 
 doCorePass CoreDoSpecConstr          = {-# SCC "SpecConstr" #-}
                                        specConstrProgram
+
+doCorePass CoreDoSupercomp           = {-# SCC "Supercomp" #-}
+                                       doPassD supercompileProgram
 
 doCorePass CoreDoVectorisation       = {-# SCC "Vectorise" #-}
                                        vectorise
