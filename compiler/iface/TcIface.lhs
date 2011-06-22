@@ -265,10 +265,10 @@ typecheckIface iface
 	; writeMutVar tc_env_var type_env
 
 		-- Now do those rules, instances and annotations
-	; insts     <- mapM tcIfaceInst    (mi_insts     iface)
+	; insts     <- mapM tcIfaceInst (mi_insts iface)
 	; fam_insts <- mapM tcIfaceFamInst (mi_fam_insts iface)
 	; rules     <- tcIfaceRules ignore_prags (mi_rules iface)
-	; anns      <- tcIfaceAnnotations  (mi_anns iface)
+	; anns      <- tcIfaceAnnotations (mi_anns iface)
 
                 -- Vectorisation information
         ; vect_info <- tcIfaceVectInfo (mi_module iface) type_env 
@@ -590,11 +590,11 @@ look at it.
 \begin{code}
 tcIfaceInst :: IfaceInst -> IfL Instance
 tcIfaceInst (IfaceInst { ifDFun = dfun_occ, ifOFlag = oflag,
-			 ifInstCls = cls, ifInstTys = mb_tcs })
-  = do	{ dfun    <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
-		     tcIfaceExtId dfun_occ
-        ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
-	; return (mkImportedInstance cls mb_tcs' dfun oflag) }
+                              ifInstCls = cls, ifInstTys = mb_tcs })
+  = do { dfun    <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
+                     tcIfaceExtId dfun_occ
+       ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
+       ; return (mkImportedInstance cls mb_tcs' dfun oflag) }
 
 tcIfaceFamInst :: IfaceFamInst -> IfL FamInst
 tcIfaceFamInst (IfaceFamInst { ifFamInstTyCon = tycon, 
@@ -1026,8 +1026,8 @@ do_one (IfaceRec pairs) thing_inside
 \begin{code}
 tcIdDetails :: Type -> IfaceIdDetails -> IfL IdDetails
 tcIdDetails _  IfVanillaId = return VanillaId
-tcIdDetails ty (IfDFunId ns)
-  = return (DFunId ns (isNewTyCon (classTyCon cls)))
+tcIdDetails ty IfDFunId
+  = return (DFunId (isNewTyCon (classTyCon cls)))
   where
     (_, _, cls, _) = tcSplitDFunTy ty
 
@@ -1099,7 +1099,6 @@ tcUnfolding name dfun_ty _ (IfDFunUnfold ops)
     doc = text "Class ops for dfun" <+> ppr name
     tc_arg (DFunPolyArg  e) = do { e' <- tcIfaceExpr e; return (DFunPolyArg e') }
     tc_arg (DFunConstArg e) = do { e' <- tcIfaceExpr e; return (DFunConstArg e') }
-    tc_arg (DFunLamArg i)   = return (DFunLamArg i)
 
 tcUnfolding name ty info (IfExtWrapper arity wkr)
   = tcIfaceWrapper name ty info arity (tcIfaceExtId wkr)

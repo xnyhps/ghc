@@ -177,7 +177,7 @@ type IfaceAnnTarget = AnnTarget OccName
 data IfaceIdDetails
   = IfVanillaId
   | IfRecSelId IfaceTyCon Bool
-  | IfDFunId Int          -- Number of silent args
+  | IfDFunId 
 
 data IfaceIdInfo
   = NoInfo                      -- When writing interface file without -O
@@ -341,7 +341,7 @@ and suppose we are compiling module X:
         data T = ...
         instance C S T where ...
 
-If we base the instance verion on T, I'm worried that changing S to S'
+If we base the instance version on T, I'm worried that changing S to S'
 would change T's version, but not S or S'.  But an importing module might
 not depend on T, and so might not be recompiled even though the new instance
 (C S' T) might be relevant.  I have not been able to make a concrete example,
@@ -672,7 +672,7 @@ instance Outputable IfaceIdDetails where
   ppr IfVanillaId       = empty
   ppr (IfRecSelId tc b) = ptext (sLit "RecSel") <+> ppr tc
                           <+> if b then ptext (sLit "<naughty>") else empty
-  ppr (IfDFunId ns)     = ptext (sLit "DFunId") <> brackets (int ns)
+  ppr IfDFunId          = ptext (sLit "DFunId")
 
 instance Outputable IfaceIdInfo where
   ppr NoInfo       = empty

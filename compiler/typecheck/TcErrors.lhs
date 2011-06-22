@@ -33,7 +33,6 @@ import Util
 import FastString
 import Outputable
 import DynFlags
-import StaticFlags( opt_PprStyle_Debug )
 import Data.List( partition )
 import Control.Monad( when, unless )
 \end{code}
@@ -242,15 +241,8 @@ getUserGivens :: ReportErrCtxt -> [([EvVar], GivenLoc)]
 -- One item for each enclosing implication
 getUserGivens (CEC {cec_encl = ctxt})
   = reverse $
-    [ (givens', loc) | Implic {ic_given = givens, ic_loc = loc} <- ctxt
-                     , let givens' = get_user_givens givens
-                     , not (null givens') ]
-  where
-    get_user_givens givens | opt_PprStyle_Debug = givens
-                           | otherwise          = filterOut isSilentEvVar givens
-       -- In user mode, don't show the "silent" givens, used for
-       -- the "self" dictionary and silent superclass arguments for dfuns
-
+    [ (givens, loc) | Implic {ic_given = givens, ic_loc = loc} <- ctxt
+                    , not (null givens) ]
 \end{code}
 
 
@@ -562,16 +554,17 @@ reportOverlap ctxt inst_envs orig pred@(ClassP clas tys)
            -- Note [Flattening in error message generation]
 
        ; case lookupInstEnv inst_envs clas tys_flat of
-                ([], _) -> return (Just pred)               -- No match
+                ([], _, _) -> return (Just pred)            -- No match
 		-- The case of exactly one match and no unifiers means a
 		-- successful lookup.  That can't happen here, because dicts
 		-- only end up here if they didn't match in Inst.lookupInst
-		([_],[])
+		([_],[], _)
 		 | debugIsOn -> pprPanic "check_overlap" (ppr pred)
                 res          -> do { addErrorReport ctxt (mk_overlap_msg res)
                                    ; return Nothing } }
   where
-    mk_overlap_msg (matches, unifiers)
+    -- Normal overlap error
+    mk_overlap_msg (matches, unifiers, False)
       = ASSERT( not (null matches) )
         vcat [	addArising orig (ptext (sLit "Overlapping instances for") 
 				<+> pprPredTy pred)
@@ -600,33 +593,50 @@ reportOverlap ctxt inst_envs orig pred@(ClassP clas tys)
                                    vcat [ ptext (sLit "To pick the first instance above, use -XIncoherentInstances"),
 			                  ptext (sLit "when compiling the other instance declarations")]
                               else empty])]
-      where
-    	ispecs = [ispec | (ispec, _) <- matches]
+        where
+            ispecs = [ispec | (ispec, _) <- matches]
 
-        givens = getUserGivens ctxt
-        overlapping_givens = unifiable_givens givens
+            givens = getUserGivens ctxt
+            overlapping_givens = unifiable_givens givens
+    
+            unifiable_givens [] = [] 
+            unifiable_givens (gg:ggs) 
+              | Just ggdoc <- matchable gg 
+              = ggdoc : unifiable_givens ggs 
+              | otherwise 
+              = unifiable_givens ggs 
+    
+            matchable (evvars,gloc) 
+              = case ev_vars_matching of
+                     [] -> Nothing
+                     _  -> Just $ hang (pprTheta ev_vars_matching)
+                                    2 (sep [ ptext (sLit "bound by") <+> ppr (ctLocOrigin gloc)
+                                           , ptext (sLit "at") <+> ppr (ctLocSpan gloc)])
+                where ev_vars_matching = filter ev_var_matches (map evVarPred evvars)
+                      ev_var_matches (ClassP clas' tys')
+                        | clas' == clas
+                        , Just _ <- tcMatchTys (tyVarsOfTypes tys) tys tys'
+                        = True 
+                      ev_var_matches (ClassP clas' tys') =
+                        any ev_var_matches (immSuperClasses clas' tys')
+                      ev_var_matches _ = False
 
-        unifiable_givens [] = [] 
-        unifiable_givens (gg:ggs) 
-          | Just ggdoc <- matchable gg 
-          = ggdoc : unifiable_givens ggs 
-          | otherwise 
-          = unifiable_givens ggs 
-
-        matchable (evvars,gloc) 
-          = case ev_vars_matching of
-                 [] -> Nothing
-                 _  -> Just $ hang (pprTheta ev_vars_matching)
-                                2 (sep [ ptext (sLit "bound by") <+> ppr (ctLocOrigin gloc)
-                                       , ptext (sLit "at") <+> ppr (ctLocSpan gloc)])
-            where ev_vars_matching = filter ev_var_matches (map evVarPred evvars)
-                  ev_var_matches (ClassP clas' tys')
-                    | clas' == clas
-                    , Just _ <- tcMatchTys (tyVarsOfTypes tys) tys tys'
-                    = True 
-                  ev_var_matches (ClassP clas' tys') =
-                    any ev_var_matches (immSuperClasses clas' tys')
-                  ev_var_matches _ = False
+    -- Overlap error because of SafeHaskell (first match should be the most
+    -- specific match)
+    mk_overlap_msg (matches, _unifiers, True)
+      = ASSERT( length matches > 1 )
+        vcat [ addArising orig (ptext (sLit "Unsafe overlapping instances for") 
+                        <+> pprPredTy pred)
+             , sep [ptext (sLit "The matching instance is") <> colon,
+                    nest 2 (pprInstance $ head ispecs)]
+             , vcat [ ptext $ sLit "It is compiled in a Safe module and as such can only"
+                    , ptext $ sLit "overlap instances from the same module, however it"
+                    , ptext $ sLit "overlaps the following instances from different modules:"
+                    , nest 2 (vcat [pprInstances $ tail ispecs])
+                    ]
+             ]
+        where
+            ispecs = [ispec | (ispec, _) <- matches]
 
 
 reportOverlap _ _ _ _ = panic "reportOverlap"    -- Not a ClassP
