@@ -244,8 +244,6 @@ import BreakArray
 import InteractiveEval
 #endif
 
-import Supercompile () -- FIXME: remove this. Just used to pull it in
-
 import HscMain
 import GhcMake
 import DriverPipeline	( compile' )
