@@ -701,7 +701,7 @@ stringTyConName         = tcQual  gHC_BASE (fsLit "String") stringTyConKey
 inlineIdName :: Name
 inlineIdName	 	= varQual gHC_MAGIC (fsLit "inline") inlineIdKey
 
--- The 'undefined' function
+-- The 'undefined' function. Used by supercompilation.
 undefinedName :: Name
 undefinedName = varQual gHC_ERR (fsLit "undefined") undefinedKey
 
