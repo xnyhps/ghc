@@ -32,7 +32,7 @@
 
 module Var (
         -- * The main data type and synonyms
-        Var, TyVar, CoVar, TyCoVar, Id, DictId, DFunId, EvVar, EvId, IpId,
+        Var, TyVar, CoVar, TyCoVar, KindVar, Id, DictId, DFunId, EvVar, EvId, IpId,
 
 	-- ** Taking 'Var's apart
 	varName, varUnique, varType, 
@@ -47,26 +47,35 @@ module Var (
 	setIdExported, setIdNotExported,
 
         -- ** Predicates
-        isId, isTyVar, isTcTyVar,
+        isId, isTyVar, isTcTyVar, isKindVar,
         isLocalVar, isLocalId,
 	isGlobalId, isExportedId,
 	mustHaveLocalBinding,
 
 	-- ** Constructing 'TyVar's
-	mkTyVar, mkTcTyVar, 
+	mkTyVar, mkTcTyVar,
 
 	-- ** Taking 'TyVar's apart
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
 
 	-- ** Modifying 'TyVar's
-	setTyVarName, setTyVarUnique, setTyVarKind
+	setTyVarName, setTyVarUnique, setTyVarKind,
+
+        -- ** Constructing 'KindVar's
+        mkKindVar,
+
+	-- ** Taking 'KindVar's apart
+        kindVarName, kindVarSuperKind,
+
+	-- ** Modifying 'KindVar's
+	setKindVarName, setKindVarUnique, setKindVarSuperKind
 
     ) where
 
 #include "HsVersions.h"
 #include "Typeable.h"
 
-import {-# SOURCE #-}	TypeRep( Type, Kind )
+import {-# SOURCE #-}	TypeRep( Type, Kind, SuperKind )
 import {-# SOURCE #-}	TcType( TcTyVarDetails, pprTcTyVarDetails )
 import {-# SOURCE #-}	IdInfo( IdDetails, IdInfo, coVarDetails, vanillaIdInfo, pprIdDetails )
 
@@ -104,6 +113,7 @@ type CoVar = Id		-- A coercion variable is simply an Id
 			-- variable of kind @ty1 ~ ty2@. Hence its
 			-- 'varType' is always @PredTy (EqPred t1 t2)@
 type TyCoVar = TyVar    -- Something that is a type OR coercion variable.
+type KindVar = Var
 \end{code}
 
 %************************************************************************
@@ -145,7 +155,12 @@ data Var
 	idScope    :: IdScope,
 	id_details :: IdDetails,	-- Stable, doesn't change
 	id_info    :: IdInfo }		-- Unstable, updated by simplifier
-    deriving Typeable
+
+  | KindVar {
+	varName    :: !Name,
+	realUnique :: FastInt,
+	varType    :: SuperKind }
+  deriving Typeable
 
 data IdScope	-- See Note [GlobalId/LocalId]
   = GlobalId 
@@ -282,6 +297,37 @@ setTcTyVarDetails tv details = tv { tc_tv_details = details }
 
 %************************************************************************
 %*									*
+\subsection{Kind variables}
+%*									*
+%************************************************************************
+
+\begin{code}
+kindVarName :: KindVar -> Name
+kindVarName = varName
+
+kindVarSuperKind :: KindVar -> SuperKind
+kindVarSuperKind = varType
+
+setKindVarUnique :: KindVar -> Unique -> KindVar
+setKindVarUnique = setVarUnique
+
+setKindVarName :: KindVar -> Name -> KindVar
+setKindVarName = setVarName
+
+setKindVarSuperKind :: KindVar -> SuperKind -> KindVar
+setKindVarSuperKind kv sk = kv {varType = sk}
+\end{code}
+
+\begin{code}
+mkKindVar :: Name -> SuperKind -> KindVar
+mkKindVar name superKind =
+  KindVar { varName    = name
+          , realUnique = getKeyFastInt (nameUnique name)
+          , varType    = superKind }
+\end{code}
+
+%************************************************************************
+%*									*
 \subsection{Ids}
 %*									*
 %************************************************************************
@@ -362,6 +408,10 @@ isTyVar _            = False
 isTcTyVar :: Var -> Bool
 isTcTyVar (TcTyVar {}) = True
 isTcTyVar _            = False
+
+isKindVar :: Var -> Bool
+isKindVar (KindVar {}) = True
+isKindVar _            = False
 
 isId :: Var -> Bool
 isId (Id {}) = True
