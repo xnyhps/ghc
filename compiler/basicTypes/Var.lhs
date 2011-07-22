@@ -196,6 +196,7 @@ ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})                           = ptext (sLit "tv")
 ppr_debug (TcTyVar {tc_tv_details = d})        = pprTcTyVarDetails d
 ppr_debug (Id { idScope = s, id_details = d }) = ppr_id_scope s <> pprIdDetails d
+ppr_debug (KindVar {})                         = ptext (sLit "kv")
 
 ppr_id_scope :: IdScope -> SDoc
 ppr_id_scope GlobalId              = ptext (sLit "gid")

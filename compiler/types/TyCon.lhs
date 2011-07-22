@@ -29,7 +29,7 @@ module TyCon(
         mkSuperKindTyCon,
         mkForeignTyCon,
         mkAnyTyCon,
-	mkLiftedDataConTyCon,
+	mkPromotedDataTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -84,7 +84,7 @@ module TyCon(
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
-import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon, dataConName, dataConRepType )
+import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon, dataConName )
 
 import Var
 import Class
@@ -400,11 +400,10 @@ data TyCon
         tyConName   :: Name
     }
 
-  -- | Represents lifted data constructor.
-  | LiftedDataConTyCon {
+  -- | Represents promoted data constructor.
+  | PromotedDataTyCon {
 	tyConUnique :: Unique, -- ^ Same Unique as the data constructor
 	tyConName   :: Name,   -- ^ Same Name as the data constructor
-        {- TODO: We might also want to add a lifted dcRepTyCon -}
 	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
         dataCon     :: DataCon -- ^ Corresponding data constructor
     }
@@ -891,14 +890,13 @@ mkSuperKindTyCon name
         tyConUnique = nameUnique name
   }
 
--- | Create a lifted data constructor 'TyCon'
-mkLiftedDataConTyCon :: DataCon -> TyCon
-mkLiftedDataConTyCon con
-  = LiftedDataConTyCon {
+-- | Create a promoted data constructor 'TyCon'
+mkPromotedDataTyCon :: DataCon -> Kind -> TyCon
+mkPromotedDataTyCon con kind
+  = PromotedDataTyCon {
         tyConName = dataConName con,
         tyConUnique = getUnique con,
-        tc_kind = undefined (dataConRepType con),
-          -- ^ TODO: replace by the lifting function from types to kinds
+        tc_kind = kind,
         dataCon = con
   }
 \end{code}

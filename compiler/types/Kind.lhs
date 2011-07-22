@@ -18,7 +18,7 @@ module Kind (
 
         -- Super Kinds
 	tySuperKind, tySuperKindTyCon, 
-        
+
 	pprKind, pprParendKind,
 
         -- ** Deconstructing Kinds
@@ -33,6 +33,9 @@ module Kind (
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon,
+
+        -- ** Promotion reladed functions
+        promoteType,
 
        ) where
 
@@ -232,4 +235,37 @@ defaultKind k
   | isSubOpenTypeKind k = liftedTypeKind
   | isSubArgTypeKind k  = liftedTypeKind
   | otherwise        = k
+
+
+-- About promoting a type to a kind
+
+-- | Promotes a type to a kind if possible.  Assumes the argument is
+-- promotable.
+promoteType :: Type -> Kind
+promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
+  -- a :: *  ~~>  a :: Box
+promoteType (AppTy _app _arg) = panic "we do not promote arbitrary applications"
+promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
+  -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
+promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
+  -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
+promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
+  -- forall (a :: *). t  ~~> forall a. k  where  t ~~> k
+promoteType (PredTy _pred) = panic "we do not promote predicate types"
+
+-- Helpers
+promoteTyVar :: TyVar -> KindVar
+promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
+
+{- Note [Promoting a Type to a Kind]
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We only promote the followings.
+* Type variable
+* Fully applied arrow type
+* Fully applied type constructor of kind @*^n -> *@ (n >= 0)
+* Polymorphic type with a type variable of kind star
+-}
+
+
 \end{code}
+

@@ -1,12 +1,10 @@
 \begin{code}
 module DataCon where
-import {-# SOURCE #-} TypeRep( Type )
 import Name( Name )
 import Unique
 
 data DataCon
 dataConName      :: DataCon -> Name
-dataConRepType   :: DataCon -> Type
 isVanillaDataCon :: DataCon -> Bool
 
 instance Uniquable DataCon
