@@ -543,7 +543,7 @@ kcSpliceType splice@(HsSplice name hs_expr) fvs
     -- Here (h 4) :: Q Type
     -- but $(h 4) :: a 	i.e. any type, of any kind
 
-    ; kind <- newKindVar
+    ; kind <- newMetaKindVar
     ; return (HsSpliceTy splice fvs kind, kind)	
     }}}
 

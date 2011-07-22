@@ -692,7 +692,7 @@ kcHsTyVars tvs thing_inside
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
-kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newKindVar
+kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
 kcHsTyVar tv@(KindedTyVar {}) = return tv
 
 ------------------

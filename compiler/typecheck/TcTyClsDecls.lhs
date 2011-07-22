@@ -248,7 +248,7 @@ getInitialKind (L _ decl)
 	; res_kind  <- mk_res_kind decl
 	; return (tcdName decl, mkArrowKinds arg_kinds res_kind) }
   where
-    mk_arg_kind (UserTyVar _ _)      = newKindVar
+    mk_arg_kind (UserTyVar _ _)      = newMetaKindVar
     mk_arg_kind (KindedTyVar _ kind) = return kind
 
     mk_res_kind (TyFamily { tcdKind    = Just kind }) = return kind
