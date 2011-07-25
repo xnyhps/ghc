@@ -434,8 +434,9 @@ repBangTy ty= do
   rep2 strictTypeName [s, t]
   where 
     (str, ty') = case ty of
-		   L _ (HsBangTy _ ty) -> (isStrictName,  ty)
-		   _                   -> (notStrictName, ty)
+		   L _ (HsBangTy HsUnpack ty) -> (unpackedName,  ty)
+		   L _ (HsBangTy _ ty)        -> (isStrictName,  ty)
+		   _                          -> (notStrictName, ty)
 
 -------------------------------------------------------
 -- 			Deriving clause
@@ -1777,7 +1778,7 @@ templateHaskellNames = [
     -- Pred
     classPName, equalPName,
     -- Strict
-    isStrictName, notStrictName,
+    isStrictName, notStrictName, unpackedName,
     -- Con
     normalCName, recCName, infixCName, forallCName,
     -- StrictType
@@ -1996,9 +1997,10 @@ classPName = libFun (fsLit "classP") classPIdKey
 equalPName = libFun (fsLit "equalP") equalPIdKey
 
 -- data Strict = ...
-isStrictName, notStrictName :: Name
+isStrictName, notStrictName, unpackedName :: Name
 isStrictName      = libFun  (fsLit "isStrict")      isStrictKey
 notStrictName     = libFun  (fsLit "notStrict")     notStrictKey
+unpackedName      = libFun  (fsLit "unpacked")      unpackedKey
 
 -- data Con = ...
 normalCName, recCName, infixCName, forallCName :: Name
@@ -2277,9 +2279,10 @@ classPIdKey         = mkPreludeMiscIdUnique 361
 equalPIdKey         = mkPreludeMiscIdUnique 362
 
 -- data Strict = ...
-isStrictKey, notStrictKey :: Unique
+isStrictKey, notStrictKey, unpackedKey :: Unique
 isStrictKey         = mkPreludeMiscIdUnique 363
 notStrictKey        = mkPreludeMiscIdUnique 364
+unpackedKey         = mkPreludeMiscIdUnique 365
 
 -- data Con = ...
 normalCIdKey, recCIdKey, infixCIdKey, forallCIdKey :: Unique
