@@ -319,32 +319,9 @@ This makes the error messages right.
 
 %************************************************************************
 %*									*
-	Extracting generic instance declaration from class declarations
+	Generic default methods
 %*									*
 %************************************************************************
-
-@getGenericInstances@ extracts the generic instance declarations from a class
-declaration.  For exmaple
-
-	class C a where
-	  op :: a -> a
-	
-	  op{ x+y } (Inl v)   = ...
-	  op{ x+y } (Inr v)   = ...
-	  op{ x*y } (v :*: w) = ...
-	  op{ 1   } Unit      = ...
-
-gives rise to the instance declarations
-
-	instance C (x+y) where
-	  op (Inl v)   = ...
-	  op (Inr v)   = ...
-	
-	instance C (x*y) where
-	  op (v :*: w) = ...
-
-	instance C 1 where
-	  op Unit      = ...
 
 \begin{code}
 mkGenericDefMethBind :: Class -> [Type] -> Id -> Name -> TcM (LHsBind Name)

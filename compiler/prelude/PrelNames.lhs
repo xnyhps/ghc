@@ -569,6 +569,18 @@ undefined_RDR = varQual_RDR gHC_ERR (fsLit "undefined")
 error_RDR :: RdrName
 error_RDR = varQual_RDR gHC_ERR (fsLit "error")
 
+genUnsafeCoerce_RDR :: RdrName
+genUnsafeCoerce_RDR = varQual_RDR gHC_GENERICS (fsLit "genUnsafeCoerce")
+
+{-
+-- Old Generics (constructors and functions)
+crossDataCon_RDR, inlDataCon_RDR, inrDataCon_RDR, genUnitDataCon_RDR :: RdrName
+crossDataCon_RDR   = dataQual_RDR gHC_GENERICS (fsLit ":*:")
+inlDataCon_RDR     = dataQual_RDR gHC_GENERICS (fsLit "Inl")
+inrDataCon_RDR     = dataQual_RDR gHC_GENERICS (fsLit "Inr")
+genUnitDataCon_RDR = dataQual_RDR gHC_GENERICS (fsLit "Unit")
+-}
+
 -- Generics (constructors and functions)
 u1DataCon_RDR, par1DataCon_RDR, rec1DataCon_RDR,
   k1DataCon_RDR, m1DataCon_RDR, l1DataCon_RDR, r1DataCon_RDR,
@@ -619,7 +631,7 @@ ap_RDR                  = varQual_RDR cONTROL_APPLICATIVE (fsLit "<*>")
 foldable_foldr_RDR      = varQual_RDR dATA_FOLDABLE       (fsLit "foldr")
 traverse_RDR            = varQual_RDR dATA_TRAVERSABLE    (fsLit "traverse")
 
-----------------------
+
 varQual_RDR, tcQual_RDR, clsQual_RDR, dataQual_RDR
     :: Module -> FastString -> RdrName
 varQual_RDR  mod str = mkOrig mod (mkOccNameFS varName str)

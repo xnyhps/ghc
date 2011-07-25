@@ -1,0 +1,12 @@
+
+\begin{code}
+
+module TcDeriv where
+
+import DynFlags
+import TyCon
+import Outputable
+
+cond_functorOK :: Bool -> (DynFlags, TyCon) -> Maybe SDoc
+
+\end{code}
