@@ -109,7 +109,7 @@ rnHsType _ (HsTyVar tyvar) = do
     tyvar' <- lookupOccRn tyvar
     return (HsTyVar tyvar')
 
-rnHsType _ (HsPromotedTy _con) = undefined  -- UNDEFINED: might be like HsTyVar
+rnHsType _ (HsPromotedConTy _con) = undefined  -- UNDEFINED: might be like HsTyVar
 
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
@@ -194,6 +194,10 @@ rnHsType doc (HsQuasiQuoteTy qq) = do { ty <- runQuasiQuoteType qq
                                       ; rnHsType doc (unLoc ty) }
 #endif
 rnHsType _ (HsCoreTy ty) = return (HsCoreTy ty)
+
+rnHsType _ (HsLitTy _lit) = undefined  -- UNDEFINED
+rnHsType _ (HsExplicitListTy _tys) = undefined  -- UNDEFINED
+rnHsType _ (HsExplicitTupleTy _tys) = undefined  -- UNDEFINED
 
 --------------
 rnLHsTypes :: SDoc -> [LHsType RdrName]

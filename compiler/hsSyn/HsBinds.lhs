@@ -22,6 +22,7 @@ import {-# SOURCE #-} HsExpr ( pprExpr, LHsExpr,
 			       GRHSs, pprPatBind )
 import {-# SOURCE #-} HsPat  ( LPat )
 
+import HsLit
 import HsTypes
 import PprCore ()
 import Coercion

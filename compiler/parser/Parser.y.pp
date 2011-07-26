@@ -1028,13 +1028,27 @@ atype :: { LHsType RdrName }
 	| '(#' comma_types1 '#)'	{ LL $ HsTupleTy Unboxed $2     }
 	| '[' ctype ']'			{ LL $ HsListTy  $2 }
 	| '[:' ctype ':]'		{ LL $ HsPArrTy  $2 }
-	| '(' ctype ')'		        { LL $ HsParTy   $2 }
 	| '(' ctype '::' kind ')'	{ LL $ HsKindSig $2 $4 }
 	| quasiquote       	        { L1 (HsQuasiQuoteTy (unLoc $1)) }
 	| '$(' exp ')'	      		{ LL $ mkHsSpliceTy $2 }
-	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $ 
+	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
-	| TH_VAR_QUOTE qconid           { LL $ HsPromotedTy (unLoc $2) }
+	| TH_VAR_QUOTE qconid                         { LL $ HsPromotedConTy (unLoc $2) }
+	| opt_quote typelit                           { LL (HsLitTy $! (unLoc $2)) }
+	| TH_VAR_QUOTE '(' ')'                        { LL $ HsPromotedConTy $ getRdrName unitDataCon }
+	| TH_VAR_QUOTE '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy ($3 : $5) }
+	| TH_VAR_QUOTE '[' comma_types0 ']'           { LL $ HsExplicitListTy $3 }
+	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy ($2 : $4) }
+	| '(' ctype ')'		        { LL $ HsParTy   $2 }
+
+typelit :: { Located HsLit }  -- type literal
+	: CHAR 		{ L1 $ HsChar   $ getCHAR $1 }
+	| STRING 	{ L1 $ HsString $ getSTRING $1 }
+	| INTEGER       { L1 $ HsInt    $ getINTEGER $1 }
+
+opt_quote :: { Located () }
+          : {- empty -}  { noLoc () }
+          | TH_VAR_QUOTE { L1 () }
 
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
@@ -1094,13 +1108,13 @@ akind	:: { LHsKind RdrName }
 	: '*'			        { L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
 	| '!'			        { L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
         | tyvar                         { L1 (HsTyVar (unLoc $1)) }
-        | TH_VAR_QUOTE qtycon           { LL (HsPromotedTy (unLoc $2)) }
-        |              qtycon           { L1 (HsPromotedTy (unLoc $1)) }
-	| TH_VAR_QUOTE
-          '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($3:$5) }
+        | opt_quote qtycon              { LL (HsPromotedConTy (unLoc $2)) }
+        | '(' ')'                       { LL $ HsPromotedConTy $ getRdrName unitTyCon }
+        | TH_VAR_QUOTE '(' ')'          { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 	| '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($2:$4) }
-	| TH_VAR_QUOTE '[' kind ']'     { LL $ HsListTy  $3 }
-	|              '[' kind ']'     { LL $ HsListTy  $2 }
+	| TH_VAR_QUOTE '(' kind ',' comma_kinds1 ')'
+                                        { LL $ HsTupleTy Boxed  ($3:$5) }
+	| opt_quote '[' kind ']'        { LL $ HsListTy  $3 }
 	| '(' kind ')'		        { LL $ HsParTy   $2 }
 
 comma_kinds1	:: { [LHsKind RdrName] }

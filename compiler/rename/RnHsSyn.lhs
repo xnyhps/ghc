@@ -65,7 +65,7 @@ extractHsTyNames ty
     get (HsBangTy _ ty)        = getl ty
     get (HsRecTy flds)         = extractHsTyNames_s (map cd_fld_type flds)
     get (HsTyVar tv)           = unitNameSet tv
-    get (HsPromotedTy tv)      = unitNameSet tv
+    get (HsPromotedConTy tv)   = unitNameSet tv
     get (HsSpliceTy _ fvs _)   = fvs
     get (HsQuasiQuoteTy {})    = emptyNameSet
     get (HsKindSig ty _)       = getl ty
@@ -77,6 +77,9 @@ extractHsTyNames ty
     get (HsDocTy ty _)         = getl ty
     get (HsCoreTy {})          = emptyNameSet	-- This probably isn't quite right
     		  	       	 		-- but I don't think it matters
+    get (HsLitTy _lit)         = emptyNameSet
+    get (HsExplicitListTy tys) = extractHsTyNames_s tys
+    get (HsExplicitTupleTy tys) = extractHsTyNames_s tys
 
 extractHsTyNames_s  :: [LHsType Name] -> NameSet
 extractHsTyNames_s tys = foldr (unionNameSets . extractHsTyNames) emptyNameSet tys

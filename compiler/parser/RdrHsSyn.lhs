@@ -118,7 +118,7 @@ extract_lty :: LHsType RdrName -> [Located RdrName] -> [Located RdrName]
 extract_lty (L loc ty) acc 
   = case ty of
       HsTyVar tv 	        -> extract_tv loc tv acc
-      HsPromotedTy tv           -> extract_tv loc tv acc
+      HsPromotedConTy tv        -> extract_tv loc tv acc
       HsBangTy _ ty            	-> extract_lty ty acc
       HsRecTy flds            	-> foldr (extract_lty . cd_fld_type) acc flds
       HsAppTy ty1 ty2          	-> extract_lty ty1 (extract_lty ty2 acc)
@@ -139,6 +139,9 @@ extract_lty (L loc ty) acc
 				where
 				   locals = hsLTyVarNames tvs
       HsDocTy ty _              -> extract_lty ty acc
+      HsLitTy _lit              -> acc
+      HsExplicitListTy tys      -> extract_ltys tys acc
+      HsExplicitTupleTy tys     -> extract_ltys tys acc
 
 extract_tv :: SrcSpan -> RdrName -> [Located RdrName] -> [Located RdrName]
 extract_tv loc tv acc | isRdrTyVar tv = L loc tv : acc

@@ -356,7 +356,7 @@ kc_hs_type (HsTyVar name) = do
     kind <- kcTyVar name
     return (HsTyVar name, kind)
 
-kc_hs_type (HsPromotedTy _) = undefined  -- UNDEFINED
+kc_hs_type (HsPromotedConTy _) = undefined  -- UNDEFINED
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
@@ -436,6 +436,10 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 -- its the same for a doc node and it's child type node
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
+
+kc_hs_type (HsLitTy _) = undefined  -- UNDEFINED
+kc_hs_type (HsExplicitListTy _) = undefined  -- UNDEFINED
+kc_hs_type (HsExplicitTupleTy _) = undefined  -- UNDEFINED
 
 ---------------------------
 kcApps :: Outputable a
@@ -550,7 +554,7 @@ ds_type :: HsType Name -> TcM Type
 ds_type ty@(HsTyVar _)
   = ds_app ty []
 
-ds_type (HsPromotedTy _) = undefined  -- UNDEFINED
+ds_type (HsPromotedConTy _) = undefined  -- UNDEFINED
 
 ds_type (HsParTy ty)		-- Remove the parentheses markers
   = dsHsType ty
@@ -613,6 +617,10 @@ ds_type (HsSpliceTy _ _ kind)
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
+
+ds_type (HsLitTy _) = undefined  -- UNDEFINED
+ds_type (HsExplicitListTy _) = undefined  -- UNDEFINED
+ds_type (HsExplicitTupleTy _) = undefined  -- UNDEFINED
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
 dsHsTypes arg_tys = mapM dsHsType arg_tys
