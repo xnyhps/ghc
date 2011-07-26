@@ -1094,6 +1094,7 @@ akind	:: { LHsKind RdrName }
 	: '*'			{ L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
 	| '!'			{ L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
         | TH_VAR_QUOTE qtycon   { LL (HsPromotedTy (unLoc $2)) }
+        | tyvar                 { L1 (HsTyVar (unLoc $1)) }
 	| '(' kind ')'		{ LL (unLoc $2) }
 
 
