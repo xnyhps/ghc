@@ -177,8 +177,8 @@ data HsType name
   | HsPromotedConTy name   -- A promoted data or type constructor in types or kinds
                            -- see Note [Promotions (HsPromotedConTy)]
   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
-  | HsExplicitListTy [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsLitTy)]
-  | HsExplicitTupleTy [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsLitTy)]
+  | HsExplicitListTy [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
+  | HsExplicitTupleTy [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
   deriving (Data, Typeable)
 
 {- Note [Promotions]
