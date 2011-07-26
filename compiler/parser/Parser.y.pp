@@ -1091,11 +1091,21 @@ bkind   :: { LHsKind RdrName }
         | bkind akind           { LL (HsAppTy $1 $2) }
 
 akind	:: { LHsKind RdrName }
-	: '*'			{ L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
-	| '!'			{ L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
-        | TH_VAR_QUOTE qtycon   { LL (HsPromotedTy (unLoc $2)) }
-        | tyvar                 { L1 (HsTyVar (unLoc $1)) }
-	| '(' kind ')'		{ LL (unLoc $2) }
+	: '*'			        { L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
+	| '!'			        { L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
+        | tyvar                         { L1 (HsTyVar (unLoc $1)) }
+        | TH_VAR_QUOTE qtycon           { LL (HsPromotedTy (unLoc $2)) }
+        |              qtycon           { L1 (HsPromotedTy (unLoc $1)) }
+	| TH_VAR_QUOTE
+          '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($3:$5) }
+	| '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($2:$4) }
+	| TH_VAR_QUOTE '[' kind ']'     { LL $ HsListTy  $3 }
+	|              '[' kind ']'     { LL $ HsListTy  $2 }
+	| '(' kind ')'		        { LL $ HsParTy   $2 }
+
+comma_kinds1	:: { [LHsKind RdrName] }
+	: kind				{ [$1] }
+	| kind  ',' comma_kinds1	{ $1 : $3 }
 
 
 -----------------------------------------------------------------------------
