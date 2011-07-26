@@ -249,10 +249,10 @@ getInitialKind (L _ decl)
 	; return (tcdName decl, mkArrowKinds arg_kinds res_kind) }
   where
     mk_arg_kind (UserTyVar _ _)      = newMetaKindVar
-    mk_arg_kind (KindedTyVar _ kind) = return kind
+    mk_arg_kind (KindedTyVar _ kind) = return (undefined kind)  -- UNDEFINED
 
-    mk_res_kind (TyFamily { tcdKind    = Just kind }) = return kind
-    mk_res_kind (TyData   { tcdKindSig = Just kind }) = return kind
+    mk_res_kind (TyFamily { tcdKind    = Just kind }) = return (undefined kind)  -- UNDEFINED
+    mk_res_kind (TyData   { tcdKindSig = Just kind }) = return (undefined kind)  -- UNDEFINED
 	-- On GADT-style declarations we allow a kind signature
 	--	data T :: *->* where { ... }
     mk_res_kind _ = return liftedTypeKind
@@ -339,8 +339,8 @@ kcTyClDeclBody decl thing_inside
 			   zipWith add_kind hs_tvs kinds
 	; tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
-    add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
-    add_kind (L loc (KindedTyVar n _)) k = L loc (KindedTyVar n k)
+    add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n (undefined k))  -- UNDEFINED
+    add_kind (L loc (KindedTyVar n _)) k = L loc (KindedTyVar n (undefined k))  -- UNDEFINED
 
 -- Kind check a data declaration, assuming that we already extended the
 -- kind environment with the type variables of the left-hand side (these
@@ -396,7 +396,7 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
   = kcTyClDeclBody decl $ \tvs' ->
     do { mapM_ unifyClassParmKinds tvs'
        ; return (decl {tcdTyVars = tvs', 
-		       tcdKind = kind `mplus` Just liftedTypeKind})
+		       tcdKind = kind `mplus` Just (undefined liftedTypeKind)})  -- UNDEFINED
 		       -- default result kind is '*'
        }
   where
@@ -440,7 +440,7 @@ tcTyClDecl1 parent _calc_isrec
   ; idx_tys <- xoptM Opt_TypeFamilies
   ; checkTc idx_tys $ badFamInstDecl tc_name
 
-  ; tycon <- buildSynTyCon tc_name tvs' SynFamilyTyCon kind parent Nothing
+  ; tycon <- buildSynTyCon tc_name tvs' SynFamilyTyCon (undefined kind) parent Nothing  -- UNDEFINED
   ; return [ATyCon tycon]
   }
 
@@ -450,7 +450,7 @@ tcTyClDecl1 parent _calc_isrec
 	     tcdLName = L _ tc_name, tcdTyVars = tvs, tcdKind = mb_kind})
   = tcTyVarBndrs tvs  $ \ tvs' -> do 
   { traceTc "data family:" (ppr tc_name) 
-  ; extra_tvs <- tcDataKindSig mb_kind
+  ; extra_tvs <- tcDataKindSig (undefined mb_kind)  -- UNDEFINED
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
 
 
@@ -482,7 +482,7 @@ tcTyClDecl1 _parent calc_isrec
 	   tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons})
   = ASSERT( isNoParent _parent )
     tcTyVarBndrs tvs	$ \ tvs' -> do 
-  { extra_tvs <- tcDataKindSig mb_ksig
+  { extra_tvs <- tcDataKindSig (undefined mb_ksig)  -- UNDEFINED
   ; let final_tvs = tvs' ++ extra_tvs
   ; stupid_theta <- tcHsKindedContext ctxt
   ; kind_signatures <- xoptM Opt_KindSignatures

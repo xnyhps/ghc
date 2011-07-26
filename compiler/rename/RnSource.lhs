@@ -748,7 +748,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
-			   tcdTyPats = typats', tcdKindSig = sig,
+			   tcdTyPats = typats', tcdKindSig = undefined$ sig,  -- UNDEFINED
 			   tcdCons = condecls', tcdDerivs = derivs'}, 
 	     	   con_fvs `plusFV` stuff_fvs)
         }
@@ -1001,7 +1001,7 @@ rnFamily (tydecl@TyFamily {tcdFlavour = flavour,
       do { bindIdxVars tyvars $ \tyvars' -> do {
 	 ; tycon' <- lookupLocatedTopBndrRn tycon
 	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon', 
-			      tcdTyVars = tyvars', tcdKind = tcdKind tydecl}, 
+			      tcdTyVars = tyvars', tcdKind = undefined$ tcdKind tydecl},  -- UNDEFINED
 		    emptyFVs) 
          } }
 rnFamily d _ = pprPanic "rnFamily" (ppr d)

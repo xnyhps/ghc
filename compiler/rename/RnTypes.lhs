@@ -109,6 +109,8 @@ rnHsType _ (HsTyVar tyvar) = do
     tyvar' <- lookupOccRn tyvar
     return (HsTyVar tyvar')
 
+rnHsType _ (HsPromotedTy _con) = undefined  -- UNDEFINED: might be like HsTyVar
+
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
 -- Hence the jiggery pokery with ty1
@@ -155,7 +157,7 @@ rnHsType doc (HsKindSig ty k)
   = do { kind_sigs_ok <- xoptM Opt_KindSignatures
        ; unless kind_sigs_ok (addErr (kindSigErr ty))
        ; ty' <- rnLHsType doc ty
-       ; return (HsKindSig ty' k) }
+       ; return (HsKindSig ty' (undefined$ k)) }  -- UNDEFINED
 
 rnHsType doc (HsPArrTy ty) = do
     ty' <- rnLHsType doc ty

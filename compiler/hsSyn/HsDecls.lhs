@@ -60,7 +60,6 @@ import HsPat
 import HsTypes
 import HsDoc
 import NameSet
-import {- Kind parts of -} Type
 import BasicTypes
 import ForeignCall
 
@@ -438,7 +437,7 @@ data TyClDecl name
     TyFamily {  tcdFlavour:: FamilyFlavour,	        -- type or data
 		tcdLName  :: Located name,	        -- type constructor
 		tcdTyVars :: [LHsTyVarBndr name],	-- type variables
-		tcdKind   :: Maybe Kind			-- result kind
+		tcdKind   :: Maybe (LHsKind name)	-- result kind
     }
 
 
@@ -460,7 +459,7 @@ data TyClDecl name
 			--	in this case @tcdTyVars = fv( tcdTyPats )@.
 			-- @Nothing@ for everything else.
 
-		tcdKindSig:: Maybe Kind,
+		tcdKindSig:: Maybe (LHsKind name),
                         -- ^ Optional kind signature.
                         --
 			-- @(Just k)@ for a GADT-style @data@, or @data
@@ -606,7 +605,7 @@ instance OutputableBndr name
 
           pp_kind = case mb_kind of
 		      Nothing   -> empty
-		      Just kind -> dcolon <+> pprKind kind
+		      Just kind -> dcolon <+> ppr kind
 
     ppr (TySynonym {tcdLName = ltycon, tcdTyVars = tyvars, tcdTyPats = typats,
 		    tcdSynRhs = mono_ty})
@@ -628,7 +627,7 @@ instance OutputableBndr name
 		  derivings
       where
 	ppr_sigx Nothing     = empty
-	ppr_sigx (Just kind) = dcolon <+> pprKind kind
+	ppr_sigx (Just kind) = dcolon <+> ppr kind
 
     ppr (ClassDecl {tcdCtxt = context, tcdLName = lclas, tcdTyVars = tyvars, 
 		    tcdFDs  = fds, 

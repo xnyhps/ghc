@@ -65,6 +65,7 @@ extractHsTyNames ty
     get (HsBangTy _ ty)        = getl ty
     get (HsRecTy flds)         = extractHsTyNames_s (map cd_fld_type flds)
     get (HsTyVar tv)           = unitNameSet tv
+    get (HsPromotedTy tv)      = unitNameSet tv
     get (HsSpliceTy _ fvs _)   = fvs
     get (HsQuasiQuoteTy {})    = emptyNameSet
     get (HsKindSig ty _)       = getl ty

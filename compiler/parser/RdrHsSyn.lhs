@@ -50,7 +50,6 @@ module RdrHsSyn (
 
 import HsSyn		-- Lots of it
 import Class            ( FunDep )
-import TypeRep          ( Kind )
 import RdrName		( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc, 
 			  isRdrDataCon, isUnqual, getRdrName, setRdrNameSpace )
 import Name             ( Name )
@@ -113,10 +112,13 @@ extract_pred (HsIParam _   ty ) acc = extract_lty ty acc
 extract_ltys :: [LHsType RdrName] -> [Located RdrName] -> [Located RdrName]
 extract_ltys tys acc = foldr extract_lty acc tys
 
+-- This function returns also kind variables since they are in the
+-- same namespace as type variables.
 extract_lty :: LHsType RdrName -> [Located RdrName] -> [Located RdrName]
 extract_lty (L loc ty) acc 
   = case ty of
       HsTyVar tv 	        -> extract_tv loc tv acc
+      HsPromotedTy tv           -> extract_tv loc tv acc
       HsBangTy _ ty            	-> extract_lty ty acc
       HsRecTy flds            	-> foldr (extract_lty . cd_fld_type) acc flds
       HsAppTy ty1 ty2          	-> extract_lty ty1 (extract_lty ty2 acc)
@@ -192,7 +194,7 @@ mkTyData :: SrcSpan
          -> NewOrData
 	 -> Bool		-- True <=> data family instance
          -> Located (Maybe (LHsContext RdrName), LHsType RdrName)
-         -> Maybe Kind
+         -> Maybe (LHsKind RdrName)
          -> [LConDecl RdrName]
          -> Maybe [LHsType RdrName]
          -> P (LTyClDecl RdrName)
@@ -220,7 +222,7 @@ mkTySynonym loc is_family lhs rhs
 mkTyFamily :: SrcSpan
            -> FamilyFlavour
 	   -> LHsType RdrName   -- LHS
-	   -> Maybe Kind        -- Optional kind signature
+	   -> Maybe (LHsKind RdrName) -- Optional kind signature
            -> P (LTyClDecl RdrName)
 mkTyFamily loc flavour lhs ksig
   = do { (tc, tparams) <- checkTyClHdr lhs

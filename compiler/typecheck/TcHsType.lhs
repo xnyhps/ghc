@@ -356,6 +356,8 @@ kc_hs_type (HsTyVar name) = do
     kind <- kcTyVar name
     return (HsTyVar name, kind)
 
+kc_hs_type (HsPromotedTy _) = undefined  -- UNDEFINED
+
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
     return (HsListTy ty', liftedTypeKind)
@@ -365,8 +367,8 @@ kc_hs_type (HsPArrTy ty) = do
     return (HsPArrTy ty', liftedTypeKind)
 
 kc_hs_type (HsKindSig ty k) = do
-    ty' <- kc_check_lhs_type ty (EK k EkKindSig)
-    return (HsKindSig ty' k, k)
+    ty' <- kc_check_lhs_type ty (EK (undefined$ k) EkKindSig)  -- UNDEFINED
+    return (HsKindSig ty' k, undefined$ k)  -- UNDEFINED
 
 kc_hs_type (HsTupleTy Boxed tys) = do
     tys' <- mapM kcLiftedType tys
@@ -548,6 +550,8 @@ ds_type :: HsType Name -> TcM Type
 ds_type ty@(HsTyVar _)
   = ds_app ty []
 
+ds_type (HsPromotedTy _) = undefined  -- UNDEFINED
+
 ds_type (HsParTy ty)		-- Remove the parentheses markers
   = dsHsType ty
 
@@ -707,7 +711,7 @@ tcTyVarBndrs bndrs thing_inside = do
   where
     zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
 				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name kind) = return (mkTyVar name kind)
+    zonk (KindedTyVar name kind) = return (mkTyVar name (undefined$ kind))  -- UNDEFINED
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]

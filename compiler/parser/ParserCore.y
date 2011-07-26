@@ -346,7 +346,7 @@ eqTc (IfaceTc name) tycon = name == tyConName tycon
 -- Tiresomely, we have to generate both HsTypes (in type/class decls) 
 -- and IfaceTypes (in Core expressions).  So we parse them as IfaceTypes,
 -- and convert to HsTypes here.  But the IfaceTypes we can see here
--- are very limited (see the productions for 'ty', so the translation
+-- are very limited (see the productions for 'ty'), so the translation
 -- isn't hard
 toHsType :: IfaceType -> LHsType RdrName
 toHsType (IfaceTyVar v)        		 = noLoc $ HsTyVar (mkRdrUnqual (mkTyVarOccFS v))
@@ -355,12 +355,8 @@ toHsType (IfaceFunTy t1 t2)    		 = noLoc $ HsFunTy (toHsType t1) (toHsType t2)
 toHsType (IfaceTyConApp (IfaceTc tc) ts) = foldl mkHsAppTy (noLoc $ HsTyVar (ifaceExtRdrName tc)) (map toHsType ts) 
 toHsType (IfaceForAllTy tv t)            = add_forall (toHsTvBndr tv) (toHsType t)
 
--- We also need to convert IfaceKinds to Kinds (now that they are different).
--- Only a limited form of kind will be encountered... hopefully
-toKind :: IfaceKind -> Kind
-toKind (IfaceFunTy ifK1 ifK2)  = mkArrowKind (toKind ifK1) (toKind ifK2)
-toKind (IfaceTyConApp ifKc []) = mkTyConApp (toKindTc ifKc) []
-toKind other                   = pprPanic "toKind" (ppr other)
+toHsKind :: IfaceKind -> LHsKind RdrName
+toHsKind = toHsType  -- TODO: Check this after parsing works.
 
 toKindTc :: IfaceTyCon -> TyCon
 toKindTc IfaceLiftedTypeKindTc   = liftedTypeKindTyCon
@@ -381,7 +377,7 @@ ifaceArrow ifT1 ifT2 = IfaceFunTy ifT1 ifT2
 ifaceEq ifT1 ifT2 = IfacePredTy (IfaceEqPred ifT1 ifT2)
 
 toHsTvBndr :: IfaceTvBndr -> LHsTyVarBndr RdrName
-toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toKind k)
+toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toHsKind k)
 
 ifaceExtRdrName :: Name -> RdrName
 ifaceExtRdrName name = mkOrig (nameModule name) (nameOccName name)

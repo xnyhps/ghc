@@ -9,7 +9,7 @@ HsTypes: Abstract syntax: user-defined types
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module HsTypes (
-	HsType(..), LHsType, 
+	HsKind, LHsKind, HsType(..), LHsType, 
 	HsTyVarBndr(..), LHsTyVarBndr,
 	HsExplicitFlag(..),
 	HsContext, LHsContext,
@@ -133,6 +133,9 @@ data HsPred name = HsClassP name [LHsType name]		 -- class constraint
 		 | HsIParam (IPName name) (LHsType name)
 		 deriving (Data, Typeable)
 
+type LHsKind name = LHsType name
+type HsKind name = HsType name
+
 type LHsType name = Located (HsType name)
 
 data HsType name
@@ -177,7 +180,7 @@ data HsType name
 					-- Enclosed HsPred; the one on the type will do
 
   | HsKindSig		(LHsType name)	-- (ty :: kind)
-			Kind		-- A type with a kind signature
+			(LHsKind name)	-- A type with a kind signature
 
   | HsQuasiQuoteTy	(HsQuasiQuote name)
 
@@ -192,7 +195,7 @@ data HsType name
 
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
-					 
+  | HsPromotedTy name   -- A promoted data or type constructor in types or kinds like 'Cons or 'Either
   deriving (Data, Typeable)
 
 data HsExplicitFlag = Explicit | Implicit deriving (Data, Typeable)
@@ -253,7 +256,7 @@ data HsTyVarBndr name
 
   | KindedTyVar 
          name 
-         Kind 
+         (LHsKind name)
       --  *** NOTA BENE *** A "monotype" in a pragma can have
       -- for-alls in it, (mostly to do with dictionaries).  These
       -- must be explicitly Kinded.
@@ -264,12 +267,12 @@ hsTyVarName (UserTyVar n _)   = n
 hsTyVarName (KindedTyVar n _) = n
 
 hsTyVarKind :: HsTyVarBndr name -> Kind
-hsTyVarKind (UserTyVar _ k)   = k
-hsTyVarKind (KindedTyVar _ k) = k
+hsTyVarKind (UserTyVar _ k)   = undefined$ k  -- UNDEFINED
+hsTyVarKind (KindedTyVar _ k) = undefined$ k  -- UNDEFINED
 
 hsTyVarNameKind :: HsTyVarBndr name -> (name, Kind)
-hsTyVarNameKind (UserTyVar n k)   = (n,k)
-hsTyVarNameKind (KindedTyVar n k) = (n,k)
+hsTyVarNameKind (UserTyVar n k)   = (n,undefined$ k)  -- UNDEFINED
+hsTyVarNameKind (KindedTyVar n k) = (n,undefined$ k)  -- UNDEFINED
 
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
@@ -287,8 +290,8 @@ hsLTyVarLocNames :: [LHsTyVarBndr name] -> [Located name]
 hsLTyVarLocNames = map hsLTyVarLocName
 
 replaceTyVarName :: HsTyVarBndr name1 -> name2 -> HsTyVarBndr name2
-replaceTyVarName (UserTyVar _ k)   n' = UserTyVar n' k
-replaceTyVarName (KindedTyVar _ k) n' = KindedTyVar n' k
+replaceTyVarName (UserTyVar _ k)   n' = UserTyVar n' (undefined$ k)  -- UNDEFINED
+replaceTyVarName (KindedTyVar _ k) n' = KindedTyVar n' (undefined$ k)  -- UNDEFINED
 \end{code}
 
 
@@ -345,9 +348,9 @@ splitHsFunType other 	   	   = ([], other)
 instance (OutputableBndr name) => Outputable (HsType name) where
     ppr ty = pprHsType ty
 
-instance (Outputable name) => Outputable (HsTyVarBndr name) where
+instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (UserTyVar name _)      = ppr name
-    ppr (KindedTyVar name kind) = hsep [ppr name, dcolon, pprParendKind kind]
+    ppr (KindedTyVar name kind) = hsep [ppr name, dcolon, ppr kind]
 
 instance OutputableBndr name => Outputable (HsPred name) where
     ppr (HsClassP clas tys) = ppr clas <+> hsep (map pprLHsType tys)
@@ -448,12 +451,13 @@ ppr_mono_ty _    (HsRecTy flds)      = pprConDeclFields flds
 ppr_mono_ty _    (HsTyVar name)      = ppr name
 ppr_mono_ty prec (HsFunTy ty1 ty2)   = ppr_fun_ty prec ty1 ty2
 ppr_mono_ty _    (HsTupleTy con tys) = tupleParens con (interpp'SP tys)
-ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> pprKind kind)
+ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> ppr kind)
 ppr_mono_ty _    (HsListTy ty)	     = brackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPredTy pred)     = ppr pred
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
+ppr_mono_ty _    (HsPromotedTy name) = quote (ppr name)
 
 ppr_mono_ty ctxt_prec (HsAppTy fun_ty arg_ty)
   = maybeParen ctxt_prec pREC_CON $
