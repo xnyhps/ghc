@@ -22,7 +22,7 @@ module Demand(
 	DemandPs(..), Demands, mapDmds, zipWithDmds, allTop, seqDemands,
 
 	StrictSig(..), mkStrictSig, topSig, botSig, cprSig,
-        isTopSig, pprStrictSig, pprDmdType,
+        isTopSig, isTopTopSig, pprStrictSig, pprDmdType,
 	splitStrictSig, increaseStrictSigArity,
 	appIsBottom, isBottomingSig, seqStrictSig,
      ) where
@@ -248,11 +248,6 @@ topDmdType = DmdType emptyDmdEnv [] TopRes
 botDmdType = DmdType emptyDmdEnv [] BotRes
 cprDmdType dc = DmdType emptyVarEnv [] (retCPR dc)
 
-isTopDmdType :: DmdType -> Bool
--- Only used on top-level types, hence the assert
-isTopDmdType (DmdType env [] TopRes) = ASSERT( isEmptyVarEnv env) True	
-isTopDmdType _                       = False
-
 isBotRes :: DmdResult -> Bool
 isBotRes BotRes = True
 isBotRes _      = False
@@ -339,8 +334,16 @@ increaseStrictSigArity :: Int -> StrictSig -> StrictSig
 increaseStrictSigArity arity_increase (StrictSig (DmdType env dmds res))
   = StrictSig (DmdType env (replicate arity_increase topDmd ++ dmds) res)
 
+isTopTopSig :: StrictSig -> Bool
+-- Only used on top-level signatures, hence the assert
+isTopTopSig (StrictSig (DmdType env [] TopRes)) = ASSERT( isEmptyVarEnv env) True	
+isTopTopSig _                       = False
+
 isTopSig :: StrictSig -> Bool
-isTopSig (StrictSig ty) = isTopDmdType ty
+-- Can be used on any signature, nested or not
+isTopSig (StrictSig (DmdType env [] TopRes)) = isEmptyVarEnv env
+isTopSig _                                   = False
+
 
 topSig, botSig :: StrictSig
 cprSig :: DataCon -> StrictSig
