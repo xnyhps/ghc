@@ -1076,7 +1076,7 @@ tv_bndrs :: { [LHsTyVarBndr RdrName] }
 
 tv_bndr :: { LHsTyVarBndr RdrName }
 	: tyvar				{ L1 (UserTyVar (unLoc $1) placeHolderKind) }
-	| '(' tyvar '::' kind ')'	{ LL (KindedTyVar (unLoc $2) $4) }
+	| '(' tyvar '::' kind ')'	{ LL (KindedTyVar (unLoc $2) $4 placeHolderKind) }
 
 fds :: { Located [Located (FunDep RdrName)] }
 	: {- empty -}			{ noLoc [] }

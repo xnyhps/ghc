@@ -719,7 +719,8 @@ tcTyVarBndrs bndrs thing_inside = do
   where
     zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
 				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name kind) = return (mkTyVar name (undefined$ kind))  -- UNDEFINED
+    zonk (KindedTyVar name _ kind) = do { kind' <- zonkTcKindToKind kind
+				    ; return (mkTyVar name kind') }
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]

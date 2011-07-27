@@ -356,7 +356,7 @@ toHsType (IfaceTyConApp (IfaceTc tc) ts) = foldl mkHsAppTy (noLoc $ HsTyVar (ifa
 toHsType (IfaceForAllTy tv t)            = add_forall (toHsTvBndr tv) (toHsType t)
 
 toHsKind :: IfaceKind -> LHsKind RdrName
-toHsKind = toHsType  -- TODO: Check this after parsing works.
+toHsKind = toHsType  -- UNDEFINED: Check this after parsing works.
 
 toKindTc :: IfaceTyCon -> TyCon
 toKindTc IfaceLiftedTypeKindTc   = liftedTypeKindTyCon
@@ -377,7 +377,7 @@ ifaceArrow ifT1 ifT2 = IfaceFunTy ifT1 ifT2
 ifaceEq ifT1 ifT2 = IfacePredTy (IfaceEqPred ifT1 ifT2)
 
 toHsTvBndr :: IfaceTvBndr -> LHsTyVarBndr RdrName
-toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toHsKind k)
+toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toHsKind k) placeHolderKind
 
 ifaceExtRdrName :: Name -> RdrName
 ifaceExtRdrName name = mkOrig (nameModule name) (nameOccName name)

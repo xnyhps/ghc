@@ -23,14 +23,16 @@ module RnEnv (
 	addLocalFixities,
 	bindLocatedLocalsFV, bindLocatedLocalsRn,
 	bindSigTyVarsFV, bindPatSigTyVars, bindPatSigTyVarsFV,
-	bindTyVarsRn, bindTyVarsFV, extendTyVarEnvFVRn,
+	extendTyVarEnvFVRn, replaceTyVarName,
 
 	checkDupRdrNames, checkDupAndShadowedRdrNames,
         checkDupNames, checkDupAndShadowedNames, 
 	addFvRn, mapFvRn, mapMaybeFvRn, mapFvRnCPS,
 	warnUnusedMatches,
 	warnUnusedTopBinds, warnUnusedLocalBinds,
-	dataTcOccs, unknownNameErr, kindSigErr, perhapsForallMsg
+	dataTcOccs, unknownNameErr, kindSigErr, perhapsForallMsg,
+
+        HsDocContext(..), docOfHsDocContext
     ) where
 
 #include "HsVersions.h"
@@ -887,28 +889,13 @@ bindLocatedLocalsFV rdr_names enclosed_scope
     return (thing, delFVs names fvs)
 
 -------------------------------------
-bindTyVarsFV ::  [LHsTyVarBndr RdrName]
-	      -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
-	      -> RnM (a, FreeVars)
-bindTyVarsFV tyvars thing_inside
-  = bindTyVarsRn tyvars $ \ tyvars' ->
-    do { (res, fvs) <- thing_inside tyvars'
-       ; return (res, delFVs (map hsLTyVarName tyvars') fvs) }
-
-bindTyVarsRn ::  [LHsTyVarBndr RdrName]
-	      -> ([LHsTyVarBndr Name] -> RnM a)
-	      -> RnM a
--- Haskell-98 binding of type variables; e.g. within a data type decl
-bindTyVarsRn tyvar_names enclosed_scope
-  = bindLocatedLocalsRn located_tyvars	$ \ names ->
-    do { kind_sigs_ok <- xoptM Opt_KindSignatures
-       ; unless (null kinded_tyvars || kind_sigs_ok) 
-       	 	(mapM_ (addErr . kindSigErr) kinded_tyvars)
-       ; enclosed_scope (zipWith replace tyvar_names names) }
-  where 
-    replace (L loc n1) n2 = L loc (replaceTyVarName n1 n2)
-    located_tyvars = hsLTyVarLocNames tyvar_names
-    kinded_tyvars  = [n | L _ (KindedTyVar n _) <- tyvar_names]
+replaceTyVarName :: HsTyVarBndr name1 -> name2  -- new type name
+                    -> (LHsKind name1 -> RnM (LHsKind name2))  -- kind renaming
+                    -> RnM (HsTyVarBndr name2)
+replaceTyVarName (UserTyVar _ k) n' _rn = return $ UserTyVar n' k
+replaceTyVarName (KindedTyVar _ k1 k2) n' rn = do
+  k1' <- rn k1
+  return $ KindedTyVar n' k1' k2
 
 bindPatSigTyVars :: [LHsType RdrName] -> ([Name] -> RnM a) -> RnM a
   -- Find the type variables in the pattern type 
@@ -1339,4 +1326,49 @@ opDeclErr :: RdrName -> SDoc
 opDeclErr n 
   = hang (ptext (sLit "Illegal declaration of a type or class operator") <+> quotes (ppr n))
        2 (ptext (sLit "Use -XTypeOperators to declare operators in type and declarations"))
+\end{code}
+
+
+%************************************************************************
+%*									*
+\subsection{Contexts for renaming errors}
+%*									*
+%************************************************************************
+
+\begin{code}
+
+data HsDocContext
+  = TypeSigCtx SDoc
+  | PatCtx
+  | SpecInstSigCtx
+  | DefaultDeclCtx
+  | ForeignDeclCtx (Located RdrName)
+  | DerivDeclCtx
+  | RuleCtx FastString
+  | TyDataCtx (Located RdrName)
+  | TySynCtx (Located RdrName)
+  | TyFamilyCtx (Located RdrName)
+  | ConDeclCtx (Located RdrName)
+  | ClassDeclCtx (Located RdrName)
+  | ExprWithTySigCtx
+  | TypBrCtx
+  | HsTypeCtx
+
+docOfHsDocContext :: HsDocContext -> SDoc
+docOfHsDocContext (TypeSigCtx doc) = text "In the type signature for" <+> doc
+docOfHsDocContext PatCtx = text "In a pattern type-signature"
+docOfHsDocContext SpecInstSigCtx = text "In a SPECIALISE instance pragma"
+docOfHsDocContext DefaultDeclCtx = text "In a `default' declaration"
+docOfHsDocContext (ForeignDeclCtx name) = ptext (sLit "In the foreign declaration for") <+> ppr name
+docOfHsDocContext DerivDeclCtx = text "In a deriving declaration"
+docOfHsDocContext (RuleCtx name) = text "In the transformation rule" <+> ftext name
+docOfHsDocContext (TyDataCtx tycon) = text "In the data type declaration for" <+> quotes (ppr tycon)
+docOfHsDocContext (TySynCtx name) = text "In the declaration for type synonym" <+> quotes (ppr name)
+docOfHsDocContext (TyFamilyCtx name) = text "In the declaration for type family" <+> quotes (ppr name)
+docOfHsDocContext (ConDeclCtx name) = text "In the definition of data constructor" <+> quotes (ppr name)
+docOfHsDocContext (ClassDeclCtx name) = text "In the declaration for class" 	<+> ppr name
+docOfHsDocContext ExprWithTySigCtx = text "In an expression type signature"
+docOfHsDocContext TypBrCtx = ptext (sLit "In a Template-Haskell quoted type")
+docOfHsDocContext HsTypeCtx = text "In a type argument"
+
 \end{code}

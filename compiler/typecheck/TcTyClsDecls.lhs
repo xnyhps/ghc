@@ -249,7 +249,7 @@ getInitialKind (L _ decl)
 	; return (tcdName decl, mkArrowKinds arg_kinds res_kind) }
   where
     mk_arg_kind (UserTyVar _ _)      = newMetaKindVar
-    mk_arg_kind (KindedTyVar _ kind) = return (undefined kind)  -- UNDEFINED
+    mk_arg_kind (KindedTyVar _ kind _) = return (undefined kind)  -- UNDEFINED
 
     mk_res_kind (TyFamily { tcdKind    = Just kind }) = return (undefined kind)  -- UNDEFINED
     mk_res_kind (TyData   { tcdKindSig = Just kind }) = return (undefined kind)  -- UNDEFINED
@@ -339,8 +339,8 @@ kcTyClDeclBody decl thing_inside
 			   zipWith add_kind hs_tvs kinds
 	; tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
-    add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n (undefined k))  -- UNDEFINED
-    add_kind (L loc (KindedTyVar n _)) k = L loc (KindedTyVar n (undefined k))  -- UNDEFINED
+    add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
+    add_kind (L loc (KindedTyVar n hsk _)) k = L loc (KindedTyVar n hsk k)
 
 -- Kind check a data declaration, assuming that we already extended the
 -- kind environment with the type variables of the left-hand side (these

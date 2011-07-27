@@ -6,8 +6,9 @@
 \begin{code}
 module RnTypes ( 
 	-- Type related stuff
-	rnHsType, rnLHsType, rnLHsTypes, rnContext,
+	rnHsType, rnLHsType, rnLHsKind, rnLHsTypes, rnContext,
 	rnHsSigType, rnHsTypeFVs, rnConDeclFields, rnLPred,
+        bindTyVarsRn, bindTyVarsFV,
 
 	-- Precence related stuff
 	mkOpAppRn, mkNegAppRn, mkOpFormRn, mkConOpPatRn,
@@ -15,8 +16,6 @@ module RnTypes (
 
 	-- Splice related stuff
 	rnSplice, checkTH,
-
-        HsTyKiContext(..), hsTyKiContextIsType, hsTyKiContextIsKind, docOfHsTyKiContext
   ) where
 
 import {-# SOURCE #-} RnExpr( rnLExpr )
@@ -43,7 +42,7 @@ import BasicTypes	( compareFixity, funTyFixity, negateFixity,
 			  Fixity(..), FixityDirection(..) )
 import Outputable
 import FastString
-import Control.Monad	( unless )
+import Control.Monad	( unless, zipWithM )
 
 #include "HsVersions.h"
 \end{code}
@@ -58,7 +57,7 @@ to break several loop.
 %*********************************************************
 
 \begin{code}
-rnHsTypeFVs :: HsTyKiContext -> LHsType RdrName -> RnM (LHsType Name, FreeVars)
+rnHsTypeFVs :: HsDocContext -> LHsType RdrName -> RnM (LHsType Name, FreeVars)
 rnHsTypeFVs doc_str ty  = do
     ty' <- rnLHsType doc_str ty
     return (ty', extractHsTyNames ty')
@@ -74,63 +73,24 @@ rnHsType is here because we call it from loadInstDecl, and I didn't
 want a gratuitous knot.
 
 \begin{code}
-rnLHsType  :: HsTyKiContext -> LHsType RdrName -> RnM (LHsType Name)
+rnLHsType  :: HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
 rnLHsType doc = wrapLocM (rnHsType doc)
 
-data HsTyKiContext
-  = TypeSigCtx SDoc
-  | PatCtx
-  | SpecInstSigCtx
-  | DefaultDeclCtx
-  | ForeignDeclCtx (Located RdrName)
-  | DerivDeclCtx
-  | RuleCtx FastString
-  | TyDataCtx (Located RdrName)
-  | TySynCtx (Located RdrName)
-  | ConDeclCtx (Located RdrName)
-  | ClassDeclCtx (Located RdrName)
-  | ExprWithTySigCtx
-  | TypBrCtx
-  | HsTypeCtx
+rnLHsKind  :: HsDocContext -> LHsKind RdrName -> RnM (LHsKind Name)
+rnLHsKind doc = wrapLocM (rnHsKind doc)
 
-hsTyKiContextIsType :: HsTyKiContext -> Bool
-hsTyKiContextIsType (TypeSigCtx _) = True
-hsTyKiContextIsType PatCtx = True
-hsTyKiContextIsType SpecInstSigCtx = True
-hsTyKiContextIsType DefaultDeclCtx = True
-hsTyKiContextIsType (ForeignDeclCtx _) = True
-hsTyKiContextIsType DerivDeclCtx = True
-hsTyKiContextIsType (RuleCtx _) = True
-hsTyKiContextIsType (TyDataCtx _) = True
-hsTyKiContextIsType (TySynCtx _) = True
-hsTyKiContextIsType (ConDeclCtx _) = True
-hsTyKiContextIsType (ClassDeclCtx _) = True
-hsTyKiContextIsType ExprWithTySigCtx = True
-hsTyKiContextIsType TypBrCtx = True
-hsTyKiContextIsType HsTypeCtx = True
+rnHsType :: HsDocContext -> HsType RdrName -> RnM (HsType Name)
+rnHsType = rnHsTypeKind True
 
-hsTyKiContextIsKind :: HsTyKiContext -> Bool
-hsTyKiContextIsKind = not . hsTyKiContextIsType
+rnHsKind :: HsDocContext -> HsKind RdrName -> RnM (HsKind Name)
+rnHsKind = rnHsTypeKind False
 
-docOfHsTyKiContext :: HsTyKiContext -> SDoc
-docOfHsTyKiContext (TypeSigCtx doc) = text "In the type signature for" <+> doc
-docOfHsTyKiContext PatCtx = text "In a pattern type-signature"
-docOfHsTyKiContext SpecInstSigCtx = text "In a SPECIALISE instance pragma"
-docOfHsTyKiContext DefaultDeclCtx = text "In a `default' declaration"
-docOfHsTyKiContext (ForeignDeclCtx name) = ptext (sLit "In the foreign declaration for") <+> ppr name
-docOfHsTyKiContext DerivDeclCtx = text "In a deriving declaration"
-docOfHsTyKiContext (RuleCtx name) = text "In the transformation rule" <+> ftext name
-docOfHsTyKiContext (TyDataCtx tycon) = text "In the data type declaration for" <+> quotes (ppr tycon)
-docOfHsTyKiContext (TySynCtx name) = text "In the declaration for type synonym" <+> quotes (ppr name)
-docOfHsTyKiContext (ConDeclCtx name) = text "In the definition of data constructor" <+> quotes (ppr name)
-docOfHsTyKiContext (ClassDeclCtx name) = text "In the declaration for class" 	<+> ppr name
-docOfHsTyKiContext ExprWithTySigCtx = text "In an expression type signature"
-docOfHsTyKiContext TypBrCtx = ptext (sLit "In a Template-Haskell quoted type")
-docOfHsTyKiContext HsTypeCtx = text "In a type argument"
+rnLHsTypeKind  :: Bool -> HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
+rnLHsTypeKind typeCtx doc = wrapLocM (rnHsTypeKind typeCtx doc)
 
-rnHsType :: HsTyKiContext -> HsType RdrName -> RnM (HsType Name)
+rnHsTypeKind :: Bool -> HsDocContext -> HsType RdrName -> RnM (HsType Name)
 
-rnHsType doc (HsForAllTy Implicit _ ctxt ty) = do
+rnHsTypeKind typeCtx doc (HsForAllTy Implicit _ ctxt ty) = do
 	-- Implicit quantifiction in source code (no kinds on tyvars)
 	-- Given the signature  C => T  we universally quantify 
 	-- over FV(T) \ {in-scope-tyvars} 
@@ -145,31 +105,31 @@ rnHsType doc (HsForAllTy Implicit _ ctxt ty) = do
 	forall_tyvars = filter (not . (`elemLocalRdrEnv` name_env) . unLoc) mentioned
 	tyvar_bndrs   = userHsTyVarBndrs forall_tyvars
 
-    rnForAll doc Implicit tyvar_bndrs ctxt ty
+    ASSERT( typeCtx == True ) rnForAll doc Implicit tyvar_bndrs ctxt ty
 
-rnHsType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
+rnHsTypeKind typeCtx doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
   = do { 	-- Explicit quantification.
          -- Check that the forall'd tyvars are actually 
 	 -- mentioned in the type, and produce a warning if not
          let mentioned   = extractHsRhoRdrTyVars ctxt tau
              in_type_doc = ptext (sLit "In the type") <+> quotes (ppr ty)
-       ; warnUnusedForAlls (in_type_doc $$ docOfHsTyKiContext doc) forall_tyvars mentioned
+       ; warnUnusedForAlls (in_type_doc $$ docOfHsDocContext doc) forall_tyvars mentioned
 
        ; -- rnForAll does the rest
-         rnForAll doc Explicit forall_tyvars ctxt tau }
+         ASSERT( typeCtx == True ) rnForAll doc Explicit forall_tyvars ctxt tau }
 
-rnHsType _ (HsTyVar tyvar) = do
-    tyvar' <- lookupOccRn tyvar  -- TODO: if this fails we have to lookup in terms
+rnHsTypeKind _typeCtx _ (HsTyVar tyvar) = do
+    tyvar' <- lookupOccRn tyvar  -- UNDEFINED: if this fails we have to lookup one level below?
     return (HsTyVar tyvar')
 
-rnHsType _ (HsPromotedConTy con) = do
-    con' <- lookupOccRn con  -- TODO: this lookup has to be done in terms
+rnHsTypeKind _typeCtx _ (HsPromotedConTy con) = do
+    con' <- lookupOccRn con  -- UNDEFINED: this lookup has to be done in terms?
     return (HsPromotedConTy con')
 
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
 -- Hence the jiggery pokery with ty1
-rnHsType doc ty@(HsOpTy ty1 (L loc op) ty2)
+rnHsTypeKind typeCtx doc ty@(HsOpTy ty1 (L loc op) ty2)
   = setSrcSpan loc $ 
     do	{ ops_ok <- xoptM Opt_TypeOperators
 	; op' <- if ops_ok
@@ -178,91 +138,100 @@ rnHsType doc ty@(HsOpTy ty1 (L loc op) ty2)
 			 ; return (mkUnboundName op) }	-- Avoid double complaint
 	; let l_op' = L loc op'
 	; fix <- lookupTyFixityRn l_op'
-	; ty1' <- rnLHsType doc ty1
-	; ty2' <- rnLHsType doc ty2
+	; ty1' <- rnLHsTypeKind typeCtx doc ty1
+	; ty2' <- rnLHsTypeKind typeCtx doc ty2
 	; mkHsOpTyRn (\t1 t2 -> HsOpTy t1 l_op' t2) op' fix ty1' ty2' }
 
-rnHsType doc (HsParTy ty) = do
-    ty' <- rnLHsType doc ty
+rnHsTypeKind typeCtx doc (HsParTy ty) = do
+    ty' <- rnLHsTypeKind typeCtx doc ty
     return (HsParTy ty')
 
-rnHsType doc (HsBangTy b ty)
-  = do { ty' <- rnLHsType doc ty
+rnHsTypeKind typeCtx doc (HsBangTy b ty)
+  = ASSERT( typeCtx == True )
+    do { ty' <- rnLHsType doc ty
        ; return (HsBangTy b ty') }
 
-rnHsType doc (HsRecTy flds)
-  = do { flds' <- rnConDeclFields doc flds
+rnHsTypeKind typeCtx doc (HsRecTy flds)
+  = ASSERT( typeCtx == True )
+    do { flds' <- rnConDeclFields doc flds
        ; return (HsRecTy flds') }
 
-rnHsType doc (HsFunTy ty1 ty2) = do
-    ty1' <- rnLHsType doc ty1
+rnHsTypeKind typeCtx doc (HsFunTy ty1 ty2) = do
+    ty1' <- rnLHsTypeKind typeCtx doc ty1
 	-- Might find a for-all as the arg of a function type
-    ty2' <- rnLHsType doc ty2
+    ty2' <- rnLHsTypeKind typeCtx doc ty2
 	-- Or as the result.  This happens when reading Prelude.hi
 	-- when we find return :: forall m. Monad m -> forall a. a -> m a
 
 	-- Check for fixity rearrangements
     mkHsOpTyRn HsFunTy funTyConName funTyFixity ty1' ty2'
 
-rnHsType doc (HsListTy ty) = do
-    ty' <- rnLHsType doc ty
+rnHsTypeKind typeCtx doc (HsListTy ty) = do
+    ty' <- rnLHsTypeKind typeCtx doc ty
     return (HsListTy ty')
 
-rnHsType doc (HsKindSig ty k)
-  = do { kind_sigs_ok <- xoptM Opt_KindSignatures
+rnHsTypeKind typeCtx doc (HsKindSig ty k)
+  = ASSERT( typeCtx == True )
+    do { kind_sigs_ok <- xoptM Opt_KindSignatures
        ; unless kind_sigs_ok (addErr (kindSigErr ty))
        ; ty' <- rnLHsType doc ty
-       ; return (HsKindSig ty' (undefined$ k)) }  -- UNDEFINED
+       ; k' <- rnLHsKind doc k
+       ; return (HsKindSig ty' k') }
 
-rnHsType doc (HsPArrTy ty) = do
+rnHsTypeKind typeCtx doc (HsPArrTy ty) = ASSERT( typeCtx == True ) do
     ty' <- rnLHsType doc ty
     return (HsPArrTy ty')
 
 -- Unboxed tuples are allowed to have poly-typed arguments.  These
 -- sometimes crop up as a result of CPR worker-wrappering dictionaries.
-rnHsType doc (HsTupleTy tup_con tys) = do
-    tys' <- mapM (rnLHsType doc) tys
+rnHsTypeKind typeCtx doc (HsTupleTy tup_con tys) = do
+    tys' <- mapM (rnLHsTypeKind typeCtx doc) tys
     return (HsTupleTy tup_con tys')
 
-rnHsType doc (HsAppTy ty1 ty2) = do
-    ty1' <- rnLHsType doc ty1
-    ty2' <- rnLHsType doc ty2
+rnHsTypeKind typeCtx doc (HsAppTy ty1 ty2) = do
+    ty1' <- rnLHsTypeKind typeCtx doc ty1
+    ty2' <- rnLHsTypeKind typeCtx doc ty2
     return (HsAppTy ty1' ty2')
 
-rnHsType doc (HsPredTy pred) = do
+rnHsTypeKind typeCtx doc (HsPredTy pred) = ASSERT( typeCtx == True ) do
     pred' <- rnPred doc pred
     return (HsPredTy pred')
 
-rnHsType _ (HsSpliceTy sp _ k)
-  = do { (sp', fvs) <- rnSplice sp	-- ToDo: deal with fvs
+rnHsTypeKind typeCtx _ (HsSpliceTy sp _ k)
+  = ASSERT( typeCtx == True ) do { (sp', fvs) <- rnSplice sp	-- ToDo: deal with fvs
        ; return (HsSpliceTy sp' fvs k) }
 
-rnHsType doc (HsDocTy ty haddock_doc) = do
+rnHsTypeKind typeCtx doc (HsDocTy ty haddock_doc) = ASSERT( typeCtx == True ) do
     ty' <- rnLHsType doc ty
     haddock_doc' <- rnLHsDoc haddock_doc
     return (HsDocTy ty' haddock_doc')
 
 #ifndef GHCI
-rnHsType _ ty@(HsQuasiQuoteTy _) = pprPanic "Can't do quasiquotation without GHCi" (ppr ty)
+rnHsTypeKind _ _ ty@(HsQuasiQuoteTy _) = pprPanic "Can't do quasiquotation without GHCi" (ppr ty)
 #else
-rnHsType doc (HsQuasiQuoteTy qq) = do { ty <- runQuasiQuoteType qq
-                                      ; rnHsType doc (unLoc ty) }
+rnHsTypeKind typeCtx doc (HsQuasiQuoteTy qq) = ASSERT( typeCtx == True )
+                                                do { ty <- runQuasiQuoteType qq
+                                                   ; rnHsType doc (unLoc ty) }
 #endif
-rnHsType _ (HsCoreTy ty) = return (HsCoreTy ty)
+rnHsTypeKind typeCtx _ (HsCoreTy ty) = ASSERT( typeCtx == True ) return (HsCoreTy ty)
 
-rnHsType _ (HsLitTy _lit) = undefined  -- UNDEFINED
-rnHsType _ (HsExplicitListTy _tys) = undefined  -- UNDEFINED
-rnHsType _ (HsExplicitTupleTy _tys) = undefined  -- UNDEFINED
+rnHsTypeKind typeCtx _ (HsLitTy lit) = ASSERT( typeCtx == False ) return (HsLitTy lit)
+rnHsTypeKind typeCtx doc (HsExplicitListTy ks) = ASSERT( typeCtx == False ) do
+    ks' <- mapM (rnLHsKind doc) ks
+    return (HsExplicitListTy ks')
+rnHsTypeKind typeCtx doc (HsExplicitTupleTy ks) = ASSERT( typeCtx == False ) do
+    ks' <- mapM (rnLHsKind doc) ks
+    return (HsExplicitTupleTy ks')
 
 --------------
-rnLHsTypes :: HsTyKiContext -> [LHsType RdrName]
+rnLHsTypes :: HsDocContext -> [LHsType RdrName]
            -> IOEnv (Env TcGblEnv TcLclEnv) [LHsType Name]
 rnLHsTypes doc tys = mapM (rnLHsType doc) tys
 \end{code}
 
 
 \begin{code}
-rnForAll :: HsTyKiContext -> HsExplicitFlag -> [LHsTyVarBndr RdrName]
+rnForAll :: HsDocContext -> HsExplicitFlag -> [LHsTyVarBndr RdrName]
 	 -> LHsContext RdrName -> LHsType RdrName -> RnM (HsType Name)
 
 rnForAll doc _ [] (L _ []) (L _ ty) = rnHsType doc ty
@@ -275,17 +244,44 @@ rnForAll doc _ [] (L _ []) (L _ ty) = rnHsType doc ty
 	-- of kind *.
 
 rnForAll doc exp forall_tyvars ctxt ty
-  = bindTyVarsRn forall_tyvars $ \ new_tyvars -> do
+  = bindTyVarsRn doc forall_tyvars $ \ new_tyvars -> do
     new_ctxt <- rnContext doc ctxt
     new_ty <- rnLHsType doc ty
     return (HsForAllTy exp new_tyvars new_ctxt new_ty)
 	-- Retain the same implicit/explicit flag as before
 	-- so that we can later print it correctly
 
-rnConDeclFields :: HsTyKiContext -> [ConDeclField RdrName] -> RnM [ConDeclField Name]
+bindTyVarsFV :: HsDocContext -> [LHsTyVarBndr RdrName]
+	      -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
+	      -> RnM (a, FreeVars)
+bindTyVarsFV doc tyvars thing_inside
+  = bindTyVarsRn doc tyvars $ \ tyvars' ->
+    do { (res, fvs) <- thing_inside tyvars'
+       ; return (res, delFVs (map hsLTyVarName tyvars') fvs) }
+
+bindTyVarsRn :: HsDocContext -> [LHsTyVarBndr RdrName]
+	      -> ([LHsTyVarBndr Name] -> RnM a)
+	      -> RnM a
+-- Haskell-98 binding of type variables; e.g. within a data type decl
+bindTyVarsRn doc tyvar_names enclosed_scope
+  = bindLocatedLocalsRn located_tyvars	$ \ names ->
+    do { kind_sigs_ok <- xoptM Opt_KindSignatures
+       ; unless (null kinded_tyvars || kind_sigs_ok) 
+       	 	(mapM_ (addErr . kindSigErr) kinded_tyvars)
+       ; new_tyvars <- zipWithM replace tyvar_names names
+       ; enclosed_scope new_tyvars }
+  where
+    replace :: LHsTyVarBndr RdrName -> Name -> RnM (LHsTyVarBndr Name)
+    replace (L loc n1) n2 = do
+      tyvar <- replaceTyVarName n1 n2 (rnLHsKind doc)
+      return $ L loc tyvar
+    located_tyvars = hsLTyVarLocNames tyvar_names
+    kinded_tyvars  = [n | L _ (KindedTyVar n _ _) <- tyvar_names]
+
+rnConDeclFields :: HsDocContext -> [ConDeclField RdrName] -> RnM [ConDeclField Name]
 rnConDeclFields doc fields = mapM (rnField doc) fields
 
-rnField :: HsTyKiContext -> ConDeclField RdrName -> RnM (ConDeclField Name)
+rnField :: HsDocContext -> ConDeclField RdrName -> RnM (ConDeclField Name)
 rnField doc (ConDeclField name ty haddock_doc)
   = do { new_name <- lookupLocatedTopBndrRn name
        ; new_ty <- rnLHsType doc ty
@@ -300,16 +296,16 @@ rnField doc (ConDeclField name ty haddock_doc)
 %*********************************************************
 
 \begin{code}
-rnContext :: HsTyKiContext -> LHsContext RdrName -> RnM (LHsContext Name)
+rnContext :: HsDocContext -> LHsContext RdrName -> RnM (LHsContext Name)
 rnContext doc = wrapLocM (rnContext' doc)
 
-rnContext' :: HsTyKiContext -> HsContext RdrName -> RnM (HsContext Name)
+rnContext' :: HsDocContext -> HsContext RdrName -> RnM (HsContext Name)
 rnContext' doc ctxt = mapM (rnLPred doc) ctxt
 
-rnLPred :: HsTyKiContext -> LHsPred RdrName -> RnM (LHsPred Name)
+rnLPred :: HsDocContext -> LHsPred RdrName -> RnM (LHsPred Name)
 rnLPred doc  = wrapLocM (rnPred doc)
 
-rnPred :: HsTyKiContext -> HsPred RdrName
+rnPred :: HsDocContext -> HsPred RdrName
        -> IOEnv (Env TcGblEnv TcLclEnv) (HsPred Name)
 rnPred doc (HsClassP clas tys)
   = do { clas_name <- lookupOccRn clas

@@ -28,7 +28,7 @@ import {-# SOURCE #-} RnExpr( rnLExpr, rnStmts )
 import HsSyn
 import RnHsSyn
 import TcRnMonad
-import RnTypes        (HsTyKiContext(..), rnHsSigType, rnLHsType, checkPrecMatch)
+import RnTypes        (rnHsSigType, rnLHsType, checkPrecMatch)
 import RnPat          (rnPats, rnBindPat,
                        NameMaker, localRecNameMaker, topRecNameMaker, applyNameMaker
                       )

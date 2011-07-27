@@ -22,7 +22,7 @@ module HsTypes (
 	ConDeclField(..), pprConDeclFields,
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
-	hsTyVarName, hsTyVarNames, replaceTyVarName,
+	hsTyVarName, hsTyVarNames,
 	hsTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
@@ -290,9 +290,10 @@ data HsTyVarBndr name
          name 		-- See Note [Printing KindedTyVars]
          PostTcKind
 
-  | KindedTyVar 
-         name 
+  | KindedTyVar
+         name
          (LHsKind name)
+         PostTcKind
       --  *** NOTA BENE *** A "monotype" in a pragma can have
       -- for-alls in it, (mostly to do with dictionaries).  These
       -- must be explicitly Kinded.
@@ -300,15 +301,15 @@ data HsTyVarBndr name
 
 hsTyVarName :: HsTyVarBndr name -> name
 hsTyVarName (UserTyVar n _)   = n
-hsTyVarName (KindedTyVar n _) = n
+hsTyVarName (KindedTyVar n _ _) = n
 
 hsTyVarKind :: HsTyVarBndr name -> Kind
-hsTyVarKind (UserTyVar _ k)   = undefined$ k  -- UNDEFINED
-hsTyVarKind (KindedTyVar _ k) = undefined$ k  -- UNDEFINED
+hsTyVarKind (UserTyVar _ k)   = k
+hsTyVarKind (KindedTyVar _ _ k) = k
 
 hsTyVarNameKind :: HsTyVarBndr name -> (name, Kind)
-hsTyVarNameKind (UserTyVar n k)   = (n,undefined$ k)  -- UNDEFINED
-hsTyVarNameKind (KindedTyVar n k) = (n,undefined$ k)  -- UNDEFINED
+hsTyVarNameKind (UserTyVar n k)   = (n,k)
+hsTyVarNameKind (KindedTyVar n _ k) = (n,k)
 
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
@@ -324,10 +325,6 @@ hsLTyVarLocName = fmap hsTyVarName
 
 hsLTyVarLocNames :: [LHsTyVarBndr name] -> [Located name]
 hsLTyVarLocNames = map hsLTyVarLocName
-
-replaceTyVarName :: HsTyVarBndr name1 -> name2 -> HsTyVarBndr name2
-replaceTyVarName (UserTyVar _ k)   n' = UserTyVar n' (undefined$ k)  -- UNDEFINED
-replaceTyVarName (KindedTyVar _ k) n' = KindedTyVar n' (undefined$ k)  -- UNDEFINED
 \end{code}
 
 
@@ -386,7 +383,7 @@ instance (OutputableBndr name) => Outputable (HsType name) where
 
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (UserTyVar name _)      = ppr name
-    ppr (KindedTyVar name kind) = parens $ hsep [ppr name, dcolon, ppr kind]
+    ppr (KindedTyVar name kind _) = parens $ hsep [ppr name, dcolon, ppr kind]
 
 instance OutputableBndr name => Outputable (HsPred name) where
     ppr (HsClassP clas tys) = ppr clas <+> hsep (map pprLHsType tys)

@@ -27,7 +27,7 @@ import HsSyn
 import TcRnMonad
 import TcEnv		( thRnBrack )
 import RnEnv
-import RnTypes		( HsTyKiContext(..), rnHsTypeFVs, rnSplice, checkTH,
+import RnTypes		( rnHsTypeFVs, rnSplice, checkTH,
 			  mkOpFormRn, mkOpAppRn, mkNegAppRn, checkSectionPrec)
 import RnPat
 import DynFlags

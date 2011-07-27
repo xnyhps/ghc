@@ -524,7 +524,7 @@ checkTyVars tparms = mapM chk tparms
   where
 	-- Check that the name space is correct!
     chk (L l (HsKindSig (L _ (HsTyVar tv)) k))
-	| isRdrTyVar tv    = return (L l (KindedTyVar tv k))
+	| isRdrTyVar tv    = return (L l (KindedTyVar tv k placeHolderKind))
     chk (L l (HsTyVar tv))
         | isRdrTyVar tv    = return (L l (UserTyVar tv placeHolderKind))
     chk t@(L l _)            =
