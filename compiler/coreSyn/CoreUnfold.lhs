@@ -379,21 +379,27 @@ sizeExpr bOMB_OUT_SIZE top_args expr
               (size_up body `addSizeN` (10 * length pairs))     -- (length pairs) for the allocation
               pairs
 
-    size_up (Case (Var v) _ _ alts) 
-	| v `elem` top_args		-- We are scrutinising an argument variable
-	= alts_size (foldr1 addAltSize alt_sizes)
-		    (foldr1 maxSize alt_sizes)
+    size_up (Case e _ _ alts) 
+	| Var v <- e
+        , v `elem` top_args	-- We are scrutinising an argument variable
+	= alts_size v (foldr addAltSize case_size alt_sizes)
+		      (foldr1 maxSize alt_sizes)
 		-- Good to inline if an arg is scrutinised, because
 		-- that may eliminate allocation in the caller
 		-- And it eliminates the case itself
-	where
+        | otherwise
+        = size_up e  `addSizeNSD`
+          foldr (addAltSize . size_up_alt) case_size alts
+      where
 	  alt_sizes = map size_up_alt alts
 
 		-- alts_size tries to compute a good discount for
 		-- the case when we are scrutinising an argument variable
-	  alts_size (SizeIs tot tot_disc tot_scrut)  -- Size of all alternatives
-		    (SizeIs max _        _)          -- Size of biggest alternative
-                = SizeIs tot (unitBag (v, iBox (_ILIT(20) +# tot -# max)) `unionBags` tot_disc) tot_scrut
+	  alts_size v (SizeIs tot tot_disc tot_scrut)  -- Size of all alternatives
+		      (SizeIs max _        _)          -- Size of biggest alternative
+                = SizeIs tot 
+                         (unitBag (v, iBox (_ILIT(20) +# tot -# max)) `unionBags` tot_disc) 
+                         tot_scrut
 			-- If the variable is known, we produce a discount that
 			-- will take us back to 'max', the size of the largest alternative
 			-- The 1+ is a little discount for reduced allocation in the caller
@@ -401,34 +407,33 @@ sizeExpr bOMB_OUT_SIZE top_args expr
 			-- Notice though, that we return tot_disc, the total discount from 
 			-- all branches.  I think that's right.
 
-	  alts_size tot_size _ = tot_size
+	  alts_size _ tot_size _ = tot_size
 
-    size_up (Case e _ _ alts) = size_up e  `addSizeNSD`
-                                foldr (addAltSize . size_up_alt) case_size alts
-      where
-          case_size
-           | is_inline_scrut e, not (lengthExceeds alts 1)  = sizeN (-10)
-           | otherwise = sizeZero
-                -- Normally we don't charge for the case itself, but
-                -- we charge one per alternative (see size_up_alt,
-                -- below) to account for the cost of the info table
-                -- and comparisons.
-                --
-                -- However, in certain cases (see is_inline_scrut
-                -- below), no code is generated for the case unless
-                -- there are multiple alts.  In these cases we
-                -- subtract one, making the first alt free.
-                -- e.g. case x# +# y# of _ -> ...   should cost 1
+          case_size = sizeN (info_table_size + conditional_tree_size)
+          info_table_size | is_inline_scrut e = 0	-- No info table
+                          | otherwise         = 20
+                -- e.g. for the is_inline_scrut
+                -- case x# +# y# of _ -> ...   should cost 1
                 --      case touch# x# of _ -> ...  should cost 0
                 -- (see #4978)
-                --
+
+          conditional_tree_size = length alts * 5
+	    -- The conditional is not a huge deal, but
+            -- we *do* charge something for eac alternative, else we 
+	    -- find that giant case nests are treated as practically free
+	    -- A good example is Foreign.C.Error.errrnoToIOError
+
+	        --   OLD COMMENT: I think it relates to making making 
+		--                is_inline_scrut apply only when there is
+                --                a single alternative
                 -- I would like to not have the "not (lengthExceeds alts 1)"
                 -- condition above, but without that some programs got worse
                 -- (spectral/hartel/event and spectral/para).  I don't fully
                 -- understand why. (SDM 24/5/11)
 
-                -- unboxed variables, inline primops and unsafe foreign calls
-                -- are all "inline" things:
+            -- is_inline_scrut: no info table
+            -- unboxed variables, inline primops and unsafe foreign calls
+            -- are all "inline" things:
           is_inline_scrut (Var v) = isUnLiftedType (idType v)
           is_inline_scrut scrut
               | (Var f, _) <- collectArgs scrut
@@ -459,13 +464,10 @@ sizeExpr bOMB_OUT_SIZE top_args expr
 	   _     	    -> funSize top_args fun (length val_args)
 
     ------------ 
-    size_up_alt (_con, _bndrs, rhs) = size_up rhs `addSizeN` 10
+    size_up_alt (_con, _bndrs, rhs) = size_up rhs
  	-- Don't charge for args, so that wrappers look cheap
 	-- (See comments about wrappers with Case)
-	--
-	-- IMPORATANT: *do* charge 1 for the alternative, else we 
-	-- find that giant case nests are treated as practically free
-	-- A good example is Foreign.C.Error.errrnoToIOError
+	-- The cost for the conditonal tree etc is handled in case_size
 
     ------------
 	-- These addSize things have to be here because
@@ -547,14 +549,19 @@ funSize top_args fun n_val_args
 
 conSize :: DataCon -> Int -> ExprSize
 conSize dc n_val_args
-  | n_val_args == 0 = SizeIs (_ILIT(0)) emptyBag (_ILIT(10))    -- Like variables
+  | n_val_args == 0 
+  = SizeIs (_ILIT(0)) emptyBag (_ILIT(10))    -- Like variables
 
 -- See Note [Unboxed tuple result discount]
-  | isUnboxedTupleCon dc = SizeIs (_ILIT(0)) emptyBag (iUnbox (10 * (1 + n_val_args)))
+  | isUnboxedTupleCon dc 
+  = SizeIs (iUnbox (10 * n_val_args)) emptyBag
+           (iUnbox (10 * n_val_args))
 
 -- See Note [Constructor size]
-  | otherwise = SizeIs (_ILIT(10)) emptyBag (iUnbox (10 * (10 + n_val_args)))
-     -- discont was (10 * (1 + n_val_args)), but it turns out that
+  | otherwise 
+  = SizeIs (_ILIT(10)) emptyBag 
+           (iUnbox (10 * (10 + n_val_args)))
+     -- discount was (10 * (1 + n_val_args)), but it turns out that
      -- adding a bigger constant here is an unambiguous win.  We
      -- REALLY like unfolding constructors that get scrutinised.
      -- [SDM, 25/5/11]
@@ -574,11 +581,11 @@ and f wasn't getting inlined.
 
 Note [Unboxed tuple result discount]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-I tried giving unboxed tuples a *result discount* of zero (see the
-commented-out line).  Why?  When returned as a result they do not
-allocate, so maybe we don't want to charge so much for them If you
-have a non-zero discount here, we find that workers often get inlined
-back into wrappers, because it look like
+I tried giving unboxed tuples a *result discount* of zero.  Why?  When
+returned as a result they do not allocate, so maybe we don't want to
+charge so much for them. If you have a non-zero discount here, we find
+that workers often get inlined back into wrappers, because it look
+like
     f x = case $wf x of (# a,b #) -> (a,b)
 and we are keener because of the case.  However while this change
 shrank binary sizes by 0.5% it also made spectral/boyer allocate 5%
@@ -593,7 +600,6 @@ primOpSize op n_val_args
       else sizeN op_size
  where
    op_size = primOpCodeSize op
-
 
 buildSize :: ExprSize
 buildSize = SizeIs (_ILIT(0)) emptyBag (_ILIT(40))
@@ -1079,8 +1085,8 @@ which Roman did.
 \begin{code}
 computeDiscount :: Int -> [Int] -> Int -> [ArgSummary] -> CallCtxt -> Int
 computeDiscount n_vals_wanted arg_discounts res_discount arg_infos cont_info
- 	-- We multiple the raw discounts (args_discount and result_discount)
-	-- ty opt_UnfoldingKeenessFactor because the former have to do with
+ 	-- We multiply the raw discounts (args_discount and result_discount)
+	-- by opt_UnfoldingKeenessFactor because the former have to do with
 	--  *size* whereas the discounts imply that there's some extra 
 	--  *efficiency* to be gained (e.g. beta reductions, case reductions) 
 	-- by inlining.
