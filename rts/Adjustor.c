@@ -152,7 +152,8 @@ createAdjustor (int cconv,
 #else 
 #define UNDERSCORE ""
 #endif
-#if defined(i386_HOST_ARCH) && !defined(darwin_HOST_OS)
+
+#if defined(x86_64_HOST_ARCH)
 /* 
   Now here's something obscure for you:
 
@@ -170,20 +171,6 @@ createAdjustor (int cconv,
   returning in some static piece of memory and arrange
   to return to it before tail jumping from the adjustor thunk.
 */
-static void  GNUC3_ATTRIBUTE(used) obscure_ccall_wrapper(void)
-{
-  __asm__ (
-     ".globl " UNDERSCORE "obscure_ccall_ret_code\n"
-     UNDERSCORE "obscure_ccall_ret_code:\n\t"
-     "addl $0x4, %esp\n\t"
-     "ret"
-   );
-}
-extern void obscure_ccall_ret_code(void);
-
-#endif
-
-#if defined(x86_64_HOST_ARCH)
 static void GNUC3_ATTRIBUTE(used) obscure_ccall_wrapper(void)
 {
   __asm__ (
@@ -1067,25 +1054,17 @@ TODO: Depending on how much allocation overhead stgMallocBytes uses for
 void
 freeHaskellFunctionPtr(void* ptr)
 {
-#if defined(i386_HOST_ARCH) && !defined(darwin_HOST_OS)
- if ( *(unsigned char*)ptr != 0x68 &&
+#if defined(i386_HOST_ARCH)
+ if ( *(unsigned char*)ptr != 0xe8 &&
       *(unsigned char*)ptr != 0x58 ) {
    errorBelch("freeHaskellFunctionPtr: not for me, guv! %p\n", ptr);
    return;
  }
-
- /* Free the stable pointer first..*/
- if (*(unsigned char*)ptr == 0x68) { /* Aha, a ccall adjustor! */
-    freeStablePtr(*((StgStablePtr*)((unsigned char*)ptr + 0x01)));
+ if (*(unsigned char*)ptr == 0xe8) { /* Aha, a ccall adjustor! */
+     freeStablePtr(((AdjustorStub*)ptr)->hptr);
  } else {
     freeStablePtr(*((StgStablePtr*)((unsigned char*)ptr + 0x02)));
  }
-#elif defined(i386_HOST_ARCH) && defined(darwin_HOST_OS)
-if ( *(unsigned char*)ptr != 0xe8 ) {
-   errorBelch("freeHaskellFunctionPtr: not for me, guv! %p\n", ptr);
-   return;
- }
- freeStablePtr(((AdjustorStub*)ptr)->hptr);
 #elif defined(x86_64_HOST_ARCH)
  if ( *(StgWord16 *)ptr == 0x894d ) {
      freeStablePtr(*(StgStablePtr*)((StgWord8*)ptr+0x20));
