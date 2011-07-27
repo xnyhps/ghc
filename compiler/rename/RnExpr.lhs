@@ -27,7 +27,7 @@ import HsSyn
 import TcRnMonad
 import TcEnv		( thRnBrack )
 import RnEnv
-import RnTypes		( rnHsTypeFVs, rnSplice, checkTH,
+import RnTypes		( HsTyKiContext(..), rnHsTypeFVs, rnSplice, checkTH,
 			  mkOpFormRn, mkOpAppRn, mkNegAppRn, checkSectionPrec)
 import RnPat
 import DynFlags
@@ -258,12 +258,10 @@ rnExpr (RecordUpd expr rbinds _ _ _)
 		  fvExpr `plusFV` fvRbinds) }
 
 rnExpr (ExprWithTySig expr pty)
-  = do	{ (pty', fvTy) <- rnHsTypeFVs doc pty
+  = do	{ (pty', fvTy) <- rnHsTypeFVs ExprWithTySigCtx pty
 	; (expr', fvExpr) <- bindSigTyVarsFV (hsExplicitTvs pty') $
 		  	     rnLExpr expr
 	; return (ExprWithTySig expr' pty', fvExpr `plusFV` fvTy) }
-  where 
-    doc = text "In an expression type signature"
 
 rnExpr (HsIf _ p b1 b2)
   = do { (p', fvP) <- rnLExpr p
@@ -273,10 +271,8 @@ rnExpr (HsIf _ p b1 b2)
        ; return (HsIf mb_ite p' b1' b2', plusFVs [fvITE, fvP, fvB1, fvB2]) }
 
 rnExpr (HsType a)
-  = rnHsTypeFVs doc a	`thenM` \ (t, fvT) -> 
+  = rnHsTypeFVs HsTypeCtx a	`thenM` \ (t, fvT) -> 
     return (HsType t, fvT)
-  where 
-    doc = text "In a type argument"
 
 rnExpr (ArithSeq _ seq)
   = rnArithSeq seq	 `thenM` \ (new_seq, fvs) ->
@@ -599,10 +595,8 @@ rnBracket (ExpBr e) = do { (e', fvs) <- rnLExpr e
 
 rnBracket (PatBr p) = rnPat ThPatQuote p $ \ p' -> return (PatBr p', emptyFVs)
 
-rnBracket (TypBr t) = do { (t', fvs) <- rnHsTypeFVs doc t
+rnBracket (TypBr t) = do { (t', fvs) <- rnHsTypeFVs TypBrCtx t
 			 ; return (TypBr t', fvs) }
-		    where
-		      doc = ptext (sLit "In a Template-Haskell quoted type")
 
 rnBracket (DecBrL decls) 
   = do { (group, mb_splice) <- findSplice decls

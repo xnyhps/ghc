@@ -28,7 +28,7 @@ import {-# SOURCE #-} RnExpr( rnLExpr, rnStmts )
 import HsSyn
 import RnHsSyn
 import TcRnMonad
-import RnTypes        ( rnHsSigType, rnLHsType, checkPrecMatch)
+import RnTypes        (HsTyKiContext(..), rnHsSigType, rnLHsType, checkPrecMatch)
 import RnPat          (rnPats, rnBindPat,
                        NameMaker, localRecNameMaker, topRecNameMaker, applyNameMaker
                       )
@@ -713,7 +713,7 @@ renameSig mb_names sig@(GenericSig vs ty)
 	; return (GenericSig new_v new_ty) }
 
 renameSig _ (SpecInstSig ty)
-  = do	{ new_ty <- rnLHsType (text "In a SPECIALISE instance pragma") ty
+  = do	{ new_ty <- rnLHsType SpecInstSigCtx ty
 	; return (SpecInstSig new_ty) }
 
 -- {-# SPECIALISE #-} pragmas can refer to imported Ids
