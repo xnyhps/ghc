@@ -308,6 +308,7 @@ incorrect.
  ';'		{ L _ ITsemi }
  ','		{ L _ ITcomma }
  '`'		{ L _ ITbackquote }
+ SIMPLEQUOTE 	{ L _ ITsimpleQuote      }     -- 'x
 
  VARID   	{ L _ (ITvarid    _) }		-- identifiers
  CONID   	{ L _ (ITconid    _) }
@@ -347,7 +348,6 @@ incorrect.
 '|]'            { L _ ITcloseQuote    }
 TH_ID_SPLICE    { L _ (ITidEscape _)  }     -- $x
 '$('	        { L _ ITparenEscape   }     -- $( exp )
-TH_VAR_QUOTE	{ L _ ITvarQuote      }     -- 'x
 TH_TY_QUOTE	{ L _ ITtyQuote       }      -- ''T
 TH_QUASIQUOTE	{ L _ (ITquasiQuote _) }
 
@@ -1033,13 +1033,14 @@ atype :: { LHsType RdrName }
 	| '$(' exp ')'	      		{ LL $ mkHsSpliceTy $2 }
 	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
-	| TH_VAR_QUOTE qconid                         { LL $ HsPromotedConTy (unLoc $2) }
-	| opt_quote typelit                           { LL (HsLitTy $! (unLoc $2)) }
-	| TH_VAR_QUOTE '(' ')'                        { LL $ HsPromotedConTy $ getRdrName unitDataCon }
-	| TH_VAR_QUOTE '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy ($3 : $5) }
-	| TH_VAR_QUOTE '[' comma_types0 ']'           { LL $ HsExplicitListTy $3 }
-	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy ($2 : $4) }
 	| '(' ctype ')'		        { LL $ HsParTy   $2 }
+                                                      -- see Note [Promotion] for the followings
+	| SIMPLEQUOTE  qconid                         { LL $ HsPromotedConTy (unLoc $2) }
+	| opt_quote typelit                           { LL (HsLitTy $! (unLoc $2)) }
+	| SIMPLEQUOTE  '(' ')'                        { LL $ HsPromotedConTy $ getRdrName unitDataCon }
+	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy ($3 : $5) }
+	| SIMPLEQUOTE  '[' comma_types0 ']'           { LL $ HsExplicitListTy $3 }
+	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy ($2 : $4) }
 
 typelit :: { Located HsLit }  -- type literal
 	: CHAR 		{ L1 $ HsChar   $ getCHAR $1 }
@@ -1048,7 +1049,7 @@ typelit :: { Located HsLit }  -- type literal
 
 opt_quote :: { Located () }
           : {- empty -}  { noLoc () }
-          | TH_VAR_QUOTE { L1 () }
+          | SIMPLEQUOTE  { L1 () }
 
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
@@ -1108,18 +1109,42 @@ akind	:: { LHsKind RdrName }
 	: '*'			        { L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
 	| '!'			        { L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
         | tyvar                         { L1 (HsTyVar (unLoc $1)) }
+	| '(' kind ')'		        { LL $ HsParTy   $2 }
+                                        -- see Note [Promotion]
         | opt_quote qtycon              { LL (HsPromotedConTy (unLoc $2)) }
         | '(' ')'                       { LL $ HsPromotedConTy $ getRdrName unitTyCon }
-        | TH_VAR_QUOTE '(' ')'          { LL $ HsPromotedConTy $ getRdrName unitTyCon }
+        | SIMPLEQUOTE  '(' ')'          { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 	| '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($2:$4) }
-	| TH_VAR_QUOTE '(' kind ',' comma_kinds1 ')'
+	| SIMPLEQUOTE  '(' kind ',' comma_kinds1 ')'
                                         { LL $ HsTupleTy Boxed  ($3:$5) }
 	| opt_quote '[' kind ']'        { LL $ HsListTy  $3 }
-	| '(' kind ')'		        { LL $ HsParTy   $2 }
 
 comma_kinds1	:: { [LHsKind RdrName] }
 	: kind				{ [$1] }
 	| kind  ',' comma_kinds1	{ $1 : $3 }
+
+{- Note [Promotion]
+   ~~~~~~~~~~~~~~~~
+
+- Syntax of promoted qualified names
+We write 'N.Nat instead of N.'Nat when dealing with qualified names.
+We see this in rules akind (opt_quote qtycon) and atype (SIMPLEQUOTE
+qconid).
+
+- Syntax of kind polymorphism
+Kind abstraction is implicit. We write
+> data SList (s :: k -> *) (as :: '[k]) where ...
+because it looks like what we do in terms
+> id (x :: a) = x
+
+- Name resolution
+When the user write Zero instead of 'Zero in types, we parse it a
+HsTyVar "Zero" instead of HsPromotedConTy "Zero". We deal with this in
+the renamer. If a HsTyVar "Zero" is not bounded in the type level,
+then we look for it in the term level. And both become a TyConApp
+(PromotedDataTyCon "Zero") [] later on.
+
+-}
 
 
 -----------------------------------------------------------------------------
@@ -1419,8 +1444,8 @@ aexp2	:: { LHsExpr RdrName }
 	| '$(' exp ')'   	{ LL $ HsSpliceE (mkHsSplice $2) }               
 
 
-	| TH_VAR_QUOTE qvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
-	| TH_VAR_QUOTE qcon 	{ LL $ HsBracket (VarBr (unLoc $2)) }
+	| SIMPLEQUOTE  qvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
+	| SIMPLEQUOTE  qcon 	{ LL $ HsBracket (VarBr (unLoc $2)) }
 	| TH_TY_QUOTE tyvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
  	| TH_TY_QUOTE gtycon	{ LL $ HsBracket (VarBr (unLoc $2)) }
 	| '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }                       
