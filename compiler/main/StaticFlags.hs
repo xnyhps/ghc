@@ -201,38 +201,38 @@ opt_SuppressAll
 -- | Suppress all coercions, them replacing with '...'
 opt_SuppressCoercions :: Bool
 opt_SuppressCoercions
-	=  lookUp  (fsLit "-dsuppress-all") 
+	=  opt_SuppressAll
 	|| lookUp  (fsLit "-dsuppress-coercions")
 
 -- | Suppress module id prefixes on variables.
 opt_SuppressModulePrefixes :: Bool
 opt_SuppressModulePrefixes
-	=  lookUp  (fsLit "-dsuppress-all")
+	=  opt_SuppressAll
 	|| lookUp  (fsLit "-dsuppress-module-prefixes")
 
 -- | Suppress type applications.
 opt_SuppressTypeApplications :: Bool
 opt_SuppressTypeApplications
-	=  lookUp  (fsLit "-dsuppress-all")
+	=  opt_SuppressAll
 	|| lookUp  (fsLit "-dsuppress-type-applications")
 
 -- | Suppress info such as arity and unfoldings on identifiers.
 opt_SuppressIdInfo :: Bool
 opt_SuppressIdInfo 
-	=  lookUp  (fsLit "-dsuppress-all")
+	=  opt_SuppressAll
 	|| lookUp  (fsLit "-dsuppress-idinfo")
 
 -- | Suppress seprate type signatures in core, but leave types on lambda bound vars
 opt_SuppressTypeSignatures :: Bool
 opt_SuppressTypeSignatures
-	=  lookUp  (fsLit "-dsuppress-all")
+	=  opt_SuppressAll
 	|| lookUp  (fsLit "-dsuppress-type-signatures")
 
 -- | Suppress unique ids on variables.
 --   Except for uniques, as some simplifier phases introduce new variables that
---   have otherwise identical names.
+--   have otherwise identical names.  Unaffected by -dsuppress-all.
 opt_SuppressUniques :: Bool
-opt_SuppressUniques
+opt_SuppressUniques 
 	=  lookUp  (fsLit "-dsuppress-uniques")
 
 -- | Display case expressions with a single alternative as strict let bindings
@@ -333,14 +333,14 @@ opt_UF_DearOp, opt_UF_FunAppDiscount, opt_UF_DictDiscount :: Int
 opt_UF_KeenessFactor :: Float
 
 opt_UF_CreationThreshold = lookup_def_int "-funfolding-creation-threshold" (450::Int)
-opt_UF_UseThreshold      = lookup_def_int "-funfolding-use-threshold"      (60::Int)
-opt_UF_FunAppDiscount    = lookup_def_int "-funfolding-fun-discount"       (60::Int)
+opt_UF_UseThreshold      = lookup_def_int "-funfolding-use-threshold"      (90::Int)
+opt_UF_FunAppDiscount    = lookup_def_int "-funfolding-fun-discount"       (100::Int)
 
 opt_UF_DictDiscount      = lookup_def_int "-funfolding-dict-discount"      (30::Int)
    -- Be fairly keen to inline a fuction if that means
    -- we'll be able to pick the right method from a dictionary
 
-opt_UF_KeenessFactor	 = lookup_def_float "-funfolding-keeness-factor"   (1.5::Float)
+opt_UF_KeenessFactor	 = lookup_def_float "-funfolding-keeness-factor"   (1.25::Float)
 opt_UF_DearOp            = ( 40 :: Int)
 
 

@@ -418,17 +418,19 @@ pprExternal sty uniq mod occ is_wired is_builtin
 	-- ToDo: maybe we could print all wired-in things unqualified
 	-- 	 in code style, to reduce symbol table bloat?
   | debugStyle sty = ppr mod <> dot <> ppr_occ_name occ
-		     <> braces (hsep [if is_wired then ptext (sLit "(w)") else empty,
+		     <> (ppUnless opt_SuppressAll $
+                         braces (hsep [if is_wired then ptext (sLit "(w)") else empty,
 				      pprNameSpaceBrief (occNameSpace occ), 
-		 		      pprUnique uniq])
+		 		      pprUnique uniq]))
   | BuiltInSyntax <- is_builtin = ppr_occ_name occ  -- Never qualify builtin syntax
   | otherwise		        = pprModulePrefix sty mod occ <> ppr_occ_name occ
 
 pprInternal :: PprStyle -> Unique -> OccName -> SDoc
 pprInternal sty uniq occ
   | codeStyle sty  = pprUnique uniq
-  | debugStyle sty = ppr_occ_name occ <> braces (hsep [pprNameSpaceBrief (occNameSpace occ), 
-				 		       pprUnique uniq])
+  | debugStyle sty = ppr_occ_name occ
+                     <> ppr_underscore_unique uniq
+		     <> ppr_name_space occ
   | dumpStyle sty  = ppr_occ_name occ <> ppr_underscore_unique uniq
 			-- For debug dumps, we're not necessarily dumping
 			-- tidied code, so we need to print the uniques.
@@ -438,8 +440,9 @@ pprInternal sty uniq occ
 pprSystem :: PprStyle -> Unique -> OccName -> SDoc
 pprSystem sty uniq occ
   | codeStyle sty  = pprUnique uniq
-  | debugStyle sty = ppr_occ_name occ <> ppr_underscore_unique uniq
-		     <> braces (pprNameSpaceBrief (occNameSpace occ))
+  | debugStyle sty = ppr_occ_name occ 
+                     <> ppr_underscore_unique uniq
+		     <> ppr_name_space occ
   | otherwise	   = ppr_occ_name occ <> ppr_underscore_unique uniq
 				-- If the tidy phase hasn't run, the OccName
 				-- is unlikely to be informative (like 's'),
@@ -459,6 +462,11 @@ pprModulePrefix sty mod occ
       NameNotInScope2  -> ppr (modulePackageId mod) <> colon     -- Module not in
                           <> ppr (moduleName mod) <> dot         -- scope eithber
       _otherwise       -> empty
+
+ppr_name_space :: OccName -> SDoc
+ppr_name_space occ
+  | opt_SuppressAll = empty
+  | otherwise       = braces (pprNameSpaceBrief (occNameSpace occ))
 
 ppr_underscore_unique :: Unique -> SDoc
 -- Print an underscore separating the name from its unique

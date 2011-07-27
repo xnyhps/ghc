@@ -171,7 +171,8 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
   | otherwise
   = add_par $
     sep [sep [ptext (sLit "case") <+> pprCoreExpr expr,
-	      ifPprDebug (braces (ppr ty)),
+	      ppUnless opt_SuppressTypeSignatures $ 
+                ifPprDebug (braces (ppr ty)),
 	      sep [ptext (sLit "of") <+> ppr_bndr var, 
 		   char '{' <+> ppr_case_pat con args <+> arrow]
 	  ],
@@ -183,9 +184,9 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
 
 ppr_expr add_par (Case expr var ty alts)
   = add_par $
-    sep [sep [ptext (sLit "case")
-		<+> pprCoreExpr expr
-		<+> ifPprDebug (braces (ppr ty)),
+    sep [sep [ptext (sLit "case") <+> pprCoreExpr expr,
+	      ppUnless opt_SuppressTypeSignatures $ 
+                ifPprDebug (braces (ppr ty)),
 	      ptext (sLit "of") <+> ppr_bndr var <+> char '{'],
 	 nest 2 (vcat (punctuate semi (map pprCoreAlt alts))),
 	 char '}'
@@ -240,13 +241,13 @@ pprCoreAlt (con, args, rhs)
 ppr_case_pat :: OutputableBndr a => AltCon -> [a] -> SDoc
 ppr_case_pat (DataAlt dc) args
   | isTupleTyCon tc
-  = tupleParens (tupleTyConBoxity tc) (hsep (punctuate comma (map ppr_bndr args)))
+  = tupleParens (tupleTyConBoxity tc) (fsep (punctuate comma (map ppr_bndr args)))
   where
     ppr_bndr = pprBndr CaseBind
     tc = dataConTyCon dc
 
 ppr_case_pat con args
-  = ppr con <+> sep (map ppr_bndr args)
+  = ppr con <+> fsep (map ppr_bndr args)
   where
     ppr_bndr = pprBndr CaseBind
 
@@ -287,7 +288,8 @@ pprTypedLCBinder :: BindingSite -> Bool -> Var -> SDoc
 -- For lambda and case binders, show the unfolding info (usually none)
 pprTypedLCBinder bind_site debug_on var
   | not debug_on && isDeadBinder var    = char '_'
-  | not debug_on, CaseBind <- bind_site = pprUntypedBinder var  -- No parens, no kind info
+  | opt_SuppressTypeSignatures          = pprUntypedBinder var  -- No parens, no kind info
+  | not debug_on, CaseBind <- bind_site = pprUntypedBinder var 
   | isTyVar var                         = parens (pprKindedTyVarBndr var)
   | otherwise = parens (hang (pprIdBndr var) 
                            2 (vcat [ dcolon <+> pprType (idType var), pp_unf]))

@@ -103,7 +103,7 @@ import UniqSet
 import FastString
 import Outputable
 import Binary
-import StaticFlags( opt_SuppressUniques )
+import StaticFlags( opt_SuppressUniques, opt_SuppressAll )
 import Data.Char
 import Data.Data
 \end{code}
@@ -248,8 +248,10 @@ pprOccName (OccName sp occ)
     then ftext (zEncodeFS occ)
     else pp_occ <> pp_debug sty
   where
-    pp_debug sty | debugStyle sty = braces (pprNameSpaceBrief sp)
-	         | otherwise      = empty
+    pp_debug sty | debugStyle sty && not opt_SuppressAll
+                 = braces (pprNameSpaceBrief sp)
+	         | otherwise      
+                 = empty
 
     pp_occ | opt_SuppressUniques = text (strip_th_unique (unpackFS occ))
            | otherwise           = ftext occ

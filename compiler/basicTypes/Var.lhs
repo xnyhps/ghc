@@ -76,6 +76,7 @@ import Util
 import FastTypes
 import FastString
 import Outputable
+import StaticFlags( opt_SuppressAll )
 
 import Data.Data
 \end{code}
@@ -175,7 +176,8 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 
 \begin{code}
 instance Outputable Var where
-  ppr var = ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
+  ppr var = ppr (varName var) <+> (ppUnless opt_SuppressAll $
+                                   ifPprDebug (brackets (ppr_debug var)))
 
 ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})                           = ptext (sLit "tv")
