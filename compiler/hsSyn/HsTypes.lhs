@@ -390,7 +390,7 @@ instance (OutputableBndr name) => Outputable (HsType name) where
 
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (UserTyVar name _)      = ppr name
-    ppr (KindedTyVar name kind) = hsep [ppr name, dcolon, ppr kind]
+    ppr (KindedTyVar name kind) = parens $ hsep [ppr name, dcolon, ppr kind]
 
 instance OutputableBndr name => Outputable (HsPred name) where
     ppr (HsClassP clas tys) = ppr clas <+> hsep (map pprLHsType tys)
