@@ -198,6 +198,12 @@ usageHeader prog = substProg prog $
   "  $p hide {pkg-id}\n" ++
   "    Hide the specified package.\n" ++
   "\n" ++
+  "  $p trust {pkg-id}\n" ++
+  "    Trust the specified package.\n" ++
+  "\n" ++
+  "  $p distrust {pkg-id}\n" ++
+  "    Distrust the specified package.\n" ++
+  "\n" ++
   "  $p list [pkg]\n" ++
   "    List registered packages in the global database, and also the\n" ++
   "    user database if --user is given. If a package name is given\n" ++
@@ -344,6 +350,12 @@ runit verbosity cli nonopts = do
     ["hide",   pkgid_str] -> do
         pkgid <- readGlobPkgId pkgid_str
         hidePackage pkgid verbosity cli force
+    ["trust",    pkgid_str] -> do
+        pkgid <- readGlobPkgId pkgid_str
+        trustPackage pkgid verbosity cli force
+    ["distrust", pkgid_str] -> do
+        pkgid <- readGlobPkgId pkgid_str
+        distrustPackage pkgid verbosity cli force
     ["list"] -> do
         listPackages verbosity cli Nothing Nothing
     ["list", pkgid_str] ->
@@ -413,7 +425,7 @@ globVersion = Version{ versionBranch=[], versionTags=["*"] }
 -- Package databases
 
 -- Some commands operate on a single database:
---      register, unregister, expose, hide
+--      register, unregister, expose, hide, trust, distrust
 -- however these commands also check the union of the available databases
 -- in order to check consistency.  For example, register will check that
 -- dependencies exist before registering a package.
@@ -661,6 +673,7 @@ mungePackageDBPaths top_dir db@PackageDB { packages = pkgs } =
     -- files and "package.conf.d" dirs) the pkgroot is the parent directory
     -- ${pkgroot}/package.conf  or  ${pkgroot}/package.conf.d/
 
+-- TODO: This code is duplicated in compiler/main/Packages.lhs
 mungePackagePaths :: FilePath -> FilePath
                   -> InstalledPackageInfo -> InstalledPackageInfo
 -- Perform path/URL variable substitution as per the Cabal ${pkgroot} spec
@@ -678,36 +691,38 @@ mungePackagePaths top_dir pkgroot pkg =
       libraryDirs = munge_paths (libraryDirs pkg),
       frameworkDirs = munge_paths (frameworkDirs pkg),
       haddockInterfaces = munge_paths (haddockInterfaces pkg),
-      haddockHTMLs = munge_urls (haddockHTMLs pkg)
+                     -- haddock-html is allowed to be either a URL or a file
+      haddockHTMLs = munge_paths (munge_urls (haddockHTMLs pkg))
     }
   where
     munge_paths = map munge_path
     munge_urls  = map munge_url
 
     munge_path p
-      | Just p' <- stripVarPrefix "${pkgroot}" sp = pkgroot </> p'
-      | Just p' <- stripVarPrefix "$topdir"    sp = top_dir </> p'
-      | otherwise                                 = p
-      where
-        sp = splitPath p
+      | Just p' <- stripVarPrefix "${pkgroot}" p = pkgroot ++ p'
+      | Just p' <- stripVarPrefix "$topdir"    p = top_dir ++ p'
+      | otherwise                                = p
 
     munge_url p
-      | Just p' <- stripVarPrefix "${pkgrooturl}" sp = toUrlPath pkgroot p'
-      | Just p' <- stripVarPrefix "$httptopdir"   sp = toUrlPath top_dir p'
-      | otherwise                                    = p
-      where
-        sp = splitPath p
+      | Just p' <- stripVarPrefix "${pkgrooturl}" p = toUrlPath pkgroot p'
+      | Just p' <- stripVarPrefix "$httptopdir"   p = toUrlPath top_dir p'
+      | otherwise                                   = p
 
     toUrlPath r p = "file:///"
                  -- URLs always use posix style '/' separators:
-                 ++ FilePath.Posix.joinPath (r : FilePath.splitDirectories p)
+                 ++ FilePath.Posix.joinPath
+                        (r : -- We need to drop a leading "/" or "\\"
+                             -- if there is one:
+                             dropWhile (all isPathSeparator)
+                                       (FilePath.splitDirectories p))
 
-    stripVarPrefix var (root:path')
-      | Just [sep] <- stripPrefix var root
-      , isPathSeparator sep
-      = Just (joinPath path')
-
-    stripVarPrefix _ _ = Nothing
+    -- We could drop the separator here, and then use </> above. However,
+    -- by leaving it in and using ++ we keep the same path separator
+    -- rather than letting FilePath change it to use \ as the separator
+    stripVarPrefix var path = case stripPrefix var path of
+                              Just [] -> Just []
+                              Just cs@(c : _) | isPathSeparator c -> Just cs
+                              _ -> Nothing
 
 
 -- -----------------------------------------------------------------------------
@@ -856,13 +871,19 @@ updateDBCache verbosity db = do
       else ioError e
 
 -- -----------------------------------------------------------------------------
--- Exposing, Hiding, Unregistering are all similar
+-- Exposing, Hiding, Trusting, Distrusting, Unregistering are all similar
 
 exposePackage :: PackageIdentifier -> Verbosity -> [Flag] -> Force -> IO ()
 exposePackage = modifyPackage (\p -> ModifyPackage p{exposed=True})
 
 hidePackage :: PackageIdentifier -> Verbosity -> [Flag] -> Force -> IO ()
 hidePackage = modifyPackage (\p -> ModifyPackage p{exposed=False})
+
+trustPackage :: PackageIdentifier -> Verbosity -> [Flag] -> Force -> IO ()
+trustPackage = modifyPackage (\p -> ModifyPackage p{trusted=True})
+
+distrustPackage :: PackageIdentifier -> Verbosity -> [Flag] -> Force -> IO ()
+distrustPackage = modifyPackage (\p -> ModifyPackage p{trusted=False})
 
 unregisterPackage :: PackageIdentifier -> Verbosity -> [Flag] -> Force -> IO ()
 unregisterPackage = modifyPackage RemovePackage
@@ -1072,7 +1093,7 @@ doDump expand_pkgroot pkgs = do
         else showInstalledPackageInfo pkg ++ pkgrootField
     | (pkg, pkgloc) <- pkgs
     , let pkgroot      = takeDirectory pkgloc
-          pkgrootField = "pkgroot: " ++ pkgroot ++ "\n" ]
+          pkgrootField = "pkgroot: " ++ show pkgroot ++ "\n" ]
 
 -- PackageId is can have globVersion for the version
 findPackages :: PackageDBStack -> PackageArg -> IO [InstalledPackageInfo]

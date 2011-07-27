@@ -487,6 +487,12 @@
 	      <entry>-</entry>
 	    </row>
 	    <row>
+	      <entry><option>-ghci-script</option></entry>
+	      <entry>Load the given additional <filename>.ghci</filename> file</entry>
+	      <entry>static</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
 	      <entry><option>-read-dot-ghci</option></entry>
 	      <entry>Enable reading of <filename>.ghci</filename> files</entry>
 	      <entry>static</entry>
@@ -597,6 +603,26 @@
 	      <entry><option>-no-auto-link-packages</option></entry>
 	      <entry>Don't automatically link in the haskell98 package.</entry>
 	      <entry>dynamic</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-trust</option> <replaceable>P</replaceable></entry>
+        <entry>Expose package <replaceable>P</replaceable> and set it to be
+          trusted</entry>
+	      <entry>static/<literal>:set</literal></entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-distrust</option> <replaceable>P</replaceable></entry>
+        <entry>Expose package <replaceable>P</replaceable> and set it to be
+          distrusted</entry>
+	      <entry>static/<literal>:set</literal></entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-distrust-all</option> </entry>
+        <entry>Distrust all packages by default</entry>
+	      <entry>static/<literal>:set</literal></entry>
 	      <entry>-</entry>
 	    </row>
 	  </tbody>
@@ -907,6 +933,12 @@
 	      <entry><option>-XNoUnliftedFFITypes</option></entry>
 	    </row>
 	    <row>
+	      <entry><option>-XInterruptibleFFI</option></entry>
+	      <entry>Enable interruptible FFI.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-XNoInterruptibleFFI</option></entry>
+	    </row>
+	    <row>
 	      <entry><option>-XLiberalTypeSynonyms</option></entry>
 	      <entry>Enable <link linkend="type-synonyms">liberalised type synonyms</link>.</entry>
 	      <entry>dynamic</entry>
@@ -1032,6 +1064,30 @@
 	      <entry>Enable <link linkend="package-imports">package-qualified imports</link>.</entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-XNoPackageImports</option></entry>
+	    </row>
+	    <row>
+	      <entry><option>-XSafe</option></entry>
+        <entry>Enable the <link linkend="safe-haskell">Safe Haskell</link> Safe mode.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-</option></entry>
+	    </row>
+	    <row>
+	      <entry><option>-XTrustworthy</option></entry>
+        <entry>Enable the <link linkend="safe-haskell">Safe Haskell</link> Trustworthy mode.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-</option></entry>
+	    </row>
+	    <row>
+	      <entry><option>-XSafeLanguage</option></entry>
+        <entry>Enable the <link linkend="safe-haskell">Safe Haskell</link> Safe Language.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-</option></entry>
+	    </row>
+	    <row>
+	      <entry><option>-XSafeImports</option></entry>
+        <entry>Enable <link linkend="safe-imports-ext">Safe Imports</link>.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-</option></entry>
 	    </row>
 	  </tbody>
 	</tgroup>
@@ -1344,13 +1400,6 @@
 	      <entry>Make dictionaries strict</entry>
 	      <entry>static</entry>
 	      <entry><option>-fno-dicts-strict</option></entry>
-	    </row>
-
-	    <row>
-	      <entry><option>-fmethod-sharing</option></entry>
-	      <entry>Share specialisations of overloaded functions (default)</entry>
-	      <entry>dynamic</entry>
-	      <entry><option>-fno-method-sharing</option></entry>
 	    </row>
 
 	    <row>
@@ -1964,6 +2013,40 @@ phase <replaceable>n</replaceable></entry>
 	</tgroup>
       </informaltable>
     </sect2>
+
+    <sect2>
+      <title>Plugin options</title>
+
+      <para><xref linkend="compiler-plugins"/></para>
+
+      <informaltable>
+	<tgroup cols="4" align="left" colsep="1" rowsep="1">
+	  <thead>
+	    <row>
+	      <entry>Flag</entry>
+	      <entry>Description</entry>
+	      <entry>Static/Dynamic</entry>
+	      <entry>Reverse</entry>
+	    </row>
+	  </thead>
+	  <tbody>
+	    <row>
+	      <entry><option>-fplugin</option>=<replaceable>module</replaceable></entry>
+	      <entry>Load a plugin exported by a given module</entry>
+	      <entry>static</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-fplugin-opt</option>=<replaceable>module:args</replaceable></entry>
+	      <entry>Give arguments to a plugin module; module must be specified with <option>-fplugin</option></entry>
+	      <entry>static</entry>
+	      <entry>-</entry>
+	    </row>
+	  </tbody>
+	</tgroup>
+      </informaltable>
+    </sect2>
+
 
     <sect2>
       <title>Replacing phases</title>

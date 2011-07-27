@@ -67,9 +67,11 @@ module GHC (
 	modInfoInstances,
 	modInfoIsExportedName,
 	modInfoLookupName,
+        modInfoIface,
 	lookupGlobalName,
 	findGlobalAnns,
         mkPrintUnqualifiedForModule,
+        ModIface(..),
 
         -- * Querying the environment
         packageDbModules,
@@ -186,10 +188,10 @@ module GHC (
 	compareFixity,
 
 	-- ** Source locations
-	SrcLoc, pprDefnLoc,
-        mkSrcLoc, isGoodSrcLoc, noSrcLoc,
+	SrcLoc(..), RealSrcLoc, pprDefnLoc,
+        mkSrcLoc, noSrcLoc,
 	srcLocFile, srcLocLine, srcLocCol,
-        SrcSpan,
+        SrcSpan(..), RealSrcSpan,
         mkSrcSpan, srcLocSpan, isGoodSrcSpan, noSrcSpan,
         srcSpanStart, srcSpanEnd,
 	srcSpanFile, 
@@ -197,7 +199,7 @@ module GHC (
         srcSpanStartCol, srcSpanEndCol,
 
         -- ** Located
-	Located(..),
+	GenLocated(..), Located,
 
 	-- *** Constructing Located
 	noLoc, mkGeneralLocated,
@@ -317,23 +319,23 @@ import Prelude hiding (init)
 -- Unless you want to handle exceptions yourself, you should wrap this around
 -- the top level of your program.  The default handlers output the error
 -- message(s) to stderr and exit cleanly.
-defaultErrorHandler :: (ExceptionMonad m, MonadIO m) => DynFlags -> m a -> m a
-defaultErrorHandler dflags inner =
+defaultErrorHandler :: (ExceptionMonad m, MonadIO m) => LogAction -> m a -> m a
+defaultErrorHandler la inner =
   -- top-level exception handler: any unrecognised exception is a compiler bug.
   ghandle (\exception -> liftIO $ do
            hFlush stdout
            case fromException exception of
                 -- an IO exception probably isn't our fault, so don't panic
                 Just (ioe :: IOException) ->
-                  fatalErrorMsg dflags (text (show ioe))
+                  fatalErrorMsg' la (text (show ioe))
                 _ -> case fromException exception of
 		     Just UserInterrupt -> exitWith (ExitFailure 1)
                      Just StackOverflow ->
-                         fatalErrorMsg dflags (text "stack overflow: use +RTS -K<size> to increase it")
+                         fatalErrorMsg' la (text "stack overflow: use +RTS -K<size> to increase it")
                      _ -> case fromException exception of
                           Just (ex :: ExitCode) -> throw ex
                           _ ->
-                              fatalErrorMsg dflags
+                              fatalErrorMsg' la
                                   (text (show (Panic (show exception))))
            exitWith (ExitFailure 1)
          ) $
@@ -345,7 +347,7 @@ defaultErrorHandler dflags inner =
   		case ge of
 		     PhaseFailed _ code -> exitWith code
 		     Signal _ -> exitWith (ExitFailure 1)
-		     _ -> do fatalErrorMsg dflags (text (show ge))
+		     _ -> do fatalErrorMsg' la (text (show ge))
 			     exitWith (ExitFailure 1)
 	    ) $
   inner
@@ -459,6 +461,11 @@ setSessionDynFlags dflags = do
   modifySession (\h -> h{ hsc_dflags = dflags' })
   return preload
 
+
+parseDynamicFlags :: Monad m =>
+                     DynFlags -> [Located String]
+                  -> m (DynFlags, [Located String], [Located String])
+parseDynamicFlags = parseDynamicFlagsCmdLine
 
 
 -- %************************************************************************
@@ -598,7 +605,7 @@ instance ParsedMod TypecheckedModule where
 instance TypecheckedMod TypecheckedModule where
   renamedSource m     = tm_renamed_source m
   typecheckedSource m = tm_typechecked_source m
-  moduleInfo m = tm_checked_module_info m
+  moduleInfo m        = tm_checked_module_info m
   tm_internals m      = tm_internals_ m
 
 -- | The result of successful desugaring (i.e., translation to core).  Also
@@ -686,9 +693,10 @@ typecheckModule pmod = do
            minf_type_env  = md_types details,
            minf_exports   = availsToNameSet $ md_exports details,
            minf_rdr_env   = Just (tcg_rdr_env tc_gbl_env),
-           minf_instances = md_insts details
+           minf_instances = md_insts details,
+           minf_iface     = Nothing
 #ifdef GHCI
-           ,minf_modBreaks = emptyModBreaks
+          ,minf_modBreaks = emptyModBreaks
 #endif
          }}
 
@@ -729,12 +737,17 @@ loadModule tcm = do
                          return (Just l)
                      _otherwise -> return Nothing
                                                 
+   let source_modified | isNothing mb_linkable = SourceModified
+                       | otherwise             = SourceUnmodified
+                       -- we can't determine stability here
+
    -- compile doesn't change the session
    hsc_env <- getSession
    mod_info <- liftIO $ compile' (hscNothingBackendOnly     tcg,
                                   hscInteractiveBackendOnly tcg,
                                   hscBatchBackendOnly       tcg)
                                   hsc_env ms 1 1 Nothing mb_linkable
+                                  source_modified
 
    modifySession $ \e -> e{ hsc_HPT = addToUFM (hsc_HPT e) mod mod_info }
    return tcm
@@ -808,7 +821,7 @@ compileCoreToObj simplify cm@(CoreModule{ cm_module = mName }) = do
          ms_obj_date = Nothing,
          -- Only handling the single-module case for now, so no imports.
          ms_srcimps = [],
-         ms_imps = [],
+         ms_textual_imps = [],
          -- No source file
          ms_hspp_file = "",
          ms_hspp_opts = dflags,
@@ -905,11 +918,11 @@ data ModuleInfo = ModuleInfo {
 	minf_type_env  :: TypeEnv,
 	minf_exports   :: NameSet, -- ToDo, [AvailInfo] like ModDetails?
 	minf_rdr_env   :: Maybe GlobalRdrEnv,	-- Nothing for a compiled/package mod
-	minf_instances :: [Instance]
+	minf_instances :: [Instance],
+        minf_iface     :: Maybe ModIface
 #ifdef GHCI
-        ,minf_modBreaks :: ModBreaks 
+       ,minf_modBreaks :: ModBreaks 
 #endif
-	-- ToDo: this should really contain the ModIface too
   }
 	-- We don't want HomeModInfo here, because a ModuleInfo applies
 	-- to package modules too.
@@ -919,11 +932,13 @@ getModuleInfo :: GhcMonad m => Module -> m (Maybe ModuleInfo)  -- XXX: Maybe X
 getModuleInfo mdl = withSession $ \hsc_env -> do
   let mg = hsc_mod_graph hsc_env
   if mdl `elem` map ms_mod mg
-	then liftIO $ getHomeModuleInfo hsc_env (moduleName mdl)
+	then liftIO $ getHomeModuleInfo hsc_env mdl
 	else do
   {- if isHomeModule (hsc_dflags hsc_env) mdl
 	then return Nothing
 	else -} liftIO $ getPackageModuleInfo hsc_env mdl
+   -- ToDo: we don't understand what the following comment means.
+   --    (SDM, 19/7/2011)
    -- getPackageModuleInfo will attempt to find the interface, so
    -- we don't want to call it for a home module, just in case there
    -- was a problem loading the module and the interface doesn't
@@ -940,7 +955,8 @@ getPackageModuleInfo hsc_env mdl = do
   case mb_avails of
     Nothing -> return Nothing
     Just avails -> do
-	eps <- readIORef (hsc_EPS hsc_env)
+	eps <- hscEPS hsc_env
+        iface <- lookupModuleIface hsc_env mdl
 	let 
             names  = availsToNameSet avails
 	    pte    = eps_PTE eps
@@ -952,29 +968,41 @@ getPackageModuleInfo hsc_env mdl = do
 			minf_exports   = names,
 			minf_rdr_env   = Just $! availsToGlobalRdrEnv (moduleName mdl) avails,
 			minf_instances = error "getModuleInfo: instances for package module unimplemented",
+                        minf_iface     = iface,
                         minf_modBreaks = emptyModBreaks  
 		}))
 #else
+-- bogusly different for non-GHCI (ToDo)
 getPackageModuleInfo _hsc_env _mdl = do
-  -- bogusly different for non-GHCI (ToDo)
   return Nothing
 #endif
 
-getHomeModuleInfo :: HscEnv -> ModuleName -> IO (Maybe ModuleInfo)
+getHomeModuleInfo :: HscEnv -> Module -> IO (Maybe ModuleInfo)
 getHomeModuleInfo hsc_env mdl = 
-  case lookupUFM (hsc_HPT hsc_env) mdl of
+  case lookupUFM (hsc_HPT hsc_env) (moduleName mdl) of
     Nothing  -> return Nothing
     Just hmi -> do
       let details = hm_details hmi
+      iface <- lookupModuleIface hsc_env mdl
       return (Just (ModuleInfo {
 			minf_type_env  = md_types details,
 			minf_exports   = availsToNameSet (md_exports details),
 			minf_rdr_env   = mi_globals $! hm_iface hmi,
-			minf_instances = md_insts details
+			minf_instances = md_insts details,
+                        minf_iface     = iface
 #ifdef GHCI
                        ,minf_modBreaks = getModBreaks hmi
 #endif
 			}))
+
+lookupModuleIface :: HscEnv -> Module -> IO (Maybe ModIface)
+lookupModuleIface env m = do
+    eps <- hscEPS env
+    let dflags    = hsc_dflags env
+        pkgIfaceT = eps_PIT eps
+        homePkgT  = hsc_HPT env
+        iface     = lookupIfaceByModule dflags homePkgT pkgIfaceT m
+    return iface
 
 -- | The list of top-level entities defined in a module
 modInfoTyThings :: ModuleInfo -> [TyThing]
@@ -1011,6 +1039,9 @@ modInfoLookupName minf name = withSession $ \hsc_env -> do
        eps <- liftIO $ readIORef (hsc_EPS hsc_env)
        return $! lookupType (hsc_dflags hsc_env) 
 			    (hsc_HPT hsc_env) (eps_PTE eps) name
+
+modInfoIface :: ModuleInfo -> Maybe ModIface
+modInfoIface = minf_iface
 
 #ifdef GHCI
 modInfoModBreaks :: ModuleInfo -> ModBreaks
@@ -1105,7 +1136,7 @@ getModuleSourceAndFlags mod = do
 getTokenStream :: GhcMonad m => Module -> m [Located Token]
 getTokenStream mod = do
   (sourceFile, source, flags) <- getModuleSourceAndFlags mod
-  let startLoc = mkSrcLoc (mkFastString sourceFile) 1 1
+  let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts  -> return ts
     PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
@@ -1116,7 +1147,7 @@ getTokenStream mod = do
 getRichTokenStream :: GhcMonad m => Module -> m [(Located Token, String)]
 getRichTokenStream mod = do
   (sourceFile, source, flags) <- getModuleSourceAndFlags mod
-  let startLoc = mkSrcLoc (mkFastString sourceFile) 1 1
+  let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts -> return $ addSourceToTokens startLoc source ts
     PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
@@ -1124,21 +1155,22 @@ getRichTokenStream mod = do
 -- | Given a source location and a StringBuffer corresponding to this
 -- location, return a rich token stream with the source associated to the
 -- tokens.
-addSourceToTokens :: SrcLoc -> StringBuffer -> [Located Token]
+addSourceToTokens :: RealSrcLoc -> StringBuffer -> [Located Token]
                   -> [(Located Token, String)]
 addSourceToTokens _ _ [] = []
 addSourceToTokens loc buf (t@(L span _) : ts)
-    | not (isGoodSrcSpan span) = (t,"") : addSourceToTokens loc buf ts
-    | otherwise = (t,str) : addSourceToTokens newLoc newBuf ts
-    where
-      (newLoc, newBuf, str) = go "" loc buf
-      start = srcSpanStart span
-      end = srcSpanEnd span
-      go acc loc buf | loc < start = go acc nLoc nBuf
-                     | start <= loc && loc < end = go (ch:acc) nLoc nBuf
-                     | otherwise = (loc, buf, reverse acc)
-          where (ch, nBuf) = nextChar buf
-                nLoc = advanceSrcLoc loc ch
+    = case span of
+      UnhelpfulSpan _ -> (t,"") : addSourceToTokens loc buf ts
+      RealSrcSpan s   -> (t,str) : addSourceToTokens newLoc newBuf ts
+        where
+          (newLoc, newBuf, str) = go "" loc buf
+          start = realSrcSpanStart s
+          end = realSrcSpanEnd s
+          go acc loc buf | loc < start = go acc nLoc nBuf
+                         | start <= loc && loc < end = go (ch:acc) nLoc nBuf
+                         | otherwise = (loc, buf, reverse acc)
+              where (ch, nBuf) = nextChar buf
+                    nLoc = advanceSrcLoc loc ch
 
 
 -- | Take a rich token stream such as produced from 'getRichTokenStream' and
@@ -1146,21 +1178,26 @@ addSourceToTokens loc buf (t@(L span _) : ts)
 -- insignificant whitespace.)
 showRichTokenStream :: [(Located Token, String)] -> String
 showRichTokenStream ts = go startLoc ts ""
-    where sourceFile = srcSpanFile (getLoc . fst . head $ ts)
-          startLoc = mkSrcLoc sourceFile 1 1
+    where sourceFile = getFile $ map (getLoc . fst) ts
+          getFile [] = panic "showRichTokenStream: No source file found"
+          getFile (UnhelpfulSpan _ : xs) = getFile xs
+          getFile (RealSrcSpan s : _) = srcSpanFile s
+          startLoc = mkRealSrcLoc sourceFile 1 1
           go _ [] = id
           go loc ((L span _, str):ts)
-              | not (isGoodSrcSpan span) = go loc ts
-              | locLine == tokLine = ((replicate (tokCol - locCol) ' ') ++)
-                                     . (str ++)
-                                     . go tokEnd ts
-              | otherwise = ((replicate (tokLine - locLine) '\n') ++)
-                            . ((replicate tokCol ' ') ++)
-                            . (str ++)
-                            . go tokEnd ts
-              where (locLine, locCol) = (srcLocLine loc, srcLocCol loc)
-                    (tokLine, tokCol) = (srcSpanStartLine span, srcSpanStartCol span)
-                    tokEnd = srcSpanEnd span
+              = case span of
+                UnhelpfulSpan _ -> go loc ts
+                RealSrcSpan s
+                 | locLine == tokLine -> ((replicate (tokCol - locCol) ' ') ++)
+                                       . (str ++)
+                                       . go tokEnd ts
+                 | otherwise -> ((replicate (tokLine - locLine) '\n') ++)
+                              . ((replicate tokCol ' ') ++)
+                              . (str ++)
+                              . go tokEnd ts
+                  where (locLine, locCol) = (srcLocLine loc, srcLocCol loc)
+                        (tokLine, tokCol) = (srcSpanStartLine s, srcSpanStartCol s)
+                        tokEnd = realSrcSpanEnd s
 
 -- -----------------------------------------------------------------------------
 -- Interactive evaluation
@@ -1258,7 +1295,7 @@ parser :: String         -- ^ Haskell module source text (full Unicode is suppor
 
 parser str dflags filename = 
    let
-       loc  = mkSrcLoc (mkFastString filename) 1 1
+       loc  = mkRealSrcLoc (mkFastString filename) 1 1
        buf  = stringToStringBuffer str
    in
    case unP Parser.parseModule (mkPState dflags buf loc) of

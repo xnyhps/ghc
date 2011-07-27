@@ -45,6 +45,13 @@ do
     shift
 done
 
+if ! [ -d testsuite ]
+then
+    echo 'You need the testsuite to validate' >&2
+    echo 'Run "./sync-all --testsuite get" to get it' >&2
+    exit 1
+fi
+
 if [ "$THREADS" = "" ]; then
     if [ "$CPUS" = "" ]; then
         threads=2
@@ -95,10 +102,13 @@ $make test_bindist TEST_PREP=YES
 #
 bindistdir="bindisttest/install dir"
 cd libraries/mtl
-"$thisdir/$bindistdir/bin/runhaskell" Setup.hs configure --with-ghc="$thisdir/$bindistdir/bin/ghc" --global --builddir=dist-bindist --prefix="$thisdir/$bindistdir"
-"$thisdir/$bindistdir/bin/runhaskell" Setup.hs build  --builddir=dist-bindist
-"$thisdir/$bindistdir/bin/runhaskell" Setup.hs install  --builddir=dist-bindist
-"$thisdir/$bindistdir/bin/runhaskell" Setup.hs clean  --builddir=dist-bindist
+"$thisdir/$bindistdir/bin/ghc" --make Setup
+./Setup configure --with-ghc="$thisdir/$bindistdir/bin/ghc" --with-haddock="$thisdir/$bindistdir/bin/haddock" --global --builddir=dist-bindist --prefix="$thisdir/$bindistdir"
+./Setup build   --builddir=dist-bindist
+./Setup haddock --builddir=dist-bindist
+./Setup install --builddir=dist-bindist
+./Setup clean   --builddir=dist-bindist
+rm -f Setup Setup.exe Setup.hi Setup.o
 cd $thisdir
 
 fi # testsuite-only
@@ -143,7 +153,7 @@ the minimal testing procedure, please do further testing as necessary.
 When you are satisfied that you haven't broken anything, go ahead and
 push/send your patches.
 EOF
-        if grep -q "^[^#]" mk/validate.mk
+        if [ -f mk/validate.mk ] && grep -q "^[^#]" mk/validate.mk
         then
             cat <<EOF
 

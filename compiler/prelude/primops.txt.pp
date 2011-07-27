@@ -947,6 +947,23 @@ primop  WriteByteArrayOp_Word64 "writeWord64Array#" GenPrimOp
    MutableByteArray# s -> Int# -> WORD64 -> State# s -> State# s
    with has_side_effects = True
 
+primop  CopyByteArrayOp "copyByteArray#" GenPrimOp
+  ByteArray# -> Int# -> MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
+  {Copy a range of the ByteArray# to the specified region in the MutableByteArray#.
+   Both arrays must fully contain the specified ranges, but this is not checked.
+   The two arrays must not be the same array in different states, but this is not checked either.}
+  with
+  has_side_effects = True
+  code_size = { primOpCodeSizeForeignCall }
+
+primop  CopyMutableByteArrayOp "copyMutableByteArray#" GenPrimOp
+  MutableByteArray# s -> Int# -> MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
+  {Copy a range of the first MutableByteArray# to the specified region in the second MutableByteArray#.
+   Both arrays must fully contain the specified ranges, but this is not checked.}
+  with
+  has_side_effects = True
+  code_size = { primOpCodeSizeForeignCall }
+
 ------------------------------------------------------------------------
 section "Addr#"
 ------------------------------------------------------------------------
@@ -1632,6 +1649,21 @@ primop  ParOp "par#" GenPrimOp
       -- gets evaluted strictly, which it should *not* be
    has_side_effects = True
    code_size = { primOpCodeSizeForeignCall }
+
+primop SparkOp "spark#" GenPrimOp
+   a -> State# s -> (# State# s, a #)
+   with has_side_effects = True
+   code_size = { primOpCodeSizeForeignCall }
+
+primop SeqOp "seq#" GenPrimOp
+   a -> State# s -> (# State# s, a #)
+
+   -- why return the value?  So that we can control sharing of seq'd
+   -- values: in
+   --    let x = e in x `seq` ... x ...
+   -- we don't want to inline x, so better to represent it as
+   --    let x = e in case seq# x RW of (# _, x' #) -> ... x' ...
+   -- also it matches the type of rseq in the Eval monad.
 
 primop GetSparkOp "getSpark#" GenPrimOp
    State# s -> (# State# s, Int#, a #)

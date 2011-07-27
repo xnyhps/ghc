@@ -244,7 +244,10 @@ isSystemName _                        = False
 -- | Create a name which is (for now at least) local to the current module and hence
 -- does not need a 'Module' to disambiguate it from other 'Name's
 mkInternalName :: Unique -> OccName -> SrcSpan -> Name
-mkInternalName uniq occ loc = Name { n_uniq = getKeyFastInt uniq, n_sort = Internal, n_occ = occ, n_loc = loc }
+mkInternalName uniq occ loc = Name { n_uniq = getKeyFastInt uniq
+                                   , n_sort = Internal
+                                   , n_occ = occ
+                                   , n_loc = loc }
 	-- NB: You might worry that after lots of huffing and
 	-- puffing we might end up with two local names with distinct
 	-- uniques, but the same OccName.  Indeed we can, but that's ok
@@ -488,12 +491,14 @@ ppr_z_occ_name occ = ftext (zEncodeFS (occNameFS occ))
 -- Prints (if mod information is available) "Defined at <loc>" or 
 --  "Defined in <mod>" information for a Name.
 pprNameLoc :: Name -> SDoc
-pprNameLoc name
-  | isGoodSrcSpan loc = pprDefnLoc loc
-  | isInternalName name || isSystemName name 
-                      = ptext (sLit "<no location info>")
-  | otherwise         = ptext (sLit "Defined in ") <> ppr (nameModule name)
-  where loc = nameSrcSpan name
+pprNameLoc name = case nameSrcSpan name of
+                  RealSrcSpan s ->
+                      pprDefnLoc s
+                  UnhelpfulSpan _
+                   | isInternalName name || isSystemName name ->
+                      ptext (sLit "<no location info>")
+                   | otherwise ->
+                      ptext (sLit "Defined in ") <> ppr (nameModule name)
 \end{code}
 
 %************************************************************************

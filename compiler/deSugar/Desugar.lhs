@@ -61,7 +61,8 @@ deSugar hsc_env
 		    	    tcg_imports      = imports,
 		    	    tcg_exports      = exports,
 			    tcg_keep	     = keep_var,
-		    	    tcg_rdr_env      = rdr_env,
+                            tcg_th_splice_used = tc_splice_used,
+                            tcg_rdr_env      = rdr_env,
 		    	    tcg_fix_env      = fix_env,
 		    	    tcg_inst_env     = inst_env,
 		    	    tcg_fam_inst_env = fam_inst_env,
@@ -116,43 +117,47 @@ deSugar hsc_env
 
         ; case mb_res of {
            Nothing -> return (msgs, Nothing) ;
-           Just (ds_ev_binds, all_prs, all_rules, ds_vects, ds_fords,ds_hpc_info, modBreaks) -> do
+           Just (ds_ev_binds, all_prs, all_rules, vects0, ds_fords, ds_hpc_info, modBreaks) -> do
 
-	{ 	-- Add export flags to bindings
-	  keep_alive <- readIORef keep_var
-	; let (rules_for_locals, rules_for_imps) 
+        {       -- Add export flags to bindings
+          keep_alive <- readIORef keep_var
+        ; let (rules_for_locals, rules_for_imps) 
                    = partition isLocalRule all_rules
               final_prs = addExportFlagsAndRules target
-	      		      export_set keep_alive rules_for_locals (fromOL all_prs)
+                              export_set keep_alive rules_for_locals (fromOL all_prs)
 
               final_pgm = combineEvBinds ds_ev_binds final_prs
-	-- Notice that we put the whole lot in a big Rec, even the foreign binds
-	-- When compiling PrelFloat, which defines data Float = F# Float#
-	-- we want F# to be in scope in the foreign marshalling code!
-	-- You might think it doesn't matter, but the simplifier brings all top-level
-	-- things into the in-scope set before simplifying; so we get no unfolding for F#!
+        -- Notice that we put the whole lot in a big Rec, even the foreign binds
+        -- When compiling PrelFloat, which defines data Float = F# Float#
+        -- we want F# to be in scope in the foreign marshalling code!
+        -- You might think it doesn't matter, but the simplifier brings all top-level
+        -- things into the in-scope set before simplifying; so we get no unfolding for F#!
 
-	-- Lint result if necessary, and print
+        -- Lint result if necessary, and print
         ; dumpIfSet_dyn dflags Opt_D_dump_ds "Desugared, before opt" $
                (vcat [ pprCoreBindings final_pgm
                      , pprRules rules_for_imps ])
 
-	; (ds_binds, ds_rules_for_imps) <- simpleOptPgm dflags final_pgm rules_for_imps
-	      		 -- The simpleOptPgm gets rid of type 
-			 -- bindings plus any stupid dead code
+        ; (ds_binds, ds_rules_for_imps, ds_vects) 
+            <- simpleOptPgm dflags mod final_pgm rules_for_imps vects0
+                         -- The simpleOptPgm gets rid of type 
+                         -- bindings plus any stupid dead code
 
-	; endPass dflags CoreDesugar ds_binds ds_rules_for_imps
+        ; endPass dflags CoreDesugar ds_binds ds_rules_for_imps
 
         ; let used_names = mkUsedNames tcg_env
-	; deps <- mkDependencies tcg_env
+        ; deps <- mkDependencies tcg_env
 
-        ; let mod_guts = ModGuts {	
+        ; used_th <- readIORef tc_splice_used
+
+        ; let mod_guts = ModGuts {
 		mg_module    	= mod,
 		mg_boot	     	= isHsBoot hsc_src,
 		mg_exports   	= exports,
 		mg_deps	     	= deps,
 		mg_used_names   = used_names,
-		mg_dir_imps  	= imp_mods imports,
+                mg_used_th      = used_th,
+                mg_dir_imps     = imp_mods imports,
 	        mg_rdr_env   	= rdr_env,
 		mg_fix_env   	= fix_env,
 		mg_warns   	= warns,
@@ -168,7 +173,8 @@ deSugar hsc_env
 		mg_hpc_info  	= ds_hpc_info,
                 mg_modBreaks    = modBreaks,
                 mg_vect_decls   = ds_vects,
-                mg_vect_info    = noVectInfo
+                mg_vect_info    = noVectInfo,
+                mg_trust_pkg    = imp_trust_own_pkg imports
               }
         ; return (msgs, Just mod_guts)
 	}}}
@@ -344,8 +350,8 @@ dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
   = putSrcSpanDs loc $ 
     do	{ let bndrs' = [var | RuleBndr (L _ var) <- vars]
 
-        ; lhs' <- unsetOptM Opt_EnableRewriteRules $
-                  unsetOptM Opt_WarnIdentities $
+        ; lhs' <- unsetDOptM Opt_EnableRewriteRules $
+                  unsetWOptM Opt_WarnIdentities $
                   dsLExpr lhs   -- Note [Desugaring RULE left hand sides]
 
 	; rhs' <- dsLExpr rhs
@@ -393,16 +399,11 @@ the rule is precisly to optimise them:
 
 \begin{code}
 dsVect :: LVectDecl Id -> DsM CoreVect
-dsVect (L loc (HsVect v rhs))
+dsVect (L loc (HsVect (L _ v) rhs))
   = putSrcSpanDs loc $ 
     do { rhs' <- fmapMaybeM dsLExpr rhs
-       ; return $ Vect (unLoc v) rhs'
+       ; return $ Vect v rhs'
   	   }
--- dsVect (L loc (HsVect v Nothing))
---   = return $ Vect v Nothing
--- dsVect (L loc (HsVect v (Just rhs)))
---   = putSrcSpanDs loc $ 
---     do { rhs' <- dsLExpr rhs
---        ; return $ Vect v (Just rhs')
---       }
+dsVect (L _loc (HsNoVect (L _ v)))
+  = return $ NoVect v
 \end{code}

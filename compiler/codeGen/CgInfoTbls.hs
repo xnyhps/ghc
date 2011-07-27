@@ -53,7 +53,7 @@ import Outputable
 -- representation as a list of 'CmmAddr' is handled later
 -- in the pipeline by 'cmmToRawCmm'.
 
-emitClosureCodeAndInfoTable :: ClosureInfo -> CmmFormals -> CgStmts -> Code
+emitClosureCodeAndInfoTable :: ClosureInfo -> [CmmFormal] -> CgStmts -> Code
 emitClosureCodeAndInfoTable cl_info args body
  = do	{ blks <- cgStmtsToBlocks body
         ; info <- mkCmmInfo cl_info
@@ -84,12 +84,12 @@ mkCmmInfo cl_info = do
            info = ConstrInfo (ptrs, nptrs)
                              (fromIntegral (dataConTagZ con))
                              conName
-       return $ CmmInfo gc_target Nothing (CmmInfoTable False prof cl_type info)
+       return $ CmmInfo gc_target Nothing (CmmInfoTable False False prof cl_type info)
 
     ClosureInfo { closureName   = name,
                   closureLFInfo = lf_info,
                   closureSRT    = srt } ->
-       return $ CmmInfo gc_target Nothing (CmmInfoTable False prof cl_type info)
+       return $ CmmInfo gc_target Nothing (CmmInfoTable (closureInfoLocal cl_info) False prof cl_type info)
        where
          info =
              case lf_info of
@@ -142,7 +142,7 @@ emitReturnTarget name stmts
         ; let info = CmmInfo
                        gc_target
                        Nothing
-                       (CmmInfoTable False
+                       (CmmInfoTable False False
                         (ProfilingInfo zeroCLit zeroCLit)
                         rET_SMALL -- cmmToRawCmm may convert it to rET_BIG
                         (ContInfo frame srt_info))
@@ -412,7 +412,7 @@ funInfoTable info_ptr
 emitInfoTableAndCode 
 	:: CLabel 		-- Label of entry or ret
 	-> CmmInfo 		-- ...the info table
-	-> CmmFormals	-- ...args
+	-> [CmmFormal]	-- ...args
 	-> [CmmBasicBlock]	-- ...and body
 	-> Code
 

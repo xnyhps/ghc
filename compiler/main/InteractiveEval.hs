@@ -75,13 +75,16 @@ import System.Directory
 import Data.Dynamic
 import Data.List (find)
 import Control.Monad
+#if __GLASGOW_HASKELL__ >= 701
+import Foreign.Safe
+#else
 import Foreign hiding (unsafePerformIO)
+#endif
 import Foreign.C
 import GHC.Exts
 import Data.Array
 import Exception
 import Control.Concurrent
--- import Foreign.StablePtr
 import System.IO
 import System.IO.Unsafe
 
@@ -194,7 +197,7 @@ runStmtWithLocation source linenumber expr step =
 
     -- Turn off -fwarn-unused-bindings when running a statement, to hide
     -- warnings about the implicit bindings we introduce.
-    let dflags'  = dopt_unset (hsc_dflags hsc_env) Opt_WarnUnusedBinds
+    let dflags'  = wopt_unset (hsc_dflags hsc_env) Opt_WarnUnusedBinds
         hsc_env' = hsc_env{ hsc_dflags = dflags' }
 
     r <- liftIO $ hscStmtWithLocation hsc_env' expr source linenumber

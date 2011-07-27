@@ -441,7 +441,8 @@ mkDictSelId no_unf name clas
 		   -- for the ClassOp
 
     info | new_tycon = base_info `setInlinePragInfo` alwaysInlinePragma
-    	   	   -- See Note [Single-method classes] for why alwaysInlinePragma
+    	   	   -- See Note [Single-method classes] in TcInstDcls
+		   -- for why alwaysInlinePragma
          | otherwise = base_info  `setSpecInfo`       mkSpecInfo [rule]
 		       		  `setInlinePragInfo` neverInlinePragma
 		   -- Add a magic BuiltinRule, and never inline it
@@ -485,7 +486,9 @@ mkDictSelId no_unf name clas
     rhs = mkLams tyvars  (Lam dict_id   rhs_body)
     rhs_body | new_tycon = unwrapNewTypeBody tycon (map mkTyVarTy tyvars) (Var dict_id)
              | otherwise = Case (Var dict_id) dict_id (idType the_arg_id)
-                                [(DataAlt data_con, arg_ids, Var the_arg_id)]
+                                [(DataAlt data_con, arg_ids, varToCoreExpr the_arg_id)]
+				-- varToCoreExpr needed for equality superclass selectors
+				--   sel a b d = case x of { MkC _ (g:a~b) _ -> CO g }
 
 dictSelRule :: Int -> Arity 
             -> IdUnfoldingFun -> [CoreExpr] -> Maybe CoreExpr
@@ -580,7 +583,7 @@ mkProductBox arg_ids ty
     result_expr
       | isNewTyCon tycon && not (isRecursiveTyCon tycon) 
       = wrap (mkProductBox arg_ids (newTyConInstRhs tycon tycon_args))
-      | otherwise = mkConApp pack_con (map Type tycon_args ++ map Var arg_ids)
+      | otherwise = mkConApp pack_con (map Type tycon_args ++ varsToCoreExprs arg_ids)
 
     wrap expr = wrapNewTypeBody tycon tycon_args expr
 
@@ -824,26 +827,17 @@ mkDictFunId :: Name      -- Name to use for the dict fun;
 -- Implements the DFun Superclass Invariant (see TcInstDcls)
 
 mkDictFunId dfun_name tvs theta clas tys
-  = mkExportedLocalVar (DFunId n_silent is_nt)
+  = mkExportedLocalVar (DFunId is_nt)
                        dfun_name
                        dfun_ty
                        vanillaIdInfo
   where
     is_nt = isNewTyCon (classTyCon clas)
-    (n_silent, dfun_ty) = mkDictFunTy tvs theta clas tys
+    dfun_ty = mkDictFunTy tvs theta clas tys
 
-mkDictFunTy :: [TyVar] -> ThetaType -> Class -> [Type] -> (Int, Type)
+mkDictFunTy :: [TyVar] -> ThetaType -> Class -> [Type] -> Type
 mkDictFunTy tvs theta clas tys
-  = (length silent_theta, dfun_ty)
-  where
-    dfun_ty = mkSigmaTy tvs (silent_theta ++ theta) (mkDictTy clas tys)
-    silent_theta = filterOut discard $
-                   substTheta (zipTopTvSubst (classTyVars clas) tys)
-                              (classSCTheta clas)
-                   -- See Note [Silent Superclass Arguments]
-    discard pred = isEmptyVarSet (tyVarsOfPred pred)
-                 || any (`eqPred` pred) theta
-                 -- See the DFun Superclass Invariant in TcInstDcls
+  = mkSigmaTy tvs theta (mkDictTy clas tys)
 \end{code}
 
 

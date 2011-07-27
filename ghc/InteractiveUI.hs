@@ -34,7 +34,7 @@ import Packages
 -- import PackageConfig
 import UniqFM
 
-import HscTypes ( handleFlagWarnings )
+import HscTypes ( handleFlagWarnings, getSafeMode )
 import HsImpExp
 import qualified RdrName ( getGRE_NameQualifier_maybes ) -- should this come via GHC?
 import RdrName (RdrName)
@@ -82,12 +82,13 @@ import System.Environment
 import System.Exit	( exitWith, ExitCode(..) )
 import System.Directory
 import System.IO
+import System.IO.Unsafe ( unsafePerformIO )
 import System.IO.Error
 import Data.Char
 import Data.Array
 import Control.Monad as Monad
 import Text.Printf
-import Foreign
+import Foreign.Safe
 import GHC.Exts		( unsafeCoerce# )
 
 import GHC.IO.Exception	( IOErrorType(InvalidArgument) )
@@ -134,6 +135,7 @@ builtin_commands = [
   ("help",      keepGoing help,                 noCompletion),
   ("history",   keepGoing historyCmd,           noCompletion),
   ("info",      keepGoing' info,                completeIdentifier),
+  ("issafe",    keepGoing' isSafeCmd,           completeModule),
   ("kind",      keepGoing' kindOfType,          completeIdentifier),
   ("load",      keepGoingPaths loadModule_,     completeHomeModuleOrFile),
   ("list",      keepGoing' listCmd,             noCompletion),
@@ -211,6 +213,7 @@ helpText =
  "   :etags [<file>]             create tags file for Emacs (default: \"TAGS\")\n" ++
  "   :help, :?                   display this list of commands\n" ++
  "   :info [<name> ...]          display information about the given names\n" ++
+ "   :issafe [<mod>]             display safe haskell information of module <mod>\n" ++
  "   :kind <type>                show the kind of <type>\n" ++
  "   :load [*]<module> ...       load module(s) and their dependents\n" ++
  "   :main [<arguments> ...]     run the main function with the given arguments\n" ++
@@ -423,7 +426,8 @@ runGHCi paths maybe_exprs = do
       getDirectory f = case takeDirectory f of "" -> "."; d -> d
 
   when (read_dot_files) $ do
-    mcfgs0 <- sequence [ current_dir, app_user_dir, home_dir ]
+    mcfgs0 <- sequence $ [ current_dir, app_user_dir, home_dir ]
+                         ++ map (return . Just) opt_GhciScripts
     mcfgs <- liftIO $ mapM canonicalizePath' (catMaybes mcfgs0)
     mapM_ sourceConfigFile $ nub $ catMaybes mcfgs
         -- nub, because we don't want to read .ghci twice if the
@@ -687,7 +691,7 @@ checkInputForLayout stmt getStmt = do
    let dflags = xopt_set dflags' Opt_AlternativeLayoutRule
    st <- lift $ getGHCiState
    let buf =  stringToStringBuffer stmt
-       loc  = mkSrcLoc (fsLit (progname st)) (line_number st) 1
+       loc  = mkRealSrcLoc (fsLit (progname st)) (line_number st) 1
        pstate = Lexer.mkPState dflags buf loc
    case Lexer.unP goToEnd pstate of
      (Lexer.POk _ False) -> return $ Just stmt
@@ -892,6 +896,14 @@ getCurrentBreakModule = do
 noArgs :: GHCi () -> String -> GHCi ()
 noArgs m "" = m
 noArgs _ _  = liftIO $ putStrLn "This command takes no arguments"
+
+withSandboxOnly :: String -> GHCi () -> GHCi ()
+withSandboxOnly cmd this = do
+   dflags <- getDynFlags
+   if not (dopt Opt_GhciSandbox dflags)
+      then printForUser (text cmd <+>
+                         ptext (sLit "is not supported with -fno-ghci-sandbox"))
+      else this
 
 help :: String -> GHCi ()
 help _ = liftIO (putStr helpText)
@@ -1318,6 +1330,54 @@ runScript filename = do
               else return ()
 
 -----------------------------------------------------------------------------
+-- Displaying Safe Haskell properties of a module
+
+isSafeCmd :: String -> InputT GHCi ()
+isSafeCmd m = 
+  case words m of
+    [s] | looksLikeModuleName s -> do
+        m <- lift $ lookupModule s
+        isSafeModule m
+    [] -> do
+        (as,bs) <- GHC.getContext
+                -- Guess which module the user wants to browse.  Pick
+                -- modules that are interpreted first.  The most
+                -- recently-added module occurs last, it seems.
+        case (as,bs) of
+          (as@(_:_), _)   -> isSafeModule $ last as
+          ([],  bs@(_:_)) -> do
+             let i = last bs
+             m <- GHC.findModule (unLoc (ideclName i)) (ideclPkgQual i)
+             isSafeModule m
+          ([], [])  -> ghcError (CmdLineError ":issafe: no current module")
+    _ -> ghcError (CmdLineError "syntax:  :issafe <module>")
+
+isSafeModule :: Module -> InputT GHCi ()
+isSafeModule m = do
+  mb_mod_info <- GHC.getModuleInfo m
+  case mb_mod_info of
+    Nothing -> ghcError $ CmdLineError ("unknown module: " ++
+                                GHC.moduleNameString (GHC.moduleName m))
+    Just mi -> do
+        dflags <- getDynFlags
+        let iface = GHC.modInfoIface mi
+        case iface of
+             Just iface' -> do
+                 let trust = showPpr $ getSafeMode $ GHC.mi_trust iface'
+                     pkg   = if packageTrusted dflags m then "trusted" else "untrusted"
+                 liftIO $ putStrLn $ "Trust type is (Module: " ++ trust
+                                               ++ ", Package: " ++ pkg ++ ")"
+             Nothing -> ghcError $ CmdLineError ("can't load interface file for module: " ++
+                                            GHC.moduleNameString (GHC.moduleName m))
+  where
+    packageTrusted :: DynFlags -> Module -> Bool
+    packageTrusted dflags m
+        | thisPackage dflags == modulePackageId m = True
+        | otherwise = trusted $ getPackageDetails (pkgState dflags)
+                                                  (modulePackageId m)
+
+
+-----------------------------------------------------------------------------
 -- Browsing a module's contents
 
 browseCmd :: Bool -> String -> InputT GHCi ()
@@ -1549,17 +1609,29 @@ setCmd ""
    	   ))
        dflags <- getDynFlags
        liftIO $ putStrLn (showSDoc (
-          vcat (text "GHCi-specific dynamic flag settings:" 
-               :map (flagSetting dflags) ghciFlags)
+          text "GHCi-specific dynamic flag settings:" $$
+              nest 2 (vcat (map (flagSetting dflags) ghciFlags))
           ))
        liftIO $ putStrLn (showSDoc (
-          vcat (text "other dynamic, non-language, flag settings:" 
-               :map (flagSetting dflags) others)
+          text "other dynamic, non-language, flag settings:" $$
+              nest 2 (vcat (map (flagSetting dflags) others))
           ))
-  where flagSetting dflags (str, f, _)
-          | dopt f dflags = text "  " <> text "-f"    <> text str
-          | otherwise     = text "  " <> text "-fno-" <> text str
-        (ghciFlags,others)  = partition (\(_, f, _) -> f `elem` flags)
+       liftIO $ putStrLn (showSDoc (
+          text "warning settings:" $$
+              nest 2 (vcat (map (warnSetting dflags) DynFlags.fWarningFlags))
+          ))
+
+  where flagSetting dflags (str, _, f, _)
+          | dopt f dflags = fstr str
+          | otherwise     = fnostr str
+        warnSetting dflags (str, _, f, _)
+          | wopt f dflags = fstr str
+          | otherwise     = fnostr str
+
+        fstr   str = text "-f"    <> text str
+        fnostr str = text "-fno-" <> text str
+
+        (ghciFlags,others)  = partition (\(_, _, f, _) -> f `elem` flags)
                                         DynFlags.fFlags
         flags = [Opt_PrintExplicitForalls
                 ,Opt_PrintBindResult
@@ -1794,17 +1866,19 @@ showPackages = do
   liftIO $ putStrLn $ showSDoc $ vcat $
     text ("active package flags:"++if null pkg_flags then " none" else "")
     : map showFlag pkg_flags
-  where showFlag (ExposePackage p) = text $ "  -package " ++ p
-        showFlag (HidePackage p)   = text $ "  -hide-package " ++ p
-        showFlag (IgnorePackage p) = text $ "  -ignore-package " ++ p
+  where showFlag (ExposePackage   p) = text $ "  -package " ++ p
+        showFlag (HidePackage     p) = text $ "  -hide-package " ++ p
+        showFlag (IgnorePackage   p) = text $ "  -ignore-package " ++ p
         showFlag (ExposePackageId p) = text $ "  -package-id " ++ p
+        showFlag (TrustPackage    p) = text $ "  -trust " ++ p
+        showFlag (DistrustPackage p) = text $ "  -distrust " ++ p
 
 showLanguages :: GHCi ()
 showLanguages = do
    dflags <- getDynFlags
    liftIO $ putStrLn $ showSDoc $ vcat $
       text "active language flags:" :
-      [text ("  -X" ++ str) | (str, f, _) <- DynFlags.xFlags, xopt f dflags]
+      [text ("  -X" ++ str) | (str, _, f, _) <- DynFlags.xFlags, xopt f dflags]
 
 -- -----------------------------------------------------------------------------
 -- Completion
@@ -2032,49 +2106,60 @@ pprintCommand bind force str = do
   pprintClosureCommand bind force str
 
 stepCmd :: String -> GHCi ()
-stepCmd []         = doContinue (const True) GHC.SingleStep
-stepCmd expression = runStmt expression GHC.SingleStep >> return ()
+stepCmd arg = withSandboxOnly ":step" $ step arg
+  where
+  step []         = doContinue (const True) GHC.SingleStep
+  step expression = runStmt expression GHC.SingleStep >> return ()
 
 stepLocalCmd :: String -> GHCi ()
-stepLocalCmd  [] = do 
-  mb_span <- getCurrentBreakSpan
-  case mb_span of
-    Nothing  -> stepCmd []
-    Just loc -> do
-       Just mod <- getCurrentBreakModule
-       current_toplevel_decl <- enclosingTickSpan mod loc
-       doContinue (`isSubspanOf` current_toplevel_decl) GHC.SingleStep
-
-stepLocalCmd expression = stepCmd expression
+stepLocalCmd arg = withSandboxOnly ":steplocal" $ step arg
+  where
+  step expr
+   | not (null expr) = stepCmd expr
+   | otherwise = do
+      mb_span <- getCurrentBreakSpan
+      case mb_span of
+        Nothing  -> stepCmd []
+        Just loc -> do
+           Just mod <- getCurrentBreakModule
+           current_toplevel_decl <- enclosingTickSpan mod loc
+           doContinue (`isSubspanOf` current_toplevel_decl) GHC.SingleStep
 
 stepModuleCmd :: String -> GHCi ()
-stepModuleCmd  [] = do 
-  mb_span <- getCurrentBreakSpan
-  case mb_span of
-    Nothing  -> stepCmd []
-    Just _ -> do
-       Just span <- getCurrentBreakSpan
-       let f some_span = srcSpanFileName_maybe span == srcSpanFileName_maybe some_span
-       doContinue f GHC.SingleStep
-
-stepModuleCmd expression = stepCmd expression
+stepModuleCmd arg = withSandboxOnly ":stepmodule" $ step arg
+  where
+  step expr
+   | not (null expr) = stepCmd expr
+   | otherwise = do
+      mb_span <- getCurrentBreakSpan
+      case mb_span of
+        Nothing  -> stepCmd []
+        Just span -> do
+           let f some_span = srcSpanFileName_maybe span == srcSpanFileName_maybe some_span
+           doContinue f GHC.SingleStep
 
 -- | Returns the span of the largest tick containing the srcspan given
 enclosingTickSpan :: Module -> SrcSpan -> GHCi SrcSpan
-enclosingTickSpan mod src = do
+enclosingTickSpan _ (UnhelpfulSpan _) = panic "enclosingTickSpan UnhelpfulSpan"
+enclosingTickSpan mod (RealSrcSpan src) = do
   ticks <- getTickArray mod
   let line = srcSpanStartLine src
   ASSERT (inRange (bounds ticks) line) do
-  let enclosing_spans = [ span | (_,span) <- ticks ! line
-                               , srcSpanEnd span >= srcSpanEnd src]
+  let toRealSrcSpan (UnhelpfulSpan _) = panic "enclosingTickSpan UnhelpfulSpan"
+      toRealSrcSpan (RealSrcSpan s) = s
+      enclosing_spans = [ span | (_,span) <- ticks ! line
+                               , realSrcSpanEnd (toRealSrcSpan span) >= realSrcSpanEnd src]
   return . head . sortBy leftmost_largest $ enclosing_spans
 
 traceCmd :: String -> GHCi ()
-traceCmd []         = doContinue (const True) GHC.RunAndLogSteps
-traceCmd expression = runStmt expression GHC.RunAndLogSteps >> return ()
+traceCmd arg
+  = withSandboxOnly ":trace" $ trace arg
+  where
+  trace []         = doContinue (const True) GHC.RunAndLogSteps
+  trace expression = runStmt expression GHC.RunAndLogSteps >> return ()
 
 continueCmd :: String -> GHCi ()
-continueCmd = noArgs $ doContinue (const True) GHC.RunToCompletion
+continueCmd = noArgs $ withSandboxOnly ":continue" $ doContinue (const True) GHC.RunToCompletion
 
 -- doContinue :: SingleStep -> GHCi ()
 doContinue :: (SrcSpan -> Bool) -> SingleStep -> GHCi ()
@@ -2084,12 +2169,12 @@ doContinue pred step = do
   return ()
 
 abandonCmd :: String -> GHCi ()
-abandonCmd = noArgs $ do
+abandonCmd = noArgs $ withSandboxOnly ":abandon" $ do
   b <- GHC.abandon -- the prompt will change to indicate the new context
   when (not b) $ liftIO $ putStrLn "There is no computation running."
 
 deleteCmd :: String -> GHCi ()
-deleteCmd argLine = do
+deleteCmd argLine = withSandboxOnly ":delete" $ do
    deleteSwitch $ words argLine
    where
    deleteSwitch :: [String] -> GHCi ()
@@ -2137,7 +2222,7 @@ bold c | do_bold   = text start_bold <> c <> text end_bold
        | otherwise = c
 
 backCmd :: String -> GHCi ()
-backCmd = noArgs $ do
+backCmd = noArgs $ withSandboxOnly ":back" $ do
   (names, _, span) <- GHC.back
   printForUser $ ptext (sLit "Logged breakpoint at") <+> ppr span
   printTypeOfNames names
@@ -2146,7 +2231,7 @@ backCmd = noArgs $ do
   enqueueCommands [stop st]
 
 forwardCmd :: String -> GHCi ()
-forwardCmd = noArgs $ do
+forwardCmd = noArgs $ withSandboxOnly ":forward" $ do
   (names, ix, span) <- GHC.forward
   printForUser $ (if (ix == 0)
                     then ptext (sLit "Stopped at")
@@ -2158,8 +2243,7 @@ forwardCmd = noArgs $ do
 
 -- handle the "break" command
 breakCmd :: String -> GHCi ()
-breakCmd argLine = do
-   breakSwitch $ words argLine
+breakCmd argLine = withSandboxOnly ":break" $ breakSwitch $ words argLine
 
 breakSwitch :: [String] -> GHCi ()
 breakSwitch [] = do
@@ -2178,13 +2262,15 @@ breakSwitch (arg1:rest)
    | otherwise = do -- try parsing it as an identifier
         wantNameFromInterpretedModule noCanDo arg1 $ \name -> do
         let loc = GHC.srcSpanStart (GHC.nameSrcSpan name)
-        if GHC.isGoodSrcLoc loc
-               then ASSERT( isExternalName name ) 
+        case loc of
+            RealSrcLoc l ->
+               ASSERT( isExternalName name ) 
 	       	    findBreakAndSet (GHC.nameModule name) $ 
-                         findBreakByCoord (Just (GHC.srcLocFile loc))
-                                          (GHC.srcLocLine loc, 
-                                           GHC.srcLocCol loc)
-               else noCanDo name $ text "can't find its location: " <> ppr loc
+                         findBreakByCoord (Just (GHC.srcLocFile l))
+                                          (GHC.srcLocLine l, 
+                                           GHC.srcLocCol l)
+            UnhelpfulLoc _ ->
+                noCanDo name $ text "can't find its location: " <> ppr loc
        where
           noCanDo n why = printForUser $
                 text "cannot set breakpoint on " <> ppr n <> text ": " <> why
@@ -2249,10 +2335,12 @@ findBreakByLine line arr
         ticks = arr ! line
 
         starts_here = [ tick | tick@(_,span) <- ticks,
-                               GHC.srcSpanStartLine span == line ]
+                               GHC.srcSpanStartLine (toRealSpan span) == line ]
 
         (complete,incomplete) = partition ends_here starts_here
-            where ends_here (_,span) = GHC.srcSpanEndLine span == line
+            where ends_here (_,span) = GHC.srcSpanEndLine (toRealSpan span) == line
+        toRealSpan (RealSrcSpan span) = span
+        toRealSpan (UnhelpfulSpan _) = panic "findBreakByLine UnhelpfulSpan"
 
 findBreakByCoord :: Maybe FastString -> (Int,Int) -> TickArray
                  -> Maybe (BreakIndex,SrcSpan)
@@ -2269,12 +2357,16 @@ findBreakByCoord mb_file (line, col) arr
                             is_correct_file span ]
 
         is_correct_file span
-                 | Just f <- mb_file = GHC.srcSpanFile span == f
+                 | Just f <- mb_file = GHC.srcSpanFile (toRealSpan span) == f
                  | otherwise         = True
 
         after_here = [ tick | tick@(_,span) <- ticks,
-                              GHC.srcSpanStartLine span == line,
-                              GHC.srcSpanStartCol span >= col ]
+                              let span' = toRealSpan span,
+                              GHC.srcSpanStartLine span' == line,
+                              GHC.srcSpanStartCol span' >= col ]
+
+        toRealSpan (RealSrcSpan span) = span
+        toRealSpan (UnhelpfulSpan _) = panic "findBreakByCoord UnhelpfulSpan"
 
 -- For now, use ANSI bold on terminals that we know support it.
 -- Otherwise, we add a line of carets under the active expression instead.
@@ -2300,9 +2392,9 @@ listCmd' "" = do
    case mb_span of
       Nothing ->
           printForUser $ text "Not stopped at a breakpoint; nothing to list"
-      Just span
-       | GHC.isGoodSrcSpan span -> listAround span True
-       | otherwise ->
+      Just (RealSrcSpan span) ->
+          listAround span True
+      Just span@(UnhelpfulSpan _) ->
           do resumes <- GHC.getResumeContext
              case resumes of
                  [] -> panic "No resumes"
@@ -2328,17 +2420,18 @@ list2 [arg1,arg2] | looksLikeModuleName arg1, all isDigit arg2 = do
 list2 [arg] = do
         wantNameFromInterpretedModule noCanDo arg $ \name -> do
         let loc = GHC.srcSpanStart (GHC.nameSrcSpan name)
-        if GHC.isGoodSrcLoc loc
-               then do
-                  tickArray <- ASSERT( isExternalName name )
+        case loc of
+            RealSrcLoc l ->
+               do tickArray <- ASSERT( isExternalName name )
 		  	       lift $ getTickArray (GHC.nameModule name)
-                  let mb_span = findBreakByCoord (Just (GHC.srcLocFile loc))
-                                        (GHC.srcLocLine loc, GHC.srcLocCol loc)
+                  let mb_span = findBreakByCoord (Just (GHC.srcLocFile l))
+                                        (GHC.srcLocLine l, GHC.srcLocCol l)
                                         tickArray
                   case mb_span of
-                    Nothing       -> listAround (GHC.srcLocSpan loc) False
-                    Just (_,span) -> listAround span False
-               else
+                    Nothing       -> listAround (realSrcLocSpan l) False
+                    Just (_, UnhelpfulSpan _) -> panic "list2 UnhelpfulSpan"
+                    Just (_, RealSrcSpan span) -> listAround span False
+            UnhelpfulLoc _ ->
                   noCanDo name $ text "can't find its location: " <>
                                  ppr loc
     where
@@ -2355,8 +2448,8 @@ listModuleLine modl line = do
      [] -> panic "listModuleLine"
      summ:_ -> do
            let filename = expectJust "listModuleLine" (ml_hs_file (GHC.ms_location summ))
-               loc = GHC.mkSrcLoc (mkFastString (filename)) line 0
-           listAround (GHC.srcLocSpan loc) False
+               loc = mkRealSrcLoc (mkFastString (filename)) line 0
+           listAround (realSrcLocSpan loc) False
 
 -- | list a section of a source file around a particular SrcSpan.
 -- If the highlight flag is True, also highlight the span using
@@ -2367,7 +2460,7 @@ listModuleLine modl line = do
 -- 2) convert the BS to String using utf-string, and write it out.
 -- It would be better if we could convert directly between UTF-8 and the
 -- console encoding, of course.
-listAround :: MonadIO m => SrcSpan -> Bool -> InputT m ()
+listAround :: MonadIO m => RealSrcSpan -> Bool -> InputT m ()
 listAround span do_highlight = do
       contents <- liftIO $ BS.readFile (unpackFS file)
       let 
@@ -2454,11 +2547,14 @@ mkTickArray :: [(BreakIndex,SrcSpan)] -> TickArray
 mkTickArray ticks
   = accumArray (flip (:)) [] (1, max_line) 
         [ (line, (nm,span)) | (nm,span) <- ticks,
-                              line <- srcSpanLines span ]
+                              let span' = toRealSpan span,
+                              line <- srcSpanLines span' ]
     where
-        max_line = foldr max 0 (map GHC.srcSpanEndLine (map snd ticks))
+        max_line = foldr max 0 (map (GHC.srcSpanEndLine . toRealSpan . snd) ticks)
         srcSpanLines span = [ GHC.srcSpanStartLine span .. 
                               GHC.srcSpanEndLine span ]
+        toRealSpan (RealSrcSpan span) = span
+        toRealSpan (UnhelpfulSpan _) = panic "mkTickArray UnhelpfulSpan"
 
 lookupModule :: GHC.GhcMonad m => String -> m Module
 lookupModule modName
@@ -2500,3 +2596,4 @@ setBreakFlag :: Bool -> GHC.BreakArray -> Int -> IO Bool
 setBreakFlag toggle array index
    | toggle    = GHC.setBreakOn array index 
    | otherwise = GHC.setBreakOff array index
+

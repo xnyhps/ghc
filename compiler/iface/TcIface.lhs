@@ -40,7 +40,7 @@ import TyCon
 import DataCon
 import TysWiredIn
 import TysPrim          ( anyTyConOfKind )
-import BasicTypes       ( Arity, nonRuleLoopBreaker )
+import BasicTypes       ( Arity, strongLoopBreaker )
 import qualified Var
 import VarEnv
 import VarSet
@@ -265,10 +265,10 @@ typecheckIface iface
 	; writeMutVar tc_env_var type_env
 
 		-- Now do those rules, instances and annotations
-	; insts     <- mapM tcIfaceInst    (mi_insts     iface)
+	; insts     <- mapM tcIfaceInst (mi_insts iface)
 	; fam_insts <- mapM tcIfaceFamInst (mi_fam_insts iface)
 	; rules     <- tcIfaceRules ignore_prags (mi_rules iface)
-	; anns      <- tcIfaceAnnotations  (mi_anns iface)
+	; anns      <- tcIfaceAnnotations (mi_anns iface)
 
                 -- Vectorisation information
         ; vect_info <- tcIfaceVectInfo (mi_module iface) type_env 
@@ -590,11 +590,11 @@ look at it.
 \begin{code}
 tcIfaceInst :: IfaceInst -> IfL Instance
 tcIfaceInst (IfaceInst { ifDFun = dfun_occ, ifOFlag = oflag,
-			 ifInstCls = cls, ifInstTys = mb_tcs })
-  = do	{ dfun    <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
-		     tcIfaceExtId dfun_occ
-        ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
-	; return (mkImportedInstance cls mb_tcs' dfun oflag) }
+                              ifInstCls = cls, ifInstTys = mb_tcs })
+  = do { dfun    <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
+                     tcIfaceExtId dfun_occ
+       ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
+       ; return (mkImportedInstance cls mb_tcs' dfun oflag) }
 
 tcIfaceFamInst :: IfaceFamInst -> IfL FamInst
 tcIfaceFamInst (IfaceFamInst { ifFamInstTyCon = tycon, 
@@ -1026,8 +1026,8 @@ do_one (IfaceRec pairs) thing_inside
 \begin{code}
 tcIdDetails :: Type -> IfaceIdDetails -> IfL IdDetails
 tcIdDetails _  IfVanillaId = return VanillaId
-tcIdDetails ty (IfDFunId ns)
-  = return (DFunId ns (isNewTyCon (classTyCon cls)))
+tcIdDetails ty IfDFunId
+  = return (DFunId (isNewTyCon (classTyCon cls)))
   where
     (_, _, cls, _) = tcSplitDFunTy ty
 
@@ -1055,7 +1055,7 @@ tcIdInfo ignore_prags name ty info
 	-- The next two are lazy, so they don't transitively suck stuff in
     tcPrag info (HsUnfold lb if_unf) 
       = do { unf <- tcUnfolding name ty info if_unf
-    	   ; let info1 | lb        = info `setOccInfo` nonRuleLoopBreaker
+    	   ; let info1 | lb        = info `setOccInfo` strongLoopBreaker
 	     	       | otherwise = info
 	   ; return (info1 `setUnfoldingInfoLazily` unf) }
 
@@ -1113,15 +1113,12 @@ tcUnfolding name _ _ (IfInlineRule arity unsat_ok boring_ok if_expr)
     }
 
 tcUnfolding name dfun_ty _ (IfDFunUnfold ops)
-  = do { mb_ops1 <- forkM_maybe doc $ mapM tc_arg ops
+  = do { mb_ops1 <- forkM_maybe doc $ mapM tcIfaceExpr ops
        ; return (case mb_ops1 of
        	 	    Nothing   -> noUnfolding
                     Just ops1 -> mkDFunUnfolding dfun_ty ops1) }
   where
     doc = text "Class ops for dfun" <+> ppr name
-    tc_arg (DFunPolyArg  e) = do { e' <- tcIfaceExpr e; return (DFunPolyArg e') }
-    tc_arg (DFunConstArg e) = do { e' <- tcIfaceExpr e; return (DFunConstArg e') }
-    tc_arg (DFunLamArg i)   = return (DFunLamArg i)
 
 tcUnfolding name ty info (IfExtWrapper arity wkr)
   = tcIfaceWrapper name ty info arity (tcIfaceExtId wkr)

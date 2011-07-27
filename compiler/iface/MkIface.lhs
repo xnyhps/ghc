@@ -106,35 +106,37 @@ import System.FilePath
 
 
 %************************************************************************
-%*				 					*
+%*                                                                      *
 \subsection{Completing an interface}
-%*				 					*
+%*                                                                      *
 %************************************************************************
 
 \begin{code}
 mkIface :: HscEnv
-	-> Maybe Fingerprint	-- The old fingerprint, if we have it
-	-> ModDetails		-- The trimmed, tidied interface
-	-> ModGuts		-- Usages, deprecations, etc
-	-> IO (Messages,
+        -> Maybe Fingerprint    -- The old fingerprint, if we have it
+        -> ModDetails           -- The trimmed, tidied interface
+        -> ModGuts              -- Usages, deprecations, etc
+        -> IO (Messages,
                Maybe (ModIface, -- The new one
-	              Bool))	-- True <=> there was an old Iface, and the
+                      Bool))    -- True <=> there was an old Iface, and the
                                 --          new one is identical, so no need
                                 --          to write it
 
 mkIface hsc_env maybe_old_fingerprint mod_details
-	 ModGuts{     mg_module    = this_mod,
-		      mg_boot      = is_boot,
-		      mg_used_names = used_names,
-		      mg_deps      = deps,
-                      mg_dir_imps  = dir_imp_mods,
-		      mg_rdr_env   = rdr_env,
-		      mg_fix_env   = fix_env,
-		      mg_warns   = warns,
-	              mg_hpc_info  = hpc_info }
+         ModGuts{     mg_module     = this_mod,
+                      mg_boot       = is_boot,
+                      mg_used_names = used_names,
+                      mg_used_th    = used_th,
+                      mg_deps       = deps,
+                      mg_dir_imps   = dir_imp_mods,
+                      mg_rdr_env    = rdr_env,
+                      mg_fix_env    = fix_env,
+                      mg_warns      = warns,
+                      mg_hpc_info   = hpc_info,
+                      mg_trust_pkg  = self_trust }
         = mkIface_ hsc_env maybe_old_fingerprint
-                   this_mod is_boot used_names deps rdr_env 
-                   fix_env warns hpc_info dir_imp_mods mod_details
+                   this_mod is_boot used_names used_th deps rdr_env fix_env
+                   warns hpc_info dir_imp_mods self_trust mod_details
 
 -- | make an interface from the results of typechecking only.  Useful
 -- for non-optimising compilation, or where we aren't generating any
@@ -151,20 +153,25 @@ mkIfaceTc hsc_env maybe_old_fingerprint mod_details
                       tcg_rdr_env = rdr_env,
                       tcg_fix_env = fix_env,
                       tcg_warns = warns,
-                      tcg_hpc = other_hpc_info
+                      tcg_hpc = other_hpc_info,
+                      tcg_th_splice_used = tc_splice_used
                     }
   = do
           let used_names = mkUsedNames tc_result
           deps <- mkDependencies tc_result
           let hpc_info = emptyHpcInfo other_hpc_info
+          used_th <- readIORef tc_splice_used
           mkIface_ hsc_env maybe_old_fingerprint
-                   this_mod (isHsBoot hsc_src) used_names deps rdr_env 
-                   fix_env warns hpc_info (imp_mods imports) mod_details
+                   this_mod (isHsBoot hsc_src) used_names used_th deps rdr_env
+                   fix_env warns hpc_info (imp_mods imports)
+                   (imp_trust_own_pkg imports) mod_details
         
 
 mkUsedNames :: TcGblEnv -> NameSet
 mkUsedNames TcGblEnv{ tcg_dus = dus } = allUses dus
         
+-- | Extract information from the rename and typecheck phases to produce
+-- a dependencies information for the module being compiled.
 mkDependencies :: TcGblEnv -> IO Dependencies
 mkDependencies
           TcGblEnv{ tcg_mod = mod,
@@ -172,9 +179,9 @@ mkDependencies
                     tcg_th_used = th_var
                   }
  = do 
-      th_used   <- readIORef th_var                     -- Whether TH is used
-      let
-        dep_mods = eltsUFM (delFromUFM (imp_dep_mods imports) (moduleName mod))
+      -- Template Haskell used?
+      th_used <- readIORef th_var
+      let dep_mods = eltsUFM (delFromUFM (imp_dep_mods imports) (moduleName mod))
                 -- M.hi-boot can be in the imp_dep_mods, but we must remove
                 -- it before recording the modules on which this one depends!
                 -- (We want to retain M.hi-boot in imp_dep_mods so that 
@@ -182,25 +189,31 @@ mkDependencies
                 --  on M.hi-boot, and hence that we should do the hi-boot consistency 
                 --  check.)
 
-        pkgs | th_used   = insertList thPackageId (imp_dep_pkgs imports)
-             | otherwise = imp_dep_pkgs imports
+          pkgs | th_used   = insertList thPackageId (imp_dep_pkgs imports)
+               | otherwise = imp_dep_pkgs imports
+
+          -- Set the packages required to be Safe according to Safe Haskell.
+          -- See Note [RnNames . Tracking Trust Transitively]
+          sorted_pkgs = sortBy stablePackageIdCmp pkgs
+          trust_pkgs  = imp_trust_pkgs imports
+          dep_pkgs'   = map (\x -> (x, x `elem` trust_pkgs)) sorted_pkgs
 
       return Deps { dep_mods   = sortBy (stableModuleNameCmp `on` fst) dep_mods,
-                    dep_pkgs   = sortBy stablePackageIdCmp pkgs,
+                    dep_pkgs   = dep_pkgs',
                     dep_orphs  = sortBy stableModuleCmp (imp_orphs  imports),
                     dep_finsts = sortBy stableModuleCmp (imp_finsts imports) }
-                -- sort to get into canonical order
-                -- NB. remember to use lexicographic ordering
+                    -- sort to get into canonical order
+                    -- NB. remember to use lexicographic ordering
 
 mkIface_ :: HscEnv -> Maybe Fingerprint -> Module -> IsBootInterface
-         -> NameSet -> Dependencies -> GlobalRdrEnv
+         -> NameSet -> Bool -> Dependencies -> GlobalRdrEnv
          -> NameEnv FixItem -> Warnings -> HpcInfo
-         -> ImportedMods
+         -> ImportedMods -> Bool
          -> ModDetails
-	 -> IO (Messages, Maybe (ModIface, Bool))
+         -> IO (Messages, Maybe (ModIface, Bool))
 mkIface_ hsc_env maybe_old_fingerprint 
-         this_mod is_boot used_names deps rdr_env fix_env src_warns hpc_info
-         dir_imp_mods
+         this_mod is_boot used_names used_th deps rdr_env fix_env src_warns
+         hpc_info dir_imp_mods pkg_trust_req
 	 ModDetails{  md_insts 	   = insts, 
 		      md_fam_insts = fam_insts,
 		      md_rules 	   = rules,
@@ -227,11 +240,12 @@ mkIface_ hsc_env maybe_old_fingerprint
 				-- Sigh: see Note [Root-main Id] in TcRnDriver
 
 		; fixities    = [(occ,fix) | FixItem occ fix <- nameEnvElts fix_env]
-		; warns     = src_warns
+		; warns       = src_warns
 		; iface_rules = map (coreRuleToIfaceRule this_mod) rules
 		; iface_insts = map instanceToIfaceInst insts
 		; iface_fam_insts = map famInstToIfaceFamInst fam_insts
                 ; iface_vect_info = flattenVectInfo vect_info
+                ; trust_info  = (setSafeMode . safeHaskell) dflags
 
 	        ; intermediate_iface = ModIface { 
 			mi_module   = this_mod,
@@ -257,13 +271,16 @@ mkIface_ hsc_env maybe_old_fingerprint
 			mi_iface_hash = fingerprint0,
 			mi_mod_hash  = fingerprint0,
  			mi_exp_hash  = fingerprint0,
- 			mi_orphan_hash = fingerprint0,
+                        mi_used_th   = used_th,
+                        mi_orphan_hash = fingerprint0,
 			mi_orphan    = False,	-- Always set by addVersionInfo, but
 						-- it's a strict field, so we can't omit it.
                         mi_finsts    = False,   -- Ditto
 			mi_decls     = deliberatelyOmitted "decls",
 			mi_hash_fn   = deliberatelyOmitted "hash_fn",
 			mi_hpc       = isHpcUsed hpc_info,
+			mi_trust     = trust_info,
+			mi_trust_pkg = pkg_trust_req,
 
 			-- And build the cached values
 			mi_warn_fn = mkIfaceWarnCache warns,
@@ -276,8 +293,8 @@ mkIface_ hsc_env maybe_old_fingerprint
                                          intermediate_iface decls
 
 		-- Warn about orphans
-	; let warn_orphs      = dopt Opt_WarnOrphans dflags
-              warn_auto_orphs = dopt Opt_WarnAutoOrphans dflags
+	; let warn_orphs      = wopt Opt_WarnOrphans dflags
+              warn_auto_orphs = wopt Opt_WarnAutoOrphans dflags
               orph_warnings   --- Laziness means no work done unless -fwarn-orphans
 	        | warn_orphs || warn_auto_orphs = rule_warns `unionBags` inst_warns
 	        | otherwise 	       	        = emptyBag
@@ -296,8 +313,6 @@ mkIface_ hsc_env maybe_old_fingerprint
             then return ( errs_and_warns, Nothing )
             else do {
 
--- XXX	; when (dopt Opt_D_dump_hi_diffs dflags) (printDump pp_diffs)
-   
 	   	-- Debug printing
 	; dumpIfSet_dyn dflags Opt_D_dump_hi "FINAL INTERFACE" 
 			(pprModIface new_iface)
@@ -463,7 +478,7 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
           = do let hash_fn = mk_put_name local_env
                    decl = abiDecl abi
                -- pprTrace "fingerprinting" (ppr (ifName decl) ) $ do
-               hash <- computeFingerprint dflags hash_fn abi
+               hash <- computeFingerprint hash_fn abi
                return (extend_hash_env (hash,decl) local_env,
                        (hash,decl) : decls_w_hashes)
 
@@ -475,7 +490,7 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
                -- pprTrace "fingerprinting" (ppr (map ifName decls) ) $ do
                let stable_abis = sortBy cmp_abiNames abis
                 -- put the cycle in a canonical order
-               hash <- computeFingerprint dflags hash_fn stable_abis
+               hash <- computeFingerprint hash_fn stable_abis
                let pairs = zip (repeat hash) decls
                return (foldr extend_hash_env local_env pairs,
                        pairs ++ decls_w_hashes)
@@ -509,18 +524,20 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
                    $ dep_orphs sorted_deps
    dep_orphan_hashes <- getOrphanHashes hsc_env orph_mods
 
-   orphan_hash <- computeFingerprint dflags (mk_put_name local_env)
+   orphan_hash <- computeFingerprint (mk_put_name local_env)
                       (map ifDFun orph_insts, orph_rules, fam_insts)
 
    -- the export list hash doesn't depend on the fingerprints of
    -- the Names it mentions, only the Names themselves, hence putNameLiterally.
-   export_hash <- computeFingerprint dflags putNameLiterally 
+   export_hash <- computeFingerprint putNameLiterally
                       (mi_exports iface0,
                        orphan_hash,
                        dep_orphan_hashes,
-                       dep_pkgs (mi_deps iface0))
+                       dep_pkgs (mi_deps iface0),
                         -- dep_pkgs: see "Package Version Changes" on
                         -- wiki/Commentary/Compiler/RecompilationAvoidance
+                       mi_trust iface0)
+                        -- Make sure change of Safe Haskell mode causes recomp.
 
    -- put the declarations in a canonical order, sorted by OccName
    let sorted_decls = Map.elems $ Map.fromList $
@@ -532,7 +549,7 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
    --   - orphans
    --   - deprecations
    --   - XXX vect info?
-   mod_hash <- computeFingerprint dflags putNameLiterally
+   mod_hash <- computeFingerprint putNameLiterally
                       (map fst sorted_decls,
                        export_hash,
                        orphan_hash,
@@ -543,7 +560,7 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
    --    - usages
    --    - deps
    --    - hpc
-   iface_hash <- computeFingerprint dflags putNameLiterally
+   iface_hash <- computeFingerprint putNameLiterally
                       (mod_hash, 
                        mi_usages iface0,
                        sorted_deps,
@@ -594,7 +611,7 @@ getOrphanHashes hsc_env mods = do
 sortDependencies :: Dependencies -> Dependencies
 sortDependencies d
  = Deps { dep_mods   = sortBy (compare `on` (moduleNameFS.fst)) (dep_mods d),
-          dep_pkgs   = sortBy (compare `on` packageIdFS)  (dep_pkgs d),
+          dep_pkgs   = sortBy (stablePackageIdCmp `on` fst) (dep_pkgs d),
           dep_orphs  = sortBy stableModuleCmp (dep_orphs d),
           dep_finsts = sortBy stableModuleCmp (dep_finsts d) }
 \end{code}
@@ -736,19 +753,6 @@ putNameLiterally bh name = ASSERT( isExternalName name )
   do { put_ bh $! nameModule name
      ; put_ bh $! nameOccName name }
 
-computeFingerprint :: Binary a
-                   => DynFlags 
-                   -> (BinHandle -> Name -> IO ())
-                   -> a
-                   -> IO Fingerprint
-
-computeFingerprint _dflags put_name a = do
-  bh <- openBinMem (3*1024) -- just less than a block
-  ud <- newWriteState put_name putFS
-  bh <- return $ setUserData bh ud
-  put_ bh a
-  fingerprintBinMem bh
-
 {-
 -- for testing: use the md5sum command to generate fingerprints and
 -- compare the results against our built-in version.
@@ -871,7 +875,8 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
 
       | modulePackageId mod /= this_pkg
       = Just UsagePackageModule{ usg_mod      = mod,
-                                 usg_mod_hash = mod_hash }
+                                 usg_mod_hash = mod_hash,
+                                 usg_safe     = imp_safe }
         -- for package modules, we record the module hash only
 
       | (null used_occs
@@ -886,22 +891,29 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
       | otherwise	
       = Just UsageHomeModule { 
                       usg_mod_name = moduleName mod,
-    	  	      usg_mod_hash = mod_hash,
-    		      usg_exports  = export_hash,
-    		      usg_entities = Map.toList ent_hashs }
+                      usg_mod_hash = mod_hash,
+                      usg_exports  = export_hash,
+                      usg_entities = Map.toList ent_hashs,
+                      usg_safe     = imp_safe }
       where
-	maybe_iface  = lookupIfaceByModule dflags hpt pit mod
-		-- In one-shot mode, the interfaces for home-package 
-		-- modules accumulate in the PIT not HPT.  Sigh.
-
-        is_direct_import = mod `elemModuleEnv` direct_imports
+        maybe_iface  = lookupIfaceByModule dflags hpt pit mod
+                -- In one-shot mode, the interfaces for home-package
+                -- modules accumulate in the PIT not HPT.  Sigh.
 
         Just iface   = maybe_iface
 	finsts_mod   = mi_finsts    iface
         hash_env     = mi_hash_fn   iface
         mod_hash     = mi_mod_hash  iface
         export_hash | depend_on_exports = Just (mi_exp_hash iface)
-    		    | otherwise         = Nothing
+                    | otherwise         = Nothing
+
+        (is_direct_import, imp_safe)
+            = case lookupModuleEnv direct_imports mod of
+                Just ((_,_,_,safe):_xs) -> (True, safe)
+                Just _                  -> pprPanic "mkUsage: empty direct import" empty
+                Nothing                 -> (False, safeImplicitImpsReq dflags)
+                -- Nothing case is for implicit imports like 'System.IO' when 'putStrLn'
+                -- is used in the source code. We require them to be safe in Safe Haskell
     
         used_occs = lookupModuleEnv ent_map mod `orElse` []
 
@@ -1024,58 +1036,65 @@ so we may need to split up a single Avail into multiple ones.
 \begin{code}
 checkOldIface :: HscEnv
 	      -> ModSummary
-	      -> Bool 			-- Source unchanged
+              -> SourceModified
 	      -> Maybe ModIface 	-- Old interface from compilation manager, if any
 	      -> IO (RecompileRequired, Maybe ModIface)
 
-checkOldIface hsc_env mod_summary source_unchanged maybe_iface
-  = do	{ showPass (hsc_dflags hsc_env) 
-	           ("Checking old interface for " ++ 
-			showSDoc (ppr (ms_mod mod_summary))) ;
+checkOldIface hsc_env mod_summary source_modified maybe_iface
+  = do  showPass (hsc_dflags hsc_env) $
+            "Checking old interface for " ++ (showSDoc $ ppr $ ms_mod mod_summary)
+        initIfaceCheck hsc_env $
+            check_old_iface hsc_env mod_summary source_modified maybe_iface
 
-	; initIfaceCheck hsc_env $
-	  check_old_iface hsc_env mod_summary source_unchanged maybe_iface
-     }
-
-check_old_iface :: HscEnv -> ModSummary -> Bool -> Maybe ModIface
+check_old_iface :: HscEnv -> ModSummary -> SourceModified -> Maybe ModIface
                 -> IfG (Bool, Maybe ModIface)
-check_old_iface hsc_env mod_summary source_unchanged maybe_iface
- =  do 	-- CHECK WHETHER THE SOURCE HAS CHANGED
-    { when (not source_unchanged)
-	   (traceHiDiffs (nest 4 (text "Source file changed or recompilation check turned off")))
+check_old_iface hsc_env mod_summary src_modified maybe_iface
+  = let dflags = hsc_dflags hsc_env
+        getIface =
+             case maybe_iface of
+                 Just _  -> do
+                     traceIf (text "We already have the old interface for" <+> ppr (ms_mod mod_summary))
+                     return maybe_iface
+                 Nothing -> do
+                     let iface_path = msHiFilePath mod_summary
+                     read_result <- readIface (ms_mod mod_summary) iface_path False
+                     case read_result of
+                         Failed err -> do
+                             traceIf (text "FYI: cannont read old interface file:" $$ nest 4 err)
+                             return Nothing
+                         Succeeded iface -> do
+                             traceIf (text "Read the interface file" <+> text iface_path)
+                             return $ Just iface
 
-     -- If the source has changed and we're in interactive mode, avoid reading
-     -- an interface; just return the one we might have been supplied with.
-    ; let dflags = hsc_dflags hsc_env
-    ; if not (isObjectTarget (hscTarget dflags)) && not source_unchanged then
-         return (outOfDate, maybe_iface)
-      else
-      case maybe_iface of {
-        Just old_iface -> do -- Use the one we already have
-	  { traceIf (text "We already have the old interface for" <+> ppr (ms_mod mod_summary))
-	  ; recomp <- checkVersions hsc_env source_unchanged mod_summary old_iface
-	  ; return (recomp, Just old_iface) }
+    in do
+         let src_changed
+              | dopt Opt_ForceRecomp (hsc_dflags hsc_env) = True
+              | SourceModified <- src_modified = True
+              | otherwise = False
 
-      ; Nothing -> do
+         when src_changed
+             (traceHiDiffs (nest 4 (text "Source file changed or recompilation check turned off")))
 
-	-- Try and read the old interface for the current module
-	-- from the .hi file left from the last time we compiled it
-    { let iface_path = msHiFilePath mod_summary
-    ; read_result <- readIface (ms_mod mod_summary) iface_path False
-    ; case read_result of {
-         Failed err -> do	-- Old interface file not found, or garbled; give up
-		{ traceIf (text "FYI: cannot read old interface file:"
-			   	 $$ nest 4 err)
-	        ; return (outOfDate, Nothing) }
-
-      ;  Succeeded iface -> do
-
-	-- We have got the old iface; check its versions
-    { traceIf (text "Read the interface file" <+> text iface_path)
-    ; recomp <- checkVersions hsc_env source_unchanged mod_summary iface
-    ; return (recomp, Just iface)
-    }}}}}
-
+         -- If the source has changed and we're in interactive mode,
+         -- avoid reading an interface; just return the one we might
+         -- have been supplied with.
+         if not (isObjectTarget $ hscTarget dflags) && src_changed
+            then return (outOfDate, maybe_iface)
+            else do
+                -- Try and read the old interface for the current module
+                -- from the .hi file left from the last time we compiled it
+                maybe_iface' <- getIface
+                if src_changed
+                   then return (outOfDate, maybe_iface')
+                   else do
+                case maybe_iface' of
+                    Nothing -> return (outOfDate, maybe_iface')
+                    Just iface ->
+                      -- We have got the old iface; check its versions
+                      -- even in the SourceUnmodifiedAndStable case we
+                      -- should check versions because some packages
+                      -- might have changed or gone away.
+                      checkVersions hsc_env mod_summary iface
 \end{code}
 
 @recompileRequired@ is called from the HscMain.   It checks whether
@@ -1089,41 +1108,45 @@ upToDate, outOfDate :: Bool
 upToDate  = False	-- Recompile not required
 outOfDate = True	-- Recompile required
 
+-- | Check the safe haskell flags haven't changed
+--   (e.g different flag on command line now)
+safeHsChanged :: HscEnv -> ModIface -> Bool
+safeHsChanged hsc_env iface
+  = (getSafeMode $ mi_trust iface) /= (safeHaskell $ hsc_dflags hsc_env)
+
 checkVersions :: HscEnv
-	      -> Bool		-- True <=> source unchanged
               -> ModSummary
 	      -> ModIface 	-- Old interface
-	      -> IfG RecompileRequired
-checkVersions hsc_env source_unchanged mod_summary iface
-  | not source_unchanged
-  = return outOfDate
-  | otherwise
-  = do	{ traceHiDiffs (text "Considering whether compilation is required for" <+> 
-		        ppr (mi_module iface) <> colon)
+	      -> IfG (RecompileRequired, Maybe ModIface)
+checkVersions hsc_env mod_summary iface
+  = do { traceHiDiffs (text "Considering whether compilation is required for" <+>
+                        ppr (mi_module iface) <> colon)
 
-        ; recomp <- checkDependencies hsc_env mod_summary iface
-        ; if recomp then return outOfDate else do {
+       ; recomp <- checkDependencies hsc_env mod_summary iface
+       ; if recomp then return (outOfDate, Just iface) else do {
+       ; if trust_dif then return (outOfDate, Nothing) else do {
 
-	-- Source code unchanged and no errors yet... carry on 
-        --
-	-- First put the dependent-module info, read from the old
-	-- interface, into the envt, so that when we look for
-	-- interfaces we look for the right one (.hi or .hi-boot)
-	-- 
-	-- It's just temporary because either the usage check will succeed 
-	-- (in which case we are done with this module) or it'll fail (in which
-	-- case we'll compile the module from scratch anyhow).
-	--	
-	-- We do this regardless of compilation mode, although in --make mode
-	-- all the dependent modules should be in the HPT already, so it's
-	-- quite redundant
-	  updateEps_ $ \eps  -> eps { eps_is_boot = mod_deps }
-
-	; let this_pkg = thisPackage (hsc_dflags hsc_env)
-	; checkList [checkModUsage this_pkg u | u <- mi_usages iface]
-    }}
+       -- Source code unchanged and no errors yet... carry on
+       --
+       -- First put the dependent-module info, read from the old
+       -- interface, into the envt, so that when we look for
+       -- interfaces we look for the right one (.hi or .hi-boot)
+       --
+       -- It's just temporary because either the usage check will succeed
+       -- (in which case we are done with this module) or it'll fail (in which
+       -- case we'll compile the module from scratch anyhow).
+       --
+       -- We do this regardless of compilation mode, although in --make mode
+       -- all the dependent modules should be in the HPT already, so it's
+       -- quite redundant
+       ; updateEps_ $ \eps  -> eps { eps_is_boot = mod_deps }
+       ; recomp <- checkList [checkModUsage this_pkg u | u <- mi_usages iface]
+       ; return (recomp, Just iface)
+    }}}
   where
-	-- This is a bit of a hack really
+    this_pkg  = thisPackage (hsc_dflags hsc_env)
+    trust_dif = safeHsChanged hsc_env iface
+    -- This is a bit of a hack really
     mod_deps :: ModuleNameEnv (ModuleName, IsBootInterface)
     mod_deps = mkModDeps (dep_mods (mi_deps iface))
 
@@ -1150,7 +1173,7 @@ checkDependencies hsc_env summary iface
    orM = foldr f (return False)
     where f m rest = do b <- m; if b then return True else rest
 
-   dep_missing (L _ (ImportDecl (L _ mod) pkg _ _ _ _)) = do
+   dep_missing (L _ (ImportDecl (L _ mod) pkg _ _ _ _ _)) = do
      find_res <- liftIO $ findImportedModule hsc_env mod pkg
      case find_res of
         Found _ mod
@@ -1163,7 +1186,7 @@ checkDependencies hsc_env summary iface
                  else
                          return upToDate
           | otherwise
-           -> if pkg `notElem` prev_dep_pkgs
+           -> if pkg `notElem` (map fst prev_dep_pkgs)
                  then do traceHiDiffs $
                            text "imported module " <> quotes (ppr mod) <>
                            text " is from package " <> quotes (ppr pkg) <>
@@ -1474,7 +1497,7 @@ toIfaceLetBndr id  = IfLetBndr (occNameFS (getOccName id))
 --------------------------
 toIfaceIdDetails :: IdDetails -> IfaceIdDetails
 toIfaceIdDetails VanillaId 		        = IfVanillaId
-toIfaceIdDetails (DFunId ns _)                  = IfDFunId ns
+toIfaceIdDetails (DFunId {})                    = IfDFunId 
 toIfaceIdDetails (RecSelId { sel_naughty = n
 		 	   , sel_tycon = tc })  = IfRecSelId (toIfaceTyCon tc) n
 toIfaceIdDetails other	     		        = pprTrace "toIfaceIdDetails" (ppr other) 
@@ -1508,7 +1531,7 @@ toIfaceIdInfo id_info
 
     ------------  Unfolding  --------------
     unfold_hsinfo = toIfUnfolding loop_breaker (unfoldingInfo id_info) 
-    loop_breaker  = isNonRuleLoopBreaker (occInfo id_info)
+    loop_breaker  = isStrongLoopBreaker (occInfo id_info)
 					
     ------------  Inline prag  --------------
     inline_prag = inlinePragInfo id_info
@@ -1562,7 +1585,7 @@ toIfUnfolding lb (CoreUnfolding { uf_tmpl = rhs, uf_arity = arity
     if_rhs = toIfaceExpr rhs
 
 toIfUnfolding lb (DFunUnfolding _ar _con ops)
-  = Just (HsUnfold lb (IfDFunUnfold (map (fmap toIfaceExpr) ops)))
+  = Just (HsUnfold lb (IfDFunUnfold (map toIfaceExpr ops)))
       -- No need to serialise the data constructor; 
       -- we can recover it from the type of the dfun
 

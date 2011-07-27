@@ -26,6 +26,7 @@ module HsTypes (
 	hsTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
+	splitHsAppTys, mkHsAppTys,
 	
 	-- Type place holder
 	PostTcType, placeHolderType, PostTcKind, placeHolderKind,
@@ -160,13 +161,9 @@ data HsType name
 
   | HsOpTy		(LHsType name) (Located name) (LHsType name)
 
-  | HsParTy		(LHsType name)   
+  | HsParTy		(LHsType name)   -- See Note [Parens in HsSyn] in HsExpr
 	-- Parenthesis preserved for the precedence re-arrangement in RnTypes
 	-- It's important that a * (b + c) doesn't get rearranged to (a*b) + c!
-	-- 
-	-- However, NB that toHsType doesn't add HsParTys (in an effort to keep
-	-- interface files smaller), so when printing a HsType we may need to
-	-- add parens.  
 
   | HsPredTy		(HsPred name)	-- Only used in the type of an instance
 					-- declaration, eg.  Eq [a] -> Eq a
@@ -292,6 +289,19 @@ replaceTyVarName (KindedTyVar _ k) n' = KindedTyVar n' k
 
 
 \begin{code}
+splitHsAppTys :: LHsType n -> [LHsType n] -> (LHsType n, [LHsType n])
+splitHsAppTys (L _ (HsAppTy f a)) as = splitHsAppTys f (a:as)
+splitHsAppTys f          	  as = (f,as)
+
+mkHsAppTys :: OutputableBndr n => LHsType n -> [LHsType n] -> HsType n
+mkHsAppTys fun_ty [] = pprPanic "mkHsAppTys" (ppr fun_ty)
+mkHsAppTys fun_ty (arg_ty:arg_tys)
+  = foldl mk_app (HsAppTy fun_ty arg_ty) arg_tys
+  where
+    mk_app fun arg = HsAppTy (noLoc fun) arg	
+       -- Add noLocs for inner nodes of the application; 
+       -- they are never used 
+
 splitHsInstDeclTy 
     :: OutputableBndr name
     => HsType name 

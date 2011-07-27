@@ -4,8 +4,20 @@
 WERROR          = -Werror
 
 HADDOCK_DOCS    = YES
+
 SRC_CC_OPTS     += -Wall $(WERROR)
+# Debian doesn't turn -Werror=unused-but-set-variable on by default, so
+# we turn it on explicitly for consistency with other users
+ifeq "$(GccLT46)" "NO"
+SRC_CC_OPTS	    += -Werror=unused-but-set-variable
+# gcc 4.6 gives 3 warning for giveCapabilityToTask not being inlined
+SRC_CC_OPTS     += -Wno-error=inline
+endif
+
 SRC_HC_OPTS     += -Wall $(WERROR) -H64m -O0
+
+# Safe by default
+#SRC_HC_OPTS += -Dsh_SAFE_DEFAULT
 
 GhcStage1HcOpts += -O
 
@@ -23,7 +35,7 @@ STRIP_CMD       = :
 CHECK_PACKAGES = YES
 
 # We want to install DPH when validating, so that we can test it
-InstallExtraPackages = YES    
+InstallExtraPackages = YES
 
 # dblatex with miktex under msys/mingw can't build the PS and PDF docs,
 # and just building the HTML docs is sufficient to check that the
@@ -49,7 +61,9 @@ libraries/containers_dist-install_EXTRA_HC_OPTS += -fno-warn-incomplete-patterns
 libraries/bytestring_dist-install_EXTRA_HC_OPTS += -fno-warn-identities
 
 # Temporarily turn off unused-do-bind warnings for the time package
-libraries/time_dist-install_EXTRA_HC_OPTS += -fno-warn-unused-do-bind
+libraries/time_dist-install_EXTRA_HC_OPTS += -fno-warn-unused-do-bind 
+# Temporary: mkTyCon is deprecated
+libraries/time_dist-install_EXTRA_HC_OPTS += -fno-warn-deprecations
 # On Windows, there are also some unused import warnings
 libraries/time_dist-install_EXTRA_HC_OPTS += -fno-warn-unused-imports -fno-warn-identities
 
@@ -82,6 +96,10 @@ libraries/dph/dph-prim-seq_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-prim-par_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-seq_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-par_dist-install_EXTRA_HC_OPTS += -Wwarn
+
+# We need to turn of deprecated warnings for SafeHaskell transition
+libraries/array_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
+libraries/binary_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
 
 # We need -fno-warn-deprecated-flags to avoid failure with -Werror
 GhcLibHcOpts += -fno-warn-deprecated-flags

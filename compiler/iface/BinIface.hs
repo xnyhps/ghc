@@ -17,7 +17,6 @@ import IfaceEnv
 import HscTypes
 import BasicTypes
 import Annotations
-import CoreSyn
 import IfaceSyn
 import Module
 import Name
@@ -380,7 +379,8 @@ instance Binary ModIface where
 		 mi_usages    = usages,
 		 mi_exports   = exports,
 		 mi_exp_hash  = exp_hash,
-		 mi_fixities  = fixities,
+                 mi_used_th   = used_th,
+                 mi_fixities  = fixities,
 		 mi_warns     = warns,
 		 mi_anns      = anns,
 		 mi_decls     = decls,
@@ -389,7 +389,9 @@ instance Binary ModIface where
 		 mi_rules     = rules,
 		 mi_orphan_hash = orphan_hash,
                  mi_vect_info = vect_info,
-		 mi_hpc       = hpc_info }) = do
+                 mi_hpc       = hpc_info,
+                 mi_trust     = trust,
+                 mi_trust_pkg = trust_pkg }) = do
 	put_ bh mod
 	put_ bh is_boot
 	put_ bh iface_hash
@@ -400,7 +402,8 @@ instance Binary ModIface where
 	lazyPut bh usages
 	put_ bh exports
 	put_ bh exp_hash
-	put_ bh fixities
+        put_ bh used_th
+        put_ bh fixities
 	lazyPut bh warns
 	lazyPut bh anns
         put_ bh decls
@@ -410,6 +413,8 @@ instance Binary ModIface where
 	put_ bh orphan_hash
         put_ bh vect_info
 	put_ bh hpc_info
+	put_ bh trust
+	put_ bh trust_pkg
 
    get bh = do
 	mod_name  <- get bh
@@ -422,7 +427,8 @@ instance Binary ModIface where
 	usages	  <- {-# SCC "bin_usages" #-} lazyGet bh
 	exports	  <- {-# SCC "bin_exports" #-} get bh
 	exp_hash  <- get bh
-	fixities  <- {-# SCC "bin_fixities" #-} get bh
+        used_th   <- get bh
+        fixities  <- {-# SCC "bin_fixities" #-} get bh
 	warns     <- {-# SCC "bin_warns" #-} lazyGet bh
 	anns      <- {-# SCC "bin_anns" #-} lazyGet bh
         decls 	  <- {-# SCC "bin_tycldecls" #-} get bh
@@ -432,6 +438,8 @@ instance Binary ModIface where
 	orphan_hash <- get bh
         vect_info <- get bh
         hpc_info  <- get bh
+        trust     <- get bh
+        trust_pkg <- get bh
 	return (ModIface {
 		 mi_module    = mod_name,
 		 mi_boot      = is_boot,
@@ -442,8 +450,9 @@ instance Binary ModIface where
 		 mi_deps      = deps,
 		 mi_usages    = usages,
 		 mi_exports   = exports,
-		 mi_exp_hash  = exp_hash,
-		 mi_anns      = anns,
+                 mi_exp_hash  = exp_hash,
+                 mi_used_th   = used_th,
+                 mi_anns      = anns,
 		 mi_fixities  = fixities,
 		 mi_warns     = warns,
 		 mi_decls     = decls,
@@ -454,6 +463,8 @@ instance Binary ModIface where
 		 mi_orphan_hash = orphan_hash,
                  mi_vect_info = vect_info,
 		 mi_hpc       = hpc_info,
+		 mi_trust     = trust,
+		 mi_trust_pkg = trust_pkg,
 			-- And build the cached values
 		 mi_warn_fn   = mkIfaceWarnCache warns,
 		 mi_fix_fn    = mkIfaceFixCache fixities,
@@ -506,12 +517,14 @@ instance Binary Usage where
         putByte bh 0
 	put_ bh (usg_mod usg)
 	put_ bh (usg_mod_hash usg)
+	put_ bh (usg_safe     usg)
     put_ bh usg@UsageHomeModule{} = do 
         putByte bh 1
 	put_ bh (usg_mod_name usg)
 	put_ bh (usg_mod_hash usg)
 	put_ bh (usg_exports  usg)
 	put_ bh (usg_entities usg)
+	put_ bh (usg_safe     usg)
 
     get bh = do
         h <- getByte bh
@@ -519,14 +532,16 @@ instance Binary Usage where
           0 -> do
             nm    <- get bh
             mod   <- get bh
-            return UsagePackageModule { usg_mod = nm, usg_mod_hash = mod }
+            safe  <- get bh
+            return UsagePackageModule { usg_mod = nm, usg_mod_hash = mod, usg_safe = safe }
           _ -> do
             nm    <- get bh
             mod   <- get bh
             exps  <- get bh
             ents  <- get bh
+            safe  <- get bh
             return UsageHomeModule { usg_mod_name = nm, usg_mod_hash = mod,
-                            usg_exports = exps, usg_entities = ents }
+                     usg_exports = exps, usg_entities = ents, usg_safe = safe }
 
 instance Binary Warnings where
     put_ bh NoWarnings     = putByte bh 0
@@ -1146,7 +1161,7 @@ instance Binary IfaceBinding where
 instance Binary IfaceIdDetails where
     put_ bh IfVanillaId      = putByte bh 0
     put_ bh (IfRecSelId a b) = do { putByte bh 1; put_ bh a; put_ bh b }
-    put_ bh (IfDFunId n)     = do { putByte bh 2; put_ bh n }
+    put_ bh IfDFunId         = putByte bh 2
     get bh = do
 	    h <- getByte bh
 	    case h of
@@ -1154,7 +1169,7 @@ instance Binary IfaceIdDetails where
 	      1 -> do a <- get bh
 		      b <- get bh
 		      return (IfRecSelId a b)
-              _ -> do { n <- get bh; return (IfDFunId n) }
+              _ -> return IfDFunId
 
 instance Binary IfaceIdInfo where
     put_ bh NoInfo = putByte bh 0
@@ -1245,16 +1260,6 @@ instance Binary IfaceUnfolding where
 		  return (IfDFunUnfold as)
 	  _ -> do e <- get bh
 		  return (IfCompulsory e)
-
-instance Binary (DFunArg IfaceExpr) where
-    put_ bh (DFunPolyArg  e) = putByte bh 0 >> put_ bh e
-    put_ bh (DFunConstArg e) = putByte bh 1 >> put_ bh e
-    put_ bh (DFunLamArg i)   = putByte bh 2 >> put_ bh i
-    get bh = do { h <- getByte bh
-                ; case h of
-                    0 -> do { a <- get bh; return (DFunPolyArg a) }
-                    1 -> do { a <- get bh; return (DFunConstArg a) }
-                    _ -> do { a <- get bh; return (DFunLamArg a) } }
 
 instance Binary IfaceNote where
     put_ bh (IfaceSCC aa) = do
@@ -1380,14 +1385,15 @@ instance Binary IfaceFamInst where
 		return (IfaceFamInst fam tys tycon)
 
 instance Binary OverlapFlag where
-    put_ bh NoOverlap  = putByte bh 0
-    put_ bh OverlapOk  = putByte bh 1
-    put_ bh Incoherent = putByte bh 2
+    put_ bh (NoOverlap  b) = putByte bh 0 >> put_ bh b
+    put_ bh (OverlapOk  b) = putByte bh 1 >> put_ bh b
+    put_ bh (Incoherent b) = putByte bh 2 >> put_ bh b
     get bh = do h <- getByte bh
+                b <- get bh
 		case h of
-		  0 -> return NoOverlap
-		  1 -> return OverlapOk
-		  2 -> return Incoherent
+		  0 -> return $ NoOverlap b
+		  1 -> return $ OverlapOk b
+		  2 -> return $ Incoherent b
 		  _ -> panic ("get OverlapFlag " ++ show h)
 
 instance Binary IfaceConDecls where
@@ -1503,4 +1509,7 @@ instance Binary IfaceVectInfo where
 	    a5 <- get bh
 	    return (IfaceVectInfo a1 a2 a3 a4 a5)
 
+instance Binary IfaceTrustInfo where
+    put_ bh iftrust = putByte bh $ trustInfoToNum iftrust
+    get bh = getByte bh >>= (return . numToTrustInfo)
 

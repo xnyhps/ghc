@@ -29,28 +29,19 @@ import Util
 import Data.List ( partition )
 import Control.Monad ( liftM )
 
-type LlvmStatements = OrdList LlvmStatement
 
+type LlvmStatements = OrdList LlvmStatement
 
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM proc Code generator
 --
 genLlvmProc :: LlvmEnv -> RawCmmTop -> UniqSM (LlvmEnv, [LlvmCmmTop])
-genLlvmProc env (CmmData _ _)
-  = return (env, [])
+genLlvmProc env (CmmProc info lbl (ListGraph blocks)) = do
+    (env', lmblocks, lmdata) <- basicBlocksCodeGen env blocks ([], [])
+    let proc = CmmProc info lbl (ListGraph lmblocks)
+    return (env', proc:lmdata)
 
-genLlvmProc env (CmmProc _ _ (ListGraph []))
-  = return (env, [])
-
-genLlvmProc env (CmmProc info lbl (ListGraph blocks))
-  = do
-        (env', lmblocks, lmdata) <- basicBlocksCodeGen env blocks ([], [])
-
-        let proc    = CmmProc info lbl (ListGraph lmblocks)
-        let tops    = lmdata ++ [proc]
-
-        return (env', tops)
-
+genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 
 -- -----------------------------------------------------------------------------
 -- * Block code generation
@@ -147,7 +138,7 @@ stmtToInstrs env stmt = case stmt of
 
 
 -- | Foreign Calls
-genCall :: LlvmEnv -> CmmCallTarget -> HintedCmmFormals -> HintedCmmActuals
+genCall :: LlvmEnv -> CmmCallTarget -> [HintedCmmFormal] -> [HintedCmmActual]
               -> CmmReturnInfo -> UniqSM StmtData
 
 -- Write barrier needs to be handled specially as it is implemented as an LLVM
@@ -347,7 +338,7 @@ getFunPtr env funTy targ = case targ of
 
 -- | Conversion of call arguments.
 arg_vars :: LlvmEnv
-         -> HintedCmmActuals
+         -> [HintedCmmActual]
          -> ([LlvmVar], LlvmStatements, [LlvmCmmTop])
          -> UniqSM (LlvmEnv, [LlvmVar], LlvmStatements, [LlvmCmmTop])
 

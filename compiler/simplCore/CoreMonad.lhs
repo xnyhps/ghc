@@ -8,10 +8,14 @@
 
 module CoreMonad (
     -- * Configuration of the core-to-core passes
-    CoreToDo(..),
+    CoreToDo(..), runWhen, runMaybe,
     SimplifierMode(..),
     FloatOutSwitches(..),
-    getCoreToDo, dumpSimplPhase,
+    dumpSimplPhase, pprPassDetails, 
+
+    -- * Plugins
+    PluginPass, Plugin(..), CommandLineOption, 
+    defaultPlugin, bindsOnlyPass,
 
     -- * Counting
     SimplCount, doSimplTick, doFreeSimplTick, simplCountN,
@@ -35,7 +39,7 @@ module CoreMonad (
     getAnnotations, getFirstAnnotations,
     
     -- ** Debug output
-    showPass, endPass, endIteration, dumpIfSet,
+    showPass, endPass, dumpPassResult, lintPassResult, dumpIfSet,
 
     -- ** Screen output
     putMsg, putMsgS, errorMsg, errorMsgS, 
@@ -112,48 +116,52 @@ showPass :: DynFlags -> CoreToDo -> IO ()
 showPass dflags pass = Err.showPass dflags (showSDoc (ppr pass))
 
 endPass :: DynFlags -> CoreToDo -> [CoreBind] -> [CoreRule] -> IO ()
-endPass dflags pass = dumpAndLint dflags True pass empty (coreDumpFlag pass)
-
--- Same as endPass but doesn't dump Core even with -dverbose-core2core
-endIteration :: DynFlags -> CoreToDo -> Int -> [CoreBind] -> [CoreRule] -> IO ()
-endIteration dflags pass n
-  = dumpAndLint dflags False pass (ptext (sLit "iteration=") <> int n)
-                (Just Opt_D_dump_simpl_iterations)
+endPass dflags pass binds rules
+  = do { dumpPassResult dflags mb_flag (ppr pass) empty binds rules
+       ; lintPassResult dflags pass binds }      
+  where
+    mb_flag = case coreDumpFlag pass of
+                Just dflag | dopt dflag dflags                   -> Just dflag
+                           | dopt Opt_D_verbose_core2core dflags -> Just dflag
+                _ -> Nothing
 
 dumpIfSet :: Bool -> CoreToDo -> SDoc -> SDoc -> IO ()
 dumpIfSet dump_me pass extra_info doc
   = Err.dumpIfSet dump_me (showSDoc (ppr pass <+> extra_info)) doc
 
-dumpAndLint :: DynFlags -> Bool -> CoreToDo -> SDoc -> Maybe DynFlag
-            -> [CoreBind] -> [CoreRule] -> IO ()
--- The "show_all" parameter says to print dump if -dverbose-core2core is on
-dumpAndLint dflags show_all pass extra_info mb_dump_flag binds rules
-  = do {  -- Report result size if required
+dumpPassResult :: DynFlags 
+               -> Maybe DynFlag		-- Just df => show details in a file whose
+	       	  			--            name is specified by df
+               -> SDoc 			-- Header
+               -> SDoc 			-- Extra info to appear after header
+               -> [CoreBind] -> [CoreRule] 
+               -> IO ()
+dumpPassResult dflags mb_flag hdr extra_info binds rules
+  | Just dflag <- mb_flag
+  = Err.dumpSDoc dflags dflag (showSDoc hdr) dump_doc
+
+  | otherwise
+  = Err.debugTraceMsg dflags 2 $
+    (text "Result size of" <+> hdr <+> equals <+> int (coreBindsSize binds))
+          -- Report result size 
 	  -- This has the side effect of forcing the intermediate to be evaluated
-       ; Err.debugTraceMsg dflags 2 $
-		(text "    Result size =" <+> int (coreBindsSize binds))
 
-	-- Report verbosely, if required
-       ; let pass_name = showSDoc (ppr pass <+> extra_info)
-             dump_doc  = pprCoreBindings binds 
-                         $$ ppUnless (null rules) pp_rules
-
-       ; case mb_dump_flag of
-            Nothing        -> return ()
-            Just dump_flag -> Err.dumpIfSet_dyn_or dflags dump_flags pass_name dump_doc
-               where
-                 dump_flags | show_all  = [dump_flag, Opt_D_verbose_core2core]
-		 	    | otherwise = [dump_flag] 
-
-	-- Type check
-       ; when (dopt Opt_DoCoreLinting dflags) $
-         do { let (warns, errs) = lintCoreBindings binds
-            ; Err.showPass dflags ("Core Linted result of " ++ pass_name)
-            ; displayLintResults dflags pass warns errs binds  } }
   where
+    dump_doc  = vcat [ text "Result size =" <+> int (coreBindsSize binds)
+                     , extra_info
+		     , blankLine
+                     , pprCoreBindings binds 
+                     , ppUnless (null rules) pp_rules ]
     pp_rules = vcat [ blankLine
                     , ptext (sLit "------ Local rules for imported ids --------")
                     , pprRules rules ]
+
+lintPassResult :: DynFlags -> CoreToDo -> [CoreBind] -> IO ()
+lintPassResult dflags pass binds
+  = when (dopt Opt_DoCoreLinting dflags) $
+    do { let (warns, errs) = lintCoreBindings binds
+       ; Err.showPass dflags ("Core Linted result of " ++ showSDoc (ppr pass))
+       ; displayLintResults dflags pass warns errs binds  }
 
 displayLintResults :: DynFlags -> CoreToDo
                    -> Bag Err.Message -> Bag Err.Message -> [CoreBind]
@@ -198,6 +206,7 @@ showLintWarnings _ = True
 %************************************************************************
 
 \begin{code}
+
 data CoreToDo           -- These are diff core-to-core passes,
                         -- which may be invoked in any order,
                         -- as many times as you like.
@@ -205,7 +214,7 @@ data CoreToDo           -- These are diff core-to-core passes,
   = CoreDoSimplify      -- The core-to-core simplifier.
         Int                    -- Max iterations
         SimplifierMode
-
+  | CoreDoPluginPass String PluginPass
   | CoreDoFloatInwards
   | CoreDoFloatOutwards FloatOutSwitches
   | CoreLiberateCase
@@ -215,7 +224,6 @@ data CoreToDo           -- These are diff core-to-core passes,
   | CoreDoWorkerWrapper
   | CoreDoSpecialising
   | CoreDoSpecConstr
-  | CoreDoGlomBinds
   | CoreCSE
   | CoreDoRuleCheck CompilerPhase String   -- Check for non-application of rules
                                            -- matching this string
@@ -229,8 +237,12 @@ data CoreToDo           -- These are diff core-to-core passes,
   | CoreTidy
   | CorePrep
 
+\end{code}
+
+\begin{code}
 coreDumpFlag :: CoreToDo -> Maybe DynFlag
 coreDumpFlag (CoreDoSimplify {})      = Just Opt_D_dump_simpl_phases
+coreDumpFlag (CoreDoPluginPass {})    = Just Opt_D_dump_core_pipeline
 coreDumpFlag CoreDoFloatInwards       = Just Opt_D_verbose_core2core
 coreDumpFlag (CoreDoFloatOutwards {}) = Just Opt_D_verbose_core2core
 coreDumpFlag CoreLiberateCase         = Just Opt_D_verbose_core2core
@@ -248,13 +260,11 @@ coreDumpFlag CorePrep                 = Just Opt_D_dump_prep
 coreDumpFlag CoreDoPrintCore         = Nothing
 coreDumpFlag (CoreDoRuleCheck {})    = Nothing
 coreDumpFlag CoreDoNothing           = Nothing
-coreDumpFlag CoreDoGlomBinds         = Nothing
 coreDumpFlag (CoreDoPasses {})       = Nothing
 
 instance Outputable CoreToDo where
-  ppr (CoreDoSimplify n md)  = ptext (sLit "Simplifier")
-                               <+> ppr md
-                                 <+> ptext (sLit "max-iterations=") <> int n
+  ppr (CoreDoSimplify _ _)     = ptext (sLit "Simplifier")
+  ppr (CoreDoPluginPass s _)   = ptext (sLit "Core plugin: ") <+> text s
   ppr CoreDoFloatInwards       = ptext (sLit "Float inwards")
   ppr (CoreDoFloatOutwards f)  = ptext (sLit "Float out") <> parens (ppr f)
   ppr CoreLiberateCase         = ptext (sLit "Liberate case")
@@ -270,9 +280,12 @@ instance Outputable CoreToDo where
   ppr CorePrep 		       = ptext (sLit "CorePrep")
   ppr CoreDoPrintCore          = ptext (sLit "Print core")
   ppr (CoreDoRuleCheck {})     = ptext (sLit "Rule check")
-  ppr CoreDoGlomBinds          = ptext (sLit "Glom binds")
   ppr CoreDoNothing            = ptext (sLit "CoreDoNothing")
   ppr (CoreDoPasses {})        = ptext (sLit "CoreDoPasses")
+
+pprPassDetails :: CoreToDo -> SDoc
+pprPassDetails (CoreDoSimplify n md) = ppr md <+> ptext (sLit "max-iterations=") <> int n
+pprPassDetails _ = empty
 \end{code}
 
 \begin{code}
@@ -327,200 +340,6 @@ pprFloatOutSwitches sw
      [ ptext (sLit "Lam =")    <+> ppr (floatOutLambdas sw)
      , ptext (sLit "Consts =") <+> ppr (floatOutConstants sw)
      , ptext (sLit "PAPs =")   <+> ppr (floatOutPartialApplications sw) ])
-\end{code}
-
-
-%************************************************************************
-%*									*
-           Generating the main optimisation pipeline
-%*									*
-%************************************************************************
-
-\begin{code}
-getCoreToDo :: DynFlags -> [CoreToDo]
-getCoreToDo dflags
-  = core_todo
-  where
-    opt_level     = optLevel           dflags
-    phases        = simplPhases        dflags
-    max_iter      = maxSimplIterations dflags
-    rule_check    = ruleCheck          dflags
-    strictness    = dopt Opt_Strictness   		  dflags
-    full_laziness = dopt Opt_FullLaziness 		  dflags
-    do_specialise = dopt Opt_Specialise   		  dflags
-    do_float_in   = dopt Opt_FloatIn      		  dflags          
-    cse           = dopt Opt_CSE                          dflags
-    spec_constr   = dopt Opt_SpecConstr                   dflags
-    liberate_case = dopt Opt_LiberateCase                 dflags
-    static_args   = dopt Opt_StaticArgumentTransformation dflags
-    rules_on      = dopt Opt_EnableRewriteRules           dflags
-    eta_expand_on = dopt Opt_DoLambdaEtaExpansion         dflags
-
-    maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
-
-    maybe_strictness_before phase
-      = runWhen (phase `elem` strictnessBefore dflags) CoreDoStrictness
-
-    base_mode = SimplMode { sm_phase      = panic "base_mode"
-                          , sm_names      = []
-                          , sm_rules      = rules_on
-                          , sm_eta_expand = eta_expand_on
-                          , sm_inline     = True
-                          , sm_case_case  = True }
-
-    simpl_phase phase names iter
-      = CoreDoPasses
-      $   [ maybe_strictness_before phase
-          , CoreDoSimplify iter
-                (base_mode { sm_phase = Phase phase
-                           , sm_names = names })
-
-          , maybe_rule_check (Phase phase) ]
-
-          -- Vectorisation can introduce a fair few common sub expressions involving 
-          --  DPH primitives. For example, see the Reverse test from dph-examples.
-          --  We need to eliminate these common sub expressions before their definitions
-          --  are inlined in phase 2. The CSE introduces lots of  v1 = v2 bindings, 
-          --  so we also run simpl_gently to inline them.
-      ++  (if dopt Opt_Vectorise dflags && phase == 3
-	    then [CoreCSE, simpl_gently]
-	    else [])
-
-    vectorisation
-      = runWhen (dopt Opt_Vectorise dflags) $
-          CoreDoPasses [ simpl_gently, CoreDoVectorisation ]
-
-                -- By default, we have 2 phases before phase 0.
-
-                -- Want to run with inline phase 2 after the specialiser to give
-                -- maximum chance for fusion to work before we inline build/augment
-                -- in phase 1.  This made a difference in 'ansi' where an
-                -- overloaded function wasn't inlined till too late.
-
-                -- Need phase 1 so that build/augment get
-                -- inlined.  I found that spectral/hartel/genfft lost some useful
-                -- strictness in the function sumcode' if augment is not inlined
-                -- before strictness analysis runs
-    simpl_phases = CoreDoPasses [ simpl_phase phase ["main"] max_iter
-                                | phase <- [phases, phases-1 .. 1] ]
-
-
-        -- initial simplify: mk specialiser happy: minimum effort please
-    simpl_gently = CoreDoSimplify max_iter
-                       (base_mode { sm_phase = InitialPhase
-                                  , sm_names = ["Gentle"]
-                                  , sm_rules = rules_on   -- Note [RULEs enabled in SimplGently]
-                                  , sm_inline = False
-                                  , sm_case_case = False })
-                          -- Don't do case-of-case transformations.
-                          -- This makes full laziness work better
-
-    core_todo =
-     if opt_level == 0 then
-       [vectorisation,
-        simpl_phase 0 ["final"] max_iter]
-     else {- opt_level >= 1 -} [
-
-    -- We want to do the static argument transform before full laziness as it
-    -- may expose extra opportunities to float things outwards. However, to fix
-    -- up the output of the transformation we need at do at least one simplify
-    -- after this before anything else
-        runWhen static_args (CoreDoPasses [ simpl_gently, CoreDoStaticArgs ]),
-
-        -- We run vectorisation here for now, but we might also try to run
-        -- it later
-        vectorisation,
-
-        -- initial simplify: mk specialiser happy: minimum effort please
-        simpl_gently,
-
-        -- Specialisation is best done before full laziness
-        -- so that overloaded functions have all their dictionary lambdas manifest
-        runWhen do_specialise CoreDoSpecialising,
-
-        runWhen full_laziness $
-           CoreDoFloatOutwards FloatOutSwitches {
-                                 floatOutLambdas   = Just 0,
-                                 floatOutConstants = True,
-                                 floatOutPartialApplications = False },
-      		-- Was: gentleFloatOutSwitches	
-                --
-		-- I have no idea why, but not floating constants to
-		-- top level is very bad in some cases.
-                --
-		-- Notably: p_ident in spectral/rewrite
-		-- 	    Changing from "gentle" to "constantsOnly"
-		-- 	    improved rewrite's allocation by 19%, and
-		-- 	    made 0.0% difference to any other nofib
-		-- 	    benchmark
-                --
-                -- Not doing floatOutPartialApplications yet, we'll do
-                -- that later on when we've had a chance to get more
-                -- accurate arity information.  In fact it makes no
-                -- difference at all to performance if we do it here,
-                -- but maybe we save some unnecessary to-and-fro in
-                -- the simplifier.
-
-        runWhen do_float_in CoreDoFloatInwards,
-
-        simpl_phases,
-
-                -- Phase 0: allow all Ids to be inlined now
-                -- This gets foldr inlined before strictness analysis
-
-                -- At least 3 iterations because otherwise we land up with
-                -- huge dead expressions because of an infelicity in the
-                -- simpifier.
-                --      let k = BIG in foldr k z xs
-                -- ==>  let k = BIG in letrec go = \xs -> ...(k x).... in go xs
-                -- ==>  let k = BIG in letrec go = \xs -> ...(BIG x).... in go xs
-                -- Don't stop now!
-        simpl_phase 0 ["main"] (max max_iter 3),
-
-        runWhen strictness (CoreDoPasses [
-                CoreDoStrictness,
-                CoreDoWorkerWrapper,
-                CoreDoGlomBinds,
-                simpl_phase 0 ["post-worker-wrapper"] max_iter
-                ]),
-
-        runWhen full_laziness $
-           CoreDoFloatOutwards FloatOutSwitches {
-                                 floatOutLambdas   = floatLamArgs dflags,
-                                 floatOutConstants = True,
-                                 floatOutPartialApplications = True },
-                -- nofib/spectral/hartel/wang doubles in speed if you
-                -- do full laziness late in the day.  It only happens
-                -- after fusion and other stuff, so the early pass doesn't
-                -- catch it.  For the record, the redex is
-                --        f_el22 (f_el21 r_midblock)
-
-
-        runWhen cse CoreCSE,
-                -- We want CSE to follow the final full-laziness pass, because it may
-                -- succeed in commoning up things floated out by full laziness.
-                -- CSE used to rely on the no-shadowing invariant, but it doesn't any more
-
-        runWhen do_float_in CoreDoFloatInwards,
-
-        maybe_rule_check (Phase 0),
-
-                -- Case-liberation for -O2.  This should be after
-                -- strictness analysis and the simplification which follows it.
-        runWhen liberate_case (CoreDoPasses [
-            CoreLiberateCase,
-            simpl_phase 0 ["post-liberate-case"] max_iter
-            ]),         -- Run the simplifier after LiberateCase to vastly
-                        -- reduce the possiblility of shadowing
-                        -- Reason: see Note [Shadowing] in SpecConstr.lhs
-
-        runWhen spec_constr CoreDoSpecConstr,
-
-        maybe_rule_check (Phase 0),
-
-        -- Final clean-up simplification:
-        simpl_phase 0 ["final"] max_iter
-     ]
 
 -- The core-to-core pass ordering is derived from the DynFlags:
 runWhen :: Bool -> CoreToDo -> CoreToDo
@@ -530,6 +349,7 @@ runWhen False _       = CoreDoNothing
 runMaybe :: Maybe a -> (a -> CoreToDo) -> CoreToDo
 runMaybe (Just x) f = f x
 runMaybe Nothing  _ = CoreDoNothing
+
 
 dumpSimplPhase :: DynFlags -> SimplifierMode -> Bool
 dumpSimplPhase dflags mode
@@ -575,6 +395,47 @@ RULES are enabled when doing "gentle" simplification.  Two reasons:
 
 But watch out: list fusion can prevent floating.  So use phase control
 to switch off those rules until after floating.
+
+
+%************************************************************************
+%*									*
+             Types for Plugins
+%*									*
+%************************************************************************
+
+\begin{code}
+-- | Command line options gathered from the -PModule.Name:stuff syntax are given to you as this type
+type CommandLineOption = String
+
+-- | 'Plugin' is the core compiler plugin data type. Try to avoid
+-- constructing one of these directly, and just modify some fields of
+-- 'defaultPlugin' instead: this is to try and preserve source-code
+-- compatability when we add fields to this.
+--
+-- Nonetheless, this API is preliminary and highly likely to change in the future.
+data Plugin = Plugin { 
+        installCoreToDos :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
+                -- ^ Modify the Core pipeline that will be used for compilation. 
+                -- This is called as the Core pipeline is built for every module
+                --  being compiled, and plugins get the opportunity to modify 
+                -- the pipeline in a nondeterministic order.
+     }
+
+-- | Default plugin: does nothing at all! For compatability reasons you should base all your
+-- plugin definitions on this default value.
+defaultPlugin :: Plugin
+defaultPlugin = Plugin {
+        installCoreToDos = const return
+    }
+
+-- | A description of the plugin pass itself
+type PluginPass = ModGuts -> CoreM ModGuts
+
+bindsOnlyPass :: ([CoreBind] -> CoreM [CoreBind]) -> ModGuts -> CoreM ModGuts
+bindsOnlyPass pass guts
+  = do { binds' <- pass (mg_binds guts)
+       ; return (guts { mg_binds = binds' }) }
+\end{code}
 
 
 %************************************************************************
@@ -955,7 +816,6 @@ liftIOWithCount what = liftIO what >>= (\(count, x) -> addSimplCount count >> re
 %************************************************************************
 
 \begin{code}
-
 getHscEnv :: CoreM HscEnv
 getHscEnv = read cr_hsc_env
 
@@ -979,7 +839,6 @@ getOrigNameCache :: CoreM OrigNameCache
 getOrigNameCache = do
     nameCacheRef <- fmap hsc_NC getHscEnv
     liftIO $ fmap nsNames $ readIORef nameCacheRef
-
 \end{code}
 
 

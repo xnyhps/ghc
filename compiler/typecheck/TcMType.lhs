@@ -26,7 +26,7 @@ module TcMType (
   --------------------------------
   -- Creating new evidence variables
   newEvVar, newCoVar, newEvVars,
-  newIP, newDict, newSilentGiven, isSilentEvVar,
+  newIP, newDict, 
 
   newWantedEvVar, newWantedEvVars,
   newTcEvBinds, addTcEvBind,
@@ -42,10 +42,10 @@ module TcMType (
   -- Checking type validity
   Rank, UserTypeCtxt(..), checkValidType, checkValidMonoType,
   SourceTyCtxt(..), checkValidTheta, 
-  checkValidInstHead, checkValidInstance, 
+  checkValidInstHead, checkValidInstance, validDerivPred,
   checkInstTermination, checkValidTypeInst, checkTyFamFreeness, 
   arityErr, 
-  growPredTyVars, growThetaTyVars, validDerivPred,
+  growPredTyVars, growThetaTyVars, 
 
   --------------------------------
   -- Zonking
@@ -160,26 +160,6 @@ newName occ
   = do { uniq <- newUnique
        ; loc  <- getSrcSpanM
        ; return (mkInternalName uniq occ loc) }
-
------------------
-newSilentGiven :: PredType -> TcM EvVar
--- Make a dictionary for a "silent" given dictionary
--- Behaves just like any EvVar except that it responds True to isSilentDict
--- This is used only to suppress confusing error reports
-newSilentGiven (ClassP cls tys)
-  = do { uniq <- newUnique
-       ; let name = mkSystemName uniq (mkDictOcc (getOccName cls))
-       ; return (mkLocalId name (mkPredTy (ClassP cls tys))) }
-newSilentGiven (EqPred ty1 ty2)
-  = do { uniq <- newUnique
-       ; let name = mkSystemName uniq (mkTyVarOccFS (fsLit "co"))
-       ; return (mkCoVar name (mkPredTy (EqPred ty1 ty2))) }
-newSilentGiven pred@(IParam {})
-  = pprPanic "newSilentDict" (ppr pred) -- Implicit parameters rejected earlier
-
-isSilentEvVar :: EvVar -> Bool
-isSilentEvVar v = isSystemName (Var.varName v)
-  -- Notice that all *other* evidence variables get Internal Names
 \end{code}
 
 
@@ -1159,12 +1139,11 @@ check_pred_ty dflags ctxt pred@(ClassP cls tys)
     how_to_allow = parens (ptext (sLit "Use -XFlexibleContexts to permit this"))
 
 
-check_pred_ty dflags ctxt pred@(EqPred ty1 ty2)
+check_pred_ty dflags _ctxt pred@(EqPred ty1 ty2)
   = do {	-- Equational constraints are valid in all contexts if type
 		-- families are permitted
-       ; checkTc (xopt Opt_TypeFamilies dflags) (eqPredTyErr pred)
-       ; checkTc (case ctxt of ClassSCCtxt {} -> False; _ -> True)
-                 (eqSuperClassErr pred)
+       ; checkTc (xopt Opt_TypeFamilies dflags || xopt Opt_GADTs dflags) 
+                 (eqPredTyErr pred)
 
 		-- Check the form of the argument types
        ; checkValidMonoType ty1
@@ -1321,16 +1300,11 @@ checkThetaCtxt ctxt theta
   = vcat [ptext (sLit "In the context:") <+> pprTheta theta,
 	  ptext (sLit "While checking") <+> pprSourceTyCtxt ctxt ]
 
-eqSuperClassErr :: PredType -> SDoc
-eqSuperClassErr pred
-  = hang (ptext (sLit "Alas, GHC 7.0 still cannot handle equality superclasses:"))
-       2 (ppr pred)
-
 badPredTyErr, eqPredTyErr, predTyVarErr :: PredType -> SDoc
 badPredTyErr pred = ptext (sLit "Illegal constraint") <+> pprPredTy pred
 eqPredTyErr  pred = ptext (sLit "Illegal equational constraint") <+> pprPredTy pred
 		    $$
-		    parens (ptext (sLit "Use -XTypeFamilies to permit this"))
+		    parens (ptext (sLit "Use -XGADTs or -XTypeFamilies to permit this"))
 predTyVarErr pred  = sep [ptext (sLit "Non type-variable argument"),
 			  nest 2 (ptext (sLit "in the constraint:") <+> pprPredTy pred)]
 dupPredWarn :: [[PredType]] -> SDoc
@@ -1411,6 +1385,29 @@ instTypeErr pp_ty msg
 	 nest 2 msg]
 \end{code}
 
+validDeivPred checks for OK 'deriving' context.  See Note [Exotic
+derived instance contexts] in TcSimplify.  However the predicate is
+here because it uses sizeTypes, fvTypes.
+
+Also check for a bizarre corner case, when the derived instance decl 
+would look like
+    instance C a b => D (T a) where ...
+Note that 'b' isn't a parameter of T.  This gives rise to all sorts of
+problems; in particular, it's hard to compare solutions for equality
+when finding the fixpoint, and that means the inferContext loop does
+not converge.  See Trac #5287.
+
+\begin{code}
+validDerivPred :: TyVarSet -> PredType -> Bool
+validDerivPred tv_set (ClassP _ tys) 
+  =  hasNoDups fvs 
+  && sizeTypes tys == length fvs
+  && all (`elemVarSet` tv_set) fvs
+  where 
+    fvs = fvTypes tys
+validDerivPred _ _  = False
+\end{code}
+
 
 %************************************************************************
 %*									*
@@ -1488,17 +1485,6 @@ nomoreMsg, smallerMsg, undecidableMsg :: SDoc
 nomoreMsg = ptext (sLit "Variable occurs more often in a constraint than in the instance head")
 smallerMsg = ptext (sLit "Constraint is no smaller than the instance head")
 undecidableMsg = ptext (sLit "Use -XUndecidableInstances to permit this")
-\end{code}
-
-validDeivPred checks for OK 'deriving' context.  See Note [Exotic
-derived instance contexts] in TcSimplify.  However the predicate is
-here because it uses sizeTypes, fvTypes.
-
-\begin{code}
-validDerivPred :: PredType -> Bool
-validDerivPred (ClassP _ tys) = hasNoDups fvs && sizeTypes tys == length fvs
-                              where fvs = fvTypes tys
-validDerivPred _              = False
 \end{code}
 
 

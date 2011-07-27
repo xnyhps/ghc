@@ -14,7 +14,7 @@ module OldCmm (
         cmmMapGraphM, cmmTopMapGraphM,
         GenBasicBlock(..), CmmBasicBlock, blockId, blockStmts, mapBlockStmts,
         CmmStmt(..), CmmReturnInfo(..), CmmHinted(..),
-        HintedCmmFormal, HintedCmmFormals, HintedCmmActual, HintedCmmActuals,
+        HintedCmmFormal, HintedCmmActual,
         CmmSafety(..), CmmCallTarget(..),
         module CmmDecl,
         module CmmExpr,
@@ -73,12 +73,15 @@ newtype ListGraph i = ListGraph [GenBasicBlock i]
    -- across a whole compilation unit.
 
 -- | Cmm with the info table as a data type
-type Cmm    = GenCmm    CmmStatic CmmInfo (ListGraph CmmStmt)
-type CmmTop = GenCmmTop CmmStatic CmmInfo (ListGraph CmmStmt)
+type Cmm    = GenCmm    CmmStatics CmmInfo (ListGraph CmmStmt)
+type CmmTop = GenCmmTop CmmStatics CmmInfo (ListGraph CmmStmt)
 
--- | Cmm with the info tables converted to a list of 'CmmStatic'
-type RawCmm    = GenCmm    CmmStatic [CmmStatic] (ListGraph CmmStmt)
-type RawCmmTop = GenCmmTop CmmStatic [CmmStatic] (ListGraph CmmStmt)
+-- | Cmm with the info tables converted to a list of 'CmmStatic' along with the info
+-- table label. If we are building without tables-next-to-code there will be no statics
+--
+-- INVARIANT: if there is an info table, it has at least one CmmStatic
+type RawCmm    = GenCmm    CmmStatics (Maybe CmmStatics) (ListGraph CmmStmt)
+type RawCmmTop = GenCmmTop CmmStatics (Maybe CmmStatics) (ListGraph CmmStmt)
 
 
 -- A basic block containing a single label, at the beginning.
@@ -146,8 +149,8 @@ data CmmStmt	-- Old-style
 
   | CmmCall	 		 -- A call (foreign, native or primitive), with 
      CmmCallTarget
-     HintedCmmFormals		 -- zero or more results
-     HintedCmmActuals		 -- zero or more arguments
+     [HintedCmmFormal]		 -- zero or more results
+     [HintedCmmActual]		 -- zero or more arguments
      CmmSafety			 -- whether to build a continuation
      CmmReturnInfo
   -- Some care is necessary when handling the arguments of these, see
@@ -164,22 +167,20 @@ data CmmStmt	-- Old-style
 	-- Undefined outside range, and when there's a Nothing
 
   | CmmJump CmmExpr      -- Jump to another C-- function,
-      HintedCmmActuals         -- with these parameters.  (parameters never used)
+      [HintedCmmActual]        -- with these parameters.  (parameters never used)
 
   | CmmReturn            -- Return from a native C-- function,
-      HintedCmmActuals         -- with these return values. (parameters never used)
+      [HintedCmmActual]        -- with these return values. (parameters never used)
 
 data CmmHinted a = CmmHinted { hintlessCmm :: a, cmmHint :: ForeignHint }
 	   	 deriving( Eq )
 
-type HintedCmmActuals = [HintedCmmActual]
-type HintedCmmFormals = [HintedCmmFormal]
 type HintedCmmFormal  = CmmHinted CmmFormal
 type HintedCmmActual  = CmmHinted CmmActual
 
 data CmmSafety      = CmmUnsafe | CmmSafe C_SRT | CmmInterruptible
 
--- | enable us to fold used registers over 'CmmActuals' and 'CmmFormals'
+-- | enable us to fold used registers over '[CmmActual]' and '[CmmFormal]'
 instance UserOfLocalRegs CmmStmt where
   foldRegsUsed f (set::b) s = stmt s set
     where 

@@ -374,7 +374,7 @@ renameDeriv is_boot gen_binds insts
 
   | otherwise
   = discardWarnings $ 	 -- Discard warnings about unused bindings etc
-    do	{ (rn_gen, dus_gen) <- setOptM Opt_ScopedTypeVariables $  -- Type signatures in patterns 
+    do	{ (rn_gen, dus_gen) <- setXOptM Opt_ScopedTypeVariables $  -- Type signatures in patterns 
 								  -- are used in the generic binds
 			       rnTopBinds (ValBindsIn gen_binds [])
 	; keepAliveSetTc (duDefs dus_gen)	-- Mark these guys to be kept alive
@@ -1073,7 +1073,7 @@ checkFlag flag (dflags, _)
   where
     why = ptext (sLit "You need -X") <> text flag_str 
           <+> ptext (sLit "to derive an instance for this class")
-    flag_str = case [ s | (s, f, _) <- xFlags, f==flag ] of
+    flag_str = case [ s | (s, _, f, _) <- xFlags, f==flag ] of
                  [s]   -> s
                  other -> pprPanic "checkFlag" (ppr other)
 
@@ -1372,21 +1372,7 @@ inferInstanceContexts oflag infer_specs
 		 , ds_cls = clas, ds_tys = inst_tys, ds_theta = deriv_rhs })
       = setSrcSpan loc	$
 	addErrCtxt (derivInstCtxt the_pred) $ 
-	do {      -- Check for a bizarre corner case, when the derived instance decl should
-		  -- have form 	instance C a b => D (T a) where ...
-		  -- Note that 'b' isn't a parameter of T.  This gives rise to all sorts
-		  -- of problems; in particular, it's hard to compare solutions for
-		  -- equality when finding the fixpoint.  Moreover, simplifyDeriv
-		  -- has an assert failure because it finds a TyVar when it expects
-		  -- only TcTyVars.  So I just rule it out for now.  I'm not 
-		  -- even sure how it can arise.
-		  
- 	   ; let tv_set = mkVarSet tyvars
-	         weird_preds = [pred | pred <- deriv_rhs
-                                     , not (tyVarsOfPred pred `subVarSet` tv_set)]
-	   ; mapM_ (addErrTc . badDerivedPred) weird_preds	
-
-           ; theta <- simplifyDeriv orig the_pred tyvars deriv_rhs
+	do { theta <- simplifyDeriv orig the_pred tyvars deriv_rhs
 	   	-- checkValidInstance tyvars theta clas inst_tys
 		-- Not necessary; see Note [Exotic derived instance contexts]
 		-- 		  in TcSimplify
@@ -1490,8 +1476,8 @@ the renamer.  What a great hack!
 -- Representation tycons differ from the tycon in the instance signature in
 -- case of instances for indexed families.
 --
-genInst :: Bool 	-- True <=> standalone deriving
-	-> OverlapFlag
+genInst :: Bool             -- True <=> standalone deriving
+        -> OverlapFlag
         -> DerivSpec -> TcM (InstInfo RdrName, DerivAuxBinds)
 genInst standalone_deriv oflag
         spec@(DS { ds_tc = rep_tycon, ds_tc_args = rep_tc_args
@@ -1641,7 +1627,8 @@ genGenericAll tc =
 -}
 genDtMeta :: (TyCon, MetaTyCons) -> TcM [(InstInfo RdrName, DerivAuxBinds)]
 genDtMeta (tc,metaDts) =
-  do  dClas <- tcLookupClass datatypeClassName
+  do  dflags <- getDOpts
+      dClas <- tcLookupClass datatypeClassName
       d_dfun_name <- new_dfun_name dClas tc
       cClas <- tcLookupClass constructorClassName
       c_dfun_names <- sequence [ new_dfun_name cClas tc | _ <- metaC metaDts ]
@@ -1652,11 +1639,12 @@ genDtMeta (tc,metaDts) =
       fix_env <- getFixityEnv
 
       let
+        safeOverlap = safeLanguageOn dflags
         (dBinds,cBinds,sBinds) = mkBindsMetaD fix_env tc
         
         -- Datatype
         d_metaTycon = metaD metaDts
-        d_inst = mkLocalInstance d_dfun NoOverlap
+        d_inst = mkLocalInstance d_dfun $ NoOverlap safeOverlap
         d_binds = VanillaInst dBinds [] False
         d_dfun  = mkDictFunId d_dfun_name (tyConTyVars tc) [] dClas 
                     [ mkTyConTy d_metaTycon ]
@@ -1664,7 +1652,7 @@ genDtMeta (tc,metaDts) =
         
         -- Constructor
         c_metaTycons = metaC metaDts
-        c_insts = [ mkLocalInstance (c_dfun c ds) NoOverlap 
+        c_insts = [ mkLocalInstance (c_dfun c ds) $ NoOverlap safeOverlap
                   | (c, ds) <- myZip1 c_metaTycons c_dfun_names ]
         c_binds = [ VanillaInst c [] False | c <- cBinds ]
         c_dfun c dfun_name = mkDictFunId dfun_name (tyConTyVars tc) [] cClas 
@@ -1674,7 +1662,8 @@ genDtMeta (tc,metaDts) =
         
         -- Selector
         s_metaTycons = metaS metaDts
-        s_insts = map (map (\(s,ds) -> mkLocalInstance (s_dfun s ds) NoOverlap))
+        s_insts = map (map (\(s,ds) -> mkLocalInstance (s_dfun s ds) $
+                                                  NoOverlap safeOverlap))
                     (myZip2 s_metaTycons s_dfun_names)
         s_binds = [ [ VanillaInst s [] False | s <- ss ] | ss <- sBinds ]
         s_dfun s dfun_name = mkDictFunId dfun_name (tyConTyVars tc) [] sClas
@@ -1742,10 +1731,4 @@ standaloneCtxt ty = hang (ptext (sLit "In the stand-alone deriving instance for"
 derivInstCtxt :: PredType -> Message
 derivInstCtxt pred
   = ptext (sLit "When deriving the instance for") <+> parens (ppr pred)
-
-badDerivedPred :: PredType -> Message
-badDerivedPred pred
-  = vcat [ptext (sLit "Can't derive instances where the instance context mentions"),
-	  ptext (sLit "type variables that are not data type parameters"),
-	  nest 2 (ptext (sLit "Offending constraint:") <+> ppr pred)]
 \end{code}

@@ -171,7 +171,7 @@ initPackages :: DynFlags -> IO (DynFlags, [PackageId])
 initPackages dflags = do 
   pkg_db <- case pkgDatabase dflags of
                 Nothing -> readPackageConfigs dflags
-                Just db -> return $ maybeHidePackages dflags db
+                Just db -> return $ setBatchPackageFlags dflags db
   (pkg_state, preload, this_pkg)       
         <- mkPackageState dflags pkg_db [] (thisPackage dflags)
   return (dflags{ pkgDatabase = Just pkg_db,
@@ -249,17 +249,25 @@ readPackageConfig dflags conf_file = do
       top_dir = topDir dflags
       pkgroot = takeDirectory conf_file
       pkg_configs1 = map (mungePackagePaths top_dir pkgroot) proto_pkg_configs
-      pkg_configs2 = maybeHidePackages dflags pkg_configs1
+      pkg_configs2 = setBatchPackageFlags dflags pkg_configs1
   --
   return pkg_configs2
 
-maybeHidePackages :: DynFlags -> [PackageConfig] -> [PackageConfig]
-maybeHidePackages dflags pkgs
-  | dopt Opt_HideAllPackages dflags = map hide pkgs
-  | otherwise 			    = pkgs
+setBatchPackageFlags :: DynFlags -> [PackageConfig] -> [PackageConfig]
+setBatchPackageFlags dflags pkgs = (maybeDistrustAll . maybeHideAll) pkgs
   where
-    hide pkg = pkg{ exposed = False }
+    maybeHideAll pkgs'
+      | dopt Opt_HideAllPackages dflags = map hide pkgs'
+      | otherwise                       = pkgs'
 
+    maybeDistrustAll pkgs'
+      | dopt Opt_DistrustAllPackages dflags = map distrust pkgs'
+      | otherwise                           = pkgs'
+
+    hide pkg = pkg{ exposed = False }
+    distrust pkg = pkg{ exposed = False }
+
+-- TODO: This code is duplicated in utils/ghc-pkg/Main.hs
 mungePackagePaths :: FilePath -> FilePath -> PackageConfig -> PackageConfig
 -- Perform path/URL variable substitution as per the Cabal ${pkgroot} spec
 -- (http://www.haskell.org/pipermail/libraries/2009-May/011772.html)
@@ -283,29 +291,30 @@ mungePackagePaths top_dir pkgroot pkg =
     munge_urls  = map munge_url
 
     munge_path p
-      | Just p' <- stripVarPrefix "${pkgroot}" sp = pkgroot </> p'
-      | Just p' <- stripVarPrefix "$topdir"    sp = top_dir </> p'
-      | otherwise                                 = p
-      where
-        sp = splitPath p
+      | Just p' <- stripVarPrefix "${pkgroot}" p = pkgroot ++ p'
+      | Just p' <- stripVarPrefix "$topdir"    p = top_dir ++ p'
+      | otherwise                                = p
 
     munge_url p
-      | Just p' <- stripVarPrefix "${pkgrooturl}" sp = toUrlPath pkgroot p'
-      | Just p' <- stripVarPrefix "$httptopdir"   sp = toUrlPath top_dir p'
-      | otherwise                                    = p
-      where
-        sp = splitPath p
+      | Just p' <- stripVarPrefix "${pkgrooturl}" p = toUrlPath pkgroot p'
+      | Just p' <- stripVarPrefix "$httptopdir"   p = toUrlPath top_dir p'
+      | otherwise                                   = p
 
     toUrlPath r p = "file:///"
                  -- URLs always use posix style '/' separators:
-                 ++ FilePath.Posix.joinPath (r : FilePath.splitDirectories p)
+                 ++ FilePath.Posix.joinPath
+                        (r : -- We need to drop a leading "/" or "\\"
+                             -- if there is one:
+                             dropWhile (all isPathSeparator)
+                                       (FilePath.splitDirectories p))
 
-    stripVarPrefix var (root:path')
-      | Just [sep] <- stripPrefix var root
-      , isPathSeparator sep
-      = Just (joinPath path')
-
-    stripVarPrefix _ _ = Nothing
+    -- We could drop the separator here, and then use </> above. However,
+    -- by leaving it in and using ++ we keep the same path separator
+    -- rather than letting FilePath change it to use \ as the separator
+    stripVarPrefix var path = case stripPrefix var path of
+                              Just [] -> Just []
+                              Just cs@(c : _) | isPathSeparator c -> Just cs
+                              _ -> Nothing
 
 
 -- -----------------------------------------------------------------------------
@@ -341,6 +350,20 @@ applyPackageFlag unusable pkgs flag =
          Left ps       -> packageFlagErr flag ps
          Right (ps,qs) -> return (map hide ps ++ qs)
     	  where hide p = p {exposed=False}
+
+    -- we trust all matching packages. Maybe should only trust first one?
+    -- and leave others the same or set them untrusted
+    TrustPackage str ->
+       case selectPackages (matchingStr str) pkgs unusable of
+         Left ps       -> packageFlagErr flag ps
+         Right (ps,qs) -> return (map trust ps ++ qs)
+    	  where trust p = p {trusted=True}
+
+    DistrustPackage str ->
+       case selectPackages (matchingStr str) pkgs unusable of
+         Left ps       -> packageFlagErr flag ps
+         Right (ps,qs) -> return (map distrust ps ++ qs)
+    	  where distrust p = p {trusted=False}
 
     _ -> panic "applyPackageFlag"
 
@@ -405,6 +428,8 @@ packageFlagErr flag reasons = ghcError (CmdLineError (showSDoc $ err))
                      HidePackage p   -> text "-hide-package " <> text p
                      ExposePackage p -> text "-package " <> text p
                      ExposePackageId p -> text "-package-id " <> text p
+                     TrustPackage p    -> text "-trust " <> text p
+                     DistrustPackage p -> text "-distrust " <> text p
         ppr_reasons = vcat (map ppr_reason reasons)
         ppr_reason (p, reason) = pprReason (pprIPkg p <+> text "is") reason
 

@@ -30,7 +30,7 @@ import Var
 import VarEnv
 import VarSet
 import Id
-import BasicTypes( isLoopBreaker )
+import BasicTypes( isStrongLoopBreaker )
 import Literal
 import TysWiredIn
 import TysPrim
@@ -62,7 +62,8 @@ vectPolyExpr loop_breaker recFns expr
     (tvs, mono) = collectAnnTypeBinders expr
 
 
--- | Vectorise an expression.
+-- |Vectorise an expression.
+--
 vectExpr :: CoreExprWithFVs -> VM VExpr
 vectExpr (_, AnnType ty)
   = liftM vType (vectType ty)
@@ -75,6 +76,17 @@ vectExpr (_, AnnLit lit)
 
 vectExpr (_, AnnNote note expr)
   = liftM (vNote note) (vectExpr expr)
+
+-- SPECIAL CASE: Vectorise/lift 'patError @ ty err' by only vectorising/lifting the type 'ty';
+--   its only purpose is to abort the program, but we need to adjust the type to keep CoreLint
+--   happy.
+vectExpr (_, AnnApp (_, AnnApp (_, AnnVar v) (_, AnnType ty)) err)
+  | v == pAT_ERROR_ID
+  = do { (vty, lty) <- vectAndLiftType ty
+       ; return (mkCoreApps (Var v) [Type vty, err'], mkCoreApps (Var v) [Type lty, err'])
+       }
+  where
+    err' = deAnnotate err
 
 vectExpr e@(_, AnnApp _ arg)
   | isAnnTypeArg arg
@@ -141,7 +153,7 @@ vectExpr (_, AnnLet (AnnRec bs) body)
     vect_rhs bndr rhs = localV
                       . inBind bndr
                       . liftM (\(_,_,z)->z)
-                      $ vectPolyExpr (isLoopBreaker $ idOccInfo bndr) [] rhs
+                      $ vectPolyExpr (isStrongLoopBreaker $ idOccInfo bndr) [] rhs
 
 vectExpr e@(_, AnnLam bndr _)
   | isId bndr = liftM (\(_,_,z) ->z) $ vectFnExpr True False [] e

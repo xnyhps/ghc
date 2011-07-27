@@ -41,9 +41,7 @@ import ForeignCall	( Safety(..), CExportSpec(..), CLabelString,
 			)
 import OccName		( varName, dataName, tcClsName, tvName )
 import DataCon		( DataCon, dataConName )
-import SrcLoc		( Located(..), unLoc, getLoc, noLoc, combineSrcSpans,
-			  SrcSpan, combineLocs, srcLocFile, 
-			  mkSrcLoc, mkSrcSpan )
+import SrcLoc
 import Module
 import StaticFlags	( opt_SccProfilingOn, opt_Hpc )
 import Type		( Kind, liftedTypeKind, unliftedTypeKind )
@@ -240,7 +238,6 @@ incorrect.
  'label'	{ L _ ITlabel } 
  'dynamic'	{ L _ ITdynamic }
  'safe'		{ L _ ITsafe }
- 'threadsafe'	{ L _ ITthreadsafe }  -- ToDo: remove deprecated alias
  'interruptible' { L _ ITinterruptible }
  'unsafe'	{ L _ ITunsafe }
  'mdo'		{ L _ ITmdo }
@@ -254,21 +251,22 @@ incorrect.
  'by'       { L _ ITby }        -- for list transform extension
  'using'    { L _ ITusing }     -- for list transform extension
 
- '{-# INLINE'      	  { L _ (ITinline_prag _ _) }
- '{-# SPECIALISE'  	  { L _ ITspec_prag }
+ '{-# INLINE'             { L _ (ITinline_prag _ _) }
+ '{-# SPECIALISE'         { L _ ITspec_prag }
  '{-# SPECIALISE_INLINE'  { L _ (ITspec_inline_prag _) }
- '{-# SOURCE'	   { L _ ITsource_prag }
- '{-# RULES'	   { L _ ITrules_prag }
- '{-# CORE'        { L _ ITcore_prag }              -- hdaume: annotated core
- '{-# SCC'	   { L _ ITscc_prag }
- '{-# GENERATED'   { L _ ITgenerated_prag }
- '{-# DEPRECATED'  { L _ ITdeprecated_prag }
- '{-# WARNING'     { L _ ITwarning_prag }
- '{-# UNPACK'      { L _ ITunpack_prag }
- '{-# ANN'         { L _ ITann_prag }
+ '{-# SOURCE'      				{ L _ ITsource_prag }
+ '{-# RULES'       				{ L _ ITrules_prag }
+ '{-# CORE'        				{ L _ ITcore_prag }              -- hdaume: annotated core
+ '{-# SCC'                { L _ ITscc_prag }
+ '{-# GENERATED'          { L _ ITgenerated_prag }
+ '{-# DEPRECATED'         { L _ ITdeprecated_prag }
+ '{-# WARNING'            { L _ ITwarning_prag }
+ '{-# UNPACK'             { L _ ITunpack_prag }
+ '{-# ANN'                { L _ ITann_prag }
  '{-# VECTORISE'          { L _ ITvect_prag }
  '{-# VECTORISE_SCALAR'   { L _ ITvect_scalar_prag }
- '#-}'		   { L _ ITclose_prag }
+ '{-# NOVECTORISE'        { L _ ITnovect_prag }
+ '#-}'             				{ L _ ITclose_prag }
 
  '..'		{ L _ ITdotdot }  			-- reserved symbols
  ':'		{ L _ ITcolon }
@@ -428,14 +426,18 @@ header 	:: { Located (HsModule RdrName) }
 		{% fileSrcSpan >>= \ loc ->
 		   return (L loc (HsModule (Just $3) $5 $7 [] $4 $1
                           ))}
-	| missing_module_keyword importdecls
+        | header_body2
 		{% fileSrcSpan >>= \ loc ->
-		   return (L loc (HsModule Nothing Nothing $2 [] Nothing
+                   return (L loc (HsModule Nothing Nothing $1 [] Nothing
                           Nothing)) }
 
 header_body :: { [LImportDecl RdrName] }
 	:  '{'            importdecls		{ $2 }
- 	|      vocurly    importdecls		{ $2 }
+        |      vocurly    importdecls           { $2 }
+
+header_body2 :: { [LImportDecl RdrName] }
+        :  '{' importdecls                      { $2 }
+        |  missing_module_keyword importdecls   { $2 }
 
 -----------------------------------------------------------------------------
 -- The Export List
@@ -501,11 +503,15 @@ importdecls :: { [LImportDecl RdrName] }
 	| {- empty -}				{ [] }
 
 importdecl :: { LImportDecl RdrName }
-	: 'import' maybe_src optqualified maybe_pkg modid maybeas maybeimpspec 
-		{ L (comb4 $1 $5 $6 $7) (ImportDecl $5 $4 $2 $3 (unLoc $6) (unLoc $7)) }
+	: 'import' maybe_src maybe_safe optqualified maybe_pkg modid maybeas maybeimpspec 
+		{ L (comb4 $1 $6 $7 $8) (ImportDecl $6 $5 $2 $3 $4 (unLoc $7) (unLoc $8)) }
 
 maybe_src :: { IsBootInterface }
 	: '{-# SOURCE' '#-}'			{ True }
+	| {- empty -}				{ False }
+
+maybe_safe :: { Bool }
+	: 'safe'				{ True }
 	| {- empty -}				{ False }
 
 maybe_pkg :: { Maybe FastString }
@@ -548,33 +554,34 @@ ops   	:: { Located [Located RdrName] }
 -- Top-Level Declarations
 
 topdecls :: { OrdList (LHsDecl RdrName) }
-        : topdecls ';' topdecl		        { $1 `appOL` $3 }
-        | topdecls ';'			        { $1 }
-	| topdecl			        { $1 }
+        : topdecls ';' topdecl                  { $1 `appOL` $3 }
+        | topdecls ';'                          { $1 }
+        | topdecl                               { $1 }
 
 topdecl :: { OrdList (LHsDecl RdrName) }
-  	: cl_decl			{ unitOL (L1 (TyClD (unLoc $1))) }
-  	| ty_decl			{ unitOL (L1 (TyClD (unLoc $1))) }
-	| 'instance' inst_type where_inst
-	    { let (binds, sigs, ats, _) = cvBindsAndSigs (unLoc $3)
-	      in 
-	      unitOL (L (comb3 $1 $2 $3) (InstD (InstDecl $2 binds sigs ats)))}
+        : cl_decl                       { unitOL (L1 (TyClD (unLoc $1))) }
+        | ty_decl                       { unitOL (L1 (TyClD (unLoc $1))) }
+        | 'instance' inst_type where_inst
+            { let (binds, sigs, ats, _) = cvBindsAndSigs (unLoc $3)
+              in 
+              unitOL (L (comb3 $1 $2 $3) (InstD (InstDecl $2 binds sigs ats)))}
         | stand_alone_deriving                  { unitOL (LL (DerivD (unLoc $1))) }
-	| 'default' '(' comma_types0 ')'	{ unitOL (LL $ DefD (DefaultDecl $3)) }
-	| 'foreign' fdecl			{ unitOL (LL (unLoc $2)) }
+        | 'default' '(' comma_types0 ')'        { unitOL (LL $ DefD (DefaultDecl $3)) }
+        | 'foreign' fdecl                       { unitOL (LL (unLoc $2)) }
         | '{-# DEPRECATED' deprecations '#-}'   { $2 }
         | '{-# WARNING' warnings '#-}'          { $2 }
-	| '{-# RULES' rules '#-}'		{ $2 }
-	| '{-# VECTORISE_SCALAR' qvar '#-}'	{ unitOL $ LL $ VectD (HsVect $2 Nothing) }
-	| '{-# VECTORISE' qvar '=' exp '#-}'	{ unitOL $ LL $ VectD (HsVect $2 (Just $4)) }
-	| annotation { unitOL $1 }
-      	| decl					{ unLoc $1 }
+        | '{-# RULES' rules '#-}'               { $2 }
+        | '{-# VECTORISE_SCALAR' qvar '#-}'     { unitOL $ LL $ VectD (HsVect   $2 Nothing) }
+        | '{-# VECTORISE' qvar '=' exp '#-}'    { unitOL $ LL $ VectD (HsVect   $2 (Just $4)) }
+        | '{-# NOVECTORISE' qvar '#-}'     			{ unitOL $ LL $ VectD (HsNoVect $2) }
+        | annotation { unitOL $1 }
+        | decl                                  { unLoc $1 }
 
-	-- Template Haskell Extension
-	-- The $(..) form is one possible form of infixexp
-	-- but we treat an arbitrary expression just as if 
-	-- it had a $(..) wrapped around it
-	| infixexp 				{ unitOL (LL $ mkTopSpliceDecl $1) } 
+        -- Template Haskell Extension
+        -- The $(..) form is one possible form of infixexp
+        -- but we treat an arbitrary expression just as if 
+        -- it had a $(..) wrapped around it
+        | infixexp                              { unitOL (LL $ mkTopSpliceDecl $1) } 
 
 -- Type classes
 --
@@ -886,7 +893,7 @@ fdecl :: { LHsDecl RdrName }
 fdecl : 'import' callconv safety fspec
 		{% mkImport $2 $3 (unLoc $4) >>= return.LL }
       | 'import' callconv        fspec		
-		{% do { d <- mkImport $2 (PlaySafe False) (unLoc $3);
+		{% do { d <- mkImport $2 PlaySafe (unLoc $3);
 			return (LL d) } }
       | 'export' callconv fspec
 		{% mkExport $2 (unLoc $3) >>= return.LL }
@@ -898,9 +905,8 @@ callconv :: { CCallConv }
 
 safety :: { Safety }
 	: 'unsafe'			{ PlayRisky }
-	| 'safe'			{ PlaySafe  False }
+	| 'safe'			{ PlaySafe }
 	| 'interruptible'		{ PlayInterruptible }
-	| 'threadsafe'			{ PlaySafe  True } -- deprecated alias
 
 fspec :: { Located (Located FastString, Located RdrName, LHsType RdrName) }
        : STRING var '::' sigtypedoc     { LL (L (getLoc $1) (getSTRING $1), $2, $4) }
@@ -1241,7 +1247,7 @@ sigdecl :: { Located (OrdList (LHsDecl RdrName)) }
                         {% do s <- checkValSig $1 $3 
                         ; return (LL $ unitOL (LL $ SigD s)) }
 	| var ',' sig_vars '::' sigtypedoc
-				{ LL $ toOL [ LL $ SigD (TypeSig n $5) | n <- $1 : unLoc $3 ] }
+				{ LL $ toOL [ LL $ SigD (TypeSig ($1 : unLoc $3) $5) ] }
 	| infix prec ops	{ LL $ toOL [ LL $ SigD (FixSig (FixitySig n (Fixity $2 (unLoc $1))))
 					     | n <- unLoc $3 ] }
 	| '{-# INLINE'   activation qvar '#-}'	      
@@ -1262,7 +1268,7 @@ quasiquote :: { Located (HsQuasiQuote RdrName) }
 	: TH_QUASIQUOTE   { let { loc = getLoc $1
                                 ; ITquasiQuote (quoter, quote, quoteSpan) = unLoc $1
                                 ; quoterId = mkUnqual varName quoter }
-                            in L1 (mkHsQuasiQuote quoterId quoteSpan quote) }
+                            in L1 (mkHsQuasiQuote quoterId (RealSrcSpan quoteSpan) quote) }
 
 exp   :: { LHsExpr RdrName }
 	: infixexp '::' sigtype		{ LL $ ExprWithTySig $1 $3 }
@@ -1431,7 +1437,7 @@ texp :: { LHsExpr RdrName }
         -- Then when converting expr to pattern we unravel it again
 	-- Meanwhile, the renamer checks that real sections appear
 	-- inside parens.
-        | infixexp qop 	{ LL $ SectionL $1 $2 }
+        | infixexp qop 	      { LL $ SectionL $1 $2 }
 	| qopm infixexp       { LL $ SectionR $1 $2 }
 
        -- View patterns get parenthesized above
@@ -1800,7 +1806,6 @@ tyvarid	:: { Located RdrName }
 	| 'unsafe' 		{ L1 $! mkUnqual tvName (fsLit "unsafe") }
 	| 'safe' 		{ L1 $! mkUnqual tvName (fsLit "safe") }
 	| 'interruptible' 	{ L1 $! mkUnqual tvName (fsLit "interruptible") }
-	| 'threadsafe' 		{ L1 $! mkUnqual tvName (fsLit "threadsafe") }
 
 tyvarsym :: { Located RdrName }
 -- Does not include "!", because that is used for strictness marks
@@ -1834,7 +1839,6 @@ varid :: { Located RdrName }
 	| 'unsafe'		{ L1 $! mkUnqual varName (fsLit "unsafe") }
 	| 'safe'		{ L1 $! mkUnqual varName (fsLit "safe") }
 	| 'interruptible'	{ L1 $! mkUnqual varName (fsLit "interruptible") }
-	| 'threadsafe'		{ L1 $! mkUnqual varName (fsLit "threadsafe") }
 	| 'forall'		{ L1 $! mkUnqual varName (fsLit "forall") }
 	| 'family'              { L1 $! mkUnqual varName (fsLit "family") }
 

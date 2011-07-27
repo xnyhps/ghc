@@ -95,6 +95,9 @@ failWith m = CvtM (\_ -> Left m)
 returnL :: a -> CvtM (Located a)
 returnL x = CvtM (\loc -> Right (L loc x))
 
+wrapParL :: (Located a -> a) -> a -> CvtM a
+wrapParL add_par x = CvtM (\loc -> Right (add_par (L loc x)))
+
 wrapMsg :: (Show a, TH.Ppr a) => String -> a -> CvtM b -> CvtM b
 -- E.g  wrapMsg "declaration" dec thing
 wrapMsg what item (CvtM m)
@@ -143,7 +146,7 @@ cvtDec (TH.FunD nm cls)
 cvtDec (TH.SigD nm typ)  
   = do  { nm' <- vNameL nm
 	; ty' <- cvtType typ
-	; returnL $ Hs.SigD (TypeSig nm' ty') }
+	; returnL $ Hs.SigD (TypeSig [nm'] ty') }
 
 cvtDec (PragmaD prag)
   = do { prag' <- cvtPragmaD prag
@@ -336,6 +339,7 @@ cvtConstr (ForallC tvs ctxt con)
 cvt_arg :: (TH.Strict, TH.Type) -> CvtM (LHsType RdrName)
 cvt_arg (IsStrict, ty)  = do { ty' <- cvtType ty; returnL $ HsBangTy HsStrict ty' }
 cvt_arg (NotStrict, ty) = cvtType ty
+cvt_arg (Unpacked, ty)  = do { ty' <- cvtType ty; returnL $ HsBangTy HsUnpack ty' }
 
 cvt_id_arg :: (TH.Name, TH.Strict, TH.Type) -> CvtM (ConDeclField RdrName)
 cvt_id_arg (i, str, ty) 
@@ -374,8 +378,7 @@ cvtForD (ImportF callconv safety from nm ty)
   where
     safety' = case safety of
                      Unsafe     -> PlayRisky
-                     Safe       -> PlaySafe False
-                     Threadsafe -> PlaySafe True
+                     Safe       -> PlaySafe
                      Interruptible -> PlayInterruptible
 
 cvtForD (ExportF callconv as nm ty)
@@ -463,9 +466,10 @@ cvtl e = wrapL (cvt e)
     cvt (AppE x y)     = do { x' <- cvtl x; y' <- cvtl y; return $ HsApp x' y' }
     cvt (LamE ps e)    = do { ps' <- cvtPats ps; e' <- cvtl e 
 			    ; return $ HsLam (mkMatchGroup [mkSimpleMatch ps' e']) }
-    cvt (TupE [e])     = cvt e	-- Singleton tuples treated like nothing (just parens)
+    cvt (TupE [e])     = do { e' <- cvtl e; return $ HsPar e' }
+    	      	       	         -- Note [Dropping constructors]
+                                 -- Singleton tuples treated like nothing (just parens)
     cvt (TupE es)      = do { es' <- mapM cvtl es; return $ ExplicitTuple (map Present es') Boxed }
-    cvt (UnboxedTupE [e])     = cvt e	-- Singleton tuples treated like nothing (just parens)
     cvt (UnboxedTupE es)      = do { es' <- mapM cvtl es; return $ ExplicitTuple (map Present es') Unboxed }
     cvt (CondE x y z)  = do { x' <- cvtl x; y' <- cvtl y; z' <- cvtl z;
 			    ; return $ HsIf (Just noSyntaxExpr) x' y' z' }
@@ -482,17 +486,28 @@ cvtl e = wrapL (cvt e)
       | Just s <- allCharLs xs       = do { l' <- cvtLit (StringL s); return (HsLit l') }
       	     -- Note [Converting strings]
       | otherwise                    = do { xs' <- mapM cvtl xs; return $ ExplicitList void xs' }
-    cvt (InfixE (Just x) s (Just y)) = do { x' <- cvtl x; s' <- cvtl s; y' <- cvtl y
-					  ; e' <- returnL $ OpApp x' s' undefined y'
-					  ; return $ HsPar e' }
-    cvt (InfixE Nothing  s (Just y)) = do { s' <- cvtl s; y' <- cvtl y
-					  ; sec <- returnL $ SectionR s' y'
-					  ; return $ HsPar sec }
-    cvt (InfixE (Just x) s Nothing ) = do { x' <- cvtl x; s' <- cvtl s
-					  ; sec <- returnL $ SectionL x' s'
-					  ; return $ HsPar sec }
-    cvt (InfixE Nothing  s Nothing ) = cvt s	-- Can I indicate this is an infix thing?
 
+    -- Infix expressions
+    cvt (InfixE (Just x) s (Just y)) = do { x' <- cvtl x; s' <- cvtl s; y' <- cvtl y
+					  ; wrapParL HsPar $ 
+                                            OpApp (mkLHsPar x') s' undefined (mkLHsPar y') }
+  					    -- Parenthesise both arguments and result, 
+					    -- to ensure this operator application does
+ 					    -- does not get re-associated
+			    -- See Note [Operator association]
+    cvt (InfixE Nothing  s (Just y)) = do { s' <- cvtl s; y' <- cvtl y
+					  ; wrapParL HsPar $ SectionR s' y' }
+					    -- See Note [Sections in HsSyn] in HsExpr
+    cvt (InfixE (Just x) s Nothing ) = do { x' <- cvtl x; s' <- cvtl s
+					  ; wrapParL HsPar $ SectionL x' s' }
+
+    cvt (InfixE Nothing  s Nothing ) = do { s' <- cvtl s; return $ HsPar s' }
+                                       -- Can I indicate this is an infix thing?
+                                       -- Note [Dropping constructors]
+
+    cvt (UInfixE x s y)  = do { x' <- cvtl x; cvtOpApp x' s y } --  Note [Converting UInfix]
+
+    cvt (ParensE e)      = do { e' <- cvtl e; return $ HsPar e' }
     cvt (SigE e t)	 = do { e' <- cvtl e; t' <- cvtType t
 			      ; return $ ExprWithTySig e' t' }
     cvt (RecConE c flds) = do { c' <- cNameL c
@@ -501,6 +516,22 @@ cvtl e = wrapL (cvt e)
     cvt (RecUpdE e flds) = do { e' <- cvtl e
 			      ; flds' <- mapM cvtFld flds
 			      ; return $ RecordUpd e' (HsRecFields flds' Nothing) [] [] [] }
+
+{- Note [Dropping constructors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When we drop constructors from the input (for instance, when we encounter @TupE [e]@)
+we must insert parentheses around the argument. Otherwise, @UInfix@ constructors in @e@
+could meet @UInfix@ constructors containing the @TupE [e]@. For example:
+
+  UInfixE x * (TupE [UInfixE y + z])
+
+If we drop the singleton tuple but don't insert parentheses, the @UInfixE@s would meet
+and the above expression would be reassociated to
+
+  OpApp (OpApp x * y) + z
+
+which we don't want.
+-}
 
 cvtFld :: (TH.Name, TH.Exp) -> CvtM (HsRecField RdrName (LHsExpr RdrName))
 cvtFld (v,e) 
@@ -512,6 +543,66 @@ cvtDD (FromR x) 	  = do { x' <- cvtl x; return $ From x' }
 cvtDD (FromThenR x y)     = do { x' <- cvtl x; y' <- cvtl y; return $ FromThen x' y' }
 cvtDD (FromToR x y)       = do { x' <- cvtl x; y' <- cvtl y; return $ FromTo x' y' }
 cvtDD (FromThenToR x y z) = do { x' <- cvtl x; y' <- cvtl y; z' <- cvtl z; return $ FromThenTo x' y' z' }
+
+{- Note [Operator assocation]
+We must be quite careful about adding parens:
+  * Infix (UInfix ...) op arg      Needs parens round the first arg
+  * Infix (Infix ...) op arg       Needs parens round the first arg
+  * UInfix (UInfix ...) op arg     No parens for first arg
+  * UInfix (Infix ...) op arg      Needs parens round first arg
+
+
+Note [Converting UInfix]
+~~~~~~~~~~~~~~~~~~~~~~~~
+When converting @UInfixE@ and @UInfixP@ values, we want to readjust
+the trees to reflect the fixities of the underlying operators:
+
+  UInfixE x * (UInfixE y + z) ---> (x * y) + z
+
+This is done by the renamer (see @mkOppAppRn@ and @mkConOppPatRn@ in
+RnTypes), which expects that the input will be completely left-biased.
+So we left-bias the trees  of @UInfixP@ and @UInfixE@ that we come across.
+
+Sample input:
+
+  UInfixE
+   (UInfixE x op1 y)
+   op2
+   (UInfixE z op3 w)
+
+Sample output:
+
+  OpApp
+    (OpApp
+      (OpApp x op1 y)
+      op2
+      z)
+    op3
+    w
+
+The functions @cvtOpApp@ and @cvtOpAppP@ are responsible for this
+left-biasing.
+-}
+
+{- | @cvtOpApp x op y@ converts @op@ and @y@ and produces the operator application @x `op` y@.
+The produced tree of infix expressions will be left-biased, provided @x@ is.
+
+We can see that @cvtOpApp@ is correct as follows. The inductive hypothesis
+is that @cvtOpApp x op y@ is left-biased, provided @x@ is. It is clear that
+this holds for both branches (of @cvtOpApp@), provided we assume it holds for
+the recursive calls to @cvtOpApp@.
+
+When we call @cvtOpApp@ from @cvtl@, the first argument will always be left-biased
+since we have already run @cvtl@ on it.
+-}
+cvtOpApp :: LHsExpr RdrName -> TH.Exp -> TH.Exp -> CvtM (HsExpr RdrName)
+cvtOpApp x op1 (UInfixE y op2 z)
+  = do { l <- wrapL $ cvtOpApp x op1 y
+       ; cvtOpApp l op2 z }
+cvtOpApp x op y
+  = do { op' <- cvtl op
+       ; y' <- cvtl y
+       ; return (OpApp x op' undefined y') }
 
 -------------------------------------
 -- 	Do notation and statements
@@ -624,33 +715,51 @@ cvtPat pat = wrapL (cvtp pat)
 
 cvtp :: TH.Pat -> CvtM (Hs.Pat RdrName)
 cvtp (TH.LitP l)
-  | overloadedLit l   = do { l' <- cvtOverLit l
-		 	   ; return (mkNPat l' Nothing) }
+  | overloadedLit l    = do { l' <- cvtOverLit l
+		 	    ; return (mkNPat l' Nothing) }
 		 		  -- Not right for negative patterns; 
 		 		  -- need to think about that!
-  | otherwise	      = do { l' <- cvtLit l; return $ Hs.LitPat l' }
-cvtp (TH.VarP s)      = do { s' <- vName s; return $ Hs.VarPat s' }
-cvtp (TupP [p])       = cvtp p
-cvtp (TupP ps)        = do { ps' <- cvtPats ps; return $ TuplePat ps' Boxed void }
-cvtp (UnboxedTupP [p]) = cvtp p
+  | otherwise	       = do { l' <- cvtLit l; return $ Hs.LitPat l' }
+cvtp (TH.VarP s)       = do { s' <- vName s; return $ Hs.VarPat s' }
+cvtp (TupP [p])        = do { p' <- cvtPat p; return $ ParPat p' } -- Note [Dropping constructors]
+cvtp (TupP ps)         = do { ps' <- cvtPats ps; return $ TuplePat ps' Boxed void }
 cvtp (UnboxedTupP ps)  = do { ps' <- cvtPats ps; return $ TuplePat ps' Unboxed void }
-cvtp (ConP s ps)      = do { s' <- cNameL s; ps' <- cvtPats ps; return $ ConPatIn s' (PrefixCon ps') }
-cvtp (InfixP p1 s p2) = do { s' <- cNameL s; p1' <- cvtPat p1; p2' <- cvtPat p2
-			   ; return $ ConPatIn s' (InfixCon p1' p2') }
-cvtp (TildeP p)       = do { p' <- cvtPat p; return $ LazyPat p' }
-cvtp (BangP p)        = do { p' <- cvtPat p; return $ BangPat p' }
-cvtp (TH.AsP s p)     = do { s' <- vNameL s; p' <- cvtPat p; return $ AsPat s' p' }
-cvtp TH.WildP         = return $ WildPat void
-cvtp (RecP c fs)      = do { c' <- cNameL c; fs' <- mapM cvtPatFld fs 
-		  	   ; return $ ConPatIn c' $ Hs.RecCon (HsRecFields fs' Nothing) }
-cvtp (ListP ps)       = do { ps' <- cvtPats ps; return $ ListPat ps' void }
-cvtp (SigP p t)       = do { p' <- cvtPat p; t' <- cvtType t; return $ SigPatIn p' t' }
-cvtp (ViewP e p)      = do { e' <- cvtl e; p' <- cvtPat p; return $ ViewPat e' p' void }
+cvtp (ConP s ps)       = do { s' <- cNameL s; ps' <- cvtPats ps
+                            ; return $ ConPatIn s' (PrefixCon ps') }
+cvtp (InfixP p1 s p2)  = do { s' <- cNameL s; p1' <- cvtPat p1; p2' <- cvtPat p2
+                            ; wrapParL ParPat $ 
+                              ConPatIn s' (InfixCon (mkParPat p1') (mkParPat p2')) }
+			    -- See Note [Operator association]
+cvtp (UInfixP p1 s p2) = do { p1' <- cvtPat p1; cvtOpAppP p1' s p2 } -- Note [Converting UInfix]
+cvtp (ParensP p)       = do { p' <- cvtPat p; return $ ParPat p' }
+cvtp (TildeP p)        = do { p' <- cvtPat p; return $ LazyPat p' }
+cvtp (BangP p)         = do { p' <- cvtPat p; return $ BangPat p' }
+cvtp (TH.AsP s p)      = do { s' <- vNameL s; p' <- cvtPat p; return $ AsPat s' p' }
+cvtp TH.WildP          = return $ WildPat void
+cvtp (RecP c fs)       = do { c' <- cNameL c; fs' <- mapM cvtPatFld fs
+		       	   ; return $ ConPatIn c' $ Hs.RecCon (HsRecFields fs' Nothing) }
+cvtp (ListP ps)        = do { ps' <- cvtPats ps; return $ ListPat ps' void }
+cvtp (SigP p t)        = do { p' <- cvtPat p; t' <- cvtType t; return $ SigPatIn p' t' }
+cvtp (ViewP e p)       = do { e' <- cvtl e; p' <- cvtPat p; return $ ViewPat e' p' void }
 
 cvtPatFld :: (TH.Name, TH.Pat) -> CvtM (HsRecField RdrName (LPat RdrName))
 cvtPatFld (s,p)
   = do	{ s' <- vNameL s; p' <- cvtPat p
 	; return (HsRecField { hsRecFieldId = s', hsRecFieldArg = p', hsRecPun = False}) }
+
+{- | @cvtOpAppP x op y@ converts @op@ and @y@ and produces the operator application @x `op` y@.
+The produced tree of infix patterns will be left-biased, provided @x@ is.
+
+See the @cvtOpApp@ documentation for how this function works.
+-}
+cvtOpAppP :: Hs.LPat RdrName -> TH.Name -> TH.Pat -> CvtM (Hs.Pat RdrName)
+cvtOpAppP x op1 (UInfixP y op2 z)
+  = do { l <- wrapL $ cvtOpAppP x op1 y
+       ; cvtOpAppP l op2 z }
+cvtOpAppP x op y
+  = do { op' <- cNameL op
+       ; y' <- cvtPat y
+       ; return (ConPatIn op' (InfixCon x y')) }
 
 -----------------------------------------------------------
 --	Types and type variables
@@ -710,8 +819,6 @@ cvtType ty
              -> if n==1 then return (head tys')	-- Singleton tuples treated
                                                 -- like nothing (ie just parens)
                         else returnL (HsTupleTy Unboxed tys')
-             | n == 1
-             -> failWith (ptext (sLit "Illegal 1-unboxed-tuple type constructor"))
              | otherwise
              -> mk_apps (HsTyVar (getRdrName (tupleTyCon Unboxed n))) tys'
            ArrowT 
@@ -831,13 +938,17 @@ thRdrName :: OccName.NameSpace -> String -> TH.NameFlavour -> RdrName
 -- 	 which will give confusing error messages later
 -- 
 -- The strict applications ensure that any buried exceptions get forced
-thRdrName _       occ (TH.NameG th_ns pkg mod) = thOrigRdrName occ th_ns pkg mod
-thRdrName ctxt_ns occ (TH.NameL uniq)      = nameRdrName $! (((Name.mkInternalName $! (mk_uniq uniq)) $! (mk_occ ctxt_ns occ)) noSrcSpan)
-thRdrName ctxt_ns occ (TH.NameQ mod)       = (mkRdrQual  $! (mk_mod mod)) $! (mk_occ ctxt_ns occ)
-thRdrName ctxt_ns occ (TH.NameU uniq)      = mkRdrUnqual $! (mk_uniq_occ ctxt_ns occ uniq)
-thRdrName ctxt_ns occ TH.NameS
-  | Just name <- isBuiltInOcc ctxt_ns occ  = nameRdrName $! name
-  | otherwise			           = mkRdrUnqual $! (mk_occ ctxt_ns occ)
+thRdrName ctxt_ns th_occ th_name
+  = case th_name of
+     TH.NameG th_ns pkg mod -> thOrigRdrName th_occ th_ns pkg mod
+     TH.NameQ mod  -> (mkRdrQual  $! mk_mod mod) $! occ
+     TH.NameL uniq -> nameRdrName $! (((Name.mkInternalName $! mk_uniq uniq) $! occ) noSrcSpan)
+     TH.NameU uniq -> nameRdrName $! (((Name.mkSystemName $! mk_uniq uniq) $! occ))
+     TH.NameS | Just name <- isBuiltInOcc ctxt_ns th_occ -> nameRdrName $! name
+              | otherwise			         -> mkRdrUnqual $! occ
+  where
+    occ :: OccName.OccName
+    occ = mk_occ ctxt_ns th_occ
 
 thOrigRdrName :: String -> TH.NameSpace -> PkgName -> ModName -> RdrName
 thOrigRdrName occ th_ns pkg mod = (mkOrig $! (mkModule (mk_pkg pkg) (mk_mod mod))) $! (mk_occ (mk_ghc_ns th_ns) occ)
@@ -873,14 +984,9 @@ isBuiltInOcc ctxt_ns occ
 	| OccName.isTcClsNameSpace ctxt_ns = Name.getName (tupleTyCon Boxed n)
 	| otherwise 		           = Name.getName (tupleCon Boxed n)
 
-mk_uniq_occ :: OccName.NameSpace -> String -> Int# -> OccName.OccName
-mk_uniq_occ ns occ uniq 
-  = OccName.mkOccName ns (occ ++ '[' : shows (mk_uniq uniq) "]")
-        -- See Note [Unique OccNames from Template Haskell]
-
 -- The packing and unpacking is rather turgid :-(
 mk_occ :: OccName.NameSpace -> String -> OccName.OccName
-mk_occ ns occ = OccName.mkOccNameFS ns (mkFastString occ)
+mk_occ ns occ = OccName.mkOccName ns occ
 
 mk_ghc_ns :: TH.NameSpace -> OccName.NameSpace
 mk_ghc_ns TH.DataName  = OccName.dataName
@@ -897,17 +1003,64 @@ mk_uniq :: Int# -> Unique
 mk_uniq u = mkUniqueGrimily (I# u)
 \end{code}
 
-Note [Unique OccNames from Template Haskell]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The idea here is to make a name that 
-  a) the user could not possibly write (it has a "[" 
-     and letters or digits from the unique)
-  b) cannot clash with another NameU
-Previously I generated an Exact RdrName with mkInternalName.  This
-works fine for local binders, but does not work at all for top-level
-binders, which must have External Names, since they are rapidly baked
-into data constructors and the like.  Baling out and generating an
-unqualified RdrName here is the simple solution
+Note [Binders in Template Haskell]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider this TH term construction:
+  do { x1 <- TH.newName "x"   -- newName :: String -> Q TH.Name
+     ; x2 <- TH.newName "x"   -- Builds a NameU
+     ; x3 <- TH.newName "x"
 
-See also Note [Suppressing uniques in OccNames] in OccName, which
-suppresses the unique when opt_SuppressUniques is on.
+     ; let x = mkName "x"     -- mkName :: String -> TH.Name
+       	       	      	      -- Builds a NameL
+
+     ; return (LamE (..pattern [x1,x2]..) $
+               LamE (VarPat x3) $
+               ..tuple (x1,x2,x3,x)) }
+
+It represents the term   \[x1,x2]. \x3. (x1,x2,x3,x)
+
+a) We don't want to complain about "x" being bound twice in 
+   the pattern [x1,x2]
+b) We don't want x3 to shadow the x1,x2
+c) We *do* want 'x' (dynamically bound with mkName) to bind 
+   to the innermost binding of "x", namely x3.. (In this
+d) When pretty printing, we want to print a unique with x1,x2 
+   etc, else they'll all print as "x" which isn't very helpful
+
+When we convert all this to HsSyn, the TH.Names are converted with
+thRdrName.  To achieve (b) we want the binders to be Exact RdrNames.
+Achieving (a) is a bit awkward, because
+   - We must check for duplicate and shadowed names on Names, 
+     not RdrNames, *after* renaming.   
+     See Note [Collect binders only after renaming] in HsUtils
+
+   - But to achieve (a) we must distinguish between the Exact
+     RdrNames arising from TH and the Unqual RdrNames that would
+     come from a user writing \[x,x] -> blah
+
+So in Convert (here) we translate
+   TH Name		            RdrName
+   --------------------------------------------------------
+   NameU (arising from newName) --> Exact (Name{ System })
+   NameS (arising from mkName)  --> Unqual
+
+Notice that the NameUs generate *System* Names.  Then, when
+figuring out shadowing and duplicates, we can filter out
+System Names.
+
+This use of System Names fits with other uses of System Names, eg for
+temporary variables "a". Since there are lots of things called "a" we
+usually want to print the name with the unique, and that is indeed
+the way System Names are printed.
+
+There's a small complication of course.  For data types and
+classes we'll now have system Names in the binding positions
+for constructors, TyCons etc.  For example
+    [d| data T = MkT Int |]
+when we splice in and Convert to HsSyn RdrName, we'll get
+    data (Exact (system Name "T")) = (Exact (system Name "MkT")) ...
+So RnEnv.newGlobalBinder we spot Exact RdrNames that wrap a
+non-External Name, and make an External name for.  (Remember, 
+constructors and the like need External Names.)  Oddly, the 
+*occurrences* will continue to be that (non-External) System Name, 
+but that will come out in the wash.

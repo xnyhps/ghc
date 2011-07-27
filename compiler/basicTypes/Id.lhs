@@ -49,7 +49,7 @@ module Id (
         isStrictId,
 	isExportedId, isLocalId, isGlobalId,
 	isRecordSelector, isNaughtyRecordSelector,
-        isClassOpId_maybe, isDFunId, dfunNSilent,
+        isClassOpId_maybe, isDFunId, 
 	isPrimOpId, isPrimOpId_maybe, 
 	isFCallId, isFCallId_maybe,
 	isDataConWorkId, isDataConWorkId_maybe, isDataConId_maybe, idDataCon,
@@ -337,11 +337,6 @@ isDFunId id = case Var.idDetails id of
                         DFunId {} -> True
                         _         -> False
 
-dfunNSilent :: Id -> Int
-dfunNSilent id = case Var.idDetails id of
-                   DFunId ns _ -> ns
-                   _ -> pprTrace "dfunSilent: not a dfun:" (ppr id) 0
-
 isPrimOpId_maybe id = case Var.idDetails id of
                         PrimOpId op -> Just op
                         _           -> Nothing
@@ -509,8 +504,8 @@ isStrictId id
 idUnfolding :: Id -> Unfolding
 -- Do not expose the unfolding of a loop breaker!
 idUnfolding id 
-  | isNonRuleLoopBreaker (occInfo info) = NoUnfolding
-  | otherwise                           = unfoldingInfo info
+  | isStrongLoopBreaker (occInfo info) = NoUnfolding
+  | otherwise                          = unfoldingInfo info
   where
     info = idInfo id
 

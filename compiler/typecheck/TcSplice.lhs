@@ -810,6 +810,8 @@ runMeta :: (Outputable hs_syn)
 	-> TcM hs_syn		-- Of type t
 runMeta show_code run_and_convert expr
   = do	{ traceTc "About to run" (ppr expr)
+        ; recordThSpliceUse -- seems to be the best place to do this,
+                            -- we catch all kinds of splices and annotations.
 
 	-- Desugar
 	; ds_expr <- initDsTc (dsLExpr expr)
@@ -897,13 +899,17 @@ instance TH.Quasi (IOEnv (Env TcGblEnv TcLclEnv)) where
   qReport False msg = addReport (text msg) empty
 
   qLocation = do { m <- getModule
-		 ; l <- getSrcSpanM
-		 ; return (TH.Loc { TH.loc_filename = unpackFS (srcSpanFile l)
-				  , TH.loc_module   = moduleNameString (moduleName m)
-				  , TH.loc_package  = packageIdString (modulePackageId m)
-				  , TH.loc_start = (srcSpanStartLine l, srcSpanStartCol l)
-				  , TH.loc_end = (srcSpanEndLine   l, srcSpanEndCol   l) }) }
-		
+                 ; l <- getSrcSpanM
+                 ; r <- case l of
+                        UnhelpfulSpan _ -> pprPanic "qLocation: Unhelpful location"
+                                                    (ppr l)
+                        RealSrcSpan s -> return s
+                 ; return (TH.Loc { TH.loc_filename = unpackFS (srcSpanFile r)
+                                  , TH.loc_module   = moduleNameString (moduleName m)
+                                  , TH.loc_package  = packageIdString (modulePackageId m)
+                                  , TH.loc_start = (srcSpanStartLine r, srcSpanStartCol r)
+                                  , TH.loc_end = (srcSpanEndLine   r, srcSpanEndCol   r) }) }
+
   qReify v = reify v
   qClassInstances = lookupClassInstances
 
@@ -966,7 +972,7 @@ lookupClassInstances c ts
 
 	-- Now look up instances
         ; inst_envs <- tcGetInstEnvs
-        ; let (matches, unifies) = lookupInstEnv inst_envs cls tys
+        ; let (matches, unifies, _) = lookupInstEnv inst_envs cls tys
         ; mapM reifyClassInstance (map fst matches ++ unifies) } } }
   where
     doc = ptext (sLit "TcSplice.classInstances")
@@ -1311,8 +1317,9 @@ reifyFixity name
       conv_dir BasicTypes.InfixN = TH.InfixN
 
 reifyStrict :: BasicTypes.HsBang -> TH.Strict
-reifyStrict bang | isBanged bang = TH.IsStrict
-                 | otherwise     = TH.NotStrict
+reifyStrict bang | bang == HsUnpack = TH.Unpacked
+                 | isBanged bang    = TH.IsStrict
+                 | otherwise        = TH.NotStrict
 
 ------------------------------
 noTH :: LitString -> SDoc -> TcM a

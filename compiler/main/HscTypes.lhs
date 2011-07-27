@@ -15,10 +15,11 @@ module HscTypes (
         -- * Information about modules
 	ModDetails(..),	emptyModDetails,
         ModGuts(..), CgGuts(..), ForeignStubs(..), appendStubC,
-        ImportedMods,
+        ImportedMods, ImportedModsVal,
 
-	ModSummary(..), ms_mod_name, showModMsg, isBootSummary,
+	ModSummary(..), ms_imps, ms_mod_name, showModMsg, isBootSummary,
 	msHsFilePath, msHiFilePath, msObjFilePath,
+        SourceModified(..),
 
         -- * Information about the module being compiled
 	HscSource(..), isHsBoot, hscSourceString,	-- Re-exported from DriverPhases
@@ -91,6 +92,10 @@ module HscTypes (
         VectInfo(..), IfaceVectInfo(..), noVectInfo, plusVectInfo, 
         noIfaceVectInfo,
 
+        -- * Safe Haskell information
+        IfaceTrustInfo, getSafeMode, setSafeMode, noIfaceTrustInfo,
+        trustInfoToNum, numToTrustInfo, IsSafeImport,
+
         -- * Compilation errors and warnings
         SourceError, GhcApiError, mkSrcErr, srcErrorMessages, mkApiErr,
         throwOneError, handleSourceError,
@@ -126,8 +131,7 @@ import TyCon
 import DataCon		( DataCon, dataConImplicitIds, dataConWrapId )
 import PrelNames	( gHC_PRIM )
 import Packages hiding ( Version(..) )
-import DynFlags		( DynFlags(..), isOneShot, HscTarget (..), dopt,
-                          DynFlag(..) )
+import DynFlags
 import DriverPhases	( HscSource(..), isHsBoot, hscSourceString, Phase )
 import BasicTypes	( IPName, defaultFixity, WarningTxt(..) )
 import OptimizationFuel	( OptFuelState )
@@ -136,15 +140,13 @@ import CoreSyn		( CoreRule, CoreVect )
 import Maybes		( orElse, expectJust, catMaybes )
 import Outputable
 import BreakArray
-import SrcLoc		( SrcSpan, Located(..) )
+import SrcLoc
 import UniqFM		( lookupUFM, eltsUFM, emptyUFM )
 import UniqSupply	( UniqSupply )
 import FastString
 import StringBuffer	( StringBuffer )
 import Fingerprint
 import MonadUtils
-import Data.Dynamic     ( Typeable )
-import qualified Data.Dynamic as Dyn
 import Bag
 import ErrUtils
 
@@ -154,8 +156,10 @@ import Data.IORef
 import Data.Array       ( Array, array )
 import Data.List
 import Data.Map (Map)
+import Data.Word
 import Control.Monad    ( mplus, guard, liftM, when )
 import Exception
+import Data.Typeable    ( Typeable )
 
 -- -----------------------------------------------------------------------------
 -- Source Errors
@@ -186,17 +190,12 @@ throwOneError err = liftIO $ throwIO $ mkSrcErr $ unitBag err
 --
 -- See 'printExceptionAndWarnings' for more information on what to take care
 -- of when writing a custom error handler.
-data SourceError = SourceError ErrorMessages
+newtype SourceError = SourceError ErrorMessages
+  deriving Typeable
 
 instance Show SourceError where
   show (SourceError msgs) = unlines . map show . bagToList $ msgs
     -- ToDo: is there some nicer way to print this?
-
-sourceErrorTc :: Dyn.TyCon
-sourceErrorTc = Dyn.mkTyCon "SourceError"
-{-# NOINLINE sourceErrorTc #-}
-instance Typeable SourceError where
-  typeOf _ = Dyn.mkTyConApp sourceErrorTc []
 
 instance Exception SourceError
 
@@ -214,16 +213,11 @@ handleSourceError handler act =
 srcErrorMessages (SourceError msgs) = msgs
 
 -- | XXX: what exactly is an API error?
-data GhcApiError = GhcApiError SDoc
+newtype GhcApiError = GhcApiError SDoc
+ deriving Typeable
 
 instance Show GhcApiError where
   show (GhcApiError msg) = showSDoc msg
-
-ghcApiErrorTc :: Dyn.TyCon
-ghcApiErrorTc = Dyn.mkTyCon "GhcApiError"
-{-# NOINLINE ghcApiErrorTc #-}
-instance Typeable GhcApiError where
-  typeOf _ = Dyn.mkTyConApp ghcApiErrorTc []
 
 instance Exception GhcApiError
 
@@ -241,7 +235,7 @@ printOrThrowWarnings dflags warns
 
 handleFlagWarnings :: DynFlags -> [Located String] -> IO ()
 handleFlagWarnings dflags warns
- = when (dopt Opt_WarnDeprecatedFlags dflags) $ do
+ = when (wopt Opt_WarnDeprecatedFlags dflags) $ do
         -- It would be nicer if warns :: [Located Message], but that
         -- has circular import problems.
       let bag = listToBag [ mkPlainWarnMsg loc (text warn) 
@@ -622,6 +616,8 @@ data ModIface
         
         mi_exp_hash :: !Fingerprint,	-- ^ Hash of export list
 
+        mi_used_th :: !Bool,  -- ^ Module required TH splices when it was compiled.  This disables recompilation avoidance (see #481).
+
         mi_fixities :: [(OccName,Fixity)],
                 -- ^ Fixities
         
@@ -680,8 +676,17 @@ data ModIface
 			-- isn't in decls. It's useful to know that when
 			-- seeing if we are up to date wrt. the old interface.
                         -- The 'OccName' is the parent of the name, if it has one.
-	mi_hpc    :: !AnyHpcUsage
+	mi_hpc    :: !AnyHpcUsage,
 	        -- ^ True if this program uses Hpc at any point in the program.
+	mi_trust  :: !IfaceTrustInfo,
+	        -- ^ Safe Haskell Trust information for this module.
+	mi_trust_pkg :: !Bool
+	        -- ^ Do we require the package this module resides in be trusted
+	        -- to trust this module? This is used for the situation where a
+	        -- module is Safe (so doesn't require the package be trusted
+	        -- itself) but imports some trustworthy modules from its own
+	        -- package (which does require its own package be trusted).
+                -- See Note [RnNames . Trust Own Package]
      }
 
 -- | The 'ModDetails' is essentially a cache for information in the 'ModIface'
@@ -711,7 +716,9 @@ emptyModDetails = ModDetails { md_types = emptyTypeEnv,
                              } 
 
 -- | Records the modules directly imported by a module for extracting e.g. usage information
-type ImportedMods = ModuleEnv [(ModuleName, Bool, SrcSpan)]
+type ImportedMods = ModuleEnv [ImportedModsVal]
+type ImportedModsVal = (ModuleName, Bool, SrcSpan, IsSafeImport)
+
 -- TODO: we are not actually using the codomain of this type at all, so it can be
 -- replaced with ModuleEnv ()
 
@@ -730,7 +737,8 @@ data ModGuts
 					 -- generate initialisation code
 	mg_used_names:: !NameSet,	 -- ^ What the module needed (used in 'MkIface.mkIface')
 
-        mg_rdr_env   :: !GlobalRdrEnv,	 -- ^ Top-level lexical environment
+        mg_used_th   :: !Bool,           -- ^ Did we run a TH splice?
+        mg_rdr_env   :: !GlobalRdrEnv,   -- ^ Top-level lexical environment
 
 	-- These fields all describe the things **declared in this module**
 	mg_fix_env   :: !FixityEnv,	 -- ^ Fixities declared in this module
@@ -758,9 +766,12 @@ data ModGuts
 	mg_inst_env     :: InstEnv,
         -- ^ Class instance environment from /home-package/ modules (including
 	-- this one); c.f. 'tcg_inst_env'
-	mg_fam_inst_env :: FamInstEnv
+	mg_fam_inst_env :: FamInstEnv,
         -- ^ Type-family instance enviroment for /home-package/ modules
 	-- (including this one); c.f. 'tcg_fam_inst_env'
+        mg_trust_pkg :: Bool
+        -- ^ Do we need to trust our own package for Safe Haskell?
+        -- See Note [RnNames . Trust Own Package]
     }
 
 -- The ModGuts takes on several slightly different forms:
@@ -839,7 +850,8 @@ emptyModIface mod
 	       mi_usages   = [],
 	       mi_exports  = [],
 	       mi_exp_hash = fingerprint0,
-	       mi_fixities = [],
+               mi_used_th  = False,
+               mi_fixities = [],
 	       mi_warns    = NoWarnings,
 	       mi_anns     = [],
 	       mi_insts     = [],
@@ -852,7 +864,9 @@ emptyModIface mod
 	       mi_warn_fn    = emptyIfaceWarnCache,
 	       mi_fix_fn    = emptyIfaceFixCache,
 	       mi_hash_fn   = emptyIfaceHashCache,
-	       mi_hpc       = False
+	       mi_hpc       = False,
+	       mi_trust     = noIfaceTrustInfo,
+               mi_trust_pkg = False
     }		
 \end{code}
 
@@ -1425,19 +1439,21 @@ type IsBootInterface = Bool
 data Dependencies
   = Deps { dep_mods   :: [(ModuleName, IsBootInterface)]
                         -- ^ Home-package module dependencies
-	 , dep_pkgs   :: [PackageId]
-	                -- ^ External package dependencies
-	 , dep_orphs  :: [Module]	    
-	                -- ^ Orphan modules (whether home or external pkg),
-	                -- *not* including family instance orphans as they
-	                -- are anyway included in 'dep_finsts'
-         , dep_finsts :: [Module]	    
+         , dep_pkgs   :: [(PackageId, Bool)]
+                       -- ^ External package dependencies. The bool indicates
+                        -- if the package is required to be trusted when the
+                        -- module is imported as a safe import (Safe Haskell).
+                        -- See Note [RnNames . Tracking Trust Transitively]
+         , dep_orphs  :: [Module]
+                        -- ^ Orphan modules (whether home or external pkg),
+                        -- *not* including family instance orphans as they
+                        -- are anyway included in 'dep_finsts'
+         , dep_finsts :: [Module]
                         -- ^ Modules that contain family instances (whether the
                         -- instances are from the home or an external package)
          }
   deriving( Eq )
-	-- Equality used only for old/new comparison in MkIface.addVersionInfo
-
+        -- Equality used only for old/new comparison in MkIface.addVersionInfo
         -- See 'TcRnTypes.ImportAvails' for details on dependencies.
 
 noDependencies :: Dependencies
@@ -1448,7 +1464,10 @@ data Usage
   = UsagePackageModule {
         usg_mod      :: Module,
            -- ^ External package module depended on
-        usg_mod_hash :: Fingerprint
+        usg_mod_hash :: Fingerprint,
+	    -- ^ Cached module fingerprint
+        usg_safe :: IsSafeImport
+            -- ^ Was this module imported as a safe import
     }                                           -- ^ Module from another package
   | UsageHomeModule {
         usg_mod_name :: ModuleName,
@@ -1459,9 +1478,11 @@ data Usage
             -- ^ Entities we depend on, sorted by occurrence name and fingerprinted.
             -- NB: usages are for parent names only, e.g. type constructors 
             -- but not the associated data constructors.
-	usg_exports  :: Maybe Fingerprint
+	usg_exports  :: Maybe Fingerprint,
             -- ^ Fingerprint for the export list we used to depend on this module,
             -- if we depend on the export list
+        usg_safe :: IsSafeImport
+            -- ^ Was this module imported as a safe import
     }                                           -- ^ Module from the current package
     deriving( Eq )
 	-- The export list field is (Just v) if we depend on the export list:
@@ -1628,21 +1649,37 @@ emptyMG = []
 -- * An external-core source module
 data ModSummary
    = ModSummary {
-        ms_mod       :: Module,			-- ^ Identity of the module
-	ms_hsc_src   :: HscSource,		-- ^ The module source either plain Haskell, hs-boot or external core
-        ms_location  :: ModLocation,		-- ^ Location of the various files belonging to the module
-        ms_hs_date   :: ClockTime,		-- ^ Timestamp of source file
-	ms_obj_date  :: Maybe ClockTime,	-- ^ Timestamp of object, if we have one
-        ms_srcimps   :: [Located (ImportDecl RdrName)],	-- ^ Source imports of the module
-        ms_imps      :: [Located (ImportDecl RdrName)],	-- ^ Non-source imports of the module
-        ms_hspp_file :: FilePath,		-- ^ Filename of preprocessed source file
-        ms_hspp_opts :: DynFlags,               -- ^ Cached flags from @OPTIONS@, @INCLUDE@
+        ms_mod          :: Module,		-- ^ Identity of the module
+	ms_hsc_src      :: HscSource,		-- ^ The module source either plain Haskell, hs-boot or external core
+        ms_location     :: ModLocation,		-- ^ Location of the various files belonging to the module
+        ms_hs_date      :: ClockTime,		-- ^ Timestamp of source file
+	ms_obj_date     :: Maybe ClockTime,	-- ^ Timestamp of object, if we have one
+        ms_srcimps      :: [Located (ImportDecl RdrName)],	-- ^ Source imports of the module
+        ms_textual_imps :: [Located (ImportDecl RdrName)],	-- ^ Non-source imports of the module from the module *text*
+        ms_hspp_file    :: FilePath,		-- ^ Filename of preprocessed source file
+        ms_hspp_opts    :: DynFlags,            -- ^ Cached flags from @OPTIONS@, @INCLUDE@
                                                 -- and @LANGUAGE@ pragmas in the modules source code
-	ms_hspp_buf  :: Maybe StringBuffer    	-- ^ The actual preprocessed source, if we have it
+	ms_hspp_buf     :: Maybe StringBuffer   -- ^ The actual preprocessed source, if we have it
      }
 
 ms_mod_name :: ModSummary -> ModuleName
 ms_mod_name = moduleName . ms_mod
+
+ms_imps :: ModSummary -> [Located (ImportDecl RdrName)]
+ms_imps ms = ms_textual_imps ms ++ map mk_additional_import (dynFlagDependencies (ms_hspp_opts ms))
+  where
+    -- This is a not-entirely-satisfactory means of creating an import that corresponds to an
+    -- import that did not occur in the program text, such as those induced by the use of
+    -- plugins (the -plgFoo flag)
+    mk_additional_import mod_nm = noLoc $ ImportDecl {
+      ideclName = noLoc mod_nm,
+      ideclPkgQual = Nothing,
+      ideclSource = False,
+      ideclQualified = False,
+      ideclAs = Nothing,
+      ideclHiding = Nothing,
+      ideclSafe = False
+    }
 
 -- The ModLocation contains both the original source filename and the
 -- filename of the cleaned-up source file after all preprocessing has been
@@ -1669,7 +1706,7 @@ instance Outputable ModSummary where
              nest 3 (sep [text "ms_hs_date = " <> text (show (ms_hs_date ms)),
                           text "ms_mod =" <+> ppr (ms_mod ms) 
 				<> text (hscSourceString (ms_hsc_src ms)) <> comma,
-                          text "ms_imps =" <+> ppr (ms_imps ms),
+                          text "ms_textual_imps =" <+> ppr (ms_textual_imps ms),
                           text "ms_srcimps =" <+> ppr (ms_srcimps ms)]),
              char '}'
             ]
@@ -1690,6 +1727,30 @@ showModMsg target recomp mod_summary
     mod_str = showSDoc (ppr mod) ++ hscSourceString (ms_hsc_src mod_summary)
 \end{code}
 
+%************************************************************************
+%*									*
+\subsection{Recmpilation}
+%*									*
+%************************************************************************
+
+\begin{code}
+-- | Indicates whether a given module's source has been modified since it
+-- was last compiled.
+data SourceModified
+  = SourceModified
+       -- ^ the source has been modified
+  | SourceUnmodified
+       -- ^ the source has not been modified.  Compilation may or may
+       -- not be necessary, depending on whether any dependencies have
+       -- changed since we last compiled.
+  | SourceUnmodifiedAndStable
+       -- ^ the source has not been modified, and furthermore all of
+       -- its (transitive) dependencies are up to date; it definitely
+       -- does not need to be recompiled.  This is important for two
+       -- reasons: (a) we can omit the version check in checkOldIface,
+       -- and (b) if the module used TH splices we don't need to force
+       -- recompilation.
+\end{code}
 
 %************************************************************************
 %*									*
@@ -1790,6 +1851,54 @@ concatVectInfo = foldr plusVectInfo noVectInfo
 
 noIfaceVectInfo :: IfaceVectInfo
 noIfaceVectInfo = IfaceVectInfo [] [] [] [] []
+\end{code}
+
+%************************************************************************
+%*									*
+\subsection{Safe Haskell Support}
+%*									*
+%************************************************************************
+
+This stuff here is related to supporting the Safe Haskell extension,
+primarily about storing under what trust type a module has been compiled.
+
+\begin{code}
+-- | Is an import a safe import?
+type IsSafeImport = Bool
+
+-- | Safe Haskell information for 'ModIface'
+-- Simply a wrapper around SafeHaskellMode to sepperate iface and flags
+newtype IfaceTrustInfo = TrustInfo SafeHaskellMode
+
+getSafeMode :: IfaceTrustInfo -> SafeHaskellMode
+getSafeMode (TrustInfo x) = x
+
+setSafeMode :: SafeHaskellMode -> IfaceTrustInfo
+setSafeMode = TrustInfo
+
+noIfaceTrustInfo :: IfaceTrustInfo
+noIfaceTrustInfo = setSafeMode Sf_None
+
+trustInfoToNum :: IfaceTrustInfo -> Word8
+trustInfoToNum it
+  = case getSafeMode it of
+            Sf_None -> 0
+            Sf_SafeImports -> 1
+            Sf_Trustworthy -> 2
+            Sf_Safe -> 3
+
+numToTrustInfo :: Word8 -> IfaceTrustInfo
+numToTrustInfo 0 = setSafeMode Sf_None
+numToTrustInfo 1 = setSafeMode Sf_SafeImports
+numToTrustInfo 2 = setSafeMode Sf_Trustworthy
+numToTrustInfo 3 = setSafeMode Sf_Safe
+numToTrustInfo n = error $ "numToTrustInfo: bad input number! (" ++ show n ++ ")"
+
+instance Outputable IfaceTrustInfo where
+    ppr (TrustInfo Sf_None)         = ptext $ sLit "none"
+    ppr (TrustInfo Sf_SafeImports)  = ptext $ sLit "safe-imports"
+    ppr (TrustInfo Sf_Trustworthy)  = ptext $ sLit "trustworthy"
+    ppr (TrustInfo Sf_Safe)         = ptext $ sLit "safe"
 \end{code}
 
 %************************************************************************

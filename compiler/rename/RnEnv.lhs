@@ -11,7 +11,8 @@ module RnEnv (
         lookupGlobalOccRn, lookupGlobalOccRn_maybe,
 	lookupLocalDataTcNames, lookupSigOccRn,
 	lookupFixityRn, lookupTyFixityRn, 
-	lookupInstDeclBndr, lookupSubBndr, lookupConstructorFields,
+	lookupInstDeclBndr, lookupSubBndr, 
+        lookupSubBndrGREs, lookupConstructorFields,
 	lookupSyntaxName, lookupSyntaxTable, lookupIfThenElse,
 	lookupGreRn, lookupGreLocalRn, lookupGreRn_maybe,
 	getLookupOccRn, addUsedRdrNames,
@@ -35,11 +36,11 @@ module RnEnv (
 #include "HsVersions.h"
 
 import LoadIface	( loadInterfaceForName, loadSrcInterface )
-import IfaceEnv		( lookupOrig, newGlobalBinder, newIPName )
+import IfaceEnv		( lookupOrig, newGlobalBinder, newIPName, updNameCache, extendNameCache )
 import HsSyn
 import RdrHsSyn		( extractHsTyRdrTyVars )
 import RdrName
-import HscTypes		( availNames, ModIface(..), FixItem(..), lookupFixity)
+import HscTypes		( NameCache(..), availNames, ModIface(..), FixItem(..), lookupFixity)
 import TcEnv		( tcLookupDataCon, tcLookupField, isBrackStage )
 import TcRnMonad
 import Id		( isRecordSelector )
@@ -90,12 +91,19 @@ newTopSrcBinder (L loc rdr_name)
 	-- very confused indeed. This test rejects code like
 	--	data T = (,) Int Int
 	-- unless we are in GHC.Tup
-    ASSERT2( isExternalName name,  ppr name )
-    do	{ this_mod <- getModule
-        ; unless (this_mod == nameModule name)
-	         (addErrAt loc (badOrigBinding rdr_name))
-	; return name }
-
+    if isExternalName name then
+      do { this_mod <- getModule
+         ; unless (this_mod == nameModule name)
+      	          (addErrAt loc (badOrigBinding rdr_name))
+         ; return name }
+    else   -- See Note [Binders in Template Haskell] in Convert.hs
+      do { let occ = nameOccName name
+         ; occ `seq` return ()	-- c.f. seq in newGlobalBinder
+         ; this_mod <- getModule
+         ; updNameCache $ \ ns ->
+           let name' = mkExternalName (nameUnique name) this_mod occ loc
+               ns'   = ns { nsNames = extendNameCache (nsNames ns) this_mod occ name' }
+           in (ns', name') }
 
   | Just (rdr_mod, rdr_occ) <- isOrig_maybe rdr_name
   = do	{ this_mod <- getModule
@@ -281,38 +289,53 @@ lookupSubBndr parent doc rdr_name
   = lookupOrig rdr_mod rdr_occ
 
   | otherwise	-- Find all the things the rdr-name maps to
-  = do	{	-- and pick the one with the right parent name
-	; env <- getGlobalRdrEnv
-        ; let gres = lookupGlobalRdrEnv env (rdrNameOcc rdr_name)
-	; case pick parent gres  of
+  = do	{	-- and pick the one with the right parent namep
+	  env <- getGlobalRdrEnv
+	; case lookupSubBndrGREs env parent rdr_name of
 		-- NB: lookupGlobalRdrEnv, not lookupGRE_RdrName!
 		--     The latter does pickGREs, but we want to allow 'x'
 		--     even if only 'M.x' is in scope
-	    [gre] -> do { addUsedRdrNames (used_rdr_names gre)
+	    [gre] -> do { addUsedRdrName gre (used_rdr_name gre)
                         ; return (gre_name gre) }
 	    []    -> do { addErr (unknownSubordinateErr doc rdr_name)
-			; traceRn (text "RnEnv.lookup_sub_bndr" <+> (ppr rdr_name $$ ppr gres))
 			; return (mkUnboundName rdr_name) }
 	    gres  -> do { addNameClashErrRn rdr_name gres
 			; return (gre_name (head gres)) } }
   where
-    pick NoParent gres		-- Normal lookup 
-      = pickGREs rdr_name gres
-    pick (ParentIs p) gres	-- Disambiguating lookup
-      | isUnqual rdr_name = filter (right_parent p) gres
-      | otherwise         = filter (right_parent p) (pickGREs rdr_name gres)
-
-    right_parent p (GRE { gre_par = ParentIs p' }) = p==p' 
-    right_parent _ _                               = False
-
     -- Note [Usage for sub-bndrs]
-    used_rdr_names gre
-      | isQual rdr_name = [rdr_name]
+    used_rdr_name gre
+      | isQual rdr_name = rdr_name
       | otherwise       = case gre_prov gre of
-                            LocalDef -> [rdr_name]
-			    Imported is -> map mk_qual_rdr is
-    mk_qual_rdr imp_spec = mkRdrQual (is_as (is_decl imp_spec)) rdr_occ
-    rdr_occ = rdrNameOcc rdr_name    
+                            LocalDef    -> rdr_name
+			    Imported is -> used_rdr_name_from_is is
+
+    used_rdr_name_from_is imp_specs	-- rdr_name is unqualified
+      | not (all (is_qual . is_decl) imp_specs) 
+      = rdr_name    -- An unqualified import is available
+      | otherwise
+      = 	    -- Only qualified imports available, so make up 
+		    -- a suitable qualifed name from the first imp_spec
+        ASSERT( not (null imp_specs) )
+        mkRdrQual (is_as (is_decl (head imp_specs))) (rdrNameOcc rdr_name)
+
+lookupSubBndrGREs :: GlobalRdrEnv -> Parent -> RdrName -> [GlobalRdrElt]
+-- If Parent = NoParent, just do a normal lookup
+-- If Parent = Parent p then find all GREs that
+--   (a) have parent p
+--   (b) for Unqual, are in scope qualified or unqualified
+--       for Qual, are in scope with that qualification
+lookupSubBndrGREs env parent rdr_name
+  = case parent of
+      NoParent   -> pickGREs rdr_name gres
+      ParentIs p 
+        | isUnqual rdr_name -> filter (parent_is p) gres
+        | otherwise         -> filter (parent_is p) (pickGREs rdr_name gres)
+
+  where
+    gres = lookupGlobalRdrEnv env (rdrNameOcc rdr_name)
+
+    parent_is p (GRE { gre_par = ParentIs p' }) = p == p'
+    parent_is _ _                               = False
 
 newIPNameRn :: IPName RdrName -> TcRnIf m n (IPName Name)
 newIPNameRn ip_rdr = newIPName (mapIPName rdrNameOcc ip_rdr)
@@ -334,13 +357,21 @@ Note [Usage for sub-bndrs]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 If you have this
    import qualified M( C( f ) ) 
-   intance M.C T where
+   instance M.C T where
      f x = x
 then is the qualified import M.f used?  Obviously yes.
 But the RdrName used in the instance decl is unqualified.  In effect,
 we fill in the qualification by looking for f's whose class is M.C
 But when adding to the UsedRdrNames we must make that qualification
-explicit, otherwise we get "Redundant import of M.C".
+explicit (saying "used  M.f"), otherwise we get "Redundant import of M.f".
+
+So we make up a suitable (fake) RdrName.  But be careful
+   import qualifed M
+   import M( C(f) )
+   instance C T where
+     f x = x
+Here we want to record a use of 'f', not of 'M.f', otherwise
+we'll miss the fact that the qualified import is redundant.
 
 --------------------------------------------------
 --		Occurrences
@@ -922,18 +953,20 @@ extendTyVarEnvFVRn tyvars thing_inside = bindLocalNamesFV tyvars thing_inside
 
 -------------------------------------
 checkDupRdrNames :: [Located RdrName] -> RnM ()
+-- Check for duplicated names in a binding group
 checkDupRdrNames rdr_names_w_loc
-  = 	-- Check for duplicated names in a binding group
-    mapM_ (dupNamesErr getLoc) dups
+  = mapM_ (dupNamesErr getLoc) dups
   where
     (_, dups) = removeDups (\n1 n2 -> unLoc n1 `compare` unLoc n2) rdr_names_w_loc
 
 checkDupNames :: [Name] -> RnM ()
+-- Check for duplicated names in a binding group
 checkDupNames names
-  = 	-- Check for duplicated names in a binding group
-    mapM_ (dupNamesErr nameSrcSpan) dups
+  = mapM_ (dupNamesErr nameSrcSpan) dups
   where
-    (_, dups) = removeDups (\n1 n2 -> nameOccName n1 `compare` nameOccName n2) names
+    (_, dups) = removeDups (\n1 n2 -> nameOccName n1 `compare` nameOccName n2) $
+                filterOut isSystemName names
+		-- See Note [Binders in Template Haskell] in Convert
 
 ---------------------
 checkDupAndShadowedRdrNames :: [Located RdrName] -> RnM ()
@@ -954,7 +987,7 @@ checkDupAndShadowedNames envs names
 -------------------------------------
 checkShadowedOccs :: (GlobalRdrEnv, LocalRdrEnv) -> [(SrcSpan,OccName)] -> RnM ()
 checkShadowedOccs (global_env,local_env) loc_occs
-  = ifDOptM Opt_WarnNameShadowing $ 
+  = ifWOptM Opt_WarnNameShadowing $ 
     do	{ traceRn (text "shadow" <+> ppr loc_occs)
 	; mapM_ check_shadow loc_occs }
   where
@@ -1053,7 +1086,11 @@ unknownNameSuggestErr where_look tried_rdr_name
   where
     pp_item :: (RdrName, HowInScope) -> SDoc
     pp_item (rdr, Left loc) = quotes (ppr rdr) <+>   -- Locally defined
-                              parens (ptext (sLit "line") <+> int (srcSpanStartLine loc))
+                              parens (ptext (sLit "line") <+> int (srcSpanStartLine loc'))
+        where loc' = case loc of
+                     UnhelpfulSpan _ ->
+                         panic "unknownNameSuggestErr UnhelpfulSpan"
+                     RealSrcSpan l -> l
     pp_item (rdr, Right is) = quotes (ppr rdr) <+>   -- Imported
                               parens (ptext (sLit "imported from") <+> ppr (is_mod is))
 
@@ -1184,7 +1221,7 @@ mapFvRnCPS f (x:xs) cont = f x 		   $ \ x' ->
 \begin{code}
 warnUnusedTopBinds :: [GlobalRdrElt] -> RnM ()
 warnUnusedTopBinds gres
-    = ifDOptM Opt_WarnUnusedBinds
+    = ifWOptM Opt_WarnUnusedBinds
     $ do isBoot <- tcIsHsBoot
          let noParent gre = case gre_par gre of
                             NoParent -> True
@@ -1200,9 +1237,9 @@ warnUnusedLocalBinds, warnUnusedMatches :: [Name] -> FreeVars -> RnM ()
 warnUnusedLocalBinds = check_unused Opt_WarnUnusedBinds
 warnUnusedMatches    = check_unused Opt_WarnUnusedMatches
 
-check_unused :: DynFlag -> [Name] -> FreeVars -> RnM ()
+check_unused :: WarningFlag -> [Name] -> FreeVars -> RnM ()
 check_unused flag bound_names used_names
- = ifDOptM flag (warnUnusedLocals (filterOut (`elemNameSet` used_names) bound_names))
+ = ifWOptM flag (warnUnusedLocals (filterOut (`elemNameSet` used_names) bound_names))
 
 -------------------------
 --	Helpers

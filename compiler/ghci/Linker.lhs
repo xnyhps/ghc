@@ -15,8 +15,8 @@ module Linker ( HValue, getHValue, showLinkerState,
 		linkExpr, unload, withExtendedLinkEnv,
                 extendLinkEnv, deleteFromLinkEnv,
                 extendLoadedPkgs, 
-		linkPackages,initDynLinker,
-                dataConInfoPtrToName
+		linkPackages,initDynLinker,linkModule,
+                dataConInfoPtrToName, lessUnsafeCoerce
 	) where
 
 #include "HsVersions.h"
@@ -54,6 +54,8 @@ import UniqSet
 import Constants
 import FastString
 import Config
+
+import GHC.Exts (unsafeCoerce#)
 
 -- Standard libraries
 import Control.Monad
@@ -264,6 +266,7 @@ dataConInfoPtrToName x = do
 -- Throws a 'ProgramError' if loading fails or the name cannot be found.
 getHValue :: HscEnv -> Name -> IO HValue
 getHValue hsc_env name = do
+  initDynLinker (hsc_dflags hsc_env)
   pls <- modifyMVar v_PersistentLinkerState $ \pls -> do
            if (isExternalName name) then do
              (pls', ok) <- linkDependencies hsc_env pls noSrcSpan [nameModule name]
@@ -277,6 +280,7 @@ linkDependencies :: HscEnv -> PersistentLinkerState
                  -> SrcSpan -> [Module]
                  -> IO (PersistentLinkerState, SuccessFlag)
 linkDependencies hsc_env pls span needed_mods = do
+--   initDynLinker (hsc_dflags hsc_env)
    let hpt = hsc_HPT hsc_env
        dflags = hsc_dflags hsc_env
 	-- The interpreter and dynamic linker can only handle object code built
@@ -633,7 +637,7 @@ getLinkDeps hsc_env hpt pls maybe_normal_osuf span mods
 
             boot_deps' = filter (not . (`elementOfUniqSet` acc_mods)) boot_deps
             acc_mods'  = addListToUniqSet acc_mods (moduleName mod : mod_deps)
-            acc_pkgs'  = addListToUniqSet acc_pkgs pkg_deps
+            acc_pkgs'  = addListToUniqSet acc_pkgs $ map fst pkg_deps
           --
           if pkg /= this_pkg
              then follow_deps mods acc_mods (addOneToUniqSet acc_pkgs' pkg)
@@ -696,6 +700,38 @@ getLinkDeps hsc_env hpt pls maybe_normal_osuf span mods
 	    adjust_ul _ _ = panic "adjust_ul"
 \end{code}
 
+%************************************************************************
+%*									*
+              Loading a single module
+%*									*
+%************************************************************************
+\begin{code}
+
+-- | Link a single module
+linkModule :: HscEnv -> Module -> IO ()
+linkModule hsc_env mod = do
+  initDynLinker (hsc_dflags hsc_env)
+  modifyMVar v_PersistentLinkerState $ \pls -> do
+    (pls', ok) <- linkDependencies hsc_env pls noSrcSpan [mod]
+    if (failed ok) then ghcError (ProgramError "could not link module")
+      else return (pls',())
+
+-- | Coerce a value as usual, but:
+--
+-- 1) Evaluate it immediately to get a segfault early if the coercion was wrong
+--
+-- 2) Wrap it in some debug messages at verbosity 3 or higher so we can see what happened
+--    if it /does/ segfault
+lessUnsafeCoerce :: DynFlags -> String -> a -> IO b
+lessUnsafeCoerce dflags context what = do
+    debugTraceMsg dflags 3 $ (ptext $ sLit "Coercing a value in") <+> (text context) <> (ptext $ sLit "...")
+    output <- evaluate (unsafeCoerce# what)
+    debugTraceMsg dflags 3 $ ptext $ sLit "Successfully evaluated coercion"
+    return output
+
+
+
+\end{code}
 
 %************************************************************************
 %*									*
@@ -997,6 +1033,7 @@ linkPackages :: DynFlags -> [PackageId] -> IO ()
 linkPackages dflags new_pkgs = do
   -- It's probably not safe to try to load packages concurrently, so we take
   -- a lock.
+  initDynLinker dflags
   modifyMVar_ v_PersistentLinkerState $ \pls -> do
     linkPackages' dflags new_pkgs pls
 
@@ -1056,26 +1093,18 @@ linkPackage dflags pkg
         classifieds   <- mapM (locateOneObj dirs) libs'
 
         -- Complication: all the .so's must be loaded before any of the .o's.  
-	let dlls = [ dll | DLL dll    <- classifieds ]
-	    objs = [ obj | Object obj <- classifieds ]
-	    archs = [ arch | Archive arch <- classifieds ]
+        let known_dlls = [ dll  | DLLPath dll    <- classifieds ]
+            dlls       = [ dll  | DLL dll        <- classifieds ]
+            objs       = [ obj  | Object obj     <- classifieds ]
+            archs      = [ arch | Archive arch   <- classifieds ]
 
 	maybePutStr dflags ("Loading package " ++ display (sourcePackageId pkg) ++ " ... ")
 
 	-- See comments with partOfGHCi
 	when (packageName pkg `notElem` partOfGHCi) $ do
 	    loadFrameworks pkg
-            -- When a library A needs symbols from a library B, the order in
-            -- extra_libraries/extra_ld_opts is "-lA -lB", because that's the
-            -- way ld expects it for static linking. Dynamic linking is a
-            -- different story: When A has no dependency information for B,
-            -- dlopen-ing A with RTLD_NOW (see addDLL in Linker.c) will fail
-            -- when B has not been loaded before. In a nutshell: Reverse the
-            -- order of DLLs for dynamic linking.
-	    -- This fixes a problem with the HOpenGL package (see "Compiling
-	    -- HOpenGL under recent versions of GHC" on the HOpenGL list).
-	    mapM_ (load_dyn dirs) (reverse dlls)
-	
+            mapM_ load_dyn (known_dlls ++ map mkSOName dlls)
+
 	-- After loading all the DLLs, we can load the static objects.
 	-- Ordering isn't important here, because we do one final link
 	-- step to resolve everything.
@@ -1087,12 +1116,17 @@ linkPackage dflags pkg
 	if succeeded ok then maybePutStrLn dflags "done."
 	      else ghcError (InstallationError ("unable to load package `" ++ display (sourcePackageId pkg) ++ "'"))
 
-load_dyn :: [FilePath] -> FilePath -> IO ()
-load_dyn dirs dll = do r <- loadDynamic dirs dll
-		       case r of
-			 Nothing  -> return ()
-			 Just err -> ghcError (CmdLineError ("can't load .so/.DLL for: " 
-                                 			      ++ dll ++ " (" ++ err ++ ")" ))
+-- we have already searched the filesystem; the strings passed to load_dyn
+-- can be passed directly to loadDLL.  They are either fully-qualified
+-- ("/usr/lib/libfoo.so"), or unqualified ("libfoo.so").  In the latter case,
+-- loadDLL is going to search the system paths to find the library.
+--
+load_dyn :: FilePath -> IO ()
+load_dyn dll = do r <- loadDLL dll
+                  case r of
+                    Nothing  -> return ()
+                    Just err -> ghcError (CmdLineError ("can't load .so/.DLL for: "
+                                                              ++ dll ++ " (" ++ err ++ ")" ))
 
 loadFrameworks :: InstalledPackageInfo_ ModuleName -> IO ()
 loadFrameworks pkg
@@ -1131,7 +1165,7 @@ locateOneObj dirs lib
      mk_dyn_lib_path dir = dir </> mkSOName dyn_lib_name
      findObject  = liftM (fmap Object)  $ findFile mk_obj_path  dirs
      findArchive = liftM (fmap Archive) $ findFile mk_arch_path dirs
-     findDll     = liftM (fmap DLL)     $ findFile mk_dyn_lib_path dirs
+     findDll     = liftM (fmap DLLPath) $ findFile mk_dyn_lib_path dirs
      assumeDll   = return (DLL lib)
      infixr `orElse`
      f `orElse` g = do m <- f
