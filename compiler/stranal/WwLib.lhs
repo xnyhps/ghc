@@ -367,7 +367,7 @@ mkWWstr_one arg
 	        rebox_fn       = Let (NonRec arg con_app) 
 	        con_app        = mkCoerce co $
                                  mkConApp data_con 
-                                          (map Type tycon_args ++ map Var unpk_args)
+                                          (map Type tycon_args ++ varsToCoreExprs unpk_args)
 	      (worker_args, wrap_fn, work_fn) <- mkWWstr unpk_args_w_ds
 	      return (worker_args, unbox_fn . wrap_fn, work_fn . rebox_fn) 
 	  		   -- Don't pass the arg, rebox instead
