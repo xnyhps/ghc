@@ -119,11 +119,11 @@ rnHsTypeKind typeCtx doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
          ASSERT( typeCtx == True ) rnForAll doc Explicit forall_tyvars ctxt tau }
 
 rnHsTypeKind _typeCtx _ (HsTyVar tyvar) = do
-    tyvar' <- lookupOccRn tyvar  -- UNDEFINED: if this fails we have to lookup one level below?
+    tyvar' <- lookupOccRn tyvar
     return (HsTyVar tyvar')
 
 rnHsTypeKind _typeCtx _ (HsPromotedConTy con) = do
-    con' <- lookupOccRn con  -- UNDEFINED: this lookup has to be done in terms?
+    con' <- lookupOccRn con
     return (HsPromotedConTy con')
 
 -- If we see (forall a . ty), without foralls on, the forall will give
@@ -215,12 +215,12 @@ rnHsTypeKind typeCtx doc (HsQuasiQuoteTy qq) = ASSERT( typeCtx == True )
 #endif
 rnHsTypeKind typeCtx _ (HsCoreTy ty) = ASSERT( typeCtx == True ) return (HsCoreTy ty)
 
-rnHsTypeKind typeCtx _ (HsLitTy lit) = ASSERT( typeCtx == False ) return (HsLitTy lit)
-rnHsTypeKind typeCtx doc (HsExplicitListTy ks) = ASSERT( typeCtx == False ) do
-    ks' <- mapM (rnLHsKind doc) ks
+rnHsTypeKind typeCtx _ (HsLitTy lit) = ASSERT( typeCtx == True ) return (HsLitTy lit)
+rnHsTypeKind typeCtx doc (HsExplicitListTy ks) = ASSERT( typeCtx == True ) do
+    ks' <- mapM (rnLHsType doc) ks
     return (HsExplicitListTy ks')
-rnHsTypeKind typeCtx doc (HsExplicitTupleTy ks) = ASSERT( typeCtx == False ) do
-    ks' <- mapM (rnLHsKind doc) ks
+rnHsTypeKind typeCtx doc (HsExplicitTupleTy ks) = ASSERT( typeCtx == True ) do
+    ks' <- mapM (rnLHsType doc) ks
     return (HsExplicitTupleTy ks')
 
 --------------
