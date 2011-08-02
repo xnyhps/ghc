@@ -1,0 +1,56 @@
+I use "IA0" as a keyword for grep.
+
+## For the renamer
+
+* implicit kind polymorphism
+
+* Move error messages about Template Haskell in Renamer.
+
+* Add a boolean in TyVar and TcTyVar to know if it's a kind variable or not
+  and add a commentary about why it is ok to mix type and kind variables.
+
+
+## For the type checker
+
+* Add PromotedTyCon TyCon in TyCon to know how to pretty-print a TyConAppTy.
+
+* Sort check HsKind.
+
+* I will definitely need some kind of TcTyFamily TcKindedVar and so on.
+
+
+## Bugs
+
+* ''a' -> ITtyvar a'
+  instead of ITsimplequote 'a'
+
+* Promoted primitive negative integers are not parsed.
+  > f :: -1
+
+* What about lifting operators?
+
+* Maybe want to merge UserTyVar and KindedTyVar
+
+* Operators are not printed correctly. See bug/Operators.hs.
+
+* Kinds are not always printed correctly.
+  (*, *) instead of '(*, *)
+  [*] instead of '[*]
+  We might add a Promoted flag in HsTupleTy and HsListTy.
+
+* Types are not always printed correctly.
+  21 instead of '21
+  "aoeu" instead of '"aoeu"
+  We might add a Promoted flag in HsTupleTy and HsListTy.
+
+* No wildpat in types.
+
+----------------------------------------------------------------------
+--                             HELPERS                              --
+----------------------------------------------------------------------
+
+  1. How to check conflicts in the parser
+
+% cd compiler/parser
+% gcc -E -undef -traditional -P -Iincludes -x c Parser.y.pp | grep -v '^#pragma GCC' >! Parser.y && happy -agc --strict Parser.y -i
+
