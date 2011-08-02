@@ -356,7 +356,7 @@ toHsType (IfaceTyConApp (IfaceTc tc) ts) = foldl mkHsAppTy (noLoc $ HsTyVar (ifa
 toHsType (IfaceForAllTy tv t)            = add_forall (toHsTvBndr tv) (toHsType t)
 
 toHsKind :: IfaceKind -> LHsKind RdrName
-toHsKind = toHsType  -- UNDEFINED: Check this after parsing works.
+toHsKind = toHsType  -- IA0: We might want to refine this.
 
 toKindTc :: IfaceTyCon -> TyCon
 toKindTc IfaceLiftedTypeKindTc   = liftedTypeKindTyCon
