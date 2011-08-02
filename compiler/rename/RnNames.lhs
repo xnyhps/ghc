@@ -21,8 +21,6 @@ import RnHsDoc          ( rnHsDoc )
 import IfaceEnv         ( ifaceExportNames )
 import LoadIface        ( loadSrcInterface )
 import TcRnMonad
-
-import HeaderInfo       ( mkPrelImports )
 import PrelNames
 import Module
 import Name
@@ -133,28 +131,20 @@ with yes we have gone with no for now.
 
 \begin{code}
 rnImports :: [LImportDecl RdrName]
-           -> RnM ([LImportDecl Name], GlobalRdrEnv, ImportAvails, AnyHpcUsage)
+          -> RnM ([LImportDecl Name], GlobalRdrEnv, ImportAvails, AnyHpcUsage)
 
 rnImports imports
          -- PROCESS IMPORT DECLS
          -- Do the non {- SOURCE -} ones first, so that we get a helpful
          -- warning for {- SOURCE -} ones that are unnecessary
     = do this_mod <- getModule
-         implicit_prelude <- xoptM Opt_ImplicitPrelude
-         let prel_imports = mkPrelImports (moduleName this_mod)
-                                implicit_prelude imports
-             (source, ordinary) = partition is_source_import imports
-             is_source_import (L _ (ImportDecl _ _ is_boot _ _ _ _)) = is_boot
-
-         ifWOptM Opt_WarnImplicitPrelude $
-             when (notNull prel_imports) $ addWarn (implicitPreludeWarn)
-
-         stuff1 <- mapM (rnImportDecl this_mod True)  prel_imports
-         stuff2 <- mapM (rnImportDecl this_mod False) ordinary
-         stuff3 <- mapM (rnImportDecl this_mod False) source
+         let (source, ordinary) = partition is_source_import imports
+             is_source_import d = ideclSource (unLoc d)
+         stuff1 <- mapM (rnImportDecl this_mod) ordinary
+         stuff2 <- mapM (rnImportDecl this_mod) source
          -- Safe Haskell: See Note [Tracking Trust Transitively]
          let (decls, rdr_env, imp_avails, hpc_usage) = 
-                        combine (stuff1 ++ stuff2 ++ stuff3)
+                        combine (stuff1 ++ stuff2)
          return (decls, rdr_env, imp_avails, hpc_usage)
 
     where
@@ -169,15 +159,15 @@ rnImports imports
                 imp_avails1 `plusImportAvails` imp_avails2,
                 hpc_usage1 || hpc_usage2 )
 
-rnImportDecl  :: Module -> Bool
+rnImportDecl  :: Module
               -> LImportDecl RdrName
               -> RnM (LImportDecl Name, GlobalRdrEnv, ImportAvails, AnyHpcUsage)
 
-rnImportDecl this_mod implicit_prelude
-             (L loc (ImportDecl { ideclName = loc_imp_mod_name, ideclPkgQual = mb_pkg
-                                , ideclSource = want_boot, ideclSafe = mod_safe
-                                , ideclQualified = qual_only
-                                , ideclAs = as_mod, ideclHiding = imp_details }))
+rnImportDecl this_mod 
+             (L loc decl@(ImportDecl { ideclName = loc_imp_mod_name, ideclPkgQual = mb_pkg
+                                     , ideclSource = want_boot, ideclSafe = mod_safe
+                                     , ideclQualified = qual_only, ideclImplicit = implicit
+                                     , ideclAs = as_mod, ideclHiding = imp_details }))
   = setSrcSpan loc $ do
 
     when (isJust mb_pkg) $ do
@@ -194,11 +184,11 @@ rnImportDecl this_mod implicit_prelude
         -- (Opt_WarnMissingImportList also checks for T(..) items
         --  but that is done in checkDodgyImport below)
     case imp_details of
-        Just (False, _)       -> return () -- Explicit import list
-        _  | implicit_prelude -> return ()
-           | qual_only        -> return ()
-           | otherwise        -> ifWOptM Opt_WarnMissingImportList $
-                                 addWarn (missingImportListWarn imp_mod_name)
+        Just (False, _) -> return () -- Explicit import list
+        _  | implicit   -> return () -- Do not bleat for implicit imports
+           | qual_only  -> return ()
+           | otherwise  -> ifWOptM Opt_WarnMissingImportList $
+                           addWarn (missingImportListWarn imp_mod_name)
 
     iface <- loadSrcInterface doc imp_mod_name want_boot mb_pkg
 
@@ -309,8 +299,8 @@ rnImportDecl this_mod implicit_prelude
 
         -- should the import be safe?
         mod_safe' = mod_safe
-                    || (not implicit_prelude && safeDirectImpsReq dflags)
-                    || (implicit_prelude && safeImplicitImpsReq dflags)
+                    || (not implicit && safeDirectImpsReq dflags)
+                    || (implicit && safeImplicitImpsReq dflags)
 
         imports   = ImportAvails {
                         imp_mods       = unitModuleEnv imp_mod
@@ -339,8 +329,8 @@ rnImportDecl this_mod implicit_prelude
           _           -> return ()
      )
 
-    let new_imp_decl = L loc (ImportDecl loc_imp_mod_name mb_pkg want_boot mod_safe'
-                                         qual_only as_mod new_imp_details)
+    let new_imp_decl = L loc (decl { ideclSafe = mod_safe'
+                                   , ideclHiding = new_imp_details })
 
     return (new_imp_decl, gbl_env, imports, mi_hpc iface)
     )
@@ -1393,18 +1383,20 @@ warnUnusedImportDecls gbl_env
        ; let usage :: [ImportDeclUsage]
              usage = findImportUsage imports rdr_env (Set.elems uses)
 
-       ; traceRn (ptext (sLit "Import usage") <+> ppr usage)
+       ; traceRn (vcat [ ptext (sLit "Uses:") <+> ppr (Set.elems uses)
+                       , ptext (sLit "Import usage") <+> ppr usage])
        ; ifWOptM Opt_WarnUnusedImports $
          mapM_ warnUnusedImport usage
 
        ; ifDOptM Opt_D_dump_minimal_imports $
          printMinimalImports usage }
   where
-    explicit_import (L loc _) = case loc of
-                                UnhelpfulSpan _ -> False
-                                RealSrcSpan _ -> True
+    explicit_import (L _ decl) = unLoc (ideclName decl) /= pRELUDE_NAME
         -- Filter out the implicit Prelude import
         -- which we do not want to bleat about
+	-- This also filters out an *explicit* Prelude import
+	-- but solving that problem involves more plumbing, and
+	-- it just doesn't seem worth it
 \end{code}
 
 \begin{code}
@@ -1682,8 +1674,9 @@ exportClashErr global_env name1 name2 ie1 ie2
          , ppr_export ie2' name2' ]
   where
     occ = nameOccName name1
-    ppr_export ie name = nest 2 (quotes (ppr ie) <+> ptext (sLit "exports") <+>
-                                 quotes (ppr name) <+> pprNameProvenance (get_gre name))
+    ppr_export ie name = nest 3 (hang (quotes (ppr ie) <+> ptext (sLit "exports") <+>
+                                       quotes (ppr name))
+                                    2 (pprNameProvenance (get_gre name)))
 
     -- get_gre finds a GRE for the Name, so that we can show its provenance
     get_gre name
@@ -1755,10 +1748,6 @@ moduleWarn mod (DeprecatedTxt txt)
   = sep [ ptext (sLit "Module") <+> quotes (ppr mod)
                                 <+> ptext (sLit "is deprecated:"),
           nest 2 (vcat (map ppr txt)) ]
-
-implicitPreludeWarn :: SDoc
-implicitPreludeWarn
-  = ptext (sLit "Module `Prelude' implicitly imported")
 
 packageImportErr :: SDoc
 packageImportErr
