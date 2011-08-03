@@ -42,6 +42,7 @@ module HscTypes (
 
         -- * Interactive context
 	InteractiveContext(..), emptyInteractiveContext, 
+        InteractiveImport(..),
 	icPrintUnqual, extendInteractiveContext,
         substInteractiveContext,
         mkPrintUnqualified, pprModulePrefix,
@@ -71,8 +72,8 @@ module HscTypes (
 	Dependencies(..), noDependencies,
 	NameCache(..), OrigNameCache, OrigIParamCache,
 	Avails, availsToNameSet, availsToNameEnv, availName, availNames,
-	GenAvailInfo(..), AvailInfo, RdrAvailInfo, 
-	IfaceExport,
+	AvailInfo(..),
+	IfaceExport, stableAvailCmp, 
 
 	-- * Warnings
 	Warnings(..), WarningTxt(..), plusWarns,
@@ -149,6 +150,7 @@ import Fingerprint
 import MonadUtils
 import Bag
 import ErrUtils
+import Util
 
 import System.FilePath
 import System.Time	( ClockTime )
@@ -883,15 +885,12 @@ emptyModIface mod
 --
 data InteractiveContext 
   = InteractiveContext { 
-         -- These two fields are only stored here so that the client
-         -- can retrieve them with GHC.getContext.  GHC itself doesn't
-         -- use them, but it does reset them to empty sometimes (such
+         -- This field is only stored here so that the client
+         -- can retrieve it with GHC.getContext.  GHC itself doesn't
+         -- use it, but does reset it to empty sometimes (such
          -- as before a GHC.load).  The context is set with GHC.setContext.
-         ic_toplev_scope :: [Module],
-             -- ^ The context includes the "top-level" scope of
-             -- these modules
-         ic_imports :: [ImportDecl RdrName],
-             -- ^ The context is extended with these import declarations
+         ic_imports :: [InteractiveImport],
+             -- ^ The GHCi context is extended with these imports
 
          ic_rn_gbl_env :: GlobalRdrEnv,
              -- ^ The contexts' cached 'GlobalRdrEnv', built by
@@ -914,11 +913,17 @@ data InteractiveContext
              -- virtual CWD of the program
     }
 
+data InteractiveImport 
+  = IIDecl (ImportDecl RdrName)	-- Bring the exports of a particular module
+    	   	       		-- (filtered by an import decl) into scope
 
+  | IIModule Module	-- Bring into scope the entire top-level envt of
+    	     		-- of this module, including the things imported
+			-- into it.
+ 
 emptyInteractiveContext :: InteractiveContext
 emptyInteractiveContext
-  = InteractiveContext { ic_toplev_scope = [],
-                         ic_imports = [],
+  = InteractiveContext { ic_imports = [],
 			 ic_rn_gbl_env = emptyGlobalRdrEnv,
 			 ic_tmp_ids = []
 #ifdef GHCI
@@ -948,6 +953,10 @@ substInteractiveContext ictxt@InteractiveContext{ic_tmp_ids=ids} subst
   = ictxt { ic_tmp_ids = map subst_ty ids }
   where
    subst_ty id = id `setIdType` substTy subst (idType id)
+
+instance Outputable InteractiveImport where
+  ppr (IIModule m) = char '*' <> ppr m
+  ppr (IIDecl d)   = ppr d
 \end{code}
 
 %************************************************************************
@@ -1327,27 +1336,24 @@ plusWarns (WarnSome v1) (WarnSome v2) = WarnSome (v1 ++ v2)
 \begin{code}
 -- | A collection of 'AvailInfo' - several things that are \"available\"
 type Avails	  = [AvailInfo]
--- | 'Name'd things that are available
-type AvailInfo    = GenAvailInfo Name
--- | 'RdrName'd things that are available
-type RdrAvailInfo = GenAvailInfo OccName
 
 -- | Records what things are "available", i.e. in scope
-data GenAvailInfo name	= Avail name	 -- ^ An ordinary identifier in scope
-			| AvailTC name
-				  [name] -- ^ A type or class in scope. Parameters:
-				         --
-				         --  1) The name of the type or class
-				         --
-				         --  2) The available pieces of type or class.
-					 --     NB: If the type or class is itself
-					 --     to be in scope, it must be in this list.
-					 --     Thus, typically: @AvailTC Eq [Eq, ==, \/=]@
-			deriving( Eq )
+data AvailInfo = Avail Name	 -- ^ An ordinary identifier in scope
+	       | AvailTC Name
+			 [Name]  -- ^ A type or class in scope. Parameters:
+			         --
+				 --  1) The name of the type or class
+				 --  2) The available pieces of type or class.
+				 -- 
+				 -- The AvailTC Invariant:
+				 --   * If the type or class is itself
+				 --     to be in scope, it must be *first* in this list.
+				 --     Thus, typically: @AvailTC Eq [Eq, ==, \/=]@
+		deriving( Eq )
 			-- Equality used when deciding if the interface has changed
 
 -- | The original names declared of a certain module that are exported
-type IfaceExport = (Module, [GenAvailInfo OccName])
+type IfaceExport = AvailInfo
 
 availsToNameSet :: [AvailInfo] -> NameSet
 availsToNameSet avails = foldr add emptyNameSet avails
@@ -1360,21 +1366,29 @@ availsToNameEnv avails = foldr add emptyNameEnv avails
 
 -- | Just the main name made available, i.e. not the available pieces
 -- of type or class brought into scope by the 'GenAvailInfo'
-availName :: GenAvailInfo name -> name
+availName :: AvailInfo -> Name
 availName (Avail n)     = n
 availName (AvailTC n _) = n
 
 -- | All names made available by the availability information
-availNames :: GenAvailInfo name -> [name]
+availNames :: AvailInfo -> [Name]
 availNames (Avail n)      = [n]
 availNames (AvailTC _ ns) = ns
 
-instance Outputable n => Outputable (GenAvailInfo n) where
+instance Outputable AvailInfo where
    ppr = pprAvail
 
-pprAvail :: Outputable n => GenAvailInfo n -> SDoc
+pprAvail :: AvailInfo -> SDoc
 pprAvail (Avail n)      = ppr n
 pprAvail (AvailTC n ns) = ppr n <> braces (hsep (punctuate comma (map ppr ns)))
+
+stableAvailCmp :: AvailInfo -> AvailInfo -> Ordering
+-- Compare lexicographically
+stableAvailCmp (Avail n1)     (Avail n2)     = n1 `stableNameCmp` n2
+stableAvailCmp (Avail {})     (AvailTC {})   = LT
+stableAvailCmp (AvailTC n ns) (AvailTC m ms) = (n `stableNameCmp` m) `thenCmp`
+                                               (cmpList stableNameCmp ns ms)
+stableAvailCmp (AvailTC {})   (Avail {})     = GT
 \end{code}
 
 \begin{code}
@@ -1675,6 +1689,7 @@ ms_imps ms = ms_textual_imps ms ++ map mk_additional_import (dynFlagDependencies
       ideclName = noLoc mod_nm,
       ideclPkgQual = Nothing,
       ideclSource = False,
+      ideclImplicit = True,	-- Maybe implicit because not "in the program text"
       ideclQualified = False,
       ideclAs = Nothing,
       ideclHiding = Nothing,
