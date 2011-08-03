@@ -23,7 +23,7 @@ module RnEnv (
 	addLocalFixities,
 	bindLocatedLocalsFV, bindLocatedLocalsRn,
 	bindSigTyVarsFV, bindPatSigTyVars, bindPatSigTyVarsFV,
-	bindTyVarsRn, bindTyVarsFV, extendTyVarEnvFVRn,
+	extendTyVarEnvFVRn,
 
 	checkDupRdrNames, checkDupAndShadowedRdrNames,
         checkDupNames, checkDupAndShadowedNames, 
@@ -885,29 +885,6 @@ bindLocatedLocalsFV rdr_names enclosed_scope
     return (thing, delFVs names fvs)
 
 -------------------------------------
-bindTyVarsFV ::  [LHsTyVarBndr RdrName]
-	      -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
-	      -> RnM (a, FreeVars)
-bindTyVarsFV tyvars thing_inside
-  = bindTyVarsRn tyvars $ \ tyvars' ->
-    do { (res, fvs) <- thing_inside tyvars'
-       ; return (res, delFVs (map hsLTyVarName tyvars') fvs) }
-
-bindTyVarsRn ::  [LHsTyVarBndr RdrName]
-	      -> ([LHsTyVarBndr Name] -> RnM a)
-	      -> RnM a
--- Haskell-98 binding of type variables; e.g. within a data type decl
-bindTyVarsRn tyvar_names enclosed_scope
-  = bindLocatedLocalsRn located_tyvars	$ \ names ->
-    do { kind_sigs_ok <- xoptM Opt_KindSignatures
-       ; unless (null kinded_tyvars || kind_sigs_ok) 
-       	 	(mapM_ (addErr . kindSigErr) kinded_tyvars)
-       ; enclosed_scope (zipWith replace tyvar_names names) }
-  where 
-    replace (L loc n1) n2 = L loc (replaceTyVarName n1 n2)
-    located_tyvars = hsLTyVarLocNames tyvar_names
-    kinded_tyvars  = [n | L _ (KindedTyVar n _) <- tyvar_names]
-
 bindPatSigTyVars :: [LHsType RdrName] -> ([Name] -> RnM a) -> RnM a
   -- Find the type variables in the pattern type 
   -- signatures that must be brought into scope

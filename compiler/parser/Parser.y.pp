@@ -32,6 +32,7 @@ import RdrHsSyn
 import HscTypes		( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
+import TysPrim          ( liftedTypeKindTyConName, unliftedTypeKindTyConName )
 import TysWiredIn	( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
 			  unboxedSingletonTyCon, unboxedSingletonDataCon,
 			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR )
@@ -44,8 +45,6 @@ import DataCon		( DataCon, dataConName )
 import SrcLoc
 import Module
 import StaticFlags	( opt_SccProfilingOn, opt_Hpc )
-import Type		( Kind, liftedTypeKind, unliftedTypeKind )
-import Coercion		( mkArrowKind )
 import Class		( FunDep )
 import BasicTypes
 import DynFlags
@@ -701,9 +700,9 @@ data_or_newtype :: { Located NewOrData }
 	: 'data'	{ L1 DataType }
 	| 'newtype'	{ L1 NewType }
 
-opt_kind_sig :: { Located (Maybe Kind) }
+opt_kind_sig :: { Located (Maybe (LHsKind RdrName)) }
 	: 				{ noLoc Nothing }
-	| '::' kind			{ LL (Just (unLoc $2)) }
+	| '::' kind			{ LL (Just $2) }
 
 -- tycl_hdr parses the header of a class or data type decl,
 -- which takes the form
@@ -1032,7 +1031,7 @@ atype :: { LHsType RdrName }
 	| '[' ctype ']'			{ LL $ HsListTy  $2 }
 	| '[:' ctype ':]'		{ LL $ HsPArrTy  $2 }
 	| '(' ctype ')'		        { LL $ HsParTy   $2 }
-	| '(' ctype '::' kind ')'	{ LL $ HsKindSig $2 (unLoc $4) }
+	| '(' ctype '::' kind ')'	{ LL $ HsKindSig $2 $4 }
 	| quasiquote       	        { L1 (HsQuasiQuoteTy (unLoc $1)) }
 	| '$(' exp ')'	      		{ LL $ mkHsSpliceTy $2 }
 	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $ 
@@ -1063,8 +1062,7 @@ tv_bndrs :: { [LHsTyVarBndr RdrName] }
 
 tv_bndr :: { LHsTyVarBndr RdrName }
 	: tyvar				{ L1 (UserTyVar (unLoc $1) placeHolderKind) }
-	| '(' tyvar '::' kind ')'	{ LL (KindedTyVar (unLoc $2) 
-							  (unLoc $4)) }
+	| '(' tyvar '::' kind ')'	{ LL (KindedTyVar (unLoc $2) $4 placeHolderKind) }
 
 fds :: { Located [Located (FunDep RdrName)] }
 	: {- empty -}			{ noLoc [] }
@@ -1085,14 +1083,14 @@ varids0	:: { Located [RdrName] }
 -----------------------------------------------------------------------------
 -- Kinds
 
-kind	:: { Located Kind }
+kind	:: { LHsKind RdrName }
 	: akind			{ $1 }
-	| akind '->' kind	{ LL (mkArrowKind (unLoc $1) (unLoc $3)) }
+	| akind '->' kind	{ LL (HsFunTy $1 $3) }
 
-akind	:: { Located Kind }
-	: '*'			{ L1 liftedTypeKind }
-	| '!'			{ L1 unliftedTypeKind }
-	| '(' kind ')'		{ LL (unLoc $2) }
+akind	:: { LHsKind RdrName }
+	: '*'			{ L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
+	| '!'			{ L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
+	| '(' kind ')'          { LL (HsParTy $2) }
 
 
 -----------------------------------------------------------------------------

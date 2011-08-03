@@ -249,10 +249,10 @@ getInitialKind (L _ decl)
 	; return (tcdName decl, mkArrowKinds arg_kinds res_kind) }
   where
     mk_arg_kind (UserTyVar _ _)      = newKindVar
-    mk_arg_kind (KindedTyVar _ kind) = return kind
+    mk_arg_kind (KindedTyVar _ kind _) = scDsLHsKind kind
 
-    mk_res_kind (TyFamily { tcdKind    = Just kind }) = return kind
-    mk_res_kind (TyData   { tcdKindSig = Just kind }) = return kind
+    mk_res_kind (TyFamily { tcdKind    = Just kind }) = scDsLHsKind kind
+    mk_res_kind (TyData   { tcdKindSig = Just kind }) = scDsLHsKind kind
 	-- On GADT-style declarations we allow a kind signature
 	--	data T :: *->* where { ... }
     mk_res_kind _ = return liftedTypeKind
@@ -340,7 +340,7 @@ kcTyClDeclBody decl thing_inside
 	; tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
     add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
-    add_kind (L loc (KindedTyVar n _)) k = L loc (KindedTyVar n k)
+    add_kind (L loc (KindedTyVar n lk _)) k = L loc (KindedTyVar n lk k)
 
 -- Kind check a data declaration, assuming that we already extended the
 -- kind environment with the type variables of the left-hand side (these
@@ -395,8 +395,9 @@ kcFamilyDecl :: [LHsTyVarBndr Name]  -- tyvars of enclosing class decl if any
 kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
   = kcTyClDeclBody decl $ \tvs' ->
     do { mapM_ unifyClassParmKinds tvs'
+       ; kind' <- scDsLHsMaybeKind kind
        ; return (decl {tcdTyVars = tvs', 
-		       tcdKind = kind `mplus` Just liftedTypeKind})
+		       tcdTcKind = fromMaybe liftedTypeKind kind'})  -- IA0: switch to tcdTcKind
 		       -- default result kind is '*'
        }
   where
@@ -432,7 +433,7 @@ tcTyClDecl1 :: TyConParent -> (Name -> RecFlag) -> TyClDecl Name -> TcM [TyThing
 tcTyClDecl1 parent _calc_isrec 
   (TyFamily {tcdFlavour = TypeFamily, 
 	     tcdLName = L _ tc_name, tcdTyVars = tvs,
-             tcdKind = Just kind}) -- NB: kind at latest added during kind checking
+             tcdTcKind = kind}) -- NB: kind at latest added during kind checking
   = tcTyVarBndrs tvs  $ \ tvs' -> do 
   { traceTc "type family:" (ppr tc_name) 
 
@@ -447,10 +448,10 @@ tcTyClDecl1 parent _calc_isrec
   -- "data family" declaration
 tcTyClDecl1 parent _calc_isrec 
   (TyFamily {tcdFlavour = DataFamily, 
-	     tcdLName = L _ tc_name, tcdTyVars = tvs, tcdKind = mb_kind})
+	     tcdLName = L _ tc_name, tcdTyVars = tvs, tcdTcKind = mb_kind})
   = tcTyVarBndrs tvs  $ \ tvs' -> do 
   { traceTc "data family:" (ppr tc_name) 
-  ; extra_tvs <- tcDataKindSig mb_kind
+  ; extra_tvs <- tcDataKindSig (Just mb_kind)
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
 
 
@@ -481,8 +482,9 @@ tcTyClDecl1 _parent calc_isrec
   (TyData {tcdND = new_or_data, tcdCtxt = ctxt, tcdTyVars = tvs,
 	   tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons})
   = ASSERT( isNoParent _parent )
-    tcTyVarBndrs tvs	$ \ tvs' -> do 
-  { extra_tvs <- tcDataKindSig mb_ksig
+    tcTyVarBndrs tvs	$ \ tvs' -> do
+  { mb_ksig' <- scDsLHsMaybeKind mb_ksig  -- IA0: added sort checking
+  ; extra_tvs <- tcDataKindSig mb_ksig'
   ; let final_tvs = tvs' ++ extra_tvs
   ; stupid_theta <- tcHsKindedContext ctxt
   ; kind_signatures <- xoptM Opt_KindSignatures
@@ -560,7 +562,7 @@ tcTyClDecl1 _ _
   (ForeignType {tcdLName = L _ tc_name, tcdExtName = tc_ext_name})
   = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind 0)]
 
-tcTyClDecl1 _ _ d = pprPanic "tcTyClDecl1" (ppr d)
+-- tcTyClDecl1 _ _ d = pprPanic "tcTyClDecl1" (ppr d)  -- IA0: Pattern match(es) are overlapped
 
 dataDeclChecks :: Name -> NewOrData -> ThetaType -> [LConDecl Name] -> TcM ()
 dataDeclChecks tc_name new_or_data stupid_theta cons

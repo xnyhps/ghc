@@ -46,6 +46,7 @@ import NameEnv
 import TcType
 import TyCon
 import TysWiredIn
+import TysPrim ( liftedTypeKindTyConName )
 import CoreSyn
 import MkCore
 import CoreUtils
@@ -586,7 +587,7 @@ repTyVarBndrWithKind :: LHsTyVarBndr Name
                      -> Core TH.Name -> DsM (Core TH.TyVarBndr)
 repTyVarBndrWithKind (L _ (UserTyVar {})) nm
   = repPlainTV nm
-repTyVarBndrWithKind (L _ (KindedTyVar _ ki)) nm
+repTyVarBndrWithKind (L _ (KindedTyVar _ ki _)) nm
   = repKind ki >>= repKindedTV nm
 
 -- represent a type context
@@ -690,17 +691,16 @@ repTy ty		      = notHandled "Exotic form of type" (ppr ty)
 
 -- represent a kind
 --
-repKind :: Kind -> DsM (Core TH.Kind)
+repKind :: LHsKind Name -> DsM (Core TH.Kind)
 repKind ki
-  = do { let (kis, ki') = splitKindFunTys ki
+  = do { let (kis, ki') = splitHsFunType ki
        ; kis_rep <- mapM repKind kis
        ; ki'_rep <- repNonArrowKind ki'
        ; foldrM repArrowK ki'_rep kis_rep
        }
   where
-    repNonArrowKind k | isLiftedTypeKind k = repStarK
-                      | otherwise          = notHandled "Exotic form of kind" 
-                                                        (ppr k)
+    repNonArrowKind (L _ (HsTyVar name)) | name == liftedTypeKindTyConName = repStarK
+    repNonArrowKind k = notHandled "Exotic form of kind" (ppr k)
 
 -----------------------------------------------------------------------------
 -- 		Splices

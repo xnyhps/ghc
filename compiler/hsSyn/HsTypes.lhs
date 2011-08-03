@@ -9,7 +9,7 @@ HsTypes: Abstract syntax: user-defined types
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module HsTypes (
-	HsType(..), LHsType, 
+	HsType(..), LHsType, HsKind, LHsKind,
 	HsTyVarBndr(..), LHsTyVarBndr,
 	HsExplicitFlag(..),
 	HsContext, LHsContext,
@@ -22,8 +22,8 @@ module HsTypes (
 	ConDeclField(..), pprConDeclFields,
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
-	hsTyVarName, hsTyVarNames, replaceTyVarName,
-	hsTyVarKind, hsTyVarNameKind,
+	hsTyVarName, hsTyVarNames,
+	hsTyVarKind, hsTyVarNameKind, replaceTyVarName,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
 	splitHsAppTys, mkHsAppTys,
@@ -134,6 +134,8 @@ data HsPred name = HsClassP name [LHsType name]		 -- class constraint
 		 deriving (Data, Typeable)
 
 type LHsType name = Located (HsType name)
+type HsKind name = HsType name
+type LHsKind name = Located (HsKind name)
 
 data HsType name
   = HsForAllTy	HsExplicitFlag   	-- Renamer leaves this flag unchanged, to record the way
@@ -173,7 +175,7 @@ data HsType name
 					-- Enclosed HsPred; the one on the type will do
 
   | HsKindSig		(LHsType name)	-- (ty :: kind)
-			Kind		-- A type with a kind signature
+			(LHsKind name)  -- A type with a kind signature
 
   | HsQuasiQuoteTy	(HsQuasiQuote name)
 
@@ -247,9 +249,10 @@ data HsTyVarBndr name
          name 		-- See Note [Printing KindedTyVars]
          PostTcKind
 
-  | KindedTyVar 
-         name 
-         Kind 
+  | KindedTyVar
+         name
+         (LHsKind name)
+         PostTcKind
       --  *** NOTA BENE *** A "monotype" in a pragma can have
       -- for-alls in it, (mostly to do with dictionaries).  These
       -- must be explicitly Kinded.
@@ -257,15 +260,15 @@ data HsTyVarBndr name
 
 hsTyVarName :: HsTyVarBndr name -> name
 hsTyVarName (UserTyVar n _)   = n
-hsTyVarName (KindedTyVar n _) = n
+hsTyVarName (KindedTyVar n _ _) = n
 
 hsTyVarKind :: HsTyVarBndr name -> Kind
 hsTyVarKind (UserTyVar _ k)   = k
-hsTyVarKind (KindedTyVar _ k) = k
+hsTyVarKind (KindedTyVar _ _ k) = k
 
 hsTyVarNameKind :: HsTyVarBndr name -> (name, Kind)
 hsTyVarNameKind (UserTyVar n k)   = (n,k)
-hsTyVarNameKind (KindedTyVar n k) = (n,k)
+hsTyVarNameKind (KindedTyVar n _ k) = (n,k)
 
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
@@ -282,9 +285,13 @@ hsLTyVarLocName = fmap hsTyVarName
 hsLTyVarLocNames :: [LHsTyVarBndr name] -> [Located name]
 hsLTyVarLocNames = map hsLTyVarLocName
 
-replaceTyVarName :: HsTyVarBndr name1 -> name2 -> HsTyVarBndr name2
-replaceTyVarName (UserTyVar _ k)   n' = UserTyVar n' k
-replaceTyVarName (KindedTyVar _ k) n' = KindedTyVar n' k
+replaceTyVarName :: (Monad m) => HsTyVarBndr name1 -> name2  -- new type name
+                    -> (LHsKind name1 -> m (LHsKind name2))  -- kind renaming
+                    -> m (HsTyVarBndr name2)
+replaceTyVarName (UserTyVar _ k) n' _ = return $ UserTyVar n' k
+replaceTyVarName (KindedTyVar _ k tck) n' rn = do
+  k' <- rn k
+  return $ KindedTyVar n' k' tck
 \end{code}
 
 
@@ -341,9 +348,9 @@ splitHsFunType other 	   	   = ([], other)
 instance (OutputableBndr name) => Outputable (HsType name) where
     ppr ty = pprHsType ty
 
-instance (Outputable name) => Outputable (HsTyVarBndr name) where
+instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (UserTyVar name _)      = ppr name
-    ppr (KindedTyVar name kind) = hsep [ppr name, dcolon, pprParendKind kind]
+    ppr (KindedTyVar name kind _) = parens $ hsep [ppr name, dcolon, ppr kind]
 
 instance OutputableBndr name => Outputable (HsPred name) where
     ppr (HsClassP clas tys) = ppr clas <+> hsep (map pprLHsType tys)
@@ -444,7 +451,7 @@ ppr_mono_ty _    (HsRecTy flds)      = pprConDeclFields flds
 ppr_mono_ty _    (HsTyVar name)      = ppr name
 ppr_mono_ty prec (HsFunTy ty1 ty2)   = ppr_fun_ty prec ty1 ty2
 ppr_mono_ty _    (HsTupleTy con tys) = tupleParens con (interpp'SP tys)
-ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> pprKind kind)
+ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> ppr kind)
 ppr_mono_ty _    (HsListTy ty)	     = brackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPredTy pred)     = ppr pred

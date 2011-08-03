@@ -50,7 +50,7 @@ module RdrHsSyn (
 
 import HsSyn		-- Lots of it
 import Class            ( FunDep )
-import TypeRep          ( Kind )
+-- import TypeRep          ( Kind )  -- IA0
 import RdrName		( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc, 
 			  isRdrDataCon, isUnqual, getRdrName, setRdrNameSpace )
 import Name             ( Name )
@@ -192,7 +192,7 @@ mkTyData :: SrcSpan
          -> NewOrData
 	 -> Bool		-- True <=> data family instance
          -> Located (Maybe (LHsContext RdrName), LHsType RdrName)
-         -> Maybe Kind
+         -> Maybe (LHsKind RdrName)
          -> [LConDecl RdrName]
          -> Maybe [LHsType RdrName]
          -> P (LTyClDecl RdrName)
@@ -220,12 +220,12 @@ mkTySynonym loc is_family lhs rhs
 mkTyFamily :: SrcSpan
            -> FamilyFlavour
 	   -> LHsType RdrName   -- LHS
-	   -> Maybe Kind        -- Optional kind signature
+	   -> Maybe (LHsKind RdrName) -- Optional kind signature
            -> P (LTyClDecl RdrName)
 mkTyFamily loc flavour lhs ksig
   = do { (tc, tparams) <- checkTyClHdr lhs
        ; tyvars <- checkTyVars tparams
-       ; return (L loc (TyFamily flavour tc tyvars ksig)) }
+       ; return (L loc (TyFamily flavour tc tyvars ksig placeHolderKind)) }
 
 mkTopSpliceDecl :: LHsExpr RdrName -> HsDecl RdrName
 -- If the user wrote
@@ -519,7 +519,7 @@ checkTyVars tparms = mapM chk tparms
   where
 	-- Check that the name space is correct!
     chk (L l (HsKindSig (L _ (HsTyVar tv)) k))
-	| isRdrTyVar tv    = return (L l (KindedTyVar tv k))
+	| isRdrTyVar tv    = return (L l (KindedTyVar tv k placeHolderKind))
     chk (L l (HsTyVar tv))
         | isRdrTyVar tv    = return (L l (UserTyVar tv placeHolderKind))
     chk t@(L l _)            =

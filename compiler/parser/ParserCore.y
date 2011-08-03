@@ -19,7 +19,6 @@ import Type ( Kind,
               liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
               argTypeKindTyCon, ubxTupleKindTyCon, mkTyConApp
             )
-import Coercion( mkArrowKind )
 import Name( Name, nameOccName, nameModule, mkExternalName )
 import Module
 import ParserCoreUtils
@@ -355,12 +354,11 @@ toHsType (IfaceFunTy t1 t2)    		 = noLoc $ HsFunTy (toHsType t1) (toHsType t2)
 toHsType (IfaceTyConApp (IfaceTc tc) ts) = foldl mkHsAppTy (noLoc $ HsTyVar (ifaceExtRdrName tc)) (map toHsType ts) 
 toHsType (IfaceForAllTy tv t)            = add_forall (toHsTvBndr tv) (toHsType t)
 
--- We also need to convert IfaceKinds to Kinds (now that they are different).
 -- Only a limited form of kind will be encountered... hopefully
-toKind :: IfaceKind -> Kind
-toKind (IfaceFunTy ifK1 ifK2)  = mkArrowKind (toKind ifK1) (toKind ifK2)
-toKind (IfaceTyConApp ifKc []) = mkTyConApp (toKindTc ifKc) []
-toKind other                   = pprPanic "toKind" (ppr other)
+toHsKind :: IfaceKind -> LHsKind RdrName
+toHsKind (IfaceFunTy ifK1 ifK2)  = noLoc $ HsFunTy (toHsKind ifK1) (toHsKind ifK2)
+toHsKind (IfaceTyConApp ifKc []) = noLoc $ HsTyVar (nameRdrName (tyConName (toKindTc ifKc)))
+toHsKind other                   = pprPanic "toHsKind" (ppr other)
 
 toKindTc :: IfaceTyCon -> TyCon
 toKindTc IfaceLiftedTypeKindTc   = liftedTypeKindTyCon
@@ -381,7 +379,7 @@ ifaceArrow ifT1 ifT2 = IfaceFunTy ifT1 ifT2
 ifaceEq ifT1 ifT2 = IfacePredTy (IfaceEqPred ifT1 ifT2)
 
 toHsTvBndr :: IfaceTvBndr -> LHsTyVarBndr RdrName
-toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toKind k)
+toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toHsKind k) placeHolderKind
 
 ifaceExtRdrName :: Name -> RdrName
 ifaceExtRdrName name = mkOrig (nameModule name) (nameOccName name)
