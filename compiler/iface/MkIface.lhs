@@ -650,9 +650,22 @@ type IfaceDeclABI = (Module, IfaceDecl, IfaceDeclExtras)
 
 data IfaceDeclExtras 
   = IfaceIdExtras    Fixity [IfaceRule]
-  | IfaceDataExtras  Fixity [IfaceInstABI] [(Fixity,[IfaceRule])]
-  | IfaceClassExtras Fixity [IfaceInstABI] [(Fixity,[IfaceRule])]
+
+  | IfaceDataExtras  
+       Fixity			-- Fixity of the tycon itself
+       [IfaceInstABI]		-- Local instances of this tycon
+       				-- See Note [Orphans] in IfaceSyn
+       [(Fixity,[IfaceRule])]	-- For each construcotr, fixity and RULES
+
+  | IfaceClassExtras 
+       Fixity			-- Fixity of the class itself
+       [IfaceInstABI] 		-- Local instances of this class *or*
+       				--   of its associated data types
+       				-- See Note [Orphans] in IfaceSyn
+       [(Fixity,[IfaceRule])]	-- For each class method, fixity and RULES
+
   | IfaceSynExtras   Fixity
+
   | IfaceOtherDeclExtras
 
 abiDecl :: IfaceDeclABI -> IfaceDecl
@@ -727,9 +740,12 @@ declExtras fix_fn rule_env inst_env decl
                      IfaceDataExtras (fix_fn n)
                         (map ifDFun $ lookupOccEnvL inst_env n)
                         (map (id_extras . ifConOcc) (visibleIfConDecls cons))
-      IfaceClass{ifSigs=sigs} -> 
+      IfaceClass{ifSigs=sigs, ifATs=ats} -> 
                      IfaceClassExtras (fix_fn n)
-                        (map ifDFun $ lookupOccEnvL inst_env n)
+                        (map ifDFun $ (concatMap (lookupOccEnvL inst_env . ifName) ats)
+                                    ++ lookupOccEnvL inst_env n)
+		           -- Include instances of the associated types
+			   -- as well as instances of the class (Trac #5147)
                         [id_extras op | IfaceClassOp op _ _ <- sigs]
       IfaceSyn{} -> IfaceSynExtras (fix_fn n)
       _other -> IfaceOtherDeclExtras
@@ -839,7 +855,7 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
     this_pkg = thisPackage dflags
 
     used_mods    = moduleEnvKeys ent_map
-    dir_imp_mods = (moduleEnvKeys direct_imports)
+    dir_imp_mods = moduleEnvKeys direct_imports
     all_mods     = used_mods ++ filter (`notElem` used_mods) dir_imp_mods
     usage_mods   = sortBy stableModuleCmp all_mods
                         -- canonical order is imported, to avoid interface-file
@@ -854,12 +870,14 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
         | isWiredInName name = mv_map  -- ignore wired-in names
         | otherwise
         = case nameModule_maybe name of
-             Nothing  -> pprPanic "mkUsageInfo: internal name?" (ppr name)
+             Nothing  -> ASSERT( isSystemName name ) mv_map
+	     	-- See Note [Internal used_names]
+
              Just mod -> -- This lambda function is really just a
                          -- specialised (++); originally came about to
                          -- avoid quadratic behaviour (trac #2680)
                          extendModuleEnvWith (\_ xs -> occ:xs) mv_map mod [occ]
-    		   where occ = nameOccName name
+    	        where occ = nameOccName name
     
     -- We want to create a Usage for a home module if 
     --	a) we used something from it; has something in used_names
@@ -959,54 +977,17 @@ mkIfaceAnnotation (Annotation { ann_target = target, ann_value = serialized }) =
 \end{code}
 
 \begin{code}
-mkIfaceExports :: [AvailInfo]
-               -> [(Module, [GenAvailInfo OccName])]
-                  -- Group by module and sort by occurrence
+mkIfaceExports :: [AvailInfo] -> [IfaceExport]  -- Sort to make canonical
 mkIfaceExports exports
-  = [ (mod, Map.elems avails)
-    | (mod, avails) <- sortBy (stableModuleCmp `on` fst)
-                              (moduleEnvToList groupFM)
-                       -- NB. the Map.toList is in a random order,
-                       -- because Ord Module is not a predictable
-                       -- ordering.  Hence we perform a final sort
-                       -- using the stable Module ordering.
-    ]
+  = sortBy stableAvailCmp (map sort_subs exports)
   where
-	-- Group by the module where the exported entities are defined
-	-- (which may not be the same for all Names in an Avail)
-	-- Deliberately use Map rather than UniqFM so we
-	-- get a canonical ordering
-    groupFM :: ModuleEnv (Map FastString (GenAvailInfo OccName))
-    groupFM = foldl add emptyModuleEnv exports
-
-    add_one :: ModuleEnv (Map FastString (GenAvailInfo OccName))
-	    -> Module -> GenAvailInfo OccName
-	    -> ModuleEnv (Map FastString (GenAvailInfo OccName))
-    add_one env mod avail 
-      -- XXX Is there a need to flip Map.union here?
-      =  extendModuleEnvWith (flip Map.union) env mod 
-		(Map.singleton (occNameFS (availName avail)) avail)
-
-	-- NB: we should not get T(X) and T(Y) in the export list
-	--     else the Map.union will simply discard one!  They
-	--     should have been combined by now.
-    add env (Avail n)
-      = ASSERT( isExternalName n ) 
-        add_one env (nameModule n) (Avail (nameOccName n))
-
-    add env (AvailTC tc ns)
-      = ASSERT( all isExternalName ns ) 
-	foldl add_for_mod env mods
-      where
-	tc_occ = nameOccName tc
-	mods   = nub (map nameModule ns)
-		-- Usually just one, but see Note [Original module]
-
-	add_for_mod env mod
-	    = add_one env mod (AvailTC tc_occ (sort names_from_mod))
-              -- NB. sort the children, we need a canonical order
-	    where
-	      names_from_mod = [nameOccName n | n <- ns, nameModule n == mod]
+    sort_subs :: AvailInfo -> AvailInfo
+    sort_subs (Avail n) = Avail n
+    sort_subs (AvailTC n []) = AvailTC n []
+    sort_subs (AvailTC n (m:ms)) 
+       | n==m      = AvailTC n (m:sortBy stableNameCmp ms)
+       | otherwise = AvailTC n (sortBy stableNameCmp (m:ms))
+       -- Maintain the AvailTC Invariant
 \end{code}
 
 Note [Orignal module]
@@ -1023,6 +1004,15 @@ That is, in Y,
 
 In the result of MkIfaceExports, the names are grouped by defining module,
 so we may need to split up a single Avail into multiple ones.
+
+Note [Internal used_names]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+Most of the used_names are External Names, but we can have Internal
+Names too: see Note [Binders in Template Haskell] in Convert, and
+Trac #5362 for an example.  Such Names are always
+  - Such Names are always for locally-defined things, for which we
+    don't gather usage info, so we can just ignore them in ent_map
+  - They are always System Names, hence the assert, just as a double check.
 
 
 %************************************************************************
