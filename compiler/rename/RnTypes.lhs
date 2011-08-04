@@ -60,7 +60,7 @@ to break several loop.
 %*********************************************************
 
 \begin{code}
-rnHsTypeFVs :: SDoc -> LHsType RdrName -> RnM (LHsType Name, FreeVars)
+rnHsTypeFVs :: HsDocContext -> LHsType RdrName -> RnM (LHsType Name, FreeVars)
 rnHsTypeFVs doc_str ty  = do
     ty' <- rnLHsType doc_str ty
     return (ty', extractHsTyNames ty')
@@ -69,32 +69,32 @@ rnHsSigType :: SDoc -> LHsType RdrName -> RnM (LHsType Name)
 	-- rnHsSigType is used for source-language type signatures,
 	-- which use *implicit* universal quantification.
 rnHsSigType doc_str ty
-  = rnLHsType (text "In the type signature for" <+> doc_str) ty
+  = rnLHsType (TypeSigCtx doc_str) ty
 \end{code}
 
 rnHsType is here because we call it from loadInstDecl, and I didn't
 want a gratuitous knot.
 
 \begin{code}
-rnLHsTyKi  :: Bool -> SDoc -> LHsType RdrName -> RnM (LHsType Name)
+rnLHsTyKi  :: Bool -> HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
 rnLHsTyKi isType doc = wrapLocM (rnHsTyKi isType doc)
 
-rnLHsType  :: SDoc -> LHsType RdrName -> RnM (LHsType Name)
+rnLHsType  :: HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
 rnLHsType = rnLHsTyKi True
-rnLHsKind  :: SDoc -> LHsKind RdrName -> RnM (LHsKind Name)
+rnLHsKind  :: HsDocContext -> LHsKind RdrName -> RnM (LHsKind Name)
 rnLHsKind = rnLHsTyKi False
-rnLHsMaybeKind  :: SDoc -> Maybe (LHsKind RdrName) -> RnM (Maybe (LHsKind Name))
+rnLHsMaybeKind  :: HsDocContext -> Maybe (LHsKind RdrName) -> RnM (Maybe (LHsKind Name))
 rnLHsMaybeKind _ Nothing = return Nothing
 rnLHsMaybeKind doc (Just k) = do
   k' <- rnLHsKind doc k
   return (Just k')
 
-rnHsType  :: SDoc -> HsType RdrName -> RnM (HsType Name)
+rnHsType  :: HsDocContext -> HsType RdrName -> RnM (HsType Name)
 rnHsType = rnHsTyKi True
-rnHsKind  :: SDoc -> HsKind RdrName -> RnM (HsKind Name)
+rnHsKind  :: HsDocContext -> HsKind RdrName -> RnM (HsKind Name)
 rnHsKind = rnHsTyKi False
 
-rnHsTyKi :: Bool -> SDoc -> HsType RdrName -> RnM (HsType Name)
+rnHsTyKi :: Bool -> HsDocContext -> HsType RdrName -> RnM (HsType Name)
 
 rnHsTyKi isType doc (HsForAllTy Implicit _ ctxt ty) = ASSERT ( isType ) do
 	-- Implicit quantifiction in source code (no kinds on tyvars)
@@ -119,7 +119,7 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
 	 -- mentioned in the type, and produce a warning if not
          let mentioned   = extractHsRhoRdrTyVars ctxt tau
              in_type_doc = ptext (sLit "In the type") <+> quotes (ppr ty)
-       ; warnUnusedForAlls (in_type_doc $$ doc) forall_tyvars mentioned
+       ; warnUnusedForAlls (in_type_doc $$ docOfHsDocContext doc) forall_tyvars mentioned
 
        ; -- rnForAll does the rest
          rnForAll doc Explicit forall_tyvars ctxt tau }
@@ -127,6 +127,10 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
 rnHsTyKi _ _ (HsTyVar tyvar) = do
     tyvar' <- lookupOccRn tyvar
     return (HsTyVar tyvar')
+
+rnHsTyKi _ _ (HsPromotedConTy con) = do
+    con' <- lookupOccRn con
+    return (HsPromotedConTy con')
 
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
@@ -215,15 +219,23 @@ rnHsTyKi isType doc (HsQuasiQuoteTy qq) = ASSERT ( isType ) do { ty <- runQuasiQ
 #endif
 rnHsTyKi isType _ (HsCoreTy ty) = ASSERT ( isType ) return (HsCoreTy ty)
 
+-- IA0: rnHsTyKi isType _ (HsLitTy lit) = ASSERT( isType ) return (HsLitTy lit)
+-- IA0: rnHsTyKi isType doc (HsExplicitListTy ks) = ASSERT( isType ) do
+-- IA0:     ks' <- mapM (rnLHsType doc) ks
+-- IA0:     return (HsExplicitListTy ks')
+-- IA0: rnHsTyKi isType doc (HsExplicitTupleTy ks) = ASSERT( isType ) do
+-- IA0:     ks' <- mapM (rnLHsType doc) ks
+-- IA0:     return (HsExplicitTupleTy ks')
+
 --------------
-rnLHsTypes :: SDoc -> [LHsType RdrName]
+rnLHsTypes :: HsDocContext -> [LHsType RdrName]
            -> IOEnv (Env TcGblEnv TcLclEnv) [LHsType Name]
 rnLHsTypes doc tys = mapM (rnLHsType doc) tys
 \end{code}
 
 
 \begin{code}
-rnForAll :: SDoc -> HsExplicitFlag -> [LHsTyVarBndr RdrName]
+rnForAll :: HsDocContext -> HsExplicitFlag -> [LHsTyVarBndr RdrName]
 	 -> LHsContext RdrName -> LHsType RdrName -> RnM (HsType Name)
 
 rnForAll doc _ [] (L _ []) (L _ ty) = rnHsType doc ty
@@ -243,7 +255,7 @@ rnForAll doc exp forall_tyvars ctxt ty
 	-- Retain the same implicit/explicit flag as before
 	-- so that we can later print it correctly
 
-bindTyVarsFV :: SDoc -> [LHsTyVarBndr RdrName]
+bindTyVarsFV :: HsDocContext -> [LHsTyVarBndr RdrName]
 	      -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
 	      -> RnM (a, FreeVars)
 bindTyVarsFV doc tyvars thing_inside
@@ -251,7 +263,7 @@ bindTyVarsFV doc tyvars thing_inside
     do { (res, fvs) <- thing_inside tyvars'
        ; return (res, delFVs (map hsLTyVarName tyvars') fvs) }
 
-bindTyVarsRn ::  SDoc -> [LHsTyVarBndr RdrName]
+bindTyVarsRn ::  HsDocContext -> [LHsTyVarBndr RdrName]
 	      -> ([LHsTyVarBndr Name] -> RnM a)
 	      -> RnM a
 -- Haskell-98 binding of type variables; e.g. within a data type decl
@@ -267,10 +279,10 @@ bindTyVarsRn doc tyvar_names enclosed_scope
     located_tyvars = hsLTyVarLocNames tyvar_names
     kinded_tyvars  = [n | L _ (KindedTyVar n _ _) <- tyvar_names]
 
-rnConDeclFields :: SDoc -> [ConDeclField RdrName] -> RnM [ConDeclField Name]
+rnConDeclFields :: HsDocContext -> [ConDeclField RdrName] -> RnM [ConDeclField Name]
 rnConDeclFields doc fields = mapM (rnField doc) fields
 
-rnField :: SDoc -> ConDeclField RdrName -> RnM (ConDeclField Name)
+rnField :: HsDocContext -> ConDeclField RdrName -> RnM (ConDeclField Name)
 rnField doc (ConDeclField name ty haddock_doc)
   = do { new_name <- lookupLocatedTopBndrRn name
        ; new_ty <- rnLHsType doc ty
@@ -285,16 +297,16 @@ rnField doc (ConDeclField name ty haddock_doc)
 %*********************************************************
 
 \begin{code}
-rnContext :: SDoc -> LHsContext RdrName -> RnM (LHsContext Name)
+rnContext :: HsDocContext -> LHsContext RdrName -> RnM (LHsContext Name)
 rnContext doc = wrapLocM (rnContext' doc)
 
-rnContext' :: SDoc -> HsContext RdrName -> RnM (HsContext Name)
+rnContext' :: HsDocContext -> HsContext RdrName -> RnM (HsContext Name)
 rnContext' doc ctxt = mapM (rnLPred doc) ctxt
 
-rnLPred :: SDoc -> LHsPred RdrName -> RnM (LHsPred Name)
+rnLPred :: HsDocContext -> LHsPred RdrName -> RnM (LHsPred Name)
 rnLPred doc  = wrapLocM (rnPred doc)
 
-rnPred :: SDoc -> HsPred RdrName
+rnPred :: HsDocContext -> HsPred RdrName
        -> IOEnv (Env TcGblEnv TcLclEnv) (HsPred Name)
 rnPred doc (HsClassP clas tys)
   = do { clas_name <- lookupOccRn clas

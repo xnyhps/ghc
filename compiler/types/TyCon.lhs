@@ -29,6 +29,7 @@ module TyCon(
         mkSuperKindTyCon,
         mkForeignTyCon,
         mkAnyTyCon,
+	mkPromotedDataTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -141,7 +142,7 @@ Note [Type synonym families]
        type R:FList a = Maybe a
   Indeed, in GHC's internal representation, the RHS of every
   'type instance' is simply an application of the representation
-  TyCon to the quantified varaibles.
+  TyCon to the quantified variables.
 
   The intermediate representation TyCon is a bit gratuitous, but 
   it means that:
@@ -152,23 +153,6 @@ Note [Type synonym families]
   So the result of typechecking a 'type instance' decl is just a
   TyCon.  In turn this means that type and data families can be
   treated uniformly.
-
-* Translation of type family decl:
-	type family F a :: *
-  translates to
-    a SynTyCon 'F', whose SynTyConRhs is SynFamilyTyCon
-
-* Translation of type instance decl:
-	type instance F [a] = Maybe a
-  translates to
-    A SynTyCon 'R:FList a', whose 
-       SynTyConRhs is (SynonymTyCon (Maybe a))
-       TyConParent is (FamInstTyCon F [a] co)
-         where co :: F [a] ~ R:FList a
-    Notice that we introduce a gratuitous vanilla type synonym
-       type R:FList a = Maybe a
-    solely so that type and data families can be treated more
-    uniformly, via a single FamInstTyCon descriptor        
 
 * In the future we might want to support
     * closed type families (esp when we have proper kinds)
@@ -184,8 +168,6 @@ See also Note [Wrappers for data instance tycons] in MkId.lhs
 	data instance T Int = T1 | T2 Bool
 
   Here T is the "family TyCon".
-
-* Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
 * Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
@@ -416,6 +398,14 @@ data TyCon
   | SuperKindTyCon {
         tyConUnique :: Unique,
         tyConName   :: Name
+    }
+
+  -- | Represents promoted data constructor.
+  | PromotedDataTyCon {
+	tyConUnique :: Unique, -- ^ Same Unique as the data constructor
+	tyConName   :: Name,   -- ^ Same Name as the data constructor
+	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
+        dataCon     :: DataCon -- ^ Corresponding data constructor
     }
   deriving Typeable
 
@@ -898,6 +888,16 @@ mkSuperKindTyCon name
   = SuperKindTyCon {
         tyConName = name,
         tyConUnique = nameUnique name
+  }
+
+-- | Create a promoted data constructor 'TyCon'
+mkPromotedDataTyCon :: DataCon -> Name -> Unique -> Kind -> TyCon
+mkPromotedDataTyCon con name unique kind
+  = PromotedDataTyCon {
+        tyConName = name,
+        tyConUnique = unique,
+        tc_kind = kind,
+        dataCon = con
   }
 \end{code}
 

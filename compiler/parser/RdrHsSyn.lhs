@@ -50,7 +50,6 @@ module RdrHsSyn (
 
 import HsSyn		-- Lots of it
 import Class            ( FunDep )
--- import TypeRep          ( Kind )  -- IA0
 import RdrName		( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc, 
 			  isRdrDataCon, isUnqual, getRdrName, setRdrNameSpace )
 import Name             ( Name )
@@ -113,10 +112,13 @@ extract_pred (HsIParam _   ty ) acc = extract_lty ty acc
 extract_ltys :: [LHsType RdrName] -> [Located RdrName] -> [Located RdrName]
 extract_ltys tys acc = foldr extract_lty acc tys
 
+-- This function returns also kind variables since they are in the
+-- same namespace as type variables.
 extract_lty :: LHsType RdrName -> [Located RdrName] -> [Located RdrName]
 extract_lty (L loc ty) acc 
   = case ty of
       HsTyVar tv 	        -> extract_tv loc tv acc
+      HsPromotedConTy tv        -> extract_tv loc tv acc
       HsBangTy _ ty            	-> extract_lty ty acc
       HsRecTy flds            	-> foldr (extract_lty . cd_fld_type) acc flds
       HsAppTy ty1 ty2          	-> extract_lty ty1 (extract_lty ty2 acc)
@@ -137,6 +139,9 @@ extract_lty (L loc ty) acc
 				where
 				   locals = hsLTyVarNames tvs
       HsDocTy ty _              -> extract_lty ty acc
+-- IA0:       HsLitTy _lit              -> acc
+-- IA0:       HsExplicitListTy tys      -> extract_ltys tys acc
+-- IA0:       HsExplicitTupleTy tys     -> extract_ltys tys acc
 
 extract_tv :: SrcSpan -> RdrName -> [Located RdrName] -> [Located RdrName]
 extract_tv loc tv acc | isRdrTyVar tv = L loc tv : acc

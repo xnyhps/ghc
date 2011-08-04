@@ -30,7 +30,9 @@ module RnEnv (
 	addFvRn, mapFvRn, mapMaybeFvRn, mapFvRnCPS,
 	warnUnusedMatches,
 	warnUnusedTopBinds, warnUnusedLocalBinds,
-	dataTcOccs, unknownNameErr, kindSigErr, perhapsForallMsg
+	dataTcOccs, unknownNameErr, kindSigErr, perhapsForallMsg,
+
+        HsDocContext(..), docOfHsDocContext
     ) where
 
 #include "HsVersions.h"
@@ -1314,4 +1316,55 @@ opDeclErr :: RdrName -> SDoc
 opDeclErr n 
   = hang (ptext (sLit "Illegal declaration of a type or class operator") <+> quotes (ppr n))
        2 (ptext (sLit "Use -XTypeOperators to declare operators in type and declarations"))
+\end{code}
+
+
+%************************************************************************
+%*									*
+\subsection{Contexts for renaming errors}
+%*									*
+%************************************************************************
+
+\begin{code}
+
+data HsDocContext
+  = TypeSigCtx SDoc
+  | PatCtx
+  | SpecInstSigCtx
+  | DefaultDeclCtx
+  | ForeignDeclCtx (Located RdrName)
+  | DerivDeclCtx
+  | RuleCtx FastString
+  | TyDataCtx (Located RdrName)
+  | TySynCtx (Located RdrName)
+  | TyFamilyCtx (Located RdrName)
+  | ConDeclCtx (Located RdrName)
+  | ClassDeclCtx (Located RdrName)
+  | ExprWithTySigCtx
+  | TypBrCtx
+  | HsTypeCtx
+  | GHCiCtx
+  | SpliceTypeCtx (LHsType RdrName)
+  | ClassInstanceCtx
+
+docOfHsDocContext :: HsDocContext -> SDoc
+docOfHsDocContext (TypeSigCtx doc) = text "In the type signature for" <+> doc
+docOfHsDocContext PatCtx = text "In a pattern type-signature"
+docOfHsDocContext SpecInstSigCtx = text "In a SPECIALISE instance pragma"
+docOfHsDocContext DefaultDeclCtx = text "In a `default' declaration"
+docOfHsDocContext (ForeignDeclCtx name) = ptext (sLit "In the foreign declaration for") <+> ppr name
+docOfHsDocContext DerivDeclCtx = text "In a deriving declaration"
+docOfHsDocContext (RuleCtx name) = text "In the transformation rule" <+> ftext name
+docOfHsDocContext (TyDataCtx tycon) = text "In the data type declaration for" <+> quotes (ppr tycon)
+docOfHsDocContext (TySynCtx name) = text "In the declaration for type synonym" <+> quotes (ppr name)
+docOfHsDocContext (TyFamilyCtx name) = text "In the declaration for type family" <+> quotes (ppr name)
+docOfHsDocContext (ConDeclCtx name) = text "In the definition of data constructor" <+> quotes (ppr name)
+docOfHsDocContext (ClassDeclCtx name) = text "In the declaration for class" 	<+> ppr name
+docOfHsDocContext ExprWithTySigCtx = text "In an expression type signature"
+docOfHsDocContext TypBrCtx = ptext (sLit "In a Template-Haskell quoted type")
+docOfHsDocContext HsTypeCtx = text "In a type argument"
+docOfHsDocContext GHCiCtx = ptext (sLit "In GHCi input")
+docOfHsDocContext (SpliceTypeCtx hs_ty) = ptext (sLit "In the spliced type") <+> ppr hs_ty
+docOfHsDocContext ClassInstanceCtx = ptext (sLit "TcSplice.classInstances")
+
 \end{code}

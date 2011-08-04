@@ -248,7 +248,7 @@ getInitialKind (L _ decl)
 	; res_kind  <- mk_res_kind decl
 	; return (tcdName decl, mkArrowKinds arg_kinds res_kind) }
   where
-    mk_arg_kind (UserTyVar _ _)      = newKindVar
+    mk_arg_kind (UserTyVar _ _)      = newMetaKindVar
     mk_arg_kind (KindedTyVar _ kind _) = scDsLHsKind kind
 
     mk_res_kind (TyFamily { tcdKind    = Just kind }) = scDsLHsKind kind
@@ -340,7 +340,7 @@ kcTyClDeclBody decl thing_inside
 	; tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
     add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
-    add_kind (L loc (KindedTyVar n lk _)) k = L loc (KindedTyVar n lk k)
+    add_kind (L loc (KindedTyVar n hsk _)) k = L loc (KindedTyVar n hsk k)
 
 -- Kind check a data declaration, assuming that we already extended the
 -- kind environment with the type variables of the left-hand side (these
@@ -483,7 +483,7 @@ tcTyClDecl1 _parent calc_isrec
 	   tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons})
   = ASSERT( isNoParent _parent )
     tcTyVarBndrs tvs	$ \ tvs' -> do
-  { mb_ksig' <- scDsLHsMaybeKind mb_ksig  -- IA0: added sort checking
+  { mb_ksig' <- scDsLHsMaybeKind mb_ksig  -- IA0: added sort checking, maybe it should be done before
   ; extra_tvs <- tcDataKindSig mb_ksig'
   ; let final_tvs = tvs' ++ extra_tvs
   ; stupid_theta <- tcHsKindedContext ctxt

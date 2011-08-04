@@ -345,7 +345,7 @@ eqTc (IfaceTc name) tycon = name == tyConName tycon
 -- Tiresomely, we have to generate both HsTypes (in type/class decls) 
 -- and IfaceTypes (in Core expressions).  So we parse them as IfaceTypes,
 -- and convert to HsTypes here.  But the IfaceTypes we can see here
--- are very limited (see the productions for 'ty', so the translation
+-- are very limited (see the productions for 'ty'), so the translation
 -- isn't hard
 toHsType :: IfaceType -> LHsType RdrName
 toHsType (IfaceTyVar v)        		 = noLoc $ HsTyVar (mkRdrUnqual (mkTyVarOccFS v))

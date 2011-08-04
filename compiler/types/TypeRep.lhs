@@ -116,7 +116,7 @@ to cut all loops.  The other members of the loop may be marked 'non-recursive'.
 \begin{code}
 -- | The key representation of types within the compiler
 data Type
-  = TyVarTy TyVar	-- ^ Vanilla type variable (*never* a coercion variable)
+  = TyVarTy Var 	-- ^ Vanilla type or kind variable (*never* a coercion variable)
 
   | AppTy
 	Type
@@ -150,7 +150,7 @@ data Type
 			-- See Note [Equality-constrained types]
 
   | ForAllTy
-	TyVar         -- Type variable
+	Var             -- Type or kind variable
 	Type	        -- ^ A polymorphic type
 
   | PredTy

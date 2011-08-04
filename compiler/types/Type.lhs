@@ -67,7 +67,7 @@ module Type (
 
 	-- * Main data types representing Kinds
 	-- $kind_subtyping
-        Kind, SimpleKind, KindVar,
+        Kind, SimpleKind, MetaKindVar,
         
         -- ** Common Kinds and SuperKinds
         liftedTypeKind, unliftedTypeKind, openTypeKind,
@@ -1551,9 +1551,9 @@ Kinds
 --
 -- Where in the last example @t :: ??@ (i.e. is not an unboxed tuple)
 
-type KindVar = TyVar  -- invariant: KindVar will always be a 
-                      -- TcTyVar with details MetaTv TauTv ...
--- kind var constructors and functions are in TcType
+type MetaKindVar = TyVar  -- invariant: MetaKindVar will always be a
+                          -- TcTyVar with details MetaTv TauTv ...
+-- meta kind var constructors and functions are in TcType
 
 type SimpleKind = Kind
 \end{code}

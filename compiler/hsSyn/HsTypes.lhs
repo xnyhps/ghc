@@ -22,20 +22,19 @@ module HsTypes (
 	ConDeclField(..), pprConDeclFields,
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
-	hsTyVarName, hsTyVarNames,
-	hsTyVarKind, hsTyVarNameKind, replaceTyVarName,
+	hsTyVarName, hsTyVarNames, replaceTyVarName,
+	hsTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
 	splitHsAppTys, mkHsAppTys,
-	
-	-- Type place holder
-	PostTcType, placeHolderType, PostTcKind, placeHolderKind,
 
 	-- Printing
 	pprParendHsType, pprHsForAll, pprHsContext, ppr_hs_context,
     ) where
 
 import {-# SOURCE #-} HsExpr ( HsSplice, pprSplice )
+
+import HsLit
 
 import NameSet( FreeVars )
 import Type
@@ -49,26 +48,6 @@ import FastString
 import Data.Data
 \end{code}
 
-
-%************************************************************************
-%*									*
-\subsection{Annotating the syntax}
-%*									*
-%************************************************************************
-
-\begin{code}
-type PostTcKind = Kind
-type PostTcType = Type		-- Used for slots in the abstract syntax
-				-- where we want to keep slot for a type
-				-- to be added by the type checker...but
-				-- before typechecking it's just bogus
-
-placeHolderType :: PostTcType	-- Used before typechecking
-placeHolderType  = panic "Evaluated the place holder for a PostTcType"
-
-placeHolderKind :: PostTcKind	-- Used before typechecking
-placeHolderKind  = panic "Evaluated the place holder for a PostTcKind"
-\end{code}
 
 %************************************************************************
 %*									*
@@ -190,8 +169,69 @@ data HsType name
 
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
-					 
+  | HsPromotedConTy name   -- A promoted data or type constructor in types or kinds
+                           -- see Note [Promotions (HsPromotedConTy)]
+-- IA0:   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
+-- IA0:   | HsExplicitListTy [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
+-- IA0:   | HsExplicitTupleTy [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
   deriving (Data, Typeable)
+
+{- Note [Promotions]
+   ~~~~~~~~~~~~~~~~~
+
+HsPromotedConTy: A promoted data or type constructor in types or kinds.
+  When in the context of a TYPE we see
+    'Cons
+    'Nat.Zero
+  we parse it as
+    HsPromotedConTy "Cons"
+    HsPromotedConTy "Nat.Zero"
+  When in the context of a KIND we see
+    'List
+    'N.Nat
+  we parse it as
+    HsPromotedConTy "List"
+    HsPromotedConTy "N.Nat"
+
+HsLitTy: A promoted literal.
+  This happens ONLY in the context of TYPE.
+  When we see
+    21
+    "haskell"
+    'c'
+  we parse it as
+    HsLitTy (HsInt 21)
+    HsLitTy (HsString "haskell")
+    HsLitTy (HsChar 'c')
+
+HsExplicitListTy: A promoted explicit list.
+  This happens ONLY in the context of TYPE.
+  When we see
+    '[Int]
+    [Char,Bool]
+  we parse it as
+    HsExplicitListTy [Int]
+    HsExplicitListTy [Char,Bool]
+
+  Notice the difference between types [Int] and '[Int].
+  - [Int] is a type of list of ints.  It is inhabited ([0,1,2] for
+    instance) since its kind is star: [Int] :: *.
+  - '[Int] is a list of types at the type-level.  Its kind is '[*] (or
+    equivalently [*] since there is no lists of kinds).  Hence this
+    type is not inhabited.
+
+HsExplicitTupleTy: A promoted explicit tuple.
+  This happens ONLY in the context of TYPE.
+  When we see
+    '(Int,Float,Bool)
+  we parse it as
+    HsExplicitTupleTy [Int,Float,Bool]
+
+  Notice the difference between types (Char,Bool) and '(Char,Bool).
+  - ('c,True) :: (Char,Bool) :: *
+  - '(Char,Bool) :: '(*,*)  ==  (*,*)
+
+-}
 
 data HsExplicitFlag = Explicit | Implicit deriving (Data, Typeable)
 
@@ -450,13 +490,17 @@ ppr_mono_ty _    (HsQuasiQuoteTy qq) = ppr qq
 ppr_mono_ty _    (HsRecTy flds)      = pprConDeclFields flds
 ppr_mono_ty _    (HsTyVar name)      = ppr name
 ppr_mono_ty prec (HsFunTy ty1 ty2)   = ppr_fun_ty prec ty1 ty2
-ppr_mono_ty _    (HsTupleTy con tys) = tupleParens con (interpp'SP tys)
+ppr_mono_ty _    (HsTupleTy con tys) = tupleParens con (interpp'SP tys)  -- IA0: we might want to differenciate a type from a kind to put a quote
 ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> ppr kind)
-ppr_mono_ty _    (HsListTy ty)	     = brackets (ppr_mono_lty pREC_TOP ty)
+ppr_mono_ty _    (HsListTy ty)	     = brackets (ppr_mono_lty pREC_TOP ty)  -- IA0: we might want to differenciate a type from a kind to put a quote
 ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPredTy pred)     = ppr pred
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
+ppr_mono_ty _    (HsPromotedConTy name) = quote (ppr name)
+-- IA0: ppr_mono_ty _    (HsLitTy lit)       = ppr lit  -- IA0: do we want quote here?
+-- IA0: ppr_mono_ty _    (HsExplicitListTy tys) = quote $ brackets (interpp'SP tys)
+-- IA0: ppr_mono_ty _    (HsExplicitTupleTy tys) = quote $ parens (interpp'SP tys)
 
 ppr_mono_ty ctxt_prec (HsAppTy fun_ty arg_ty)
   = maybeParen ctxt_prec pREC_CON $

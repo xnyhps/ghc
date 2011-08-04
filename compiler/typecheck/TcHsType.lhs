@@ -17,7 +17,7 @@ module TcHsType (
 		-- Sort checking
 	scDsLHsKind, scDsLHsMaybeKind,
 
-        -- Typechecking kinded types
+                -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
 	tcTyVarBndrs, dsHsType, kcHsLPred, dsHsLPred,
 	tcDataKindSig, ExpKind(..), EkCtxt(..),
@@ -359,6 +359,8 @@ kc_hs_type (HsTyVar name) = do
     kind <- kcTyVar name
     return (HsTyVar name, kind)
 
+kc_hs_type (HsPromotedConTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
     return (HsListTy ty', liftedTypeKind)
@@ -438,6 +440,10 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 -- its the same for a doc node and it's child type node
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
+
+-- IA0: kc_hs_type (HsLitTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+-- IA0: kc_hs_type (HsExplicitListTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+-- IA0: kc_hs_type (HsExplicitTupleTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
 
 ---------------------------
 kcApps :: Outputable a
@@ -561,6 +567,8 @@ ds_type :: HsType Name -> TcM Type
 ds_type ty@(HsTyVar _)
   = ds_app ty []
 
+ds_type (HsPromotedConTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+
 ds_type (HsParTy ty)		-- Remove the parentheses markers
   = dsHsType ty
 
@@ -622,6 +630,10 @@ ds_type (HsSpliceTy _ _ kind)
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
+
+-- IA0: ds_type (HsLitTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+-- IA0: ds_type (HsExplicitListTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+-- IA0: ds_type (HsExplicitTupleTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
 dsHsTypes arg_tys = mapM dsHsType arg_tys
@@ -705,7 +717,7 @@ kcHsTyVars tvs thing_inside
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
-kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newKindVar
+kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
 kcHsTyVar tv@(KindedTyVar {}) = return tv
 
 ------------------
@@ -720,7 +732,8 @@ tcTyVarBndrs bndrs thing_inside = do
   where
     zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
 				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name _ kind) = return (mkTyVar name kind)
+    zonk (KindedTyVar name _ kind) = do { kind' <- zonkTcKindToKind kind
+				    ; return (mkTyVar name kind') }
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]
@@ -1022,6 +1035,7 @@ sc_lhs_kind (L span ki) = setSrcSpan span (sc_hs_kind ki)
 sc_hs_kind :: HsKind Name -> TcM ()
 sc_hs_kind (HsParTy ki) = sc_lhs_kind ki
 sc_hs_kind (HsTyVar name) = scKiVar name
+sc_hs_kind (HsPromotedConTy _) = panic "IA0: sc_hs_kind"  -- IA0: UNDEFINED
 sc_hs_kind (HsFunTy ki1 ki2) = do
   sc_lhs_kind ki1
   sc_lhs_kind ki2

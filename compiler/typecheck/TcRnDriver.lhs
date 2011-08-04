@@ -1365,15 +1365,13 @@ tcRnType hsc_env ictxt rdr_type
   = initTcPrintErrors hsc_env iNTERACTIVE $ 
     setInteractiveContext hsc_env ictxt $ do {
 
-    rn_type <- rnLHsType doc rdr_type ;
+    rn_type <- rnLHsType GHCiCtx rdr_type ;
     failIfErrsM ;
 
 	-- Now kind-check the type
     (_ty', kind) <- kcLHsType rn_type ;
     return kind
     }
-  where
-    doc = ptext (sLit "In GHCi input")
 
 #endif /* GHCi */
 \end{code}
