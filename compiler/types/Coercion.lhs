@@ -99,7 +99,7 @@ import Outputable
 import Unique
 import Pair
 import TysPrim		( eqPredPrimTyCon )
-import PrelNames	( funTyConKey )
+import PrelNames	( funTyConKey, eqPredPrimTyConKey )
 import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import Control.Arrow (second)
@@ -279,7 +279,10 @@ isCoVar :: Var -> Bool
 isCoVar v = isCoVarType (varType v)
 
 isCoVarType :: Type -> Bool
-isCoVarType = isEqPredTy
+-- Don't rely on a PredTy; look at the representation type
+isCoVarType ty 
+  | Just tc <- tyConAppTyCon_maybe ty = tc `hasKey` eqPredPrimTyConKey
+  | otherwise                         = False
 \end{code}
 
 
@@ -459,11 +462,9 @@ splitForAllCo_maybe _                = Nothing
 -- and some coercion kind stuff
 
 coVarPred :: CoVar -> PredType
-coVarPred cv
-  = ASSERT( isCoVar cv )
-    case splitPredTy_maybe (varType cv) of
-	Just pred -> pred
-	other	  -> pprPanic "coVarPred" (ppr cv $$ ppr other)
+coVarPred cv = case coVarKind_maybe cv of
+  Just (ty1, ty2) -> mkEqPred (ty1, ty2)
+  Nothing         -> pprPanic "coVarPred" (ppr cv $$ ppr (varType cv))
 
 coVarKind :: CoVar -> (Type,Type) 
 -- c :: t1 ~ t2
@@ -472,7 +473,9 @@ coVarKind cv = case coVarKind_maybe cv of
                  Nothing -> pprPanic "coVarKind" (ppr cv $$ ppr (tyVarKind cv))
 
 coVarKind_maybe :: CoVar -> Maybe (Type,Type) 
-coVarKind_maybe cv = splitEqPredTy_maybe (varType cv)
+coVarKind_maybe cv = case splitTyConApp_maybe (varType cv) of
+  Just (tc, [ty1, ty2]) | tc `hasKey` eqPredPrimTyConKey -> Just (ty1, ty2)
+  _ -> Nothing
 
 -- | Makes a coercion type from two types: the types whose equality 
 -- is proven by the relevant 'Coercion'
@@ -1073,7 +1076,7 @@ coercionKinds :: [Coercion] -> Pair [Type]
 coercionKinds tys = sequenceA $ map coercionKind tys
 
 getNth :: Int -> Type -> Type
-getNth n ty | Just (_, tys) <- splitTyConApp_maybe ty
+getNth n ty | Just tys <- tyConAppArgs_maybe ty
             = ASSERT2( n < length tys, ppr n <+> ppr tys ) tys !! n
 getNth n ty = pprPanic "getNth" (ppr n <+> ppr ty)
 \end{code}

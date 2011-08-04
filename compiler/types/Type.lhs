@@ -34,7 +34,7 @@ module Type (
 	funResultTy, funArgTy, zipFunTys, 
 
 	mkTyConApp, mkTyConTy, 
-	tyConAppTyCon, tyConAppArgs, 
+	tyConAppTyCon_maybe, tyConAppArgs_maybe, tyConAppTyCon, tyConAppArgs, 
 	splitTyConApp_maybe, splitTyConApp, 
 
         mkForAllTy, mkForAllTys, splitForAllTy_maybe, splitForAllTys, 
@@ -43,23 +43,18 @@ module Type (
 	-- (Newtypes)
 	newTyConInstRhs, carefullySplitNewType_maybe,
 	
-	-- (Type families)
-        tyFamInsts, predFamInsts,
-
-        -- Pred types
+	-- Pred types
+        isClassPred, isEqPred, isIPPred,
         mkPredTy, mkPredTys, mkFamilyTyConApp,
-	mkDictTy, isDictLikeTy, isClassPred,
-        isEqPred, allPred, mkEqPred, 
-	mkClassPred, getClassPredTys, getClassPredTys_maybe,
-	isTyVarClassPred, 
-	mkIPPred, isIPPred,
+	mkDictTy, isDictLikeTy,
+         mkEqPred, mkClassPred,
+	mkIPPred,
 
 	-- ** Common type constructors
         funTyCon,
 
         -- ** Predicates on types
-        isTyVarTy, isFunTy, isPredTy,
-	isDictTy, isEqPredTy, isReflPredTy, splitPredTy_maybe, splitEqPredTy_maybe, 
+        isTyVarTy, isFunTy, isDictTy, isCertainlyPredReprTy,
 
 	-- (Lifting and boxity)
 	isUnLiftedType, isUnboxedTupleType, isAlgType, isClosedAlgType,
@@ -80,7 +75,7 @@ module Type (
 
 	-- * Type free variables
 	tyVarsOfType, tyVarsOfTypes, tyVarsOfPred, tyVarsOfTheta,
-	exactTyVarsOfType, exactTyVarsOfTypes, expandTypeSynonyms, 
+	expandTypeSynonyms, 
 	typeSize,
 
 	-- * Type comparison
@@ -143,9 +138,10 @@ import VarSet
 import Class
 import TyCon
 import TysPrim
+import PrelNames	( eqPredPrimTyConKey )
 
 -- others
-import Unique		( Unique )
+import Unique		( Unique, hasKey )
 import BasicTypes	( IPName )
 import Name		( Name )
 import NameSet
@@ -154,6 +150,7 @@ import Util
 import Outputable
 import FastString
 
+import Maybes		( orElse )
 import Data.Maybe	( isJust )
 
 infixr 3 `mkFunTy`	-- Associates to the right
@@ -251,6 +248,9 @@ tcView :: Type -> Maybe Type
 tcView (TyConApp tc tys) | Just (tenv, rhs, tys') <- tcExpandTyCon_maybe tc tys 
 			 = Just (mkAppTys (substTy (mkTopTvSubst tenv) rhs) tys')
 tcView _                 = Nothing
+  -- You might think that tcView belows in TcType rather than Type, but unfortunately
+  -- it is needed by Unify, which is turn imported by Coercion (for MatchEnv and matchList).
+  -- So we will leave it here to avoid module loops.
 
 -----------------------------------------------
 expandTypeSynonyms :: Type -> Type
@@ -476,12 +476,25 @@ funArgTy ty                = pprPanic "funArgTy" (ppr ty)
 -- including functions are returned as Just ..
 
 -- | The same as @fst . splitTyConApp@
+tyConAppTyCon_maybe :: Type -> Maybe TyCon
+tyConAppTyCon_maybe ty | Just ty' <- coreView ty = tyConAppTyCon_maybe ty'
+tyConAppTyCon_maybe (TyConApp tc _) = Just tc
+tyConAppTyCon_maybe (FunTy {})      = Just funTyCon
+tyConAppTyCon_maybe _               = Nothing
+
 tyConAppTyCon :: Type -> TyCon
-tyConAppTyCon ty = fst (splitTyConApp ty)
+tyConAppTyCon ty = tyConAppTyCon_maybe ty `orElse` pprPanic "tyConAppTyCon" (ppr ty)
 
 -- | The same as @snd . splitTyConApp@
+tyConAppArgs_maybe :: Type -> Maybe [Type]
+tyConAppArgs_maybe ty | Just ty' <- coreView ty = tyConAppArgs_maybe ty'
+tyConAppArgs_maybe (TyConApp _ tys) = Just tys
+tyConAppArgs_maybe (FunTy arg res)  = Just [arg,res]
+tyConAppArgs_maybe _                = Nothing
+
+
 tyConAppArgs :: Type -> [Type]
-tyConAppArgs ty = snd (splitTyConApp ty)
+tyConAppArgs ty = tyConAppArgs_maybe ty `orElse` pprPanic "tyConAppArgs" (ppr ty)
 
 -- | Attempts to tease a type apart into a type constructor and the application
 -- of a number of arguments to that constructor. Panics if that is not possible.
@@ -749,11 +762,6 @@ applyTysD doc orig_fun_ty arg_tys
 Polymorphic functions over Pred
 
 \begin{code}
-allPred :: (a -> Bool) -> Pred a -> Bool
-allPred p (ClassP _ ts)  = all p ts
-allPred p (IParam _ t)   = p t
-allPred p (EqPred t1 t2) = p t1 && p t2
-
 isClassPred :: Pred a -> Bool
 isClassPred (ClassP {}) = True
 isClassPred _            = False
@@ -783,36 +791,28 @@ predTypeRep (IParam _ ty)     = ty
 predTypeRep (ClassP clas tys) = mkTyConApp (classTyCon clas) tys
 predTypeRep (EqPred ty1 ty2)  = mkTyConApp eqPredPrimTyCon [ty1,ty2]
 
-splitPredTy_maybe :: Type -> Maybe PredType
--- Returns Just for predicates only
-splitPredTy_maybe ty | Just ty' <- tcView ty = splitPredTy_maybe ty'
-splitPredTy_maybe (PredTy p)    = Just p
-splitPredTy_maybe _             = Nothing
-
-isPredTy :: Type -> Bool
-isPredTy ty = isJust (splitPredTy_maybe ty)
+-- We can't tell if a type originated from an IParam predicate, so
+-- this function is conservative. It is only used in the eta-contraction/expansion
+-- logic at the moment, so this doesn't matter a great deal.
+isCertainlyPredReprTy :: Type -> Bool
+isCertainlyPredReprTy ty | Just ty' <- coreView ty = isCertainlyPredReprTy ty'
+isCertainlyPredReprTy ty = case tyConAppTyCon_maybe ty of
+	Just tc -> tc `hasKey` eqPredPrimTyConKey || isClassTyCon tc
+	Nothing -> False
 \end{code}
 
 --------------------- Equality types ---------------------------------
 \begin{code}
-isReflPredTy :: Type -> Bool
-isReflPredTy ty = case splitPredTy_maybe ty of
-                    Just (EqPred ty1 ty2) -> ty1 `eqType` ty2
-                    _                     -> False
-
-splitEqPredTy_maybe :: Type -> Maybe (Type,Type)
-splitEqPredTy_maybe ty = case splitPredTy_maybe ty of
-                            Just (EqPred ty1 ty2) -> Just (ty1,ty2)
-                            _                     -> Nothing
-
-isEqPredTy :: Type -> Bool
-isEqPredTy ty = case splitPredTy_maybe ty of
-                  Just (EqPred {}) -> True
-		  _                -> False
-
 -- | Creates a type equality predicate
 mkEqPred :: (a, a) -> Pred a
 mkEqPred (ty1, ty2) = EqPred ty1 ty2
+\end{code}
+
+--------------------- Implicit parameters ---------------------------------
+
+\begin{code}
+mkIPPred :: IPName Name -> Type -> PredType
+mkIPPred ip ty = IParam ip ty
 \end{code}
 
 --------------------- Dictionary types ---------------------------------
@@ -820,33 +820,22 @@ mkEqPred (ty1, ty2) = EqPred ty1 ty2
 mkClassPred :: Class -> [Type] -> PredType
 mkClassPred clas tys = ClassP clas tys
 
-isDictTy :: Type -> Bool
-isDictTy ty = case splitPredTy_maybe ty of
-                Just p  -> isClassPred p
-		Nothing -> False
-
-isTyVarClassPred :: PredType -> Bool
-isTyVarClassPred (ClassP _ tys) = all isTyVarTy tys
-isTyVarClassPred _              = False
-
-getClassPredTys_maybe :: PredType -> Maybe (Class, [Type])
-getClassPredTys_maybe (ClassP clas tys) = Just (clas, tys)
-getClassPredTys_maybe _                 = Nothing
-
-getClassPredTys :: PredType -> (Class, [Type])
-getClassPredTys (ClassP clas tys) = (clas, tys)
-getClassPredTys _ = panic "getClassPredTys"
-
 mkDictTy :: Class -> [Type] -> Type
 mkDictTy clas tys = mkPredTy (ClassP clas tys)
 
+isDictTy :: Type -> Bool
+isDictTy ty | Just ty' <- coreView ty = isDictTy ty'
+isDictTy ty = case tyConAppTyCon_maybe ty of
+	Just tyCon -> isClassTyCon tyCon
+	_		   -> False
+
 isDictLikeTy :: Type -> Bool
 -- Note [Dictionary-like types]
-isDictLikeTy ty | Just ty' <- tcView ty = isDictTy ty'
-isDictLikeTy (PredTy p) = isClassPred p
-isDictLikeTy (TyConApp tc tys) 
-  | isTupleTyCon tc     = all isDictLikeTy tys
-isDictLikeTy _          = False
+isDictLikeTy ty | Just ty' <- coreView ty = isDictLikeTy ty'
+isDictLikeTy ty = case splitTyConApp_maybe ty of
+	Just (tc, tys) | isClassTyCon tc -> True
+	 			   | isTupleTyCon tc -> all isDictLikeTy tys
+	_other                           -> False
 \end{code}
 
 Note [Dictionary-like types]
@@ -878,13 +867,6 @@ we ended up with something like
 This is all a bit ad-hoc; eg it relies on knowing that implication
 constraints build tuples.
 
---------------------- Implicit parameters ---------------------------------
-
-\begin{code}
-mkIPPred :: IPName Name -> Type -> PredType
-mkIPPred ip ty = IParam ip ty
-\end{code}
-
 %************************************************************************
 %*									*
                    Size									
@@ -909,26 +891,6 @@ typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
 %************************************************************************
 
 \begin{code}
--- | Finds type family instances occuring in a type after expanding synonyms.
-tyFamInsts :: Type -> [(TyCon, [Type])]
-tyFamInsts ty 
-  | Just exp_ty <- tcView ty    = tyFamInsts exp_ty
-tyFamInsts (TyVarTy _)          = []
-tyFamInsts (TyConApp tc tys) 
-  | isSynFamilyTyCon tc           = [(tc, tys)]
-  | otherwise                   = concat (map tyFamInsts tys)
-tyFamInsts (FunTy ty1 ty2)      = tyFamInsts ty1 ++ tyFamInsts ty2
-tyFamInsts (AppTy ty1 ty2)      = tyFamInsts ty1 ++ tyFamInsts ty2
-tyFamInsts (ForAllTy _ ty)      = tyFamInsts ty
-tyFamInsts (PredTy pty)         = predFamInsts pty
-
--- | Finds type family instances occuring in a predicate type after expanding 
--- synonyms.
-predFamInsts :: PredType -> [(TyCon, [Type])]
-predFamInsts (ClassP _cla tys) = concat (map tyFamInsts tys)
-predFamInsts (IParam _ ty)     = tyFamInsts ty
-predFamInsts (EqPred ty1 ty2)  = tyFamInsts ty1 ++ tyFamInsts ty2
-
 mkFamilyTyConApp :: TyCon -> [Type] -> Type
 -- ^ Given a family instance TyCon and its arg types, return the
 -- corresponding family type.  E.g:
@@ -976,15 +938,15 @@ isUnLiftedType :: Type -> Bool
 	-- construct them
 
 isUnLiftedType ty | Just ty' <- coreView ty = isUnLiftedType ty'
-isUnLiftedType (ForAllTy _ ty)   = isUnLiftedType ty
-isUnLiftedType (PredTy p)        = isEqPred p
-isUnLiftedType (TyConApp tc _)   = isUnLiftedTyCon tc
-isUnLiftedType _                 = False
+isUnLiftedType (ForAllTy _ ty)      = isUnLiftedType ty
+isUnLiftedType (TyConApp tc _)      = isUnLiftedTyCon tc
+isUnLiftedType _                    = False
+  -- There is no need to check for (PredTy (EqPred {})) because coreView eliminates PredTy
 
 isUnboxedTupleType :: Type -> Bool
-isUnboxedTupleType ty = case splitTyConApp_maybe ty of
-                           Just (tc, _ty_args) -> isUnboxedTupleTyCon tc
-                           _                   -> False
+isUnboxedTupleType ty = case tyConAppTyCon_maybe ty of
+                           Just tc -> isUnboxedTupleTyCon tc
+                           _       -> False
 
 -- | See "Type#type_classification" for what an algebraic type is.
 -- Should only be applied to /types/, as opposed to e.g. partially
@@ -1044,64 +1006,6 @@ isPrimitiveType ty = case splitTyConApp_maybe ty of
 			Just (tc, ty_args) -> ASSERT( ty_args `lengthIs` tyConArity tc )
 					      isPrimTyCon tc
 			_                  -> False
-\end{code}
-
-
-%************************************************************************
-%*									*
-          The "exact" free variables of a type
-%*									*
-%************************************************************************
-
-Note [Silly type synonym]
-~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider
-	type T a = Int
-What are the free tyvars of (T x)?  Empty, of course!  
-Here's the example that Ralf Laemmel showed me:
-	foo :: (forall a. C u a -> C u a) -> u
-	mappend :: Monoid u => u -> u -> u
-
-	bar :: Monoid u => u
-	bar = foo (\t -> t `mappend` t)
-We have to generalise at the arg to f, and we don't
-want to capture the constraint (Monad (C u a)) because
-it appears to mention a.  Pretty silly, but it was useful to him.
-
-exactTyVarsOfType is used by the type checker to figure out exactly
-which type variables are mentioned in a type.  It's also used in the
-smart-app checking code --- see TcExpr.tcIdApp
-
-On the other hand, consider a *top-level* definition
-	f = (\x -> x) :: T a -> T a
-If we don't abstract over 'a' it'll get fixed to GHC.Prim.Any, and then
-if we have an application like (f "x") we get a confusing error message 
-involving Any.  So the conclusion is this: when generalising
-  - at top level use tyVarsOfType
-  - in nested bindings use exactTyVarsOfType
-See Trac #1813 for example.
-
-\begin{code}
-exactTyVarsOfType :: Type -> TyVarSet
--- Find the free type variables (of any kind)
--- but *expand* type synonyms.  See Note [Silly type synonym] above.
-exactTyVarsOfType ty
-  = go ty
-  where
-    go ty | Just ty' <- tcView ty = go ty'	-- This is the key line
-    go (TyVarTy tv)         = unitVarSet tv
-    go (TyConApp _ tys)     = exactTyVarsOfTypes tys
-    go (PredTy ty)	    = go_pred ty
-    go (FunTy arg res)	    = go arg `unionVarSet` go res
-    go (AppTy fun arg)	    = go fun `unionVarSet` go arg
-    go (ForAllTy tyvar ty)  = delVarSet (go ty) tyvar
-
-    go_pred (IParam _ ty)    = go ty
-    go_pred (ClassP _ tys)   = exactTyVarsOfTypes tys
-    go_pred (EqPred ty1 ty2) = go ty1 `unionVarSet` go ty2
-
-exactTyVarsOfTypes :: [Type] -> TyVarSet
-exactTyVarsOfTypes tys = foldr (unionVarSet . exactTyVarsOfType) emptyVarSet tys
 \end{code}
 
 
