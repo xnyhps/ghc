@@ -161,7 +161,7 @@ rnExpr (NegApp e _)
 -- Template Haskell extensions
 -- Don't ifdef-GHCI them because we want to fail gracefully
 -- (not with an rnExpr crash) in a stage-1 compiler.
-rnExpr e@(HsBracket br_body)
+rnExpr e@(HsBracket br_body)  -- IA0: check here that template haskell extension is allowed
   = checkTH e "bracket"		`thenM_`
     rnBracket br_body		`thenM` \ (body', fvs_e) ->
     return (HsBracket body', fvs_e)

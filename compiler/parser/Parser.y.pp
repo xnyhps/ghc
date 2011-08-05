@@ -1049,10 +1049,6 @@ atype :: { LHsType RdrName }
 -- IA0: 	| STRING 	{ L1 $ HsString $ getSTRING $1 }
 -- IA0: 	| INTEGER       { L1 $ HsInt    $ getINTEGER $1 }
 
-opt_quote :: { Located () }
-          : {- empty -}  { noLoc () }
-          | SIMPLEQUOTE  { L1 () }
-
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
 -- It's kept as a single type, with a MonoDictTy at the right
@@ -1111,8 +1107,9 @@ akind	:: { LHsKind RdrName }
 	: '*'			        { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
 	| '!'			        { L1 $ HsTyVar (nameRdrName unliftedTypeKindTyConName) }
 	| '(' kind ')'		        { LL $ HsParTy $2 }
+        | qtycon                        { L1 $ HsTyVar (unLoc $1) }
                                         -- see Note [Promotion]
-        | opt_quote qtycon              { LL (HsPromotedConTy (unLoc $2)) }
+        | SIMPLEQUOTE qtycon            { LL $ HsPromotedConTy (unLoc $2) }
 -- IA0:         | '(' ')'                       { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 -- IA0:         | SIMPLEQUOTE  '(' ')'          { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 -- IA0: 	| '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($2:$4) }

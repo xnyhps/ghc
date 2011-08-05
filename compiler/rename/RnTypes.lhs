@@ -124,9 +124,16 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
        ; -- rnForAll does the rest
          rnForAll doc Explicit forall_tyvars ctxt tau }
 
-rnHsTyKi _ _ (HsTyVar tyvar) = do
+-- We make a difference between types and kinds because when parsing a
+-- name in kinds, we give it the namespace TcClsName, so it is already
+-- promoted.
+rnHsTyKi True _ (HsTyVar tyvar) = do
+  (promoted, name) <- lookupPromotedOccRn tyvar
+  return $ (if promoted then HsPromotedConTy else HsTyVar) name
+
+rnHsTyKi False _ (HsTyVar tyvar) = do
     tyvar' <- lookupOccRn tyvar
-    return (HsTyVar tyvar')
+    return (HsPromotedConTy tyvar')  -- HsTyVar at the kind level can only be implicitly promoted type constructors
 
 rnHsTyKi _ _ (HsPromotedConTy con) = do
     con' <- lookupOccRn con

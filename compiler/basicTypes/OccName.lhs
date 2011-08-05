@@ -45,6 +45,7 @@ module OccName (
         mkDFunOcc,
 	mkTupleOcc, 
 	setOccNameSpace,
+        promoteOccName,
 
 	-- ** Derived 'OccName's
         isDerivedOccName,
@@ -196,6 +197,14 @@ pprNameSpaceBrief DataName  = char 'd'
 pprNameSpaceBrief VarName   = char 'v'
 pprNameSpaceBrief TvName    = ptext (sLit "tv")
 pprNameSpaceBrief TcClsName = ptext (sLit "tc")
+
+-- promoteNameSpace lowers the NameSpace if possible.  We can not know
+-- in advance, since a TvName can appear in an HsTyVar.
+promoteNameSpace :: NameSpace -> Maybe NameSpace
+promoteNameSpace VarName = Nothing
+promoteNameSpace DataName = Nothing
+promoteNameSpace TvName = Nothing
+promoteNameSpace TcClsName = Just DataName
 \end{code}
 
 
@@ -308,6 +317,12 @@ mkClsOcc = mkOccName clsName
 
 mkClsOccFS :: FastString -> OccName
 mkClsOccFS = mkOccNameFS clsName
+
+-- promoteOccName lowers the Namespace of OccName.
+promoteOccName :: OccName -> Maybe OccName
+promoteOccName (OccName space name) = do
+  space' <- promoteNameSpace space
+  return $ OccName space' name
 \end{code}
 
 
