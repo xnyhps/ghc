@@ -131,9 +131,13 @@ rnHsTyKi True _ (HsTyVar tyvar) = do
   (promoted, name) <- lookupPromotedOccRn tyvar
   return $ (if promoted then HsPromotedConTy else HsTyVar) name
 
-rnHsTyKi False _ (HsTyVar tyvar) = do
-    tyvar' <- lookupOccRn tyvar
-    return (HsPromotedConTy tyvar')  -- HsTyVar at the kind level can only be implicitly promoted type constructors
+rnHsTyKi False _ (HsTyVar kivar)
+  | Just name <- isExact_maybe kivar  -- handles * and !
+  = return (HsTyVar name)
+  | otherwise
+  = do
+    kivar' <- lookupOccRn kivar
+    return (HsPromotedConTy kivar')
 
 rnHsTyKi _ _ (HsPromotedConTy con) = do
     con' <- lookupOccRn con

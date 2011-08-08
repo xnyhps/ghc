@@ -62,68 +62,70 @@ import Data.List
 
 \begin{code}
 
-tcTyAndClassDecls :: ModDetails 
+tcTyAndClassDecls :: ModDetails
                    -> [[LTyClDecl Name]]     -- Mutually-recursive groups in dependency order
-   	           -> TcM (TcGblEnv,   	     -- Input env extended by types and classes 
-					     -- and their implicit Ids,DataCons
-		           HsValBinds Name)  -- Renamed bindings for record selectors
+                   -> TcM (TcGblEnv,         -- Input env extended by types and classes
+                                             -- and their implicit Ids,DataCons
+                           HsValBinds Name)  -- Renamed bindings for record selectors
 -- Fails if there are any errors
-
 tcTyAndClassDecls boot_details decls_s
-  = checkNoErrs $ 	-- The code recovers internally, but if anything gave rise to
-			-- an error we'd better stop now, to avoid a cascade
-    do { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
-     		  -- Remove family instance decls altogether
-		  -- They are dealt with by TcInstDcls
-	      
-       ; tyclss <- fixM $ \ rec_tyclss ->
-              tcExtendRecEnv (zipRecTyClss tyclds_s rec_tyclss) $
-	      	-- We must populate the environment with the loop-tied
-	      	-- T's right away (even before kind checking), because 
-                -- the kind checker may "fault in" some type constructors 
-	      	-- that recursively mention T
+  = checkNoErrs $ do    -- The code recovers internally, but if anything gave rise to
+                        -- an error we'd better stop now, to avoid a cascade
+  { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
+                   -- Remove family instance decls altogether
+                   -- They are dealt with by TcInstDcls
+  ; traceTc "IA0" (ppr decls_s) -- IA0: debug line
+  ; tyclss <- go tyclds_s
+  ; traceTc "tcTyAndCl3" (ppr tyclss)
+  ; tcExtendGlobalEnv tyclss $ do
+      -- Perform the validity check
+      -- We can do this now because we are done with the recursive knot
+    { traceTc "ready for validity check" empty
+    ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
+    ; traceTc "done" empty
+      -- Add the implicit things;
+      -- we want them in the environment because
+      -- they may be mentioned in interface files
+      -- NB: All associated types and their implicit things will be added a
+      --     second time here.  This doesn't matter as the definitions are
+      --     the same.
+    ; let implicit_things = concatMap implicitTyThings tyclss
+          rec_sel_binds   = mkRecSelBinds [tc | ATyCon tc <- tyclss]
+          dm_ids          = mkDefaultMethodIds tyclss
+    ; env <- tcExtendGlobalEnv implicit_things $
+             tcExtendGlobalValEnv dm_ids $
+             getGblEnv
+    ; return (env, rec_sel_binds) } }
+  where
+    go [] = return []
+    go (tyclds:tyclds_s) = do
+    { tyclss <- fixM $ \ rec_tyclss ->
+        tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $ do
+        -- We must populate the environment with the loop-tied
+        -- T's right away (even before kind checking), because
+        -- the kind checker may "fault in" some type constructors
+        -- that recursively mention T
+        { -- Kind-check in dependency order
+          -- See Note [Kind checking for type and class decls]
+          (_, kc_decls) <- kcTyClDecls1 tyclds
+          -- And now build the TyCons/Classes
+        ; let rec_flags = calcRecFlags boot_details rec_tyclss
+        ; tyclss <- concatMapM (tcTyClDecl rec_flags) kc_decls
+        ; return tyclss }
+    ; tyclss_s <- tcExtendGlobalEnv tyclss $
+                  tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
+                  go tyclds_s
+    ; return (tyclss ++ tyclss_s) }
 
-              do {    -- Kind-check in dependency order
-                      -- See Note [Kind checking for type and class decls]
-                   kc_decls <- kcTyClDecls tyclds_s
-
-                      -- And now build the TyCons/Classes
-                ; let rec_flags = calcRecFlags boot_details rec_tyclss
-                ; concatMapM (tcTyClDecl rec_flags) kc_decls }
-
-       ; traceTc "tcTyAndCl3" (ppr tyclss)
-
-       ; tcExtendGlobalEnv tyclss $ do
-       {  -- Perform the validity check
-          -- We can do this now because we are done with the recursive knot
-          traceTc "ready for validity check" empty
-	; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
- 	; traceTc "done" empty
-
-	-- Add the implicit things;
-	-- we want them in the environment because
-	-- they may be mentioned in interface files
-	-- NB: All associated types and their implicit things will be added a
-	--     second time here.  This doesn't matter as the definitions are
-	--     the same.
-	; let {	implicit_things = concatMap implicitTyThings tyclss
-	      ; rec_sel_binds   = mkRecSelBinds [tc | ATyCon tc <- tyclss]
-              ; dm_ids          = mkDefaultMethodIds tyclss }
-
-  	; env <- tcExtendGlobalEnv implicit_things $
-                 tcExtendGlobalValEnv dm_ids $
-                 getGblEnv
-        ; return (env, rec_sel_binds) } }
-                    
-zipRecTyClss :: [[LTyClDecl Name]]
+zipRecTyClss :: [LTyClDecl Name]
              -> [TyThing]           -- Knot-tied
              -> [(Name,TyThing)]
 -- Build a name-TyThing mapping for the things bound by decls
 -- being careful not to look at the [TyThing]
 -- The TyThings in the result list must have a visible ATyCon/AClass,
 -- because typechecking types (in, say, tcTyClDecl) looks at this outer constructor
-zipRecTyClss decls_s rec_things
-  = [ get decl | decls <- decls_s, L _ decl <- flattenATs decls ]
+zipRecTyClss decls rec_things
+  = [ get decl | L _ decl <- flattenATs decls ]
   where
     rec_type_env :: TypeEnv
     rec_type_env = mkTypeEnv rec_things
@@ -200,12 +202,6 @@ initial kind environment.  (This is handled by `allDecls').
 
 
 \begin{code}
-kcTyClDecls :: [[LTyClDecl Name]] -> TcM [LTyClDecl Name]
-kcTyClDecls []                = return []
-kcTyClDecls (decls : decls_s) = do { (tcl_env, kc_decls1) <- kcTyClDecls1 decls
-                                   ; kc_decls2 <- setLclEnv tcl_env (kcTyClDecls decls_s)
-                                   ; return (kc_decls1 ++ kc_decls2) }
-
 kcTyClDecls1 :: [LTyClDecl Name] -> TcM (TcLclEnv, [LTyClDecl Name])
 kcTyClDecls1 decls
   = do	{       -- Omit instances of type families; they are handled together

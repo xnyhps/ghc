@@ -30,6 +30,7 @@ module TyCon(
         mkForeignTyCon,
         mkAnyTyCon,
 	mkPromotedDataTyCon,
+	mkPromotedTypeTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -50,7 +51,8 @@ module TyCon(
 	isTyConAssoc,
 	isRecursiveTyCon,
 	isHiBootTyCon,
-        isImplicitTyCon, 
+        isImplicitTyCon,
+        isPromotedTypeTyCon,
 
         -- ** Extracting information out of TyCons
 	tyConName,
@@ -406,6 +408,13 @@ data TyCon
 	tyConName   :: Name,   -- ^ Same Name as the data constructor
 	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
         dataCon     :: DataCon -- ^ Corresponding data constructor
+    }
+
+-- | Represents promoted type constructor.
+  | PromotedTypeTyCon {
+      tyConUnique :: Unique,
+      tyConName :: Name,
+      tyCon :: TyCon -- ^ Corresponding type constructor
     }
   deriving Typeable
 
@@ -899,6 +908,10 @@ mkPromotedDataTyCon con name unique kind
         tc_kind = kind,
         dataCon = con
   }
+
+-- | Create a promoted type constructor
+mkPromotedTypeTyCon :: TyCon -> TyCon
+mkPromotedTypeTyCon tc = PromotedTypeTyCon (tyConUnique tc) (tyConName tc) tc
 \end{code}
 
 \begin{code}
@@ -1131,6 +1144,12 @@ isImplicitTyCon tycon | isTyConAssoc tycon           = True
 isImplicitTyCon _other                               = True
         -- catches: FunTyCon, PrimTyCon, 
         -- CoTyCon, SuperKindTyCon
+
+-- returns (Just tc) if its argument is the promotion of tc, and
+-- Nothing otherwise
+isPromotedTypeTyCon :: TyCon -> Maybe TyCon
+isPromotedTypeTyCon (PromotedTypeTyCon {tyCon = tc}) = Just tc
+isPromotedTypeTyCon _ = Nothing
 \end{code}
 
 
@@ -1185,6 +1204,7 @@ tyConKind (TupleTyCon { tc_kind = k }) = k
 tyConKind (SynTyCon   { tc_kind = k }) = k
 tyConKind (PrimTyCon  { tc_kind = k }) = k
 tyConKind (AnyTyCon   { tc_kind = k }) = k
+tyConKind (PromotedDataTyCon { tc_kind = k }) = k
 tyConKind tc = pprPanic "tyConKind" (ppr tc)	-- SuperKindTyCon and CoTyCon
 
 tyConHasKind :: TyCon -> Bool
@@ -1378,7 +1398,8 @@ instance Uniquable TyCon where
     getUnique tc = tyConUnique tc
 
 instance Outputable TyCon where
-    ppr tc  = ppr (getName tc) 
+    ppr (PromotedTypeTyCon {tyCon = tc}) = quote (ppr tc)
+    ppr tc = ppr (getName tc)
 
 instance NamedThing TyCon where
     getName = tyConName

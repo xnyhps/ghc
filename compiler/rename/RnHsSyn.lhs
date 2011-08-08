@@ -9,6 +9,7 @@ module RnHsSyn(
         charTyCon_name, listTyCon_name, parrTyCon_name, tupleTyCon_name,
         extractHsTyVars, extractHsTyNames, extractHsTyNames_s,
         extractFunDepNames, extractHsCtxtTyNames, extractHsPredTyNames,
+        extractHsTyVarBndrNames, extractHsTyVarBndrNames_s,
 
         -- Free variables
         hsSigsFVs, hsSigFVs, conDeclFVs, bangTyFVs
@@ -68,8 +69,8 @@ extractHsTyNames ty
     get (HsPromotedConTy tv)   = unitNameSet tv
     get (HsSpliceTy _ fvs _)   = fvs
     get (HsQuasiQuoteTy {})    = emptyNameSet
-    get (HsKindSig ty _)       = getl ty
-    get (HsForAllTy _ tvs
+    get (HsKindSig ty ki)      = getl ty `unionNameSets` getl ki  -- names may appear in kinds when promoted
+    get (HsForAllTy _ tvs  -- IA0: we should add the variables in the kinds in tvs
                     ctxt ty)   = (extractHsCtxtTyNames ctxt
                                          `unionNameSets` getl ty)
                                             `minusNameSet`
@@ -87,6 +88,13 @@ extractHsTyNames_s tys = foldr (unionNameSets . extractHsTyNames) emptyNameSet t
 extractHsCtxtTyNames :: LHsContext Name -> NameSet
 extractHsCtxtTyNames (L _ ctxt)
   = foldr (unionNameSets . extractHsPredTyNames . unLoc) emptyNameSet ctxt
+
+extractHsTyVarBndrNames :: LHsTyVarBndr Name -> NameSet
+extractHsTyVarBndrNames (L _ (UserTyVar _ _)) = emptyNameSet
+extractHsTyVarBndrNames (L _ (KindedTyVar _ ki _)) = extractHsTyNames ki
+
+extractHsTyVarBndrNames_s :: [LHsTyVarBndr Name] -> NameSet
+extractHsTyVarBndrNames_s bs = foldr (unionNameSets . extractHsTyVarBndrNames) emptyNameSet bs
 
 -- You don't import or export implicit parameters,
 -- so don't mention the IP names

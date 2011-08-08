@@ -688,6 +688,8 @@ rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
 -- Renamed the declarations and do depedency analysis on them
 rnTyClDecls tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM rnTyClDecl) (concat tycl_ds)
+       ; mapM_ (\(a,b) -> traceRn (ptext (sLit "Free vars of") <+> ppr a
+                          <+> text "are" <+> ppr b)) ds_w_fvs  -- IA0: lines added for debug
 
        ; let sccs :: [SCC (LTyClDecl Name)]
              sccs = depAnalTyClDecls ds_w_fvs
@@ -696,6 +698,7 @@ rnTyClDecls tycl_ds
 
        ; return (map flattenSCC sccs, all_fvs) }
 
+-- IA0: add to the FreeVars, the variable appearing in kinds
 rnTyClDecl :: TyClDecl RdrName -> RnM (TyClDecl Name, FreeVars)
 rnTyClDecl (ForeignType {tcdLName = name, tcdExtName = ext_name})
   = lookupLocatedTopBndrRn name		`thenM` \ name' ->
@@ -993,10 +996,12 @@ rnFamily (tydecl@TyFamily {tcdFlavour = flavour, tcdKind = sig,
       do { bindIdxVars fmly_doc tyvars $ \tyvars' -> do {
 	 ; tycon' <- lookupLocatedTopBndrRn tycon
          ; sig' <- rnLHsMaybeKind fmly_doc sig
+         ; let fv_sig = maybe emptyFVs extractHsTyNames sig'
+               fv_tyvars = extractHsTyVarBndrNames_s tyvars'
 	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon',
 			      tcdTyVars = tyvars', tcdKind = sig',
                               tcdTcKind = tcdTcKind tydecl},
-		    emptyFVs)
+		    fv_sig `plusFV` fv_tyvars)
          } }
   where fmly_doc = TyFamilyCtx tycon
 rnFamily d _ = pprPanic "rnFamily" (ppr d)

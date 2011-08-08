@@ -41,8 +41,10 @@ import TcUnify
 import TcIface
 import TcType
 import {- Kind parts of -} Type
+import Kind ( promoteType )
 import Var
 import VarSet
+import DataCon ( dataConUserType )
 import TyCon
 import Class
 import Name
@@ -53,6 +55,7 @@ import SrcLoc
 import Util
 import UniqSupply
 import Outputable
+import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
 \end{code}
 
@@ -359,7 +362,17 @@ kc_hs_type (HsTyVar name) = do
     kind <- kcTyVar name
     return (HsTyVar name, kind)
 
-kc_hs_type (HsPromotedConTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+kc_hs_type (HsPromotedConTy name) = do
+    traceTc "IA0 kc_hs_type 1" (ppr name)
+    thing <- tcLookup name
+    traceTc "IA0 kc_hs_type 2" (ppr name <+> ppr thing)
+    case thing of
+      AGlobal (ADataCon dc) -> do
+        { let ty = dataConUserType dc
+              ki = promoteType ty
+        ; traceTc "IA0 kc_hs_type 3" (ppr ty <+> text "~~>" <+> ppr ki)
+        ; return (HsPromotedConTy name, ki) }
+      _                     -> panic "IA0: kc_hs_type"  -- IA0: put an error message here
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
@@ -517,7 +530,7 @@ kcTyVar name = do	-- Could be a tyvar or a tycon
     traceTc "lk1" (ppr name)
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
-    case thing of 
+    case thing of
         ATyVar _ ty             -> return (typeKind ty)
         AThing kind             -> return kind
         AGlobal (ATyCon tc)     -> return (tyConKind tc)
@@ -525,12 +538,27 @@ kcTyVar name = do	-- Could be a tyvar or a tycon
 
 scKiVar :: Name -> TcM ()
 scKiVar name = do
-    traceTc "lk1" (ppr name)
+    traceTc "ls1" (ppr name)
     thing <- tcLookup name
-    traceTc "lk2" (ppr name <+> ppr thing)
+    traceTc "ls2" (ppr name <+> ppr thing)
     case thing of
-        AGlobal (ATyCon _tc)    -> return ()  -- IA0: We should have: tc :: BOX
-        _                       -> wrongThingErr "kind" thing name
+        AGlobal (ATyCon _) -> return ()
+        _                  -> wrongThingErr "kind" thing name
+
+scKiPromotedVar :: Name -> TcM ()
+scKiPromotedVar name = do
+    traceTc "lps1" (ppr name)
+    thing <- tcLookup name
+    traceTc "lps2" (ppr name <+> ppr thing)
+    case thing of
+        AGlobal (ATyCon tc) -> do
+          let tc_kind = tyConKind tc
+          -- IA0: check that kind is star (later check that it is *^n -> *)
+          if isLiftedTypeKind tc_kind
+            then return ()
+            else failWithTc (quotes (ppr name) <+> ptext (sLit "of kind")
+                           <+> quotes (ppr tc_kind) <+> ptext (sLit "is not promotable"))
+        _                    -> wrongThingErr "kind" thing name
 
 kcClass :: Name -> TcM TcKind
 kcClass cls = do	-- Must be a class
@@ -567,7 +595,13 @@ ds_type :: HsType Name -> TcM Type
 ds_type ty@(HsTyVar _)
   = ds_app ty []
 
-ds_type (HsPromotedConTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+ds_type (HsPromotedConTy name) = do
+  traceTc "dst1" (ppr name)
+  thing <- tcLookup name
+  traceTc "dst2" (ppr name <+> ppr thing)
+  case thing of
+    AGlobal (ADataCon dc) -> return (mkTyConApp (buildPromotedDataTyCon dc) [])
+    _                     -> wrongThingErr "type" thing name
 
 ds_type (HsParTy ty)		-- Remove the parentheses markers
   = dsHsType ty
@@ -1033,9 +1067,9 @@ sc_lhs_kind :: LHsKind Name -> TcM ()
 sc_lhs_kind (L span ki) = setSrcSpan span (sc_hs_kind ki)
 
 sc_hs_kind :: HsKind Name -> TcM ()
-sc_hs_kind (HsParTy ki) = sc_lhs_kind ki
 sc_hs_kind (HsTyVar name) = scKiVar name
-sc_hs_kind (HsPromotedConTy _) = panic "IA0: sc_hs_kind"  -- IA0: UNDEFINED
+sc_hs_kind (HsParTy ki) = sc_lhs_kind ki
+sc_hs_kind (HsPromotedConTy name) = scKiPromotedVar name
 sc_hs_kind (HsFunTy ki1 ki2) = do
   sc_lhs_kind ki1
   sc_lhs_kind ki2
@@ -1056,7 +1090,30 @@ sc_hs_kind (HsQuasiQuoteTy {}) = panic "sc_hs_kind"
 sc_hs_kind (HsDocTy _ _) = panic "sc_hs_kind"
 
 ds_lhs_kind :: LHsKind Name -> TcM Kind
-ds_lhs_kind ki = ds_type (unLoc ki)
+ds_lhs_kind ki = ds_kind (unLoc ki)
+
+ds_kind :: HsKind Name -> TcM Kind
+ds_kind (HsTyVar name) = do
+  thing <- tcLookup name
+  case thing of
+    AGlobal (ATyCon tc) -> return (mkTyConApp tc [])
+    _                   -> wrongThingErr "kind" thing name
+
+ds_kind (HsPromotedConTy name) = do
+  traceTc "dsk1" (ppr name)
+  thing <- tcLookup name
+  traceTc "dsk2" (ppr name <+> ppr thing)
+  case thing of
+    AGlobal (ATyCon tc) -> return (mkTyConApp (mkPromotedTypeTyCon tc) [])
+                           -- IA0: We will have to promote the arguments
+                           -- and check it is fully applied.
+    _                   -> wrongThingErr "kind" thing name
+ds_kind (HsParTy ki) = ds_lhs_kind ki
+ds_kind (HsFunTy ki1 ki2) = do
+    kappa_ki1 <- ds_lhs_kind ki1
+    kappa_ki2 <- ds_lhs_kind ki2
+    return (mkArrowKind kappa_ki1 kappa_ki2)
+ds_kind _ = panic "ds_kind"
 
 \end{code}
 

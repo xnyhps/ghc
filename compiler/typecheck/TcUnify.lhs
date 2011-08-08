@@ -1161,8 +1161,17 @@ unifyKind :: TcKind                 -- Expected
           -> TcKind                 -- Actual
           -> TcM ()
 
-unifyKind (TyConApp kc1 []) (TyConApp kc2 [])
+unifyKind k1@(TyConApp kc1 []) k2@(TyConApp kc2 [])
   | isSubKindCon kc2 kc1 = return ()
+  | otherwise =
+    case are_equal of
+      Just True -> return ()
+      _ -> unifyKindMisMatch k1 k2
+    where
+      are_equal = do
+        tc1 <- isPromotedTypeTyCon kc1
+        tc2 <- isPromotedTypeTyCon kc2
+        return (tc1 == tc2)
 
 unifyKind (FunTy a1 r1) (FunTy a2 r2)
   = do { unifyKind a2 a1; unifyKind r1 r2 }
@@ -1229,6 +1238,7 @@ kindSimpleKind orig_swapped orig_kind
      | isLiftedTypeKind k   = return liftedTypeKind
      | isUnliftedTypeKind k = return unliftedTypeKind
     go _ k@(TyVarTy _) = return k -- MetaKindVars are always simple
+    go _ k@(TyConApp _ _) = return k  -- TyConApps too
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
                                   <+> ppr orig_swapped <+> ppr orig_kind)
         -- I think this can't actually happen

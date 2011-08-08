@@ -35,7 +35,7 @@ module Kind (
         isSubKindCon,
 
         -- ** Promotion related functions
--- IA0:         promoteType,
+        promoteType,
 
        ) where
 
@@ -239,9 +239,15 @@ defaultKind k
 
 -- About promoting a type to a kind
 
--- IA0: -- | Promotes a type to a kind if possible.  Assumes the argument is
--- IA0: -- promotable.
--- IA0: promoteType :: Type -> Kind
+-- | Promotes a type to a kind if possible.  Assumes the argument is
+-- promotable.
+promoteType :: Type -> Kind
+promoteType (TyConApp tc tys) = mkTyConApp (mkPromotedTypeTyCon tc) (map promoteType tys)
+  -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
+promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
+  -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
+promoteType _ = panic "IA0: promoteType"  -- IA0: UNDEFINED
+
 -- IA0: promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
 -- IA0:   -- a :: *  ~~>  a :: Box
 -- IA0: promoteType (AppTy _app _arg) = panic "we do not promote arbitrary applications"
@@ -252,7 +258,7 @@ defaultKind k
 -- IA0: promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
 -- IA0:   -- forall (a :: *). t  ~~> forall a. k  where  t ~~> k
 -- IA0: promoteType (PredTy _pred) = panic "we do not promote predicate types"
--- IA0: 
+
 -- IA0: -- Helpers
 -- IA0: promoteTyVar :: TyVar -> KindVar
 -- IA0: promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind

@@ -662,7 +662,7 @@ pprTypeApp :: NamedThing a => a -> [Type] -> SDoc
 -- Print infix if the tycon/class looks like an operator
 pprTypeApp tc tys = pprTypeNameApp TopPrec ppr_type (getName tc) tys
 
-pprTypeNameApp :: Prec -> (Prec -> a -> SDoc) -> Name -> [a] -> SDoc
+pprTypeNameApp :: (NamedThing b, Outputable b) => Prec -> (Prec -> a -> SDoc) -> b -> [a] -> SDoc
 -- Used for classes and coercions as well as types; that's why it's separate from pprTcApp
 pprTypeNameApp p pp tc tys
   | is_sym_occ           -- Print infix if possible
@@ -672,7 +672,7 @@ pprTypeNameApp p pp tc tys
   | otherwise
   = pprPrefixApp p (pprPrefixVar is_sym_occ (ppr tc)) (map (pp TyConPrec) tys)
   where
-    is_sym_occ = isSymOcc (getOccName tc)
+    is_sym_occ = isSymOcc (getOccName (getName tc))
 
 ----------------
 pprPrefixApp :: Prec -> SDoc -> [SDoc] -> SDoc
