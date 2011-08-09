@@ -410,11 +410,11 @@ data TyCon
         dataCon     :: DataCon -- ^ Corresponding data constructor
     }
 
--- | Represents promoted type constructor.
+  -- | Represents promoted type constructor.
   | PromotedTypeTyCon {
       tyConUnique :: Unique,
-      tyConName :: Name,
-      tyCon :: TyCon -- ^ Corresponding type constructor
+      tyConName   :: Name,
+      tyCon       :: TyCon     -- ^ Corresponding type constructor
     }
   deriving Typeable
 
