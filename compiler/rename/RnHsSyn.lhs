@@ -69,12 +69,11 @@ extractHsTyNames ty
     get (HsPromotedConTy tv)   = unitNameSet tv
     get (HsSpliceTy _ fvs _)   = fvs
     get (HsQuasiQuoteTy {})    = emptyNameSet
-    get (HsKindSig ty ki)      = getl ty `unionNameSets` getl ki  -- names may appear in kinds when promoted
-    get (HsForAllTy _ tvs  -- IA0: we should add the variables in the kinds in tvs
-                    ctxt ty)   = (extractHsCtxtTyNames ctxt
-                                         `unionNameSets` getl ty)
-                                            `minusNameSet`
-                                  mkNameSet (hsLTyVarNames tvs)
+    get (HsKindSig ty ki)      = getl ty `unionNameSets` getl ki
+    get (HsForAllTy _ tvs
+                    ctxt ty)   = extractHsTyVarBndrNames_s tvs
+                                 (extractHsCtxtTyNames ctxt
+                                  `unionNameSets` getl ty)
     get (HsDocTy ty _)         = getl ty
     get (HsCoreTy {})          = emptyNameSet	-- This probably isn't quite right
     		  	       	 		-- but I don't think it matters
@@ -93,8 +92,11 @@ extractHsTyVarBndrNames :: LHsTyVarBndr Name -> NameSet
 extractHsTyVarBndrNames (L _ (UserTyVar _ _)) = emptyNameSet
 extractHsTyVarBndrNames (L _ (KindedTyVar _ ki _)) = extractHsTyNames ki
 
-extractHsTyVarBndrNames_s :: [LHsTyVarBndr Name] -> NameSet
-extractHsTyVarBndrNames_s bs = foldr (unionNameSets . extractHsTyVarBndrNames) emptyNameSet bs
+extractHsTyVarBndrNames_s :: [LHsTyVarBndr Name] -> NameSet -> NameSet
+extractHsTyVarBndrNames_s [] body = body
+extractHsTyVarBndrNames_s (b:bs) body =
+  (extractHsTyVarBndrNames_s bs body `delFromNameSet` hsTyVarName (unLoc b))
+  `unionNameSets` extractHsTyVarBndrNames b
 
 -- You don't import or export implicit parameters,
 -- so don't mention the IP names

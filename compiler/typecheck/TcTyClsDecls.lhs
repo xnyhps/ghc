@@ -74,7 +74,6 @@ tcTyAndClassDecls boot_details decls_s
   { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
                    -- Remove family instance decls altogether
                    -- They are dealt with by TcInstDcls
-  ; traceTc "IA0" (ppr decls_s) -- IA0: debug line
   ; tyclss <- go tyclds_s
   ; traceTc "tcTyAndCl3" (ppr tyclss)
   ; tcExtendGlobalEnv tyclss $ do

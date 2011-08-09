@@ -86,7 +86,7 @@ module TyCon(
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
-import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon )
+import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon, dataConName )
 
 import Var
 import Class
@@ -1399,6 +1399,7 @@ instance Uniquable TyCon where
 
 instance Outputable TyCon where
     ppr (PromotedTypeTyCon {tyCon = tc}) = quote (ppr tc)
+    ppr (PromotedDataTyCon {dataCon = dc}) = quote (ppr (dataConName dc))
     ppr tc = ppr (getName tc)
 
 instance NamedThing TyCon where

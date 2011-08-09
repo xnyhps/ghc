@@ -202,16 +202,18 @@ isKind k = isSuperKind (typeKind k)
 isSubKind :: Kind -> Kind -> Bool
 -- ^ @k1 \`isSubKind\` k2@ checks that @k1@ <: @k2@
 isSubKind (TyConApp kc1 []) (TyConApp kc2 []) = kc1 `isSubKindCon` kc2
+-- IA0: isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) = panic "IA0: isSubKind"  -- IA0_WHEN: *^n -> *
 isSubKind (FunTy a1 r1) (FunTy a2 r2)	      = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
 isSubKind _             _                     = False
 
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@
 isSubKindCon kc1 kc2
-  | isLiftedTypeKindCon kc1   && isLiftedTypeKindCon kc2   = True
-  | isUnliftedTypeKindCon kc1 && isUnliftedTypeKindCon kc2 = True
-  | isUbxTupleKindCon kc1     && isUbxTupleKindCon kc2     = True
-  | isOpenTypeKindCon kc2                                  = True 
+  | kc1 == kc2 = True
+-- IA0:   | isLiftedTypeKindCon kc1   && isLiftedTypeKindCon kc2   = True
+-- IA0:   | isUnliftedTypeKindCon kc1 && isUnliftedTypeKindCon kc2 = True
+-- IA0:   | isUbxTupleKindCon kc1     && isUbxTupleKindCon kc2     = True
+  | isOpenTypeKindCon kc2                                  = True
                            -- we already know kc1 is not a fun, its a TyCon
   | isArgTypeKindCon kc2      && isSubArgTypeKindCon kc1   = True
   | otherwise                                              = False

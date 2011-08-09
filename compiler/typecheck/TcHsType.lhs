@@ -363,14 +363,12 @@ kc_hs_type (HsTyVar name) = do
     return (HsTyVar name, kind)
 
 kc_hs_type (HsPromotedConTy name) = do
-    traceTc "IA0 kc_hs_type 1" (ppr name)
     thing <- tcLookup name
-    traceTc "IA0 kc_hs_type 2" (ppr name <+> ppr thing)
     case thing of
       AGlobal (ADataCon dc) -> do
         { let ty = dataConUserType dc
               ki = promoteType ty
-        ; traceTc "IA0 kc_hs_type 3" (ppr ty <+> text "~~>" <+> ppr ki)
+        ; traceTc "prm" (ppr ty <+> text "~~>" <+> ppr ki)
         ; return (HsPromotedConTy name, ki) }
       _                     -> panic "IA0: kc_hs_type"  -- IA0: put an error message here
 
@@ -554,6 +552,7 @@ scKiPromotedVar name = do
         AGlobal (ATyCon tc) -> do
           let tc_kind = tyConKind tc
           -- IA0: check that kind is star (later check that it is *^n -> *)
+          -- IA0: fully application can only be done in desugarer?
           if isLiftedTypeKind tc_kind
             then return ()
             else failWithTc (quotes (ppr name) <+> ptext (sLit "of kind")
@@ -1099,9 +1098,7 @@ ds_kind (HsTyVar name) = do
     _                   -> wrongThingErr "kind" thing name
 
 ds_kind (HsPromotedConTy name) = do
-  traceTc "dsk1" (ppr name)
   thing <- tcLookup name
-  traceTc "dsk2" (ppr name <+> ppr thing)
   case thing of
     AGlobal (ATyCon tc) -> return (mkTyConApp (mkPromotedTypeTyCon tc) [])
                            -- IA0: We will have to promote the arguments

@@ -29,7 +29,7 @@ import {-# SOURCE #-} TcSplice( runQuasiQuoteType )
 import DynFlags
 import HsSyn
 import RdrHsSyn		( extractHsRhoRdrTyVars )
-import RnHsSyn		( extractHsTyNames )
+import RnHsSyn		( extractHsTyNames, extractHsTyVarBndrNames_s )
 import RnHsDoc          ( rnLHsDoc, rnMbLHsDoc )
 import RnEnv
 import TcRnMonad
@@ -272,7 +272,7 @@ bindTyVarsFV :: HsDocContext -> [LHsTyVarBndr RdrName]
 bindTyVarsFV doc tyvars thing_inside
   = bindTyVarsRn doc tyvars $ \ tyvars' ->
     do { (res, fvs) <- thing_inside tyvars'
-       ; return (res, delFVs (map hsLTyVarName tyvars') fvs) }
+       ; return (res, extractHsTyVarBndrNames_s tyvars' fvs) }
 
 bindTyVarsRn ::  HsDocContext -> [LHsTyVarBndr RdrName]
 	      -> ([LHsTyVarBndr Name] -> RnM a)

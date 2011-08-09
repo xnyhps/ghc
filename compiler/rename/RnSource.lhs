@@ -689,8 +689,6 @@ rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
 -- Renamed the declarations and do depedency analysis on them
 rnTyClDecls tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM rnTyClDecl) (concat tycl_ds)
-       ; mapM_ (\(a,b) -> traceRn (ptext (sLit "Free vars of") <+> ppr a
-                          <+> text "are" <+> ppr b)) ds_w_fvs  -- IA0: lines added for debug
 
        ; let sccs :: [SCC (LTyClDecl Name)]
              sccs = depAnalTyClDecls ds_w_fvs
@@ -699,7 +697,6 @@ rnTyClDecls tycl_ds
 
        ; return (map flattenSCC sccs, all_fvs) }
 
--- IA0: add to the FreeVars, the variable appearing in kinds
 rnTyClDecl :: TyClDecl RdrName -> RnM (TyClDecl Name, FreeVars)
 rnTyClDecl (ForeignType {tcdLName = name, tcdExtName = ext_name})
   = lookupLocatedTopBndrRn name		`thenM` \ name' ->
@@ -718,6 +715,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
   = do	{ tycon' <- if isFamInstDecl tydecl
 		    then lookupLocatedOccRn     tycon -- may be imported family
 		    else lookupLocatedTopBndrRn tycon
+        ; sig' <- rnLHsMaybeKind data_doc sig
 	; checkTc (h98_style || null (unLoc context)) 
                   (badGadtStupidTheta tycon)
     	; ((tyvars', context', typats', derivs'), stuff_fvs)
@@ -728,6 +726,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                    ; (derivs', fvs2) <- rn_derivs derivs
                    ; let fvs = fvs1 `plusFV` fvs2 `plusFV` 
                                extractHsCtxtTyNames context'
+                               `plusFV` maybe emptyFVs extractHsTyNames sig'
 		   ; return ((tyvars', context', typats', derivs'), fvs) }
 
 	-- For the constructor declarations, bring into scope the tyvars 
@@ -741,7 +740,6 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                                   rnConDecls condecls
 		-- No need to check for duplicate constructor decls
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
-        ; sig' <- rnLHsMaybeKind data_doc sig
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
 			   tcdTyPats = typats', tcdKindSig = sig',
@@ -771,7 +769,7 @@ rnTyClDecl tydecl@(TySynonym {tcdLName = name, tcdTyVars = tyvars,
     ; (ty', fvs2)    <- rnHsTypeFVs syn_doc ty
     ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars' 
     			, tcdTyPats = typats', tcdSynRhs = ty'},
-    	      fvs1 `plusFV` fvs2) }
+    	      extractHsTyVarBndrNames_s tyvars' (fvs1 `plusFV` fvs2)) }
   where
     syn_doc = TySynCtx name
 
@@ -827,7 +825,7 @@ rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname,
 	; return (ClassDecl { tcdCtxt = context', tcdLName = cname', 
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
 			      tcdMeths = mbinds', tcdATs = ats', tcdDocs = docs'},
-	     	  meth_fvs `plusFV` stuff_fvs) }
+	     	  extractHsTyVarBndrNames_s tyvars' (meth_fvs `plusFV` stuff_fvs)) }
   where
     cls_doc  = ClassDeclCtx cname
 
@@ -998,7 +996,7 @@ rnFamily (tydecl@TyFamily {tcdFlavour = flavour, tcdKind = sig,
 	 ; tycon' <- lookupLocatedTopBndrRn tycon
          ; sig' <- rnLHsMaybeKind fmly_doc sig
          ; let fv_sig = maybe emptyFVs extractHsTyNames sig'
-               fv_tyvars = extractHsTyVarBndrNames_s tyvars'
+               fv_tyvars = extractHsTyVarBndrNames_s tyvars' emptyFVs
 	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon',
 			      tcdTyVars = tyvars', tcdKind = sig',
                               tcdTcKind = tcdTcKind tydecl},
