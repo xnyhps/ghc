@@ -328,11 +328,11 @@ typesCantMatch prs = any (\(s,t) -> cant_match s t) prs
 	= cant_match a1 a2 || cant_match r1 r2
 
     cant_match (TyConApp tc1 tys1) (TyConApp tc2 tys2)
-	| isDataTyCon tc1 && isDataTyCon tc2
+	| isInjectiveTyCon tc1 && isInjectiveTyCon tc2  -- IA0: previous predicate was isDataTyCon
 	= tc1 /= tc2 || typesCantMatch (zipEqual "typesCantMatch" tys1 tys2)
 
-    cant_match (FunTy {}) (TyConApp tc _) = isDataTyCon tc
-    cant_match (TyConApp tc _) (FunTy {}) = isDataTyCon tc
+    cant_match (FunTy {}) (TyConApp tc _) = isInjectiveTyCon tc  -- IA0: as above
+    cant_match (TyConApp tc _) (FunTy {}) = isInjectiveTyCon tc  -- IA0: as above
 	-- tc can't be FunTyCon by invariant
 
     cant_match (AppTy f1 a1) ty2
@@ -343,6 +343,8 @@ typesCantMatch prs = any (\(s,t) -> cant_match s t) prs
 	= cant_match f1 f2 || cant_match a1 a2
 
     cant_match _ _ = False      -- Safe!
+
+    isInjectiveTyCon tc = isDataTyCon tc || isPromotedDataTyCon tc
 
 -- Things we could add;
 --	foralls

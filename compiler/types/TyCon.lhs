@@ -52,6 +52,7 @@ module TyCon(
 	isRecursiveTyCon,
 	isHiBootTyCon,
         isImplicitTyCon,
+        isPromotedDataTyCon,
         isPromotedTypeTyCon,
 
         -- ** Extracting information out of TyCons
@@ -1144,6 +1145,10 @@ isImplicitTyCon tycon | isTyConAssoc tycon           = True
 isImplicitTyCon _other                               = True
         -- catches: FunTyCon, PrimTyCon, 
         -- CoTyCon, SuperKindTyCon
+
+isPromotedDataTyCon :: TyCon -> Bool
+isPromotedDataTyCon (PromotedDataTyCon {}) = True
+isPromotedDataTyCon _ = False
 
 -- returns (Just tc) if its argument is the promotion of tc, and
 -- Nothing otherwise
