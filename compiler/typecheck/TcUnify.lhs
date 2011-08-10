@@ -1157,53 +1157,75 @@ matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind
 matchExpectedFunKind _                         = return Nothing
 
 -----------------
+data SubKinding
+  = SKLe  -- k1 <= k2
+  | SKEq  -- k1 == k2
+  | SKGe  -- k1 >= k2
+
+invSubKinding :: SubKinding -> SubKinding
+invSubKinding SKLe = SKGe
+invSubKinding SKEq = SKEq
+invSubKinding SKGe = SKLe
+
 unifyKind :: TcKind                 -- Expected
           -> TcKind                 -- Actual
           -> TcM ()
+unifyKind k1 k2 = unifyKind' k1 SKGe k2
 
-unifyKind k1@(TyConApp kc1 []) k2@(TyConApp kc2 [])
-  | isSubKindCon kc2 kc1 = return ()
-  | otherwise =
-    case are_equal of
-      Just True -> return ()
-      _ -> unifyKindMisMatch k1 k2
-    where
-      are_equal = do
-        tc1 <- isPromotedTypeTyCon kc1
-        tc2 <- isPromotedTypeTyCon kc2
-        return (tc1 == tc2)
+isSubKindCon' :: TyCon -> SubKinding -> TyCon -> Bool
+isSubKindCon' k1 SKLe k2 = isSubKindCon k1 k2
+isSubKindCon' k1 SKEq k2 = k1 == k2
+isSubKindCon' k1 SKGe k2 = isSubKindCon k2 k1
 
-unifyKind (FunTy a1 r1) (FunTy a2 r2)
-  = do { unifyKind a2 a1; unifyKind r1 r2 }
+unifyKind' :: TcKind -> SubKinding -> TcKind -> TcM ()
+unifyKind' (TyConApp kc1 []) sk (TyConApp kc2 [])
+  | isSubKindCon' kc1 sk kc2 = return ()
+unifyKind' (FunTy a1 r1) sk (FunTy a2 r2)
+  = do { unifyKind' a2 sk a1; unifyKind' r1 sk r2 }
                 -- Notice the flip in the argument,
                 -- so that the sub-kinding works right
-unifyKind (TyVarTy kv1) k2 = uKVar False kv1 k2
-unifyKind k1 (TyVarTy kv2) = uKVar True kv2 k1
-unifyKind k1 k2 = unifyKindMisMatch k1 k2
+unifyKind' (TyVarTy kv1) sk k2 = uKVar kv1 sk k2
+unifyKind' k1 sk (TyVarTy kv2) = uKVar kv2 (invSubKinding sk) k1
+unifyKind' k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s) =  -- IA0: new equation for unifyKind
+  case kc_are_equal of  -- check that kind constructors are the same promoted type constructor
+    Just True -> unifyKinds k1s SKEq k2s
+    _ -> unifyKindMisMatch k1 sk k2
+  where
+    kc_are_equal = do
+      tc1 <- isPromotedTypeTyCon kc1
+      tc2 <- isPromotedTypeTyCon kc2
+      return (tc1 == tc2)
+    unifyKinds [] _ [] = return ()
+    unifyKinds (k1:k1s) sk (k2:k2s) = do
+      unifyKind' k1  sk k2
+      unifyKinds k1s sk k2s
+    unifyKinds _ _ _ = panic "unifyKinds"
+      -- this cannot happen since the kind constructors are the same
+      -- and the kind are sort checked and thus fully applied
+unifyKind' k1 sk k2 = unifyKindMisMatch k1 sk k2
 
 ----------------
-uKVar :: Bool -> MetaKindVar -> TcKind -> TcM ()
-uKVar swapped kv1 k2
+uKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
+uKVar kv1 sk k2
   = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar swapped kv1 k2
-            Indirect k1 | swapped   -> unifyKind k2 k1
-                        | otherwise -> unifyKind k1 k2 }
+            Flexi -> uUnboundKVar kv1 sk k2
+            Indirect k1 -> unifyKind' k1 sk k2 }
 
 ----------------
-uUnboundKVar :: Bool -> MetaKindVar -> TcKind -> TcM ()
-uUnboundKVar swapped kv1 k2@(TyVarTy kv2)
+uUnboundKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
+uUnboundKVar kv1 sk k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
   | otherwise   -- Distinct kind variables
   = do  { mb_k2 <- readMetaKindVar kv2
         ; case mb_k2 of
-            Indirect k2 -> uUnboundKVar swapped kv1 k2
+            Indirect k2 -> uUnboundKVar kv1 sk k2
             Flexi -> writeMetaKindVar kv1 k2 }
 
-uUnboundKVar swapped kv1 non_var_k2
+uUnboundKVar kv1 sk non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
         ; kindOccurCheck kv1 k2'
-        ; k2'' <- kindSimpleKind swapped k2'
+        ; k2'' <- kindSimpleKind sk k2'
                 -- MetaKindVars must be bound only to simple kinds
                 -- Polarities: (kindSimpleKind True ?) succeeds
                 -- returning *, corresponding to unifying
@@ -1220,18 +1242,17 @@ kindOccurCheck kv1 k2   -- k2 is zonked
     not_in (FunTy a2 r2) = not_in a2 && not_in r2
     not_in _             = True
 
-kindSimpleKind :: Bool -> Kind -> TcM SimpleKind
--- (kindSimpleKind True k) returns a simple kind sk such that sk <: k
--- If the flag is False, it requires k <: sk
--- E.g.         kindSimpleKind False ?? = *
+kindSimpleKind :: SubKinding -> Kind -> TcM SimpleKind
+-- (kindSimpleKind sk k) returns a simple kind k' such that k' sk k
+-- E.g.         kindSimpleKind SKGe ?? = *
 -- What about (kv -> *) ~ ?? -> *
-kindSimpleKind orig_swapped orig_kind
-  = go orig_swapped orig_kind
+kindSimpleKind orig_sk orig_kind
+  = go orig_sk orig_kind
   where
-    go sw (FunTy k1 k2) = do { k1' <- go (not sw) k1
-                             ; k2' <- go sw k2
+    go sk (FunTy k1 k2) = do { k1' <- go (invSubKinding sk) k1
+                             ; k2' <- go sk k2
                              ; return (mkArrowKind k1' k2') }
-    go True k
+    go SKLe k
      | isOpenTypeKind k = return liftedTypeKind
      | isArgTypeKind k  = return liftedTypeKind
     go _ k
@@ -1240,21 +1261,21 @@ kindSimpleKind orig_swapped orig_kind
     go _ k@(TyVarTy _) = return k -- MetaKindVars are always simple
     go _ k@(TyConApp _ _) = return k  -- TyConApps too
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
-                                  <+> ppr orig_swapped <+> ppr orig_kind)
+                                  <+> ppr orig_kind)
         -- I think this can't actually happen
 
 -- T v = MkT v           v must be a type
 -- T v w = MkT (v -> w)  v must not be an umboxed tuple
 
-unifyKindMisMatch :: TcKind -> TcKind -> TcM ()
-unifyKindMisMatch ty1 ty2 = do
-    ty1' <- zonkTcKind ty1
-    ty2' <- zonkTcKind ty2
-    let
-	msg = hang (ptext (sLit "Couldn't match kind"))
-		   2 (sep [quotes (ppr ty1'), 
-			   ptext (sLit "against"), 
-			   quotes (ppr ty2')])
+unifyKindMisMatch :: TcKind -> SubKinding -> TcKind -> TcM ()
+unifyKindMisMatch ki1 SKLe ki2 = unifyKindMisMatch ki2 SKGe ki1
+unifyKindMisMatch ki1 _ ki2 = do
+    ki1' <- zonkTcKind ki1
+    ki2' <- zonkTcKind ki2
+    let msg = hang (ptext (sLit "Couldn't match kind"))
+              2 (sep [quotes (ppr ki1'),
+                      ptext (sLit "against"),
+                      quotes (ppr ki2')])
     failWithTc msg
 
 ----------------
