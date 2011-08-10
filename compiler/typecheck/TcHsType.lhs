@@ -374,7 +374,7 @@ kc_hs_type (HsPromotedConTy name) = do
                                  <+> ptext (sLit "is not promotable"))
         ; traceTc "prm" (ppr ty <+> text "~~>" <+> ppr ki)
         ; return (HsPromotedConTy name, ki) }
-      _ -> panic "IA0: kc_hs_type"  -- IA0: put an error message here
+      _ -> wrongThingErr "promoted data" thing name
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
@@ -1085,7 +1085,7 @@ sc_ds_promTc_app name arg_kis = do
           return (mkTyConApp (mkPromotedTypeTyCon tc) arg_kis)
         Just _ -> err tc_kind "is not fully applied"
         Nothing -> err tc_kind "is not promotable"
-    _ -> wrongThingErr "kind" thing name
+    _ -> wrongThingErr "promoted type" thing name
   where
     err k m = failWithTc (quotes (ppr name) <+> ptext (sLit "of kind")
                           <+> quotes (ppr k) <+> ptext (sLit m))

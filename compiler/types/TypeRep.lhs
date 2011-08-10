@@ -633,7 +633,12 @@ See Trac #2766.
 \begin{code}
 pprTcApp :: Prec -> (Prec -> a -> SDoc) -> TyCon -> [a] -> SDoc
 pprTcApp _ _ tc []      -- No brackets for SymOcc
-  = pp_nt_debug <> ppr tc
+  | tc `hasKey` liftedTypeKindTyConKey   = ptext (sLit "*")
+  | tc `hasKey` unliftedTypeKindTyConKey = ptext (sLit "#")
+  | tc `hasKey` openTypeKindTyConKey     = ptext (sLit "(?)")
+  | tc `hasKey` ubxTupleKindTyConKey     = ptext (sLit "(#)")
+  | tc `hasKey` argTypeKindTyConKey      = ptext (sLit "??")
+  | otherwise = pp_nt_debug <> ppr tc
   where
    pp_nt_debug | isNewTyCon tc = ifPprDebug (if isRecursiveTyCon tc 
 				             then ptext (sLit "<recnt>")
@@ -643,17 +648,12 @@ pprTcApp _ _ tc []      -- No brackets for SymOcc
 pprTcApp _ pp tc [ty]
   | tc `hasKey` listTyConKey = brackets (pp TopPrec ty)
   | tc `hasKey` parrTyConKey = ptext (sLit "[:") <> pp TopPrec ty <> ptext (sLit ":]")
-  | tc `hasKey` liftedTypeKindTyConKey   = ptext (sLit "*")
-  | tc `hasKey` unliftedTypeKindTyConKey = ptext (sLit "#")
-  | tc `hasKey` openTypeKindTyConKey     = ptext (sLit "(?)")
-  | tc `hasKey` ubxTupleKindTyConKey     = ptext (sLit "(#)")
-  | tc `hasKey` argTypeKindTyConKey      = ptext (sLit "??")
 
 pprTcApp p pp tc tys
   | isTupleTyCon tc && tyConArity tc == length tys
   = tupleParens (tupleTyConBoxity tc) (sep (punctuate comma (map (pp TopPrec) tys)))
   | otherwise
-  = pprTypeNameApp p pp (getName tc) tys
+  = pprTypeNameApp p pp tc tys
 
 ----------------
 pprTypeApp :: (NamedThing a, Outputable a) => a -> [Type] -> SDoc
