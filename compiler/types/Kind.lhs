@@ -35,7 +35,7 @@ module Kind (
         isSubKindCon,
 
         -- ** Promotion related functions
-        promoteType,
+        promoteType, isPromotableType, isPromotableKind
 
        ) where
 
@@ -45,6 +45,7 @@ import TypeRep
 import TysPrim
 import TyCon
 import Var
+import VarSet
 import PrelNames
 import Outputable
 \end{code}
@@ -241,6 +242,18 @@ defaultKind k
 
 -- About promoting a type to a kind
 
+isPromotableType :: Type -> Bool
+isPromotableType = go emptyVarSet
+  where
+    go vars (TyConApp _ tys) = all (go vars) tys
+    go vars (FunTy arg res) = all (go vars) [arg,res]
+    go vars (TyVarTy tvar) = tvar `elemVarSet` vars
+    go vars (ForAllTy tvar ty) = isPromotableTyVar tvar && go (vars `extendVarSet` tvar) ty
+    go _ _ = panic "isPromotableType"
+
+isPromotableTyVar :: TyVar -> Bool
+isPromotableTyVar = isLiftedTypeKind . varType
+
 -- | Promotes a type to a kind if possible.  Assumes the argument is
 -- promotable.
 promoteType :: Type -> Kind
@@ -248,22 +261,23 @@ promoteType (TyConApp tc tys) = mkTyConApp (mkPromotedTypeTyCon tc) (map promote
   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
 promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
-promoteType _ = panic "IA0: promoteType"  -- IA0: UNDEFINED
+promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
+  -- a :: *  ~~>  a :: BOX
+promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
+  -- forall (a :: *). t  ~~> forall (a :: BOX). k  where  t ~~> k
+promoteType _ = panic "promoteType"
 
--- IA0: promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
--- IA0:   -- a :: *  ~~>  a :: Box
--- IA0: promoteType (AppTy _app _arg) = panic "we do not promote arbitrary applications"
--- IA0: promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
--- IA0:   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
--- IA0: promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
--- IA0:   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
--- IA0: promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
--- IA0:   -- forall (a :: *). t  ~~> forall a. k  where  t ~~> k
--- IA0: promoteType (PredTy _pred) = panic "we do not promote predicate types"
+-- Helpers
+promoteTyVar :: TyVar -> KindVar
+promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
 
--- IA0: -- Helpers
--- IA0: promoteTyVar :: TyVar -> KindVar
--- IA0: promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
+-- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
+isPromotableKind :: Kind -> Maybe Int
+isPromotableKind kind =
+  let (args, res) = splitKindFunTys kind in
+  if all isLiftedTypeKind (res:args)
+  then Just $ length args
+  else Nothing
 
 {- Note [Promoting a Type to a Kind]
    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

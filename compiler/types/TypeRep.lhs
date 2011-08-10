@@ -656,10 +656,10 @@ pprTcApp p pp tc tys
   = pprTypeNameApp p pp (getName tc) tys
 
 ----------------
-pprTypeApp :: NamedThing a => a -> [Type] -> SDoc
+pprTypeApp :: (NamedThing a, Outputable a) => a -> [Type] -> SDoc
 -- The first arg is the tycon, or sometimes class
 -- Print infix if the tycon/class looks like an operator
-pprTypeApp tc tys = pprTypeNameApp TopPrec ppr_type (getName tc) tys
+pprTypeApp tc tys = pprTypeNameApp TopPrec ppr_type tc tys
 
 pprTypeNameApp :: (NamedThing b, Outputable b) => Prec -> (Prec -> a -> SDoc) -> b -> [a] -> SDoc
 -- Used for classes and coercions as well as types; that's why it's separate from pprTcApp

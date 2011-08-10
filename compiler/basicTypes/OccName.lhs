@@ -157,7 +157,7 @@ dataName    = DataName
 srcDataName = DataName	-- Haskell-source data constructors should be
 			-- in the Data name space
 
-tvName      = TvName   -- IA0: type and kind variables
+tvName      = TvName
 varName     = VarName
 
 isDataConNameSpace :: NameSpace -> Bool

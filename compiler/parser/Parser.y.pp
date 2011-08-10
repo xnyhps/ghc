@@ -1101,7 +1101,7 @@ kind	:: { LHsKind RdrName }
 
 bkind   :: { LHsKind RdrName }
         : akind                 { $1 }
--- IA0:         | bkind akind           { LL $ HsAppTy $1 $2 }
+        | bkind akind           { LL $ HsAppTy $1 $2 }
 
 akind	:: { LHsKind RdrName }
 	: '*'			        { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
