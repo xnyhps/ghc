@@ -751,7 +751,9 @@ kcHsTyVars tvs thing_inside
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
 kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
-kcHsTyVar tv@(KindedTyVar {}) = return tv
+kcHsTyVar (KindedTyVar name kind _) = do
+  kind' <- scDsLHsKind kind
+  return (KindedTyVar name kind kind')
 
 ------------------
 tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-zonking
