@@ -9,6 +9,9 @@
 
 ## BUGS
 
+* "inplace/bin/ghc-stage2.exe"   -H32m -O -Wall -Werror -H64m -O0 -DNEW_GHC_LAYOUT   -hide-all-packages -i -iutils/haddock/src -iutils/haddock/dist/build -iutils/haddock/dist/build/autogen -Iutils/haddock/dist/build -Iutils/haddock/dist/build/autogen    -optP-DIN_GHC_TREE -optP-include -optPutils/haddock/dist/build/autogen/cabal_macros.h -package Cabal-1.11.2 -package array-0.3.0.3 -package base-4.4.0.0 -package containers-0.4.1.0 -package directory-1.1.0.1 -package filepath-1.2.0.1 -package ghc-7.3.20110811 -package pretty-1.1.0.0 -package xhtml-3000.2.0.1  -funbox-strict-fields -O2 -Wall -fwarn-tabs -XHaskell2010 -XCPP -XDeriveDataTypeable -XScopedTypeVariables -XMagicHash -no-user-package-conf -rtsopts     -odir utils/haddock/dist/build -hidir utils/haddock/dist/build -stubdir utils/haddock/dist/build -hisuf hi -osuf  o -hcsuf hc -c utils/haddock/dist/build/Haddock/Lex.hs -o utils/haddock/dist/build/Haddock/Lex.o
+Segmentation fault/access violation in generated code
+
 * We do not track ticks in Iface, so [ 'List * ] gets printed [ List * ].
   We can look at the namespace of the OccName to know if we print a tick (works only for lifted data, since we don't know if we are in a type or kind context).
 
