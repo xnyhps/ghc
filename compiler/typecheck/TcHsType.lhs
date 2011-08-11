@@ -44,7 +44,7 @@ import {- Kind parts of -} Type
 import Kind
 import Var
 import VarSet
-import DataCon ( dataConUserType )
+import DataCon ( DataCon, dataConUserType )
 import TyCon
 import Class
 import Name
@@ -354,6 +354,19 @@ kc_lhs_type (L span ty)
 --
 -- The translated type has explicitly-kinded type-variable binders
 
+kc_promoted_data_con :: Name -> DataCon -> TcM (HsType Name, TcKind)
+kc_promoted_data_con name dc = do
+  unless ok $ failWithTc (quotes (ppr dc) <+> ptext (sLit "of type") <+> quotes (ppr ty)
+                          <+> ptext (sLit "is not promotable"))
+  tvs' <- mapM (const newMetaKindVar) tvs
+  let ki' = substTyWith tvs tvs' ki  -- IA0: instantiate forall with meta kind vars
+  traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki')
+  return (HsPromotedConTy name, ki')
+  where
+    ty = dataConUserType dc
+    ok = isPromotableType ty
+    (tvs, ki) = splitForAllTys (promoteType ty)
+
 kc_hs_type :: HsType Name -> TcM (HsType Name, TcKind)
 kc_hs_type (HsParTy ty) = do
    (ty', kind) <- kc_lhs_type ty
@@ -366,15 +379,8 @@ kc_hs_type (HsTyVar name) = do
 kc_hs_type (HsPromotedConTy name) = do
     thing <- tcLookup name
     case thing of
-      AGlobal (ADataCon dc) -> do
-        { let ty = dataConUserType dc
-              ok = isPromotableType ty
-              ki = promoteType ty
-        ; unless ok $ failWithTc (quotes (ppr dc) <+> ptext (sLit "of type") <+> quotes (ppr ty)
-                                 <+> ptext (sLit "is not promotable"))
-        ; traceTc "prm" (ppr ty <+> text "~~>" <+> ppr ki)
-        ; return (HsPromotedConTy name, ki) }
-      _ -> wrongThingErr "promoted data" thing name
+      AGlobal (ADataCon dc) -> kc_promoted_data_con name dc
+      _                     -> wrongThingErr "promoted data" thing name
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
