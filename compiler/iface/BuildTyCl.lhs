@@ -28,7 +28,7 @@ import MkId
 import Class
 import TyCon
 import Type
-import Kind             ( promoteType )
+import Kind             ( promoteType, isPromotableType )
 import Coercion
 
 import TcRnMonad
@@ -221,8 +221,9 @@ mkDataConStupidTheta tycon arg_tys univ_tvs
 		      tyVarsOfPred pred `intersectVarSet` arg_tyvars
 
 buildPromotedDataTyCon :: DataCon -> TyCon
-buildPromotedDataTyCon dc =
-  mkPromotedDataTyCon dc (getName dc) (getUnique dc) (promoteType (dataConUserType dc))
+buildPromotedDataTyCon dc = ASSERT ( isPromotableType ty )
+  mkPromotedDataTyCon dc (getName dc) (getUnique dc) (promoteType ty)
+  where ty = dataConUserType dc
 \end{code}
 
 
