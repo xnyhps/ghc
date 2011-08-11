@@ -1,0 +1,69 @@
+## TODO FIRST
+
+## TODO NEXT
+
+* Kind polymorphism
+  * Add a boolean in TyVar and TcTyVar to know if it's a kind variable or not
+    and add a commentary about why it is ok to mix type and kind variables.
+  * Implicit kind polymorphism
+
+## BUGS
+
+* We do not track ticks in Iface, so [ 'List * ] gets printed [ List * ].
+  We can look at the namespace of the OccName to know if we print a tick (works only for lifted data, since we don't know if we are in a type or kind context).
+
+* Error messages for things like:
+  data T (a : 'T -> *) = MkT (a 'MkT)
+
+* Promoted primitive negative integers are not parsed.
+  > f :: -1
+
+* Operators are not printed correctly. See bug/Operators.hs.
+
+* Kinds are not always printed correctly.
+  (*, *) instead of '(*, *)
+  [*] instead of '[*]
+  We might add a Promoted flag in HsTupleTy and HsListTy.
+
+## OPTIONAL
+
+* Pattern match(es) are non-exhaustive (splitAt in Vector.hs)
+  The problem is already there in master.
+
+* No wildpat in types.  Neither is there a warning on unused variables.
+
+* What about lifting type operators?
+
+* Maybe want to merge UserTyVar and KindedTyVar
+
+* ''a' -> ITtyvar a'
+  instead of ITsimplequote 'a'
+
+* Getting rid of subkinding.
+
+  kappa ::= eta | # | (#) | ? | ??
+  eta ::= * | eta -> eta | T eta .. eta
+
+  Gamma, alpha : ??, x : alpha |- e
+  ----------------------------------
+  Gamma |- \x -> e
+
+  error : forall (a : ?). String -> a  (still weird)
+
+  Gamma |- tau : kappa1 in * or #
+  Gamma |- sigma : kappa2 in * or # or (#)
+  ----------------------------------------
+  Gamma |- tau -> sigma : *
+
+  ? and ?? only appear at top level, and they always get set to star
+  when unified with a meta kind variable
+
+----------------------------------------------------------------------
+--                             HELPERS                              --
+----------------------------------------------------------------------
+
+  1. How to check conflicts in the parser
+
+% cd compiler/parser
+% gcc -E -undef -traditional -P -Iincludes -x c Parser.y.pp | grep -v '^#pragma GCC' >! Parser.y && happy -agc --strict Parser.y -i
+
