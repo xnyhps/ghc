@@ -389,7 +389,7 @@ linkingNeeded dflags linkables pkg_deps = do
 -- previous binary was linked with "the same options".
 checkLinkInfo :: DynFlags -> [PackageId] -> FilePath -> IO Bool
 checkLinkInfo dflags pkg_deps exe_file
- | isWindowsTarget || isDarwinTarget
+ | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
  -- ToDo: Windows and OS X do not use the ELF binary format, so
  -- readelf does not work there.  We need to find another way to do
  -- this.
@@ -403,6 +403,11 @@ checkLinkInfo dflags pkg_deps exe_file
    m_exe_link_info <- readElfSection dflags ghcLinkInfoSectionName exe_file
    debugTraceMsg dflags 3 $ text ("Exe link info: " ++ show m_exe_link_info)
    return (Just link_info /= m_exe_link_info)
+
+platformSupportsSavingLinkOpts :: OS -> Bool
+platformSupportsSavingLinkOpts os
+  | os == OSSolaris2 = False -- see #5382
+  | otherwise        = osElfTarget os
 
 ghcLinkInfoSectionName :: String
 ghcLinkInfoSectionName = ".debug-ghc-link-info"
@@ -1441,9 +1446,9 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
           Just opts -> text "char *ghc_rts_opts = " <> text (show opts) <> semi
 
     link_opts info
-      | isDarwinTarget  = empty
-      | isWindowsTarget = empty
-      | otherwise = hcat [
+     | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
+     = empty
+     | otherwise = hcat [
           text "__asm__(\"\\t.section ", text ghcLinkInfoSectionName,
                                     text ",\\\"\\\",",
                                     text elfSectionNote,
@@ -1460,13 +1465,8 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
 
             elfSectionNote :: String
             elfSectionNote = case platformArch (targetPlatform dflags) of
-                               ArchX86    -> "@note"
-                               ArchX86_64 -> "@note"
-                               ArchPPC    -> "@note"
-                               ArchPPC_64 -> "@note"
-                               ArchSPARC  -> "@note"
                                ArchARM    -> "%note"
-                               ArchUnknown -> panic "elfSectionNote ArchUnknown"
+                               _          -> "@note"
 
 -- The "link info" is a string representing the parameters of the
 -- link.  We save this information in the binary, and the next time we

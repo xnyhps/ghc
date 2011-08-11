@@ -1,6 +1,6 @@
 /* -----------------------------------------------------------------------------
  *
- * (c) The GHC Team, 1998-2003
+ * (c) The GHC Team, 1998-2011
  *
  * STG-to-C glue.
  *
@@ -976,5 +976,70 @@ StgRun(StgFunPtr f, StgRegTable *basereg)
 }
 
 #endif /* mips_HOST_ARCH */
+
+/* -----------------------------------------------------------------------------
+   ARM architecture
+   -------------------------------------------------------------------------- */
+
+#ifdef arm_HOST_ARCH
+
+#if defined(__thumb__)
+#define THUMB_FUNC ".thumb\n\t.thumb_func\n\t"
+#else
+#define THUMB_FUNC
+#endif
+
+StgRegTable *
+StgRun(StgFunPtr f, StgRegTable *basereg) {
+    StgRegTable * r;
+    __asm__ volatile (
+	/*
+	 * save callee-saves registers on behalf of the STG code.
+	 */
+	"stmfd sp!, {r4-r10, fp, ip, lr}\n\t"
+#if !defined(arm_HOST_ARCH_PRE_ARMv6)
+        "vstmdb sp!, {d8-d11}\n\t"
+#endif
+        /*
+         * allocate some space for Stg machine's temporary storage.
+         * Note: RESERVER_C_STACK_BYTES has to be a round number here or
+         * the assembler can't assemble it.
+         */
+        "sub sp, sp, %3\n\t"
+	/*
+	 * Set BaseReg
+	 */
+        "mov r4, %2\n\t"
+        /*
+         * Jump to function argument.
+         */
+        "bx %1\n\t"
+
+	".global " STG_RETURN "\n\t"
+        THUMB_FUNC
+        ".type " STG_RETURN ", %%function\n"
+       	STG_RETURN ":\n\t"
+        /*
+         * Free the space we allocated
+         */
+        "add sp, sp, %3\n\t"
+        /*
+         * Return the new register table, taking it from Stg's R1 (ARM's R7).
+         */
+        "mov %0, r7\n\t"
+	/*
+	 * restore callee-saves registers.
+	 */
+#if !defined(arm_HOST_ARCH_PRE_ARMv6)
+        "vldmia sp!, {d8-d11}\n\t"
+#endif
+	"ldmfd sp!, {r4-r10, fp, ip, lr}\n\t"
+      : "=r" (r)
+      : "r" (f), "r" (basereg), "i" (RESERVED_C_STACK_BYTES)
+      : 
+    );
+    return r;
+}
+#endif
 
 #endif /* !USE_MINIINTERPRETER */
