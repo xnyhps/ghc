@@ -1137,10 +1137,11 @@ because it looks like what we do in terms
 
 - Name resolution
 When the user write Zero instead of 'Zero in types, we parse it a
-HsTyVar "Zero" instead of HsPromotedConTy "Zero". We deal with this in
-the renamer. If a HsTyVar "Zero" is not bounded in the type level,
-then we look for it in the term level. And both become a TyConApp
-(PromotedDataTyCon "Zero") [] later on.
+HsTyVar ("Zero", TcClsName) instead of HsPromotedConTy ("Zero",
+DataName). We deal with this in the renamer. If a HsTyVar ("Zero",
+TcClsName) is not bounded in the type level, then we look for it in
+the term level (we change its namespace to DataName). And both become
+a TyConApp (PromotedDataTyCon ("Zero", DataName)) [] later on.
 
 -}
 
