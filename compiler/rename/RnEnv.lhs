@@ -401,12 +401,13 @@ lookupPromotedOccRn rdr_name = do
     Just name -> return (False, name)  -- we found it
     Nothing -> do {  -- we did not find it
   case promoteRdrName rdr_name of  -- maybe it was implicitly promoted
-    Nothing -> fmap ((,) False) (unboundName WL_Any rdr_name)  -- it was not in a promoted namespace
+    Nothing -> fmap ((,) err) (unboundName WL_Any rdr_name)  -- it was not in a promoted namespace
     Just promoted_rdr_name -> do {  -- let's try every thing again
   opt_promoted_name <- lookupOccRn_maybe promoted_rdr_name ;
   case opt_promoted_name of
     Just promoted_name -> return (True, promoted_name)  -- it was implicitly promoted
-    Nothing -> fmap ((,) True) (unboundName WL_Any rdr_name) } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
+    Nothing -> fmap ((,) err) (unboundName WL_Any rdr_name) } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
+  where err = panic "lookupPromotedOccRn"
 
 -- lookupOccRn looks up an occurrence of a RdrName
 lookupOccRn_maybe :: RdrName -> RnM (Maybe Name)
