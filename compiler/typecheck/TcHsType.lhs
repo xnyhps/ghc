@@ -17,7 +17,7 @@ module TcHsType (
 		-- Sort checking
 	scDsLHsKind, scDsLHsMaybeKind,
 
-        -- Typechecking kinded types
+                -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
 	tcTyVarBndrs, dsHsType, kcHsLPred, dsHsLPred,
 	tcDataKindSig, ExpKind(..), EkCtxt(..),
@@ -705,7 +705,7 @@ kcHsTyVars tvs thing_inside
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
-kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newKindVar
+kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
 kcHsTyVar (KindedTyVar name kind _) = do
   kind' <- scDsLHsKind kind
   return (KindedTyVar name kind kind')

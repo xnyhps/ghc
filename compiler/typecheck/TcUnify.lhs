@@ -1144,13 +1144,13 @@ matchExpectedFunKind :: TcKind -> TcM (Maybe (TcKind, TcKind))
 -- Like unifyFunTy, but does not fail; instead just returns Nothing
 
 matchExpectedFunKind (TyVarTy kvar) = do
-    maybe_kind <- readKindVar kvar
+    maybe_kind <- readMetaKindVar kvar
     case maybe_kind of
       Indirect fun_kind -> matchExpectedFunKind fun_kind
       Flexi ->
-          do { arg_kind <- newKindVar
-             ; res_kind <- newKindVar
-             ; writeKindVar kvar (mkArrowKind arg_kind res_kind)
+          do { arg_kind <- newMetaKindVar
+             ; res_kind <- newMetaKindVar
+             ; writeMetaKindVar kvar (mkArrowKind arg_kind res_kind)
              ; return (Just (arg_kind,res_kind)) }
 
 matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind))
@@ -1173,34 +1173,34 @@ unifyKind k1 (TyVarTy kv2) = uKVar True kv2 k1
 unifyKind k1 k2 = unifyKindMisMatch k1 k2
 
 ----------------
-uKVar :: Bool -> KindVar -> TcKind -> TcM ()
+uKVar :: Bool -> MetaKindVar -> TcKind -> TcM ()
 uKVar swapped kv1 k2
-  = do  { mb_k1 <- readKindVar kv1
+  = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
             Flexi -> uUnboundKVar swapped kv1 k2
             Indirect k1 | swapped   -> unifyKind k2 k1
                         | otherwise -> unifyKind k1 k2 }
 
 ----------------
-uUnboundKVar :: Bool -> KindVar -> TcKind -> TcM ()
+uUnboundKVar :: Bool -> MetaKindVar -> TcKind -> TcM ()
 uUnboundKVar swapped kv1 k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
   | otherwise   -- Distinct kind variables
-  = do  { mb_k2 <- readKindVar kv2
+  = do  { mb_k2 <- readMetaKindVar kv2
         ; case mb_k2 of
             Indirect k2 -> uUnboundKVar swapped kv1 k2
-            Flexi -> writeKindVar kv1 k2 }
+            Flexi -> writeMetaKindVar kv1 k2 }
 
 uUnboundKVar swapped kv1 non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
         ; kindOccurCheck kv1 k2'
         ; k2'' <- kindSimpleKind swapped k2'
-                -- KindVars must be bound only to simple kinds
+                -- MetaKindVars must be bound only to simple kinds
                 -- Polarities: (kindSimpleKind True ?) succeeds
                 -- returning *, corresponding to unifying
                 --      expected: ?
                 --      actual:   kind-ver
-        ; writeKindVar kv1 k2'' }
+        ; writeMetaKindVar kv1 k2'' }
 
 ----------------
 kindOccurCheck :: TyVar -> Type -> TcM ()

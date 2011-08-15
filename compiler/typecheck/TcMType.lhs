@@ -17,7 +17,7 @@ module TcMType (
   newFlexiTyVar,
   newFlexiTyVarTy,		-- Kind -> TcM TcType
   newFlexiTyVarTys,		-- Int -> Kind -> TcM [TcType]
-  newKindVar, newKindVars, 
+  newMetaKindVar, newMetaKindVars,
   mkTcTyVarName,
 
   newMetaTyVar, readMetaTyVar, writeMetaTyVar, writeMetaTyVarRef,
@@ -61,7 +61,7 @@ module TcMType (
   tcGetGlobalTyVars, 
 
 
-  readKindVar, writeKindVar
+  readMetaKindVar, writeMetaKindVar
   ) where
 
 #include "HsVersions.h"
@@ -105,13 +105,13 @@ import Data.List        ( (\\) )
 %************************************************************************
 
 \begin{code}
-newKindVar :: TcM TcKind
-newKindVar = do	{ uniq <- newUnique
+newMetaKindVar :: TcM TcKind
+newMetaKindVar = do	{ uniq <- newUnique
 		; ref <- newMutVar Flexi
-		; return (mkTyVarTy (mkKindVar uniq ref)) }
+		; return (mkTyVarTy (mkMetaKindVar uniq ref)) }
 
-newKindVars :: Int -> TcM [TcKind]
-newKindVars n = mapM (\ _ -> newKindVar) (nOfThem n ())
+newMetaKindVars :: Int -> TcM [TcKind]
+newMetaKindVars n = mapM (\ _ -> newMetaKindVar) (nOfThem n ())
 \end{code}
 
 
@@ -759,10 +759,10 @@ mkZonkTcTyVar unbound_var_fn tyvar
 %************************************************************************
 
 \begin{code}
-readKindVar  :: KindVar -> TcM (MetaDetails)
-writeKindVar :: KindVar -> TcKind -> TcM ()
-readKindVar  kv = readMutVar (kindVarRef kv)
-writeKindVar kv val = writeMutVar (kindVarRef kv) (Indirect val)
+readMetaKindVar  :: MetaKindVar -> TcM (MetaDetails)
+writeMetaKindVar :: MetaKindVar -> TcKind -> TcM ()
+readMetaKindVar  kv = readMutVar (kindVarRef kv)
+writeMetaKindVar kv val = writeMutVar (kindVarRef kv) (Indirect val)
 
 -------------
 zonkTcKind :: TcKind -> TcM TcKind

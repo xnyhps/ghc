@@ -20,7 +20,6 @@ import qualified OccName
 import OccName
 import SrcLoc
 import Type
--- import Coercion  -- IA0
 import TysWiredIn
 import BasicTypes as Hs
 import ForeignCall

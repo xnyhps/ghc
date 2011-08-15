@@ -111,7 +111,7 @@ module TcType (
   openTypeKind, mkArrowKind, mkArrowKinds, 
   isLiftedTypeKind, isUnliftedTypeKind, isSubOpenTypeKind, 
   isSubArgTypeKind, isSubKind, splitKindFunTys, defaultKind,
-  kindVarRef, mkKindVar,  
+  kindVarRef, mkMetaKindVar,
 
   --------------------------------
   -- Rexported from Type
@@ -372,22 +372,22 @@ data UserTypeCtxt
 mkKindName :: Unique -> Name
 mkKindName unique = mkSystemName unique kind_var_occ
 
-kindVarRef :: KindVar -> IORef MetaDetails
+kindVarRef :: MetaKindVar -> IORef MetaDetails
 kindVarRef tc = 
   ASSERT ( isTcTyVar tc )
   case tcTyVarDetails tc of
     MetaTv TauTv ref -> ref
     _                -> pprPanic "kindVarRef" (ppr tc)
 
-mkKindVar :: Unique -> IORef MetaDetails -> KindVar
-mkKindVar u r 
+mkMetaKindVar :: Unique -> IORef MetaDetails -> MetaKindVar
+mkMetaKindVar u r
   = mkTcTyVar (mkKindName u)
               tySuperKind  -- not sure this is right,
                             -- do we need kind vars for
                             -- coercions?
               (MetaTv TauTv r)
 
-kind_var_occ :: OccName	-- Just one for all KindVars
+kind_var_occ :: OccName	-- Just one for all MetaKindVars
 			-- They may be jiggled by tidying
 kind_var_occ = mkOccName tvName "k"
 \end{code}

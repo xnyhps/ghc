@@ -25,9 +25,9 @@ import RnBinds		( rnTopBindsLHS, rnTopBindsRHS, rnMethodBinds, renameSigs, mkSig
 import RnEnv		( lookupLocalDataTcNames, lookupLocatedOccRn,
 			  lookupTopBndrRn, lookupLocatedTopBndrRn,
 			  lookupOccRn, bindLocalNamesFV,
-			  bindLocatedLocalsFV, bindPatSigTyVarsFV,
-			  extendTyVarEnvFVRn,
-			  bindLocalNames, checkDupRdrNames, mapFvRn
+			  bindLocatedLocalsFV, bindPatSigTyVarsFV, extendTyVarEnvFVRn,
+                          bindLocalNames, checkDupRdrNames, mapFvRn,
+                          HsDocContext(..), docOfHsDocContext
 			)
 import RnNames       	( getLocalNonValBinders, extendGlobalRdrEnvRn )
 import HscTypes      	( AvailInfo(..), availsToNameSet )
@@ -364,10 +364,8 @@ rnAnnProvenance provenance = do
 \begin{code}
 rnDefaultDecl :: DefaultDecl RdrName -> RnM (DefaultDecl Name, FreeVars)
 rnDefaultDecl (DefaultDecl tys)
-  = mapFvRn (rnHsTypeFVs doc_str) tys	`thenM` \ (tys', fvs) ->
+  = mapFvRn (rnHsTypeFVs DefaultDeclCtx) tys	`thenM` \ (tys', fvs) ->
     return (DefaultDecl tys', fvs)
-  where
-    doc_str = text "In a `default' declaration"
 \end{code}
 
 %*********************************************************
@@ -379,9 +377,9 @@ rnDefaultDecl (DefaultDecl tys)
 \begin{code}
 rnHsForeignDecl :: ForeignDecl RdrName -> RnM (ForeignDecl Name, FreeVars)
 rnHsForeignDecl (ForeignImport name ty spec)
-  = getTopEnv                           `thenM` \ (topEnv :: HscEnv) ->
-    lookupLocatedTopBndrRn name	        `thenM` \ name' ->
-    rnHsTypeFVs (fo_decl_msg name) ty	`thenM` \ (ty', fvs) ->
+  = getTopEnv                            `thenM` \ (topEnv :: HscEnv) ->
+    lookupLocatedTopBndrRn name	         `thenM` \ name' ->
+    rnHsTypeFVs (ForeignDeclCtx name) ty `thenM` \ (ty', fvs) ->
 
     -- Mark any PackageTarget style imports as coming from the current package
     let packageId	= thisPackage $ hsc_dflags topEnv
@@ -390,16 +388,12 @@ rnHsForeignDecl (ForeignImport name ty spec)
     in	return (ForeignImport name' ty' spec', fvs)
 
 rnHsForeignDecl (ForeignExport name ty spec)
-  = lookupLocatedOccRn name	        `thenM` \ name' ->
-    rnHsTypeFVs (fo_decl_msg name) ty  	`thenM` \ (ty', fvs) ->
+  = lookupLocatedOccRn name	         `thenM` \ name' ->
+    rnHsTypeFVs (ForeignDeclCtx name) ty `thenM` \ (ty', fvs) ->
     return (ForeignExport name' ty' spec, fvs `addOneFV` unLoc name')
 	-- NB: a foreign export is an *occurrence site* for name, so 
 	--     we add it to the free-variable list.  It might, for example,
 	--     be imported from another module
-
-fo_decl_msg :: Located RdrName -> SDoc
-fo_decl_msg name = ptext (sLit "In the foreign declaration for") <+> ppr name
-
 
 -- | For Windows DLLs we need to know what packages imported symbols are from
 --	to generate correct calls. Imported symbols are tagged with the current
@@ -532,7 +526,7 @@ rnSrcDerivDecl :: DerivDecl RdrName -> RnM (DerivDecl Name, FreeVars)
 rnSrcDerivDecl (DerivDecl ty)
   = do { standalone_deriv_ok <- xoptM Opt_StandaloneDeriving
        ; unless standalone_deriv_ok (addErr standaloneDerivErr)
-       ; ty' <- rnLHsType (text "In a deriving declaration") ty
+       ; ty' <- rnLHsType DerivDeclCtx ty
        ; let fvs = extractHsTyNames ty'
        ; return (DerivDecl ty', fvs) }
 
@@ -565,15 +559,13 @@ rnHsRuleDecl (HsRule rule_name act vars lhs _fv_lhs rhs _fv_rhs)
 	; return (HsRule rule_name act vars' lhs' fv_lhs' rhs' fv_rhs',
 		  fv_vars `plusFV` fv_lhs' `plusFV` fv_rhs') }
   where
-    doc = text "In the transformation rule" <+> ftext rule_name
-  
     get_var (RuleBndr v)      = v
     get_var (RuleBndrSig v _) = v
 
     rn_var (RuleBndr (L loc _), id)
 	= return (RuleBndr (L loc id), emptyFVs)
     rn_var (RuleBndrSig (L loc _) t, id)
-	= rnHsTypeFVs doc t	`thenM` \ (t', fvs) ->
+	= rnHsTypeFVs (RuleCtx rule_name) t `thenM` \ (t', fvs) ->
 	  return (RuleBndrSig (L loc id) t', fvs)
 
 badRuleVar :: FastString -> Name -> SDoc
@@ -723,6 +715,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
   = do	{ tycon' <- if isFamInstDecl tydecl
 		    then lookupLocatedOccRn     tycon -- may be imported family
 		    else lookupLocatedTopBndrRn tycon
+        ; sig' <- rnLHsMaybeKind data_doc sig
 	; checkTc (h98_style || null (unLoc context)) 
                   (badGadtStupidTheta tycon)
     	; ((tyvars', context', typats', derivs'), stuff_fvs)
@@ -733,6 +726,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                    ; (derivs', fvs2) <- rn_derivs derivs
                    ; let fvs = fvs1 `plusFV` fvs2 `plusFV` 
                                extractHsCtxtTyNames context'
+                               `plusFV` maybe emptyFVs extractHsTyNames sig'
 		   ; return ((tyvars', context', typats', derivs'), fvs) }
 
 	-- For the constructor declarations, bring into scope the tyvars 
@@ -746,7 +740,6 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                                   rnConDecls condecls
 		-- No need to check for duplicate constructor decls
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
-        ; sig' <- rnLHsMaybeKind data_doc sig
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
 			   tcdTyPats = typats', tcdKindSig = sig',
@@ -757,8 +750,8 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
     h98_style = case condecls of	 -- Note [Stupid theta]
 		     L _ (ConDecl { con_res = ResTyGADT {} }) : _  -> False
 		     _    		                           -> True
-               		     						  
-    data_doc = text "In the data type declaration for" <+> quotes (ppr tycon)
+
+    data_doc = TyDataCtx tycon
 
     rn_derivs Nothing   = return (Nothing, emptyFVs)
     rn_derivs (Just ds) = rnLHsTypes data_doc ds	`thenM` \ ds' -> 
@@ -776,9 +769,9 @@ rnTyClDecl tydecl@(TySynonym {tcdLName = name, tcdTyVars = tyvars,
     ; (ty', fvs2)    <- rnHsTypeFVs syn_doc ty
     ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars' 
     			, tcdTyPats = typats', tcdSynRhs = ty'},
-    	      fvs1 `plusFV` fvs2) }
+    	      extractHsTyVarBndrNames_s tyvars' (fvs1 `plusFV` fvs2)) }
   where
-    syn_doc = text "In the declaration for type synonym" <+> quotes (ppr name)
+    syn_doc = TySynCtx name
 
 rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname, 
 		       tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
@@ -790,7 +783,7 @@ rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname,
 	    <- bindTyVarsFV cls_doc tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
-	     ; fds' <- rnFds cls_doc fds
+	     ; fds' <- rnFds (docOfHsDocContext cls_doc) fds
 	     ; (ats', at_fvs) <- rnATs ats
 	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
 	     ; let fvs = at_fvs `plusFV` 
@@ -832,9 +825,9 @@ rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname,
 	; return (ClassDecl { tcdCtxt = context', tcdLName = cname', 
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
 			      tcdMeths = mbinds', tcdATs = ats', tcdDocs = docs'},
-	     	  meth_fvs `plusFV` stuff_fvs) }
+	     	  extractHsTyVarBndrNames_s tyvars' (meth_fvs `plusFV` stuff_fvs)) }
   where
-    cls_doc  = text "In the declaration for class" 	<+> ppr cname
+    cls_doc  = ClassDeclCtx cname
 
 badGadtStupidTheta :: Located RdrName -> SDoc
 badGadtStupidTheta _
@@ -888,7 +881,7 @@ is jolly confusing.  See Trac #4875
 %*********************************************************
 
 \begin{code}
-rnTyPats :: SDoc -> Located Name -> Maybe [LHsType RdrName] -> RnM (Maybe [LHsType Name], FreeVars)
+rnTyPats :: HsDocContext -> Located Name -> Maybe [LHsType RdrName] -> RnM (Maybe [LHsType Name], FreeVars)
 -- Although, we are processing type patterns here, all type variables will
 -- already be in scope (they are the same as in the 'tcdTyVars' field of the
 -- type declaration to which these patterns belong)
@@ -928,7 +921,7 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
 	 -- With Implicit, find the mentioned ones, and use them as binders
 	; new_tvs <- case expl of
 	    	       Implicit -> return (userHsTyVarBndrs mentioned_tvs)
-            	       Explicit -> do { warnUnusedForAlls doc tvs mentioned_tvs
+            	       Explicit -> do { warnUnusedForAlls (docOfHsDocContext doc) tvs mentioned_tvs
                                       ; return tvs }
 
         ; mb_doc' <- rnMbLHsDoc mb_doc 
@@ -940,10 +933,10 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
         ; return (decl { con_name = new_name, con_qvars = new_tyvars, con_cxt = new_context 
                        , con_details = new_details', con_res = new_res_ty, con_doc = mb_doc' }) }}
  where
-    doc = text "In the definition of data constructor" <+> quotes (ppr name)
+    doc = ConDeclCtx name
     get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy Boxed tys))
 
-rnConResult :: SDoc
+rnConResult :: HsDocContext
             -> HsConDetails (LHsType Name) [ConDeclField Name]
             -> ResType RdrName
             -> RnM (HsConDetails (LHsType Name) [ConDeclField Name],
@@ -963,10 +956,10 @@ rnConResult doc details (ResTyGADT ty)
 			  -- See Note [Sorting out the result type] in RdrHsSyn
 		
        ; when (not (null arg_tys) && case details of { RecCon {} -> True; _ -> False })
-              (addErr (badRecResTy doc))
+              (addErr (badRecResTy (docOfHsDocContext doc)))
        ; return (details', ResTyGADT res_ty) }
 
-rnConDeclDetails :: SDoc
+rnConDeclDetails :: HsDocContext
                  -> HsConDetails (LHsType RdrName) [ConDeclField RdrName]
                  -> RnM (HsConDetails (LHsType Name) [ConDeclField Name])
 rnConDeclDetails doc (PrefixCon tys)
@@ -991,7 +984,7 @@ rnConDeclDetails doc (RecCon fields)
 --   are usage occurences for associated types.
 --
 rnFamily :: TyClDecl RdrName
-         -> (SDoc -> [LHsTyVarBndr RdrName] ->
+         -> (HsDocContext -> [LHsTyVarBndr RdrName] ->
 	     ([LHsTyVarBndr Name] -> RnM (TyClDecl Name, FreeVars)) ->
 	     RnM (TyClDecl Name, FreeVars))
          -> RnM (TyClDecl Name, FreeVars)
@@ -1002,14 +995,14 @@ rnFamily (tydecl@TyFamily {tcdFlavour = flavour, tcdKind = sig,
       do { bindIdxVars fmly_doc tyvars $ \tyvars' -> do {
 	 ; tycon' <- lookupLocatedTopBndrRn tycon
          ; sig' <- rnLHsMaybeKind fmly_doc sig
+         ; let fv_sig = maybe emptyFVs extractHsTyNames sig'
+               fv_tyvars = extractHsTyVarBndrNames_s tyvars' emptyFVs
 	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon',
 			      tcdTyVars = tyvars', tcdKind = sig',
                               tcdTcKind = tcdTcKind tydecl},
-		    emptyFVs)
+		    fv_sig `plusFV` fv_tyvars)
          } }
-    where
-      fmly_doc = text "In the declaration for type family" <+> quotes (ppr tycon)
-
+  where fmly_doc = TyFamilyCtx tycon
 rnFamily d _ = pprPanic "rnFamily" (ppr d)
 
 -- Rename associated type declarations (in classes)

@@ -22,20 +22,19 @@ module HsTypes (
 	ConDeclField(..), pprConDeclFields,
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
-	hsTyVarName, hsTyVarNames,
-	hsTyVarKind, hsTyVarNameKind, replaceTyVarName,
+	hsTyVarName, hsTyVarNames, replaceTyVarName,
+	hsTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
 	splitHsAppTys, mkHsAppTys,
-	
-	-- Type place holder
-	PostTcType, placeHolderType, PostTcKind, placeHolderKind,
 
 	-- Printing
 	pprParendHsType, pprHsForAll, pprHsContext, ppr_hs_context,
     ) where
 
 import {-# SOURCE #-} HsExpr ( HsSplice, pprSplice )
+
+import HsLit
 
 import NameSet( FreeVars )
 import Type
@@ -49,26 +48,6 @@ import FastString
 import Data.Data
 \end{code}
 
-
-%************************************************************************
-%*									*
-\subsection{Annotating the syntax}
-%*									*
-%************************************************************************
-
-\begin{code}
-type PostTcKind = Kind
-type PostTcType = Type		-- Used for slots in the abstract syntax
-				-- where we want to keep slot for a type
-				-- to be added by the type checker...but
-				-- before typechecking it's just bogus
-
-placeHolderType :: PostTcType	-- Used before typechecking
-placeHolderType  = panic "Evaluated the place holder for a PostTcType"
-
-placeHolderKind :: PostTcKind	-- Used before typechecking
-placeHolderKind  = panic "Evaluated the place holder for a PostTcKind"
-\end{code}
 
 %************************************************************************
 %*									*

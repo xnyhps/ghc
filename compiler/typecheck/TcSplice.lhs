@@ -543,7 +543,7 @@ kcSpliceType splice@(HsSplice name hs_expr) fvs
     -- Here (h 4) :: Q Type
     -- but $(h 4) :: a 	i.e. any type, of any kind
 
-    ; kind <- newKindVar
+    ; kind <- newMetaKindVar
     ; return (HsSpliceTy splice fvs kind, kind)	
     }}}
 
@@ -562,7 +562,7 @@ kcTopSpliceType expr
 	-- Rename it, but bale out if there are errors
 	-- otherwise the type checker just gives more spurious errors
         ; addErrCtxt (spliceResultDoc expr) $ do 
-	{ let doc = ptext (sLit "In the spliced type") <+> ppr hs_ty2
+	{ let doc = SpliceTypeCtx hs_ty2
 	; hs_ty3 <- checkNoErrs (rnLHsType doc hs_ty2)
 	; (ty4, kind) <- kcLHsType hs_ty3
         ; return (unLoc ty4, kind) }}
@@ -977,7 +977,7 @@ lookupClassInstances c ts
         ; case convertToHsPred loc (TH.ClassP c ts) of {
             Left msg -> failWithTc msg;
             Right rdr_pred -> do
-        { rn_pred <- rnLPred doc rdr_pred	-- Rename
+        { rn_pred <- rnLPred ClassInstanceCtx rdr_pred	-- Rename
         ; kc_pred <- kcHsLPred rn_pred		-- Kind check
         ; ClassP cls tys <- dsHsLPred kc_pred	-- Type check
 
@@ -985,8 +985,6 @@ lookupClassInstances c ts
         ; inst_envs <- tcGetInstEnvs
         ; let (matches, unifies, _) = lookupInstEnv inst_envs cls tys
         ; mapM reifyClassInstance (map fst matches ++ unifies) } } }
-  where
-    doc = ptext (sLit "TcSplice.classInstances")
 \end{code}
 
 
