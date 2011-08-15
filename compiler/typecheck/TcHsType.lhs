@@ -13,8 +13,11 @@ module TcHsType (
 		-- Kind checking
 	kcHsTyVars, kcHsSigType, kcHsLiftedSigType, 
 	kcLHsType, kcCheckLHsType, kcHsContext, 
-	
-		-- Typechecking kinded types
+
+		-- Sort checking
+	scDsLHsKind, scDsLHsMaybeKind,
+
+        -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
 	tcTyVarBndrs, dsHsType, kcHsLPred, dsHsLPred,
 	tcDataKindSig, ExpKind(..), EkCtxt(..),
@@ -365,8 +368,9 @@ kc_hs_type (HsPArrTy ty) = do
     return (HsPArrTy ty', liftedTypeKind)
 
 kc_hs_type (HsKindSig ty k) = do
-    ty' <- kc_check_lhs_type ty (EK k EkKindSig)
-    return (HsKindSig ty' k, k)
+    k' <- scDsLHsKind k
+    ty' <- kc_check_lhs_type ty (EK k' EkKindSig)
+    return (HsKindSig ty' k, k')
 
 kc_hs_type (HsTupleTy Boxed tys) = do
     tys' <- mapM kcLiftedType tys
@@ -512,6 +516,15 @@ kcTyVar name = do	-- Could be a tyvar or a tycon
         AThing kind             -> return kind
         AGlobal (ATyCon tc)     -> return (tyConKind tc)
         _                       -> wrongThingErr "type" thing name
+
+scKiVar :: Name -> TcM ()
+scKiVar name = do
+    traceTc "lk1" (ppr name)
+    thing <- tcLookup name
+    traceTc "lk2" (ppr name <+> ppr thing)
+    case thing of
+        AGlobal (ATyCon _tc)    -> return ()  -- IA0: We should have: tc :: BOX
+        _                       -> wrongThingErr "kind" thing name
 
 kcClass :: Name -> TcM TcKind
 kcClass cls = do	-- Must be a class
@@ -693,7 +706,9 @@ kcHsTyVars tvs thing_inside
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
 kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newKindVar
-kcHsTyVar tv@(KindedTyVar {}) = return tv
+kcHsTyVar (KindedTyVar name kind _) = do
+  kind' <- scDsLHsKind kind
+  return (KindedTyVar name kind kind')
 
 ------------------
 tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-zonking
@@ -707,7 +722,7 @@ tcTyVarBndrs bndrs thing_inside = do
   where
     zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
 				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name kind) = return (mkTyVar name kind)
+    zonk (KindedTyVar name _ kind) = return (mkTyVar name kind)
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]
@@ -982,6 +997,55 @@ checkExpectedKind ty act_kind (EK exp_kind ek_ctxt)
 		   <+> quotes fun <+> ptext (sLit ("should have"))
 
            failWithTcM (env2, err $$ more_info)
+\end{code}
+
+%************************************************************************
+%*                                                                      *
+        Sort checking kinds
+%*                                                                      *
+%************************************************************************
+
+\begin{code}
+
+scDsLHsKind :: LHsKind Name -> TcM Kind
+scDsLHsKind k = addErrCtxt (ptext (sLit "In the kind") <+> quotes (ppr k)) $ do
+  sc_lhs_kind k
+  ds_lhs_kind k
+
+scDsLHsMaybeKind :: Maybe (LHsKind Name) -> TcM (Maybe Kind)
+scDsLHsMaybeKind Nothing = return Nothing
+scDsLHsMaybeKind (Just k) = do
+  k' <- scDsLHsKind k
+  return (Just k')
+
+sc_lhs_kind :: LHsKind Name -> TcM ()
+sc_lhs_kind (L span ki) = setSrcSpan span (sc_hs_kind ki)
+
+sc_hs_kind :: HsKind Name -> TcM ()
+sc_hs_kind (HsParTy ki) = sc_lhs_kind ki
+sc_hs_kind (HsTyVar name) = scKiVar name
+sc_hs_kind (HsFunTy ki1 ki2) = do
+  sc_lhs_kind ki1
+  sc_lhs_kind ki2
+
+sc_hs_kind (HsListTy _) = panic "sc_hs_kind"
+sc_hs_kind (HsPArrTy _) = panic "sc_hs_kind"
+sc_hs_kind (HsKindSig _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsTupleTy _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsOpTy _ _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsAppTy _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsPredTy _) = panic "sc_hs_kind"
+sc_hs_kind (HsCoreTy _) = panic "sc_hs_kind"
+sc_hs_kind (HsForAllTy _ _ _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsBangTy _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsRecTy _) = panic "sc_hs_kind"
+sc_hs_kind (HsSpliceTy _ _ _) = panic "sc_hs_kind"
+sc_hs_kind (HsQuasiQuoteTy {}) = panic "sc_hs_kind"
+sc_hs_kind (HsDocTy _ _) = panic "sc_hs_kind"
+
+ds_lhs_kind :: LHsKind Name -> TcM Kind
+ds_lhs_kind ki = ds_type (unLoc ki)
+
 \end{code}
 
 %************************************************************************

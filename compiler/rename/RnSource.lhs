@@ -26,7 +26,7 @@ import RnEnv		( lookupLocalDataTcNames, lookupLocatedOccRn,
 			  lookupTopBndrRn, lookupLocatedTopBndrRn,
 			  lookupOccRn, bindLocalNamesFV,
 			  bindLocatedLocalsFV, bindPatSigTyVarsFV,
-			  bindTyVarsRn, bindTyVarsFV, extendTyVarEnvFVRn,
+			  extendTyVarEnvFVRn,
 			  bindLocalNames, checkDupRdrNames, mapFvRn
 			)
 import RnNames       	( getLocalNonValBinders, extendGlobalRdrEnvRn )
@@ -726,7 +726,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 	; checkTc (h98_style || null (unLoc context)) 
                   (badGadtStupidTheta tycon)
     	; ((tyvars', context', typats', derivs'), stuff_fvs)
-		<- bindTyVarsFV tyvars $ \ tyvars' -> do
+		<- bindTyVarsFV data_doc tyvars $ \ tyvars' -> do
 		         	 -- Checks for distinct tyvars
 		   { context' <- rnContext data_doc context
                    ; (typats', fvs1) <- rnTyPats data_doc tycon' typats
@@ -746,10 +746,10 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                                   rnConDecls condecls
 		-- No need to check for duplicate constructor decls
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
-
+        ; sig' <- rnLHsMaybeKind data_doc sig
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
-			   tcdTyPats = typats', tcdKindSig = sig,
+			   tcdTyPats = typats', tcdKindSig = sig',
 			   tcdCons = condecls', tcdDerivs = derivs'}, 
 	     	   con_fvs `plusFV` stuff_fvs)
         }
@@ -767,7 +767,7 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 -- "type" and "type instance" declarations
 rnTyClDecl tydecl@(TySynonym {tcdLName = name, tcdTyVars = tyvars,
 			      tcdTyPats = typats, tcdSynRhs = ty})
-  = bindTyVarsFV tyvars $ \ tyvars' -> do
+  = bindTyVarsFV syn_doc tyvars $ \ tyvars' -> do
     {    	 -- Checks for distinct tyvars
       name' <- if isFamInstDecl tydecl
     		  then lookupLocatedOccRn     name -- may be imported family
@@ -787,7 +787,7 @@ rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname,
 
 	-- Tyvars scope over superclass context and method signatures
 	; ((tyvars', context', fds', ats', sigs'), stuff_fvs)
-	    <- bindTyVarsFV tyvars $ \ tyvars' -> do
+	    <- bindTyVarsFV cls_doc tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
 	     ; fds' <- rnFds cls_doc fds
@@ -933,7 +933,7 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
 
         ; mb_doc' <- rnMbLHsDoc mb_doc 
 
-        ; bindTyVarsRn new_tvs $ \new_tyvars -> do
+        ; bindTyVarsRn doc new_tvs $ \new_tyvars -> do
 	{ new_context <- rnContext doc cxt
 	; new_details <- rnConDeclDetails doc details
         ; (new_details', new_res_ty)  <- rnConResult doc new_details res_ty
@@ -990,21 +990,26 @@ rnConDeclDetails doc (RecCon fields)
 --   variables.  On the toplevel, these are defining occurences, whereas they
 --   are usage occurences for associated types.
 --
-rnFamily :: TyClDecl RdrName 
-         -> ([LHsTyVarBndr RdrName] -> 
+rnFamily :: TyClDecl RdrName
+         -> (SDoc -> [LHsTyVarBndr RdrName] ->
 	     ([LHsTyVarBndr Name] -> RnM (TyClDecl Name, FreeVars)) ->
 	     RnM (TyClDecl Name, FreeVars))
          -> RnM (TyClDecl Name, FreeVars)
 
-rnFamily (tydecl@TyFamily {tcdFlavour = flavour, 
-			   tcdLName = tycon, tcdTyVars = tyvars}) 
+rnFamily (tydecl@TyFamily {tcdFlavour = flavour, tcdKind = sig,
+			   tcdLName = tycon, tcdTyVars = tyvars})
         bindIdxVars =
-      do { bindIdxVars tyvars $ \tyvars' -> do {
+      do { bindIdxVars fmly_doc tyvars $ \tyvars' -> do {
 	 ; tycon' <- lookupLocatedTopBndrRn tycon
-	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon', 
-			      tcdTyVars = tyvars', tcdKind = tcdKind tydecl}, 
-		    emptyFVs) 
+         ; sig' <- rnLHsMaybeKind fmly_doc sig
+	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon',
+			      tcdTyVars = tyvars', tcdKind = sig',
+                              tcdTcKind = tcdTcKind tydecl},
+		    emptyFVs)
          } }
+    where
+      fmly_doc = text "In the declaration for type family" <+> quotes (ppr tycon)
+
 rnFamily d _ = pprPanic "rnFamily" (ppr d)
 
 -- Rename associated type declarations (in classes)
@@ -1015,28 +1020,29 @@ rnATs :: [LTyClDecl RdrName] -> RnM ([LTyClDecl Name], FreeVars)
 rnATs ats = mapFvRn (wrapLocFstM rn_at) ats
   where
     rn_at (tydecl@TyFamily  {}) = rnFamily tydecl lookupIdxVars
-    rn_at (tydecl@TySynonym {}) = 
+    rn_at (tydecl@TySynonym {}) =
       do
         unless (isNothing (tcdTyPats tydecl)) $ addErr noPatterns
         rnTyClDecl tydecl
     rn_at _                      = panic "RnSource.rnATs: invalid TyClDecl"
 
-    lookupIdxVars tyvars cont = 
+    lookupIdxVars doc tyvars cont =
       do { checkForDups tyvars
-	 ; tyvars' <- mapM lookupIdxVar tyvars
+	 ; tyvars' <- mapM (lookupIdxVar doc) tyvars
 	 ; cont tyvars'
 	 }
     -- Type index variables must be class parameters, which are the only
     -- type variables in scope at this point.
-    lookupIdxVar (L l tyvar) =
+    lookupIdxVar doc (L l tyvar) =
       do
 	name' <- lookupOccRn (hsTyVarName tyvar)
-	return $ L l (replaceTyVarName tyvar name')
+        tyvar' <- replaceTyVarName tyvar name' (rnLHsKind doc)
+	return $ L l tyvar'
 
     -- Type variable may only occur once.
     --
     checkForDups [] = return ()
-    checkForDups (L loc tv:ltvs) = 
+    checkForDups (L loc tv:ltvs) =
       do { setSrcSpan loc $
 	     when (hsTyVarName tv `ltvElem` ltvs) $
 	       addErr (repeatedTyVar tv)
