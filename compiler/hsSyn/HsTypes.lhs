@@ -15,6 +15,7 @@ module HsTypes (
 	HsContext, LHsContext,
 	HsPred(..), LHsPred,
 	HsQuasiQuote(..),
+        HsTyWrapper(..),
 
 	LBangType, BangType, HsBang(..), 
         getBangType, getBangStrictness, 
@@ -170,6 +171,11 @@ data HsType name
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
 					 
+  | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
+  deriving (Data, Typeable)
+
+data HsTyWrapper
+  = WpKiApps [Kind]  -- kind instantiation: [] k1 k2 .. kn
   deriving (Data, Typeable)
 
 data HsExplicitFlag = Explicit | Implicit deriving (Data, Typeable)
@@ -436,6 +442,12 @@ ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPredTy pred)     = ppr pred
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
+
+ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps []) ty) = ppr_mono_ty ctxt_prec ty
+ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps (ki:kis)) ty)
+  = maybeParen ctxt_prec pREC_CON $
+    hsep [ ppr_mono_ty pREC_FUN (HsWrapTy (WpKiApps kis) ty)
+         , ptext (sLit "@") <> pprParendKind ki ]
 
 ppr_mono_ty ctxt_prec (HsAppTy fun_ty arg_ty)
   = maybeParen ctxt_prec pREC_CON $

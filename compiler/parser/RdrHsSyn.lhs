@@ -138,6 +138,7 @@ extract_lty (L loc ty) acc
 				where
 				   locals = hsLTyVarNames tvs
       HsDocTy ty _              -> extract_lty ty acc
+      HsWrapTy _ _              -> panic "IA0: extract_lty"
 
 extract_tv :: SrcSpan -> RdrName -> [Located RdrName] -> [Located RdrName]
 extract_tv loc tv acc | isRdrTyVar tv = L loc tv : acc

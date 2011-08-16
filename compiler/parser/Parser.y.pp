@@ -1090,12 +1090,13 @@ kind	:: { LHsKind RdrName }
 
 bkind   :: { LHsKind RdrName }
         : akind                 { $1 }
+        | bkind akind           { LL $ HsAppTy $1 $2 }
 
 akind	:: { LHsKind RdrName }
 	: '*'			        { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
 	| '(' kind ')'		        { LL $ HsParTy $2 }
-       | qtycon                        { L1 $ HsTyVar (unLoc $1) }
-       | SIMPLEQUOTE qtycon            { LL $ HsTyVar (unLoc $2) }
+        | qtycon                        { L1 $ HsTyVar (unLoc $1) }
+        | SIMPLEQUOTE qtycon            { LL $ HsTyVar (unLoc $2) }
 
 
 -----------------------------------------------------------------------------

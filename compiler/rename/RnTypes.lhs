@@ -189,9 +189,9 @@ rnHsTyKi isType doc (HsTupleTy tup_con tys) = ASSERT ( isType ) do
     tys' <- mapM (rnLHsType doc) tys
     return (HsTupleTy tup_con tys')
 
-rnHsTyKi isType doc (HsAppTy ty1 ty2) = ASSERT ( isType ) do
-    ty1' <- rnLHsType doc ty1
-    ty2' <- rnLHsType doc ty2
+rnHsTyKi isType doc (HsAppTy ty1 ty2) = do
+    ty1' <- rnLHsTyKi isType doc ty1
+    ty2' <- rnLHsTyKi isType doc ty2
     return (HsAppTy ty1' ty2')
 
 rnHsTyKi isType doc (HsPredTy pred) = ASSERT ( isType ) do
@@ -214,6 +214,7 @@ rnHsTyKi isType doc (HsQuasiQuoteTy qq) = ASSERT ( isType ) do { ty <- runQuasiQ
                                       ; rnHsType doc (unLoc ty) }
 #endif
 rnHsTyKi isType _ (HsCoreTy ty) = ASSERT ( isType ) return (HsCoreTy ty)
+rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 
 --------------
 rnLHsTypes :: HsDocContext -> [LHsType RdrName]

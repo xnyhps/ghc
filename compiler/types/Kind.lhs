@@ -44,7 +44,9 @@ module Kind (
 import TypeRep
 import TysPrim
 import TyCon
+import Type ( substKiWith, eqKind )
 import Var
+import VarSet
 import PrelNames
 import Outputable
 \end{code}
@@ -82,7 +84,7 @@ typeKind _ty@(TyConApp tc tys)
     kindAppResult (tyConKind tc) tys
 
 typeKind (PredTy pred)	      = predKind pred
-typeKind (AppTy fun _)        = kindFunResult (typeKind fun)
+typeKind (AppTy fun arg)      = kindAppResult (typeKind fun) [arg]
 typeKind (ForAllTy _ ty)      = typeKind ty
 typeKind (TyVarTy tyvar)      = tyVarKind tyvar
 typeKind (FunTy _arg res)
@@ -110,14 +112,15 @@ predKind (IParam {}) = liftedTypeKind 	-- always represented by lifted types
 %************************************************************************
 
 \begin{code}
--- | Essentially 'funResultTy' on kinds
-kindFunResult :: Kind -> Kind
-kindFunResult (FunTy _ res) = res
-kindFunResult k = pprPanic "kindFunResult" (ppr k)
+-- | Essentially 'funResultTy' on kinds handling pi-types too
+kindFunResult :: Kind -> Type -> Kind
+kindFunResult (FunTy _ res) _ = res
+kindFunResult (ForAllTy kv res) arg = substKiWith [kv] [arg] res
+kindFunResult k _ = pprPanic "kindFunResult" (ppr k)
 
-kindAppResult :: Kind -> [arg] -> Kind
+kindAppResult :: Kind -> [Type] -> Kind
 kindAppResult k []     = k
-kindAppResult k (_:as) = kindAppResult (kindFunResult k) as
+kindAppResult k (a:as) = kindAppResult (kindFunResult k a) as
 
 -- | Essentially 'splitFunTys' on kinds
 splitKindFunTys :: Kind -> ([Kind],Kind)
@@ -141,7 +144,7 @@ splitKindFunTysN n k = pprPanic "splitKindFunTysN" (ppr n <+> ppr k)
 -- Actually this function works fine on data types too, 
 -- but they'd always return '*', so we never need to ask
 synTyConResKind :: TyCon -> Kind
-synTyConResKind tycon = kindAppResult (tyConKind tycon) (tyConTyVars tycon)
+synTyConResKind tycon = kindAppResult (tyConKind tycon) (map mkTyVarTy (tyConTyVars tycon))
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind :: Kind -> Bool
@@ -203,6 +206,10 @@ isSubKind :: Kind -> Kind -> Bool
 -- ^ @k1 \`isSubKind\` k2@ checks that @k1@ <: @k2@
 isSubKind (TyConApp kc1 []) (TyConApp kc2 []) = kc1 `isSubKindCon` kc2
 isSubKind (FunTy a1 r1) (FunTy a2 r2)	      = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
+isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) =
+  not (isSubOpenTypeKindCon kc1) && kc1 == kc2
+  && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
+isSubKind (ForAllTy {}) (ForAllTy {})         = panic "IA0: isSubKind on ForAllTy"
 isSubKind _             _                     = False
 
 isSubKindCon :: TyCon -> TyCon -> Bool
@@ -237,12 +244,16 @@ defaultKind k
 -- About promoting a type to a kind
 
 isPromotableType :: Type -> Bool
-isPromotableType = go
+isPromotableType = go emptyVarSet
   where
-    go (TyConApp tc _) | isPromotedDataTyCon tc = False
-    go (TyConApp _ tys) = all go tys
-    go (FunTy arg res) = all go [arg,res]
-    go _ = panic "IA0: isPromotableType"
+    go vars (TyConApp tc tys) = ASSERT( not (isPromotedDataTyCon tc) ) all (go vars) tys
+    go vars (FunTy arg res) = all (go vars) [arg,res]
+    go vars (TyVarTy tvar) = tvar `elemVarSet` vars
+    go vars (ForAllTy tvar ty) = isPromotableTyVar tvar && go (vars `extendVarSet` tvar) ty
+    go _ _ = panic "IA0: isPromotableType"
+
+isPromotableTyVar :: TyVar -> Bool
+isPromotableTyVar = isLiftedTypeKind . varType
 
 -- | Promotes a type to a kind. Assumes the argument is promotable.
 promoteType :: Type -> Kind
@@ -250,7 +261,14 @@ promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
 promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
+promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
+  -- a :: *  ~~>  a :: BOX
+promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
+  -- forall (a :: *). t  ~~> forall (a :: BOX). k  where  t ~~> k
 promoteType _ = panic "IA0: promoteType"
+
+promoteTyVar :: TyVar -> KindVar
+promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
 
 -- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
 isPromotableKind :: Kind -> Maybe Int

@@ -110,10 +110,11 @@ module Type (
         isInScope, composeTvSubst, zipTyEnv,
         isEmptyTvSubst, unionTvSubst,
 
-	-- ** Performing substitution on types
+	-- ** Performing substitution on types and kinds
 	substTy, substTys, substTyWith, substTysWith, substTheta, 
         substPred, substTyVar, substTyVars, substTyVarBndr,
-        cloneTyVarBndr, deShadowTy, lookupTyVar, 
+        cloneTyVarBndr, deShadowTy, lookupTyVar,
+        substKiWith,
 
 	-- * Pretty-printing
 	pprType, pprParendType, pprTypeApp, pprTyThingCategory, pprTyThing, pprForAll,
@@ -1301,7 +1302,7 @@ instance Outputable TvSubst where
 
 %************************************************************************
 %*									*
-		Performing type substitutions
+		Performing type or kind substitutions
 %*									*
 %************************************************************************
 
@@ -1311,6 +1312,9 @@ instance Outputable TvSubst where
 substTyWith :: [TyVar] -> [Type] -> Type -> Type
 substTyWith tvs tys = ASSERT( length tvs == length tys )
 		      substTy (zipOpenTvSubst tvs tys)
+
+substKiWith :: [KindVar] -> [Kind] -> Kind -> Kind
+substKiWith = substTyWith
 
 -- | Type substitution making use of an 'TvSubst' that
 -- is assumed to be open, see 'zipOpenTvSubst'

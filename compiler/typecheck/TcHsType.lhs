@@ -41,12 +41,12 @@ import TcUnify
 import TcIface
 import TcType
 import {- Kind parts of -} Type
-import Kind ( isPromotableType, isPromotableKind, promoteType )
+import Kind
 import Var
 import VarSet
 import TyCon
-import DataCon ( DataCon, dataConUserType )
-import TysPrim ( liftedTypeKindTyConName, unliftedTypeKindTyConName )
+import DataCon ( DataCon, dataConUserType, dataConName )
+import TysPrim ( liftedTypeKindTyConName )
 import Class
 import Name
 import NameSet
@@ -360,9 +360,7 @@ kc_hs_type (HsParTy ty) = do
    (ty', kind) <- kc_lhs_type ty
    return (HsParTy ty', kind)
 
-kc_hs_type (HsTyVar name) = do
-    kind <- kcTyVar name
-    return (HsTyVar name, kind)
+kc_hs_type (HsTyVar name) = kcTyVar name
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
@@ -391,7 +389,8 @@ kc_hs_type (HsFunTy ty1 ty2) = do
     return (HsFunTy ty1' ty2', liftedTypeKind)
 
 kc_hs_type (HsOpTy ty1 op ty2) = do
-    op_kind <- addLocM kcTyVar op
+    (tyvar, op_kind) <- addLocM kcTyVar op
+    MASSERT( [ name | HsTyVar name <- [tyvar] ] == [unLoc op] )  -- op is not promoted
     ([ty1',ty2'], res_kind) <- kcApps op op_kind [ty1,ty2]
     return (HsOpTy ty1' op ty2', res_kind)
 
@@ -443,6 +442,8 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 -- its the same for a doc node and it's child type node
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
+
+kc_hs_type (HsWrapTy {}) = panic "kc_hs_type"
 
 ---------------------------
 kcApps :: Outputable a
@@ -511,25 +512,28 @@ kc_pred (HsEqualP ty1 ty2)
        ; return (HsEqualP ty1' ty2', unliftedTypeKind) }
 
 ---------------------------
-kcTyVar :: Name -> TcM TcKind
+kcTyVar :: Name -> TcM (HsType Name, TcKind)
 kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
     traceTc "lk1" (ppr name)
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
-        ATyVar _ ty             -> return (typeKind ty)
-        AThing kind             -> return kind
-        AGlobal (ATyCon tc)     -> return (tyConKind tc)
+        ATyVar _ ty             -> wrap (typeKind ty)
+        AThing kind             -> wrap kind
+        AGlobal (ATyCon tc)     -> wrap (tyConKind tc)
         AGlobal (ADataCon dc)   -> kcDataCon dc
         _                       -> wrongThingErr "type" thing name
+    where wrap x = return (HsTyVar name, x)
 
-kcDataCon :: DataCon -> TcM TcKind
+kcDataCon :: DataCon -> TcM (HsType Name, TcKind)
 kcDataCon dc = do
   let ty = dataConUserType dc
   unless (isPromotableType ty) $ promoteErr dc ty
-  let ki = promoteType ty
+  let (kvs, ki_body) = splitForAllTys (promoteType ty)
+  kvs' <- mapM (const newMetaKindVar) kvs
+  let ki = substKiWith kvs kvs' ki_body
   traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki)
-  return ki
+  return (HsWrapTy (WpKiApps kvs') (HsTyVar (dataConName dc)), ki)
   where
     promoteErr dc ty = failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
       <+> quotes (ppr ty) <+> ptext (sLit "is not promotable"))
@@ -630,6 +634,11 @@ ds_type (HsSpliceTy _ _ kind)
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
+
+ds_type (HsWrapTy (WpKiApps kappas) ty) = do
+  tau <- ds_type ty
+  kappas' <- mapM zonkTcKindToKind kappas
+  return (mkAppTys tau kappas')  -- IA0: we cannot differentiate between type application and kind instantiation for pretty-printing
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
 dsHsTypes arg_tys = mapM dsHsType arg_tys
@@ -1032,6 +1041,7 @@ sc_ds_lhs_kind (L span ki) = setSrcSpan span (sc_ds_hs_kind ki)
 
 sc_ds_hs_kind :: HsKind Name -> TcM Kind
 sc_ds_hs_kind k@(HsTyVar _) = sc_ds_app k []
+sc_ds_hs_kind k@(HsAppTy _ _) = sc_ds_app k []
 sc_ds_hs_kind (HsParTy ki) = sc_ds_lhs_kind ki
 sc_ds_hs_kind (HsFunTy ki1 ki2) = do
   kappa_ki1 <- sc_ds_lhs_kind ki1
@@ -1049,14 +1059,13 @@ sc_ds_app ki kis = do
 
 sc_ds_var_app :: Name -> [Kind] -> TcM Kind
 sc_ds_var_app name arg_kis
-  |  name == liftedTypeKindTyConName
-  || name == unliftedTypeKindTyConName = do
-    unless (null arg_kis) $ panic "IA0: sc_ds_var_app"
+  | name == liftedTypeKindTyConName = do
+    MASSERT( null arg_kis )
     traceTc "lps3" (ppr name)
     thing <- tcLookup name
     traceTc "lps4" (ppr name <+> ppr thing)
     case thing of
-      AGlobal (ATyCon tc) -> return (mkTyConApp tc [])
+      AGlobal (ATyCon tc) -> ASSERT( isLiftedTypeKindCon tc ) return (mkTyConApp tc [])
       _ -> panic "sc_ds_var_app 1"
 sc_ds_var_app name arg_kis = do
   traceTc "lps1" (ppr name)
