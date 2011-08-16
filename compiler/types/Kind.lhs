@@ -32,7 +32,7 @@ module Kind (
         isLiftedTypeKindCon,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
-        isSubKindCon,
+        isSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
