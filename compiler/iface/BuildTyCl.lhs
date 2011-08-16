@@ -8,6 +8,7 @@ module BuildTyCl (
 	buildSynTyCon, 
         buildAlgTyCon, 
         buildDataCon,
+        buildPromotedDataTyCon,
 	TcMethInfo, buildClass,
 	mkAbstractTyConRhs, 
 	mkNewTyConRhs, mkDataTyConRhs, 
@@ -27,11 +28,13 @@ import MkId
 import Class
 import TyCon
 import Type
+import Kind             ( promoteType, isPromotableType )
 import Coercion
 
 import TcRnMonad
 import Util		( isSingleton )
 import Outputable
+import Unique           ( getUnique )
 \end{code}
 	
 
@@ -216,6 +219,11 @@ mkDataConStupidTheta tycon arg_tys univ_tvs
     arg_tyvars      = tyVarsOfTypes arg_tys
     in_arg_tys pred = not $ isEmptyVarSet $ 
 		      tyVarsOfPred pred `intersectVarSet` arg_tyvars
+
+buildPromotedDataTyCon :: DataCon -> TyCon
+buildPromotedDataTyCon dc = ASSERT ( isPromotableType ty )
+  mkPromotedDataTyCon dc (getName dc) (getUnique dc) (promoteType ty)
+  where ty = dataConUserType dc
 \end{code}
 
 

@@ -32,7 +32,7 @@ import RdrHsSyn
 import HscTypes		( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
-import TysPrim          ( liftedTypeKindTyConName, unliftedTypeKindTyConName )
+import TysPrim          ( liftedTypeKindTyConName )
 import TysWiredIn	( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
 			  unboxedSingletonTyCon, unboxedSingletonDataCon,
 			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR )
@@ -306,6 +306,7 @@ incorrect.
  ';'		{ L _ ITsemi }
  ','		{ L _ ITcomma }
  '`'		{ L _ ITbackquote }
+ SIMPLEQUOTE 	{ L _ ITsimpleQuote      }     -- 'x
 
  VARID   	{ L _ (ITvarid    _) }		-- identifiers
  CONID   	{ L _ (ITconid    _) }
@@ -345,7 +346,6 @@ incorrect.
 '|]'            { L _ ITcloseQuote    }
 TH_ID_SPLICE    { L _ (ITidEscape _)  }     -- $x
 '$('	        { L _ ITparenEscape   }     -- $( exp )
-TH_VAR_QUOTE	{ L _ ITvarQuote      }     -- 'x
 TH_TY_QUOTE	{ L _ ITtyQuote       }      -- ''T
 TH_QUASIQUOTE	{ L _ (ITquasiQuote _) }
 
@@ -1034,8 +1034,9 @@ atype :: { LHsType RdrName }
 	| '(' ctype '::' kind ')'	{ LL $ HsKindSig $2 $4 }
 	| quasiquote       	        { L1 (HsQuasiQuoteTy (unLoc $1)) }
 	| '$(' exp ')'	      		{ LL $ mkHsSpliceTy $2 }
-	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $ 
+	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
+	| SIMPLEQUOTE qconid            { LL $ HsTyVar (unLoc $2) }
 
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
@@ -1084,13 +1085,17 @@ varids0	:: { Located [RdrName] }
 -- Kinds
 
 kind	:: { LHsKind RdrName }
-	: akind			{ $1 }
-	| akind '->' kind	{ LL (HsFunTy $1 $3) }
+	: bkind			{ $1 }
+	| bkind '->' kind	{ LL $ HsFunTy $1 $3 }
+
+bkind   :: { LHsKind RdrName }
+        : akind                 { $1 }
 
 akind	:: { LHsKind RdrName }
-	: '*'			{ L1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
-	| '!'			{ L1 (HsTyVar (nameRdrName unliftedTypeKindTyConName)) }
-	| '(' kind ')'          { LL (HsParTy $2) }
+	: '*'			        { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
+	| '(' kind ')'		        { LL $ HsParTy $2 }
+       | qtycon                        { L1 $ HsTyVar (unLoc $1) }
+       | SIMPLEQUOTE qtycon            { LL $ HsTyVar (unLoc $2) }
 
 
 -----------------------------------------------------------------------------
@@ -1390,8 +1395,8 @@ aexp2	:: { LHsExpr RdrName }
 	| '$(' exp ')'   	{ LL $ HsSpliceE (mkHsSplice $2) }               
 
 
-	| TH_VAR_QUOTE qvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
-	| TH_VAR_QUOTE qcon 	{ LL $ HsBracket (VarBr (unLoc $2)) }
+	| SIMPLEQUOTE  qvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
+	| SIMPLEQUOTE  qcon 	{ LL $ HsBracket (VarBr (unLoc $2)) }
 	| TH_TY_QUOTE tyvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
  	| TH_TY_QUOTE gtycon	{ LL $ HsBracket (VarBr (unLoc $2)) }
 	| '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }                       

@@ -521,6 +521,7 @@ data Token
   | ITcomma
   | ITunderscore
   | ITbackquote
+  | ITsimpleQuote               --  '
 
   | ITvarid   FastString        -- identifiers
   | ITconid   FastString
@@ -555,7 +556,6 @@ data Token
   | ITcloseQuote                --  |]
   | ITidEscape   FastString     --  $x
   | ITparenEscape               --  $(
-  | ITvarQuote                  --  '
   | ITtyQuote                   --  ''
   | ITquasiQuote (FastString,FastString,RealSrcSpan) --  [:...|...|]
 
@@ -1226,7 +1226,7 @@ lex_stringgap s = do
 lex_char_tok :: Action
 -- Here we are basically parsing character literals, such as 'x' or '\n'
 -- but, when Template Haskell is on, we additionally spot
--- 'x and ''T, returning ITvarQuote and ITtyQuote respectively,
+-- 'x and ''T, returning ITsimpleQuote and ITtyQuote respectively,
 -- but WITHOUT CONSUMING the x or T part  (the parser does that).
 -- So we have to do two characters of lookahead: when we see 'x we need to
 -- see if there's a trailing quote
@@ -1237,11 +1237,8 @@ lex_char_tok span _buf _len = do        -- We've seen '
         Nothing -> lit_error  i1
 
         Just ('\'', i2@(AI end2 _)) -> do       -- We've seen ''
-                  th_exts <- extension thEnabled
-                  if th_exts then do
-                        setInput i2
-                        return (L (mkRealSrcSpan loc end2)  ITtyQuote)
-                   else lit_error i1
+                   setInput i2
+                   return (L (mkRealSrcSpan loc end2)  ITtyQuote)
 
         Just ('\\', i2@(AI _end2 _)) -> do      -- We've seen 'backslash
                   setInput i2
@@ -1264,10 +1261,8 @@ lex_char_tok span _buf _len = do        -- We've seen '
                 _other -> do            -- We've seen 'x not followed by quote
                                         -- (including the possibility of EOF)
                                         -- If TH is on, just parse the quote only
-                        th_exts <- extension thEnabled
                         let (AI end _) = i1
-                        if th_exts then return (L (mkRealSrcSpan loc end) ITvarQuote)
-                                   else lit_error i2
+                        return (L (mkRealSrcSpan loc end) ITsimpleQuote)
 
 finish_char_tok :: RealSrcLoc -> Char -> P (RealLocated Token)
 finish_char_tok loc ch  -- We've already seen the closing quote

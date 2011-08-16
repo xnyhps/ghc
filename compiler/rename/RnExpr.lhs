@@ -162,8 +162,13 @@ rnExpr (NegApp e _)
 -- Don't ifdef-GHCI them because we want to fail gracefully
 -- (not with an rnExpr crash) in a stage-1 compiler.
 rnExpr e@(HsBracket br_body)
-  = checkTH e "bracket"		`thenM_`
-    rnBracket br_body		`thenM` \ (body', fvs_e) ->
+  = do
+    thEnabled <- xoptM Opt_TemplateHaskell
+    unless thEnabled $
+      failWith ( vcat [ ptext (sLit "Syntax error on") <+> quotes (ppr e)
+                      , ptext (sLit "Perhaps you intended to use -XTemplateHaskell") ] )
+    checkTH e "bracket"
+    (body', fvs_e) <- rnBracket br_body
     return (HsBracket body', fvs_e)
 
 rnExpr (HsSpliceE splice)

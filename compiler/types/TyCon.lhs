@@ -29,6 +29,7 @@ module TyCon(
         mkSuperKindTyCon,
         mkForeignTyCon,
         mkAnyTyCon,
+	mkPromotedDataTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -39,6 +40,7 @@ module TyCon(
         isSynTyCon, isClosedSynTyCon,
         isSuperKindTyCon, isDecomposableTyCon,
         isForeignTyCon, isAnyTyCon, tyConHasKind,
+        isPromotedDataTyCon,
 
 	isInjectiveTyCon,
 	isDataTyCon, isProductTyCon, isEnumerationTyCon, 
@@ -83,7 +85,7 @@ module TyCon(
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
-import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon )
+import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon, dataConName )
 
 import Var
 import Class
@@ -417,6 +419,15 @@ data TyCon
         tyConUnique :: Unique,
         tyConName   :: Name
     }
+
+  -- | Represents promoted data constructor.
+  | PromotedDataTyCon {
+	tyConUnique :: Unique, -- ^ Same Unique as the data constructor
+	tyConName   :: Name,   -- ^ Same Name as the data constructor
+	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
+        dataCon     :: DataCon -- ^ Corresponding data constructor
+    }
+
   deriving Typeable
 
 -- | Names of the fields in an algebraic record type
@@ -899,6 +910,17 @@ mkSuperKindTyCon name
         tyConName = name,
         tyConUnique = nameUnique name
   }
+
+-- | Create a promoted data constructor 'TyCon'
+mkPromotedDataTyCon :: DataCon -> Name -> Unique -> Kind -> TyCon
+mkPromotedDataTyCon con name unique kind
+  = PromotedDataTyCon {
+        tyConName = name,
+        tyConUnique = unique,
+        tc_kind = kind,
+        dataCon = con
+  }
+
 \end{code}
 
 \begin{code}
@@ -1112,6 +1134,11 @@ isAnyTyCon :: TyCon -> Bool
 isAnyTyCon (AnyTyCon {}) = True
 isAnyTyCon _              = False
 
+-- | Is this a PromotedDataTyCon?
+isPromotedDataTyCon :: TyCon -> Bool
+isPromotedDataTyCon (PromotedDataTyCon {}) = True
+isPromotedDataTyCon _                      = False
+
 -- | Identifies implicit tycons that, in particular, do not go into interface
 -- files (because they are implicitly reconstructed when the interface is
 -- read).
@@ -1185,6 +1212,7 @@ tyConKind (TupleTyCon { tc_kind = k }) = k
 tyConKind (SynTyCon   { tc_kind = k }) = k
 tyConKind (PrimTyCon  { tc_kind = k }) = k
 tyConKind (AnyTyCon   { tc_kind = k }) = k
+tyConKind (PromotedDataTyCon { tc_kind = k }) = k
 tyConKind tc = pprPanic "tyConKind" (ppr tc)	-- SuperKindTyCon and CoTyCon
 
 tyConHasKind :: TyCon -> Bool
@@ -1378,7 +1406,8 @@ instance Uniquable TyCon where
     getUnique tc = tyConUnique tc
 
 instance Outputable TyCon where
-    ppr tc  = ppr (getName tc) 
+    ppr (PromotedDataTyCon {dataCon = dc}) = quote (ppr (dataConName dc))
+    ppr tc = ppr (getName tc)
 
 instance NamedThing TyCon where
     getName = tyConName

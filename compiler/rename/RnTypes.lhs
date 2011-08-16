@@ -124,9 +124,9 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
        ; -- rnForAll does the rest
          rnForAll doc Explicit forall_tyvars ctxt tau }
 
-rnHsTyKi _ _ (HsTyVar tyvar) = do
-    tyvar' <- lookupOccRn tyvar
-    return (HsTyVar tyvar')
+rnHsTyKi isType _ (HsTyVar rdr_name) = do
+  name <- (if isType then lookupPromotedOccRn else lookupOccRn) rdr_name
+  return (HsTyVar name)
 
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too

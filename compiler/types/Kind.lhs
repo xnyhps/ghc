@@ -34,6 +34,9 @@ module Kind (
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon,
 
+        -- ** Promotion related functions
+        promoteType, isPromotableType, isPromotableKind
+
        ) where
 
 #include "HsVersions.h"
@@ -143,7 +146,7 @@ synTyConResKind tycon = kindAppResult (tyConKind tycon) (tyConTyVars tycon)
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind :: Kind -> Bool
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
-        isUnliftedTypeKindCon, isSubArgTypeKindCon      :: TyCon -> Bool
+        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon :: TyCon -> Bool
 
 isOpenTypeKindCon tc    = tyConUnique tc == openTypeKindTyConKey
 
@@ -166,15 +169,15 @@ isUnliftedTypeKind (TyConApp tc _) = isUnliftedTypeKindCon tc
 isUnliftedTypeKind _               = False
 
 isSubOpenTypeKind :: Kind -> Bool
--- ^ True of any sub-kind of OpenTypeKind (i.e. anything except arrow)
-isSubOpenTypeKind (FunTy k1 k2)    = ASSERT2 ( isKind k1, text "isSubOpenTypeKind" <+> ppr k1 <+> text "::" <+> ppr (typeKind k1) ) 
-                                     ASSERT2 ( isKind k2, text "isSubOpenTypeKind" <+> ppr k2 <+> text "::" <+> ppr (typeKind k2) ) 
-                                     False
-isSubOpenTypeKind (TyConApp kc []) = ASSERT( isKind (TyConApp kc []) ) True
-isSubOpenTypeKind other            = ASSERT( isKind other ) False
-         -- This is a conservative answer
-         -- It matters in the call to isSubKind in
-	 -- checkExpectedKind.
+-- ^ True of any sub-kind of OpenTypeKind
+isSubOpenTypeKind (TyConApp kc []) = isSubOpenTypeKindCon kc
+isSubOpenTypeKind _                = False
+
+isSubOpenTypeKindCon kc
+  | isSubArgTypeKindCon kc   = True
+  | isUbxTupleKindCon kc     = True
+  | isOpenTypeKindCon kc     = True
+  | otherwise                = False
 
 isSubArgTypeKindCon kc
   | isUnliftedTypeKindCon kc = True
@@ -205,12 +208,9 @@ isSubKind _             _                     = False
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@
 isSubKindCon kc1 kc2
-  | isLiftedTypeKindCon kc1   && isLiftedTypeKindCon kc2   = True
-  | isUnliftedTypeKindCon kc1 && isUnliftedTypeKindCon kc2 = True
-  | isUbxTupleKindCon kc1     && isUbxTupleKindCon kc2     = True
-  | isOpenTypeKindCon kc2                                  = True 
-                           -- we already know kc1 is not a fun, its a TyCon
-  | isArgTypeKindCon kc2      && isSubArgTypeKindCon kc1   = True
+  | kc1 == kc2                                             = True
+  | isSubArgTypeKindCon kc1   && isArgTypeKindCon kc2      = True
+  | isSubOpenTypeKindCon kc1  && isOpenTypeKindCon kc2     = True
   | otherwise                                              = False
 
 defaultKind :: Kind -> Kind
@@ -232,4 +232,43 @@ defaultKind k
   | isSubOpenTypeKind k = liftedTypeKind
   | isSubArgTypeKind k  = liftedTypeKind
   | otherwise        = k
+
+
+-- About promoting a type to a kind
+
+isPromotableType :: Type -> Bool
+isPromotableType = go
+  where
+    go (TyConApp tc _) | isPromotedDataTyCon tc = False
+    go (TyConApp _ tys) = all go tys
+    go (FunTy arg res) = all go [arg,res]
+    go _ = panic "IA0: isPromotableType"
+
+-- | Promotes a type to a kind. Assumes the argument is promotable.
+promoteType :: Type -> Kind
+promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
+  -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
+promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
+  -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
+promoteType _ = panic "IA0: promoteType"
+
+-- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
+isPromotableKind :: Kind -> Maybe Int
+isPromotableKind kind =
+  let (args, res) = splitKindFunTys kind in
+  if all isLiftedTypeKind (res:args)
+  then Just $ length args
+  else Nothing
+
+{- Note [Promoting a Type to a Kind]
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We only promote the followings.
+* Type variable
+* Fully applied arrow type
+* Fully applied type constructor of kind @*^n -> *@ (n >= 0)
+* Polymorphic type with a type variable of kind star
+-}
+
+
 \end{code}
+

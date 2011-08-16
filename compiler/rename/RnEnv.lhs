@@ -7,7 +7,7 @@
 module RnEnv ( 
 	newTopSrcBinder, 
 	lookupLocatedTopBndrRn, lookupTopBndrRn,
-	lookupLocatedOccRn, lookupOccRn, 
+	lookupLocatedOccRn, lookupOccRn, lookupPromotedOccRn,
         lookupGlobalOccRn, lookupGlobalOccRn_maybe,
 	lookupLocalDataTcNames, lookupSigOccRn,
 	lookupFixityRn, lookupTyFixityRn, 
@@ -389,28 +389,47 @@ lookupLocatedOccRn = wrapLocM lookupOccRn
 
 -- lookupOccRn looks up an occurrence of a RdrName
 lookupOccRn :: RdrName -> RnM Name
-lookupOccRn rdr_name
+lookupOccRn rdr_name = do
+  opt_name <- lookupOccRn_maybe rdr_name
+  maybe (unboundName WL_Any rdr_name) return opt_name
+
+-- lookupPromotedOccRn looks up an optionally promoted RdrName.
+lookupPromotedOccRn :: RdrName -> RnM Name
+lookupPromotedOccRn rdr_name = do
+  opt_name <- lookupOccRn_maybe rdr_name  -- lookup the name
+  case opt_name of
+    Just name -> return name  -- we found it
+    Nothing -> do {  -- we did not find it
+  case demoteRdrName rdr_name of  -- maybe it was implicitly promoted
+    Nothing -> err  -- it was not in a promoted namespace
+    Just demoted_rdr_name -> do {  -- let's try every thing again
+  opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;
+  case opt_demoted_name of
+    Just demoted_name -> return demoted_name  -- it was implicitly promoted
+    Nothing -> err } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
+  where err = unboundName WL_Any rdr_name
+
+-- lookupOccRn looks up an occurrence of a RdrName
+lookupOccRn_maybe :: RdrName -> RnM (Maybe Name)
+lookupOccRn_maybe rdr_name
   = do { local_env <- getLocalRdrEnv
        ; case lookupLocalRdrEnv local_env rdr_name of {
-          Just name -> return name ;
+          Just name -> return (Just name) ;
           Nothing   -> do
-
        { mb_name <- lookupGlobalOccRn_maybe rdr_name
        ; case mb_name of {
-		Just n  -> return n ;
-		Nothing -> do
-
-       { -- We allow qualified names on the command line to refer to 
-	 --  *any* name exported by any module in scope, just as if there
-	 -- was an "import qualified M" declaration for every module.
-	 allow_qual <- doptM Opt_ImplicitImportQualified
+                Just name  -> return (Just name) ;
+                Nothing -> do
+       { -- We allow qualified names on the command line to refer to
+         --  *any* name exported by any module in scope, just as if there
+         -- was an "import qualified M" declaration for every module.
+         allow_qual <- doptM Opt_ImplicitImportQualified
        ; is_ghci <- getIsGHCi
                -- This test is not expensive,
                -- and only happens for failed lookups
        ; if isQual rdr_name && allow_qual && is_ghci
          then lookupQualifiedName rdr_name
-         else unboundName WL_Any rdr_name } } } } }
-
+         else return Nothing } } } } }
 
 lookupGlobalOccRn :: RdrName -> RnM Name
 -- lookupGlobalOccRn is like lookupOccRn, except that it looks in the global 
@@ -503,7 +522,7 @@ addUsedRdrNames rdrs
 
 -- A qualified name on the command line can refer to any module at all: we
 -- try to load the interface if we don't already have it.
-lookupQualifiedName :: RdrName -> RnM Name
+lookupQualifiedName :: RdrName -> RnM (Maybe Name)
 lookupQualifiedName rdr_name
   | Just (mod,occ) <- isQual_maybe rdr_name
    -- Note: we want to behave as we would for a source file import here,
@@ -514,8 +533,8 @@ lookupQualifiedName rdr_name
 	 | avail <- mi_exports iface,
     	   name  <- availNames avail,
     	   nameOccName name == occ ] of
-      (n:ns) -> ASSERT (null ns) return n
-      _ -> unboundName WL_Any rdr_name
+      (n:ns) -> ASSERT (null ns) return (Just n)
+      _ -> return Nothing
 
   | otherwise
   = pprPanic "RnEnv.lookupQualifiedName" (ppr rdr_name)

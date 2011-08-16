@@ -1229,6 +1229,7 @@ kindSimpleKind orig_swapped orig_kind
      | isLiftedTypeKind k   = return liftedTypeKind
      | isUnliftedTypeKind k = return unliftedTypeKind
     go _ k@(TyVarTy _) = return k -- KindVars are always simple
+    go _ k@(TyConApp tc []) | not (isSuperKind (tyConKind tc)) = return k
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
                                   <+> ppr orig_swapped <+> ppr orig_kind)
         -- I think this can't actually happen
