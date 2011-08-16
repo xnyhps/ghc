@@ -24,6 +24,7 @@ import Name             ( Name, getName, isTyVarName )
 import NameSet
 import BasicTypes       ( Boxity )
 import SrcLoc
+import Panic            ( panic )
 \end{code}
 
 %************************************************************************
@@ -79,6 +80,7 @@ extractHsTyNames ty
 -- IA0:     get (HsLitTy _lit)         = emptyNameSet
 -- IA0:     get (HsExplicitListTy tys) = extractHsTyNames_s tys
 -- IA0:     get (HsExplicitTupleTy tys) = extractHsTyNames_s tys
+    get (HsWrapTy {})          = panic "IA0: extractHsTyNames"
 
 extractHsTyNames_s  :: [LHsType Name] -> NameSet
 extractHsTyNames_s tys = foldr (unionNameSets . extractHsTyNames) emptyNameSet tys

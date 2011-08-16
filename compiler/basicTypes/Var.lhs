@@ -32,7 +32,7 @@
 
 module Var (
         -- * The main data type and synonyms
-        Var, TyVar, CoVar, Id, DictId, DFunId, EvVar, EvId, IpId,
+        Var, TyVar, CoVar, Id, KindVar, DictId, DFunId, EvVar, EvId, IpId,
 
 	-- ** Taking 'Var's apart
 	varName, varUnique, varType, 
@@ -53,7 +53,7 @@ module Var (
 	mustHaveLocalBinding,
 
 	-- ** Constructing 'TyVar's
-	mkTyVar, mkTcTyVar, 
+	mkTyVar, mkTcTyVar, mkKindVar,
 
 	-- ** Taking 'TyVar's apart
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
@@ -66,7 +66,7 @@ module Var (
 #include "HsVersions.h"
 #include "Typeable.h"
 
-import {-# SOURCE #-}	TypeRep( Type, Kind )
+import {-# SOURCE #-}	TypeRep( Type, Kind, SuperKind )
 import {-# SOURCE #-}	TcType( TcTyVarDetails, pprTcTyVarDetails )
 import {-# SOURCE #-}	IdInfo( IdDetails, IdInfo, coVarDetails, vanillaIdInfo, pprIdDetails )
 
@@ -103,6 +103,7 @@ type TyVar = Var
 type CoVar = Id		-- A coercion variable is simply an Id
 			-- variable of kind @ty1 ~ ty2@. Hence its
 			-- 'varType' is always @PredTy (EqPred t1 t2)@
+type KindVar = Var
 \end{code}
 
 %************************************************************************
@@ -121,7 +122,7 @@ in its @VarDetails@.
 -- | Essentially a typed 'Name', that may also contain some additional information
 -- about the 'Var' and it's use sites.
 data Var
-  = TyVar {
+  = TyVar {  -- type and kind variables
 	varName    :: !Name,
 	realUnique :: FastInt,		-- Key for fast comparison
 					-- Identical to the Unique in the name,
@@ -234,7 +235,7 @@ setVarType id ty = id { varType = ty }
 
 %************************************************************************
 %*									*
-\subsection{Type variables}
+\subsection{Type and kind variables}
 %*									*
 %************************************************************************
 
@@ -277,6 +278,13 @@ tcTyVarDetails var = pprPanic "tcTyVarDetails" (ppr var)
 
 setTcTyVarDetails :: TyVar -> TcTyVarDetails -> TyVar
 setTcTyVarDetails tv details = tv { tc_tv_details = details }
+
+mkKindVar :: Name -> SuperKind -> KindVar
+mkKindVar name kind = TyVar
+  { varName    = name
+  , realUnique = getKeyFastInt (nameUnique name)
+  , varType    = kind }
+
 \end{code}
 
 %************************************************************************

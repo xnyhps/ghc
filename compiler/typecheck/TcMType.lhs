@@ -976,6 +976,11 @@ check_type rank ubx_tup ty@(TyConApp tc tys)
 		-- more unboxed tuples, so can't use check_arg_ty
 	; mapM_ (check_type rank' UT_Ok) tys }
 
+  -- IA0: check what follows
+  | isPromotedDataTyCon tc  -- tys contain kind instantiations first
+  = let (kvs, _) = splitForAllTys (tyConKind tc) in
+    mapM_ (check_arg_type rank) (drop (length kvs) tys)
+
   | otherwise
   = mapM_ (check_arg_type rank) tys
 
