@@ -32,7 +32,7 @@ import RdrHsSyn
 import HscTypes		( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
-import TysPrim          ( liftedTypeKindTyConName, unliftedTypeKindTyConName )
+import TysPrim          ( liftedTypeKindTyConName )
 import TysWiredIn	( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
 			  unboxedSingletonTyCon, unboxedSingletonDataCon,
 			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR )
@@ -1037,7 +1037,7 @@ atype :: { LHsType RdrName }
 	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
                                                       -- see Note [Promotion] for the followings
-	| SIMPLEQUOTE qconid                          { LL $ HsPromotedConTy (unLoc $2) }
+	| SIMPLEQUOTE qconid                          { LL $ HsTyVar (unLoc $2) }
 -- IA0: 	| opt_quote typelit                           { LL (HsLitTy $! (unLoc $2)) }
 -- IA0: 	| SIMPLEQUOTE  '(' ')'                        { LL $ HsPromotedConTy $ getRdrName unitDataCon }
 -- IA0: 	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy ($3 : $5) }
@@ -1101,15 +1101,13 @@ kind	:: { LHsKind RdrName }
 
 bkind   :: { LHsKind RdrName }
         : akind                 { $1 }
-        | bkind akind           { LL $ HsAppTy $1 $2 }
 
 akind	:: { LHsKind RdrName }
 	: '*'			        { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
-	| '!'			        { L1 $ HsTyVar (nameRdrName unliftedTypeKindTyConName) }
 	| '(' kind ')'		        { LL $ HsParTy $2 }
-        | qtycon                        { L1 $ HsTyVar (unLoc $1) }
                                         -- see Note [Promotion]
-        | SIMPLEQUOTE qtycon            { LL $ HsPromotedConTy (unLoc $2) }
+        | qtycon                        { L1 $ HsTyVar (unLoc $1) }
+        | SIMPLEQUOTE qtycon            { LL $ HsTyVar (unLoc $2) }
 -- IA0:         | '(' ')'                       { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 -- IA0:         | SIMPLEQUOTE  '(' ')'          { LL $ HsPromotedConTy $ getRdrName unitTyCon }
 -- IA0: 	| '(' kind ',' comma_kinds1 ')' { LL $ HsTupleTy Boxed  ($2:$4) }
@@ -1123,6 +1121,8 @@ akind	:: { LHsKind RdrName }
 
 {- Note [Promotion]
    ~~~~~~~~~~~~~~~~
+
+IA0_TODO update this note
 
 - Syntax of promoted qualified names
 We write 'N.Nat instead of N.'Nat when dealing with qualified names.

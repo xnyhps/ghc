@@ -32,7 +32,7 @@
 
 module Var (
         -- * The main data type and synonyms
-        Var, TyVar, CoVar, Id, KindVar, DictId, DFunId, EvVar, EvId, IpId,
+        Var, TyVar, CoVar, Id, DictId, DFunId, EvVar, EvId, IpId,
 
 	-- ** Taking 'Var's apart
 	varName, varUnique, varType, 
@@ -52,8 +52,8 @@ module Var (
 	isGlobalId, isExportedId,
 	mustHaveLocalBinding,
 
-	-- ** Constructing 'TyVar's and 'KindVar's
-	mkTyVar, mkTcTyVar, mkKindVar,
+	-- ** Constructing 'TyVar's
+	mkTyVar, mkTcTyVar, 
 
 	-- ** Taking 'TyVar's apart
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
@@ -66,7 +66,7 @@ module Var (
 #include "HsVersions.h"
 #include "Typeable.h"
 
-import {-# SOURCE #-}	TypeRep( Type, Kind, SuperKind )
+import {-# SOURCE #-}	TypeRep( Type, Kind )
 import {-# SOURCE #-}	TcType( TcTyVarDetails, pprTcTyVarDetails )
 import {-# SOURCE #-}	IdInfo( IdDetails, IdInfo, coVarDetails, vanillaIdInfo, pprIdDetails )
 
@@ -103,7 +103,6 @@ type TyVar = Var
 type CoVar = Id		-- A coercion variable is simply an Id
 			-- variable of kind @ty1 ~ ty2@. Hence its
 			-- 'varType' is always @PredTy (EqPred t1 t2)@
-type KindVar = Var
 \end{code}
 
 %************************************************************************
@@ -127,8 +126,7 @@ data Var
 	realUnique :: FastInt,		-- Key for fast comparison
 					-- Identical to the Unique in the name,
 					-- cached here for speed
-	varType    :: Kind,             -- ^ The type or kind of the 'Var' in question
-        isType     :: Bool              -- To differentiate kind variables from type variables
+	varType       :: Kind           -- ^ The type or kind of the 'Var' in question
  }
 
   | TcTyVar { 				-- Used only during type inference
@@ -137,7 +135,6 @@ data Var
 	varName        :: !Name,
 	realUnique     :: FastInt,
 	varType        :: Kind,
-        isType         :: Bool,
 	tc_tv_details  :: TcTyVarDetails }
 
   | Id {
@@ -263,7 +260,6 @@ mkTyVar :: Name -> Kind -> TyVar
 mkTyVar name kind = TyVar { varName    = name
 			  , realUnique = getKeyFastInt (nameUnique name)
 			  , varType  = kind
-                          , isType = True
 			}
 
 mkTcTyVar :: Name -> Kind -> TcTyVarDetails -> TyVar
@@ -272,7 +268,6 @@ mkTcTyVar name kind details
     TcTyVar {	varName    = name,
 		realUnique = getKeyFastInt (nameUnique name),
 		varType  = kind,
-                isType = True,
 		tc_tv_details = details
 	}
 
@@ -282,21 +277,6 @@ tcTyVarDetails var = pprPanic "tcTyVarDetails" (ppr var)
 
 setTcTyVarDetails :: TyVar -> TcTyVarDetails -> TyVar
 setTcTyVarDetails tv details = tv { tc_tv_details = details }
-\end{code}
-
-%************************************************************************
-%*									*
-\subsection{Kind variables}
-%*									*
-%************************************************************************
-
-\begin{code}
-mkKindVar :: Name -> SuperKind -> KindVar
-mkKindVar name superkind =
-  TyVar { varName    = name
-        , realUnique = getKeyFastInt (nameUnique name)
-        , varType    = superkind
-        , isType     = False }
 \end{code}
 
 %************************************************************************

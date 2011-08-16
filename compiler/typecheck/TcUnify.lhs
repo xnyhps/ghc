@@ -34,6 +34,7 @@ import TcIface
 import TcRnMonad
 import TcType
 import Type
+import Kind ( isSubOpenTypeKindCon )
 import Coercion
 import Inst
 import TyCon
@@ -1158,9 +1159,9 @@ matchExpectedFunKind _                         = return Nothing
 
 -----------------
 data SubKinding
-  = SKLe  -- k1 <= k2
-  | SKEq  -- k1 == k2
-  | SKGe  -- k1 >= k2
+  = SKLe  -- k1 <= k2  -- swapped == True
+  | SKEq  -- k1 == k2  -- new
+  | SKGe  -- k1 >= k2  -- swapped == False
 
 invSubKinding :: SubKinding -> SubKinding
 invSubKinding SKLe = SKGe
@@ -1187,19 +1188,16 @@ unifyKind' (FunTy a1 r1) sk (FunTy a2 r2)
 unifyKind' (TyVarTy kv1) sk k2 = uKVar kv1 sk k2
 unifyKind' k1 sk (TyVarTy kv2) = uKVar kv2 (invSubKinding sk) k1
 unifyKind' k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s) =  -- IA0: new equation for unifyKind
-  case kc_are_equal of  -- check that kind constructors are the same promoted type constructor
-    Just True -> unifyKinds k1s SKEq k2s
-    _ -> unifyKindMisMatch k1 sk k2
+  if kc_are_equal  -- check that kind constructors are the same
+  then unifyKinds k1s k2s
+  else unifyKindMisMatch k1 sk k2
   where
-    kc_are_equal = do
-      tc1 <- isPromotedTypeTyCon kc1
-      tc2 <- isPromotedTypeTyCon kc2
-      return (tc1 == tc2)
-    unifyKinds [] _ [] = return ()
-    unifyKinds (k1:k1s) sk (k2:k2s) = do
-      unifyKind' k1  sk k2
-      unifyKinds k1s sk k2s
-    unifyKinds _ _ _ = panic "unifyKinds"
+    kc_are_equal = ASSERT( not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2) ) (kc1 == kc2)
+    unifyKinds [] [] = return ()
+    unifyKinds (k1:k1s) (k2:k2s) = do
+      unifyKind' k1  SKEq k2
+      unifyKinds k1s      k2s
+    unifyKinds _ _ = panic "unifyKinds"
       -- this cannot happen since the kind constructors are the same
       -- and the kind are sort checked and thus fully applied
 unifyKind' k1 sk k2 = unifyKindMisMatch k1 sk k2
@@ -1259,7 +1257,7 @@ kindSimpleKind orig_sk orig_kind
      | isLiftedTypeKind k   = return liftedTypeKind
      | isUnliftedTypeKind k = return unliftedTypeKind
     go _ k@(TyVarTy _) = return k -- MetaKindVars are always simple
-    go _ k@(TyConApp _ _) = return k  -- TyConApps too
+    go _ k@(TyConApp tc _) | not (isSubOpenTypeKindCon tc) = return k  -- Promoted type constructors too
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
                                   <+> ppr orig_kind)
         -- I think this can't actually happen

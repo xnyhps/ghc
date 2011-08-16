@@ -125,7 +125,8 @@ data HsType name
 		(LHsContext name)
 		(LHsType name)
 
-  | HsTyVar		name		-- Type variable or type constructor
+  | HsTyVar		name		-- Type variable, type constructor, or data constructor
+                                        -- see Note [Promotions (HsTyVar)]
 
   | HsAppTy		(LHsType name)
 			(LHsType name)
@@ -169,8 +170,6 @@ data HsType name
 
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
-  | HsPromotedConTy name   -- A promoted data or type constructor in types or kinds
-                           -- see Note [Promotions (HsPromotedConTy)]
 -- IA0:   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
 -- IA0:   | HsExplicitListTy [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
 -- IA0:   | HsExplicitTupleTy [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
@@ -179,19 +178,7 @@ data HsType name
 {- Note [Promotions]
    ~~~~~~~~~~~~~~~~~
 
-HsPromotedConTy: A promoted data or type constructor in types or kinds.
-  When in the context of a TYPE we see
-    'Cons
-    'Nat.Zero
-  we parse it as
-    HsPromotedConTy "Cons"
-    HsPromotedConTy "Nat.Zero"
-  When in the context of a KIND we see
-    'List
-    'N.Nat
-  we parse it as
-    HsPromotedConTy "List"
-    HsPromotedConTy "N.Nat"
+HsTyVar: IA0_TODO explain what we do
 
 HsLitTy: A promoted literal.
   This happens ONLY in the context of TYPE.
@@ -497,7 +484,6 @@ ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPredTy pred)     = ppr pred
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
-ppr_mono_ty _    (HsPromotedConTy name) = quote (ppr name)
 -- IA0: ppr_mono_ty _    (HsLitTy lit)       = ppr lit  -- IA0: do we want quote here?
 -- IA0: ppr_mono_ty _    (HsExplicitListTy tys) = quote $ brackets (interpp'SP tys)
 -- IA0: ppr_mono_ty _    (HsExplicitTupleTy tys) = quote $ parens (interpp'SP tys)

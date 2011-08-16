@@ -118,7 +118,6 @@ extract_lty :: LHsType RdrName -> [Located RdrName] -> [Located RdrName]
 extract_lty (L loc ty) acc 
   = case ty of
       HsTyVar tv 	        -> extract_tv loc tv acc
-      HsPromotedConTy tv        -> extract_tv loc tv acc
       HsBangTy _ ty            	-> extract_lty ty acc
       HsRecTy flds            	-> foldr (extract_lty . cd_fld_type) acc flds
       HsAppTy ty1 ty2          	-> extract_lty ty1 (extract_lty ty2 acc)

@@ -30,7 +30,6 @@ module TyCon(
         mkForeignTyCon,
         mkAnyTyCon,
 	mkPromotedDataTyCon,
-	mkPromotedTypeTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -41,6 +40,7 @@ module TyCon(
         isSynTyCon, isClosedSynTyCon,
         isSuperKindTyCon, isDecomposableTyCon,
         isForeignTyCon, isAnyTyCon, tyConHasKind,
+        isPromotedDataTyCon,
 
 	isInjectiveTyCon,
 	isDataTyCon, isProductTyCon, isEnumerationTyCon, 
@@ -51,9 +51,7 @@ module TyCon(
 	isTyConAssoc,
 	isRecursiveTyCon,
 	isHiBootTyCon,
-        isImplicitTyCon,
-        isPromotedDataTyCon,
-        isPromotedTypeTyCon,
+        isImplicitTyCon, 
 
         -- ** Extracting information out of TyCons
 	tyConName,
@@ -145,7 +143,7 @@ Note [Type synonym families]
        type R:FList a = Maybe a
   Indeed, in GHC's internal representation, the RHS of every
   'type instance' is simply an application of the representation
-  TyCon to the quantified variables.
+  TyCon to the quantified varaibles.
 
   The intermediate representation TyCon is a bit gratuitous, but 
   it means that:
@@ -156,6 +154,23 @@ Note [Type synonym families]
   So the result of typechecking a 'type instance' decl is just a
   TyCon.  In turn this means that type and data families can be
   treated uniformly.
+
+* Translation of type family decl:
+	type family F a :: *
+  translates to
+    a SynTyCon 'F', whose SynTyConRhs is SynFamilyTyCon
+
+* Translation of type instance decl:
+	type instance F [a] = Maybe a
+  translates to
+    A SynTyCon 'R:FList a', whose 
+       SynTyConRhs is (SynonymTyCon (Maybe a))
+       TyConParent is (FamInstTyCon F [a] co)
+         where co :: F [a] ~ R:FList a
+    Notice that we introduce a gratuitous vanilla type synonym
+       type R:FList a = Maybe a
+    solely so that type and data families can be treated more
+    uniformly, via a single FamInstTyCon descriptor        
 
 * In the future we might want to support
     * closed type families (esp when we have proper kinds)
@@ -171,6 +186,8 @@ See also Note [Wrappers for data instance tycons] in MkId.lhs
 	data instance T Int = T1 | T2 Bool
 
   Here T is the "family TyCon".
+
+* Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
 * Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
@@ -411,12 +428,6 @@ data TyCon
         dataCon     :: DataCon -- ^ Corresponding data constructor
     }
 
-  -- | Represents promoted type constructor.
-  | PromotedTypeTyCon {
-      tyConUnique :: Unique,
-      tyConName   :: Name,
-      tyCon       :: TyCon     -- ^ Corresponding type constructor
-    }
   deriving Typeable
 
 -- | Names of the fields in an algebraic record type
@@ -910,9 +921,6 @@ mkPromotedDataTyCon con name unique kind
         dataCon = con
   }
 
--- | Create a promoted type constructor
-mkPromotedTypeTyCon :: TyCon -> TyCon
-mkPromotedTypeTyCon tc = PromotedTypeTyCon (tyConUnique tc) (tyConName tc) tc
 \end{code}
 
 \begin{code}
@@ -1126,6 +1134,11 @@ isAnyTyCon :: TyCon -> Bool
 isAnyTyCon (AnyTyCon {}) = True
 isAnyTyCon _              = False
 
+-- | Is this a PromotedDataTyCon?
+isPromotedDataTyCon :: TyCon -> Bool
+isPromotedDataTyCon (PromotedDataTyCon {}) = True
+isPromotedDataTyCon _                      = False
+
 -- | Identifies implicit tycons that, in particular, do not go into interface
 -- files (because they are implicitly reconstructed when the interface is
 -- read).
@@ -1145,16 +1158,6 @@ isImplicitTyCon tycon | isTyConAssoc tycon           = True
 isImplicitTyCon _other                               = True
         -- catches: FunTyCon, PrimTyCon, 
         -- CoTyCon, SuperKindTyCon
-
-isPromotedDataTyCon :: TyCon -> Bool
-isPromotedDataTyCon (PromotedDataTyCon {}) = True
-isPromotedDataTyCon _ = False
-
--- returns (Just tc) if its argument is the promotion of tc, and
--- Nothing otherwise
-isPromotedTypeTyCon :: TyCon -> Maybe TyCon
-isPromotedTypeTyCon (PromotedTypeTyCon {tyCon = tc}) = Just tc
-isPromotedTypeTyCon _ = Nothing
 \end{code}
 
 
@@ -1403,7 +1406,6 @@ instance Uniquable TyCon where
     getUnique tc = tyConUnique tc
 
 instance Outputable TyCon where
-    ppr (PromotedTypeTyCon {tyCon = tc}) = quote (ppr tc)
     ppr (PromotedDataTyCon {dataCon = dc}) = quote (ppr (dataConName dc))
     ppr tc = ppr (getName tc)
 

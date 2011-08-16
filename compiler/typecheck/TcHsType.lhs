@@ -41,11 +41,12 @@ import TcUnify
 import TcIface
 import TcType
 import {- Kind parts of -} Type
-import Kind
+import Kind ( isPromotableType, isPromotableKind, promoteType )
 import Var
 import VarSet
-import DataCon ( DataCon, dataConUserType )
 import TyCon
+import DataCon ( DataCon, dataConUserType )
+import TysPrim ( liftedTypeKindTyConName, unliftedTypeKindTyConName )
 import Class
 import Name
 import NameSet
@@ -354,19 +355,6 @@ kc_lhs_type (L span ty)
 --
 -- The translated type has explicitly-kinded type-variable binders
 
-kc_promoted_data_con :: Name -> DataCon -> TcM (HsType Name, TcKind)
-kc_promoted_data_con name dc = do
-  unless ok $ failWithTc (quotes (ppr dc) <+> ptext (sLit "of type") <+> quotes (ppr ty)
-                          <+> ptext (sLit "is not promotable"))
-  tvs' <- mapM (const newMetaKindVar) tvs
-  let ki' = substTyWith tvs tvs' ki  -- IA0: instantiate forall with meta kind vars
-  traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki')
-  return (HsPromotedConTy name, ki')
-  where
-    ty = dataConUserType dc
-    ok = isPromotableType ty
-    (tvs, ki) = splitForAllTys (promoteType ty)
-
 kc_hs_type :: HsType Name -> TcM (HsType Name, TcKind)
 kc_hs_type (HsParTy ty) = do
    (ty', kind) <- kc_lhs_type ty
@@ -375,12 +363,6 @@ kc_hs_type (HsParTy ty) = do
 kc_hs_type (HsTyVar name) = do
     kind <- kcTyVar name
     return (HsTyVar name, kind)
-
-kc_hs_type (HsPromotedConTy name) = do
-    thing <- tcLookup name
-    case thing of
-      AGlobal (ADataCon dc) -> kc_promoted_data_con name dc
-      _                     -> wrongThingErr "promoted data" thing name
 
 kc_hs_type (HsListTy ty) = do
     ty' <- kcLiftedType ty
@@ -534,7 +516,7 @@ kc_pred (HsEqualP ty1 ty2)
 
 ---------------------------
 kcTyVar :: Name -> TcM TcKind
-kcTyVar name = do	-- Could be a tyvar or a tycon
+kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
     traceTc "lk1" (ppr name)
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
@@ -542,7 +524,19 @@ kcTyVar name = do	-- Could be a tyvar or a tycon
         ATyVar _ ty             -> return (typeKind ty)
         AThing kind             -> return kind
         AGlobal (ATyCon tc)     -> return (tyConKind tc)
+        AGlobal (ADataCon dc)   -> kcDataCon dc
         _                       -> wrongThingErr "type" thing name
+
+kcDataCon :: DataCon -> TcM TcKind
+kcDataCon dc = do
+  let ty = dataConUserType dc
+  unless (isPromotableType ty) $ promoteErr dc ty
+  let ki = promoteType ty
+  traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki)
+  return ki
+  where
+    promoteErr dc ty = failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
+      <+> quotes (ppr ty) <+> ptext (sLit "is not promotable"))
 
 kcClass :: Name -> TcM TcKind
 kcClass cls = do	-- Must be a class
@@ -578,14 +572,6 @@ dsHsType ty = ds_type (unLoc ty)
 ds_type :: HsType Name -> TcM Type
 ds_type ty@(HsTyVar _)
   = ds_app ty []
-
-ds_type (HsPromotedConTy name) = do
-  traceTc "dst1" (ppr name)
-  thing <- tcLookup name
-  traceTc "dst2" (ppr name <+> ppr thing)
-  case thing of
-    AGlobal (ADataCon dc) -> return (mkTyConApp (buildPromotedDataTyCon dc) [])
-    _                     -> wrongThingErr "type" thing name
 
 ds_type (HsParTy ty)		-- Remove the parentheses markers
   = dsHsType ty
@@ -678,6 +664,7 @@ ds_var_app name arg_tys = do
     case thing of
 	ATyVar _ ty         -> return (mkAppTys ty arg_tys)
 	AGlobal (ATyCon tc) -> return (mkTyConApp tc arg_tys)
+	AGlobal (ADataCon dc) -> return (mkTyConApp (buildPromotedDataTyCon dc) arg_tys)
 	_                   -> wrongThingErr "type" thing name
 \end{code}
 
@@ -1052,34 +1039,34 @@ sc_ds_lhs_kind :: LHsKind Name -> TcM Kind
 sc_ds_lhs_kind (L span ki) = setSrcSpan span (sc_ds_hs_kind ki)
 
 sc_ds_hs_kind :: HsKind Name -> TcM Kind
-sc_ds_hs_kind (HsTyVar name) = do
-  traceTc "ls1" (ppr name)
-  thing <- tcLookup name
-  traceTc "ls2" (ppr name <+> ppr thing)
-  case thing of
-    AGlobal (ATyCon tc) -> return (mkTyConApp tc [])  -- tc can only be * or !
-    _                   -> wrongThingErr "kind" thing name
+sc_ds_hs_kind k@(HsTyVar _) = sc_ds_app k []
 sc_ds_hs_kind (HsParTy ki) = sc_ds_lhs_kind ki
 sc_ds_hs_kind (HsFunTy ki1 ki2) = do
   kappa_ki1 <- sc_ds_lhs_kind ki1
   kappa_ki2 <- sc_ds_lhs_kind ki2
   return (mkArrowKind kappa_ki1 kappa_ki2)
-sc_ds_hs_kind k@(HsPromotedConTy _) = sc_ds_app k []
-sc_ds_hs_kind k@(HsAppTy _ _) = sc_ds_app k []
-sc_ds_hs_kind _ = panic "sc_ds_hs_kind"
+sc_ds_hs_kind _ = panic "IA0: sc_ds_hs_kind"
 
 sc_ds_app :: HsKind Name -> [LHsKind Name] -> TcM Kind
 sc_ds_app (HsAppTy ki1 ki2) kis = sc_ds_app (unLoc ki1) (ki2:kis)
 sc_ds_app ki kis = do
   arg_kis <- mapM sc_ds_lhs_kind kis
   case ki of
-    HsPromotedConTy tc -> sc_ds_promTc_app tc arg_kis
-    _ -> failWithTc (quotes (ppr ki)
-                     <+> ptext (sLit "is not a promoted type constructor"))
-         -- only promoted type constructors can be applied in kinds
+    HsTyVar tc -> sc_ds_var_app tc arg_kis
+    _ -> failWithTc (quotes (ppr ki) <+> ptext (sLit "is not a kind constructor"))
 
-sc_ds_promTc_app :: Name -> [Kind] -> TcM Kind
-sc_ds_promTc_app name arg_kis = do
+sc_ds_var_app :: Name -> [Kind] -> TcM Kind
+sc_ds_var_app name arg_kis
+  |  name == liftedTypeKindTyConName
+  || name == unliftedTypeKindTyConName = do
+    unless (null arg_kis) $ panic "IA0: sc_ds_var_app"
+    traceTc "lps3" (ppr name)
+    thing <- tcLookup name
+    traceTc "lps4" (ppr name <+> ppr thing)
+    case thing of
+      AGlobal (ATyCon tc) -> return (mkTyConApp tc [])
+      _ -> panic "sc_ds_var_app 1"
+sc_ds_var_app name arg_kis = do
   traceTc "lps1" (ppr name)
   thing <- tcLookup name
   traceTc "lps2" (ppr name <+> ppr thing)
@@ -1087,8 +1074,7 @@ sc_ds_promTc_app name arg_kis = do
     AGlobal (ATyCon tc) -> do
       let tc_kind = tyConKind tc
       case isPromotableKind tc_kind of
-        Just n | n == length arg_kis ->
-          return (mkTyConApp (mkPromotedTypeTyCon tc) arg_kis)
+        Just n | n == length arg_kis -> return (mkTyConApp tc arg_kis)
         Just _ -> err tc_kind "is not fully applied"
         Nothing -> err tc_kind "is not promotable"
     _ -> wrongThingErr "promoted type" thing name

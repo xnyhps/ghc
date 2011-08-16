@@ -394,20 +394,20 @@ lookupOccRn rdr_name = do
   maybe (unboundName WL_Any rdr_name) return opt_name
 
 -- lookupPromotedOccRn looks up an optionally promoted RdrName.
-lookupPromotedOccRn :: RdrName -> RnM (Bool, Name)
+lookupPromotedOccRn :: RdrName -> RnM Name
 lookupPromotedOccRn rdr_name = do
   opt_name <- lookupOccRn_maybe rdr_name  -- lookup the name
   case opt_name of
-    Just name -> return (False, name)  -- we found it
+    Just name -> return name  -- we found it
     Nothing -> do {  -- we did not find it
-  case promoteRdrName rdr_name of  -- maybe it was implicitly promoted
-    Nothing -> fmap ((,) err) (unboundName WL_Any rdr_name)  -- it was not in a promoted namespace
-    Just promoted_rdr_name -> do {  -- let's try every thing again
-  opt_promoted_name <- lookupOccRn_maybe promoted_rdr_name ;
-  case opt_promoted_name of
-    Just promoted_name -> return (True, promoted_name)  -- it was implicitly promoted
-    Nothing -> fmap ((,) err) (unboundName WL_Any rdr_name) } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
-  where err = panic "lookupPromotedOccRn"
+  case demoteRdrName rdr_name of  -- maybe it was implicitly promoted
+    Nothing -> err  -- it was not in a promoted namespace
+    Just demoted_rdr_name -> do {  -- let's try every thing again
+  opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;
+  case opt_demoted_name of
+    Just demoted_name -> return demoted_name  -- it was implicitly promoted
+    Nothing -> err } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
+  where err = unboundName WL_Any rdr_name
 
 -- lookupOccRn looks up an occurrence of a RdrName
 lookupOccRn_maybe :: RdrName -> RnM (Maybe Name)
@@ -687,7 +687,7 @@ type MiniFixityEnv = FastStringEnv (Located Fixity)
 	--
 	-- It is keyed by the *FastString*, not the *OccName*, because
 	-- the single fixity decl	infix 3 T
-	-- affects both the data constructor T and the type constructor T
+	-- affects both the data constructor T and the type constrctor T
 	--
 	-- We keep the location so that if we find
 	-- a duplicate, we can report it sensibly

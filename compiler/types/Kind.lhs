@@ -18,7 +18,7 @@ module Kind (
 
         -- Super Kinds
 	tySuperKind, tySuperKindTyCon, 
-
+        
 	pprKind, pprParendKind,
 
         -- ** Deconstructing Kinds
@@ -32,7 +32,7 @@ module Kind (
         isLiftedTypeKindCon,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
-        isSubKindCon,
+        isSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
@@ -45,7 +45,6 @@ import TypeRep
 import TysPrim
 import TyCon
 import Var
-import VarSet
 import PrelNames
 import Outputable
 \end{code}
@@ -147,7 +146,7 @@ synTyConResKind tycon = kindAppResult (tyConKind tycon) (tyConTyVars tycon)
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind :: Kind -> Bool
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
-        isUnliftedTypeKindCon, isSubArgTypeKindCon      :: TyCon -> Bool
+        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon :: TyCon -> Bool
 
 isOpenTypeKindCon tc    = tyConUnique tc == openTypeKindTyConKey
 
@@ -170,15 +169,15 @@ isUnliftedTypeKind (TyConApp tc _) = isUnliftedTypeKindCon tc
 isUnliftedTypeKind _               = False
 
 isSubOpenTypeKind :: Kind -> Bool
--- ^ True of any sub-kind of OpenTypeKind (i.e. anything except arrow)
-isSubOpenTypeKind (FunTy k1 k2)    = ASSERT2 ( isKind k1, text "isSubOpenTypeKind" <+> ppr k1 <+> text "::" <+> ppr (typeKind k1) ) 
-                                     ASSERT2 ( isKind k2, text "isSubOpenTypeKind" <+> ppr k2 <+> text "::" <+> ppr (typeKind k2) ) 
-                                     False
-isSubOpenTypeKind (TyConApp kc []) = ASSERT( isKind (TyConApp kc []) ) True
-isSubOpenTypeKind other            = ASSERT( isKind other ) False
-         -- This is a conservative answer
-         -- It matters in the call to isSubKind in
-	 -- checkExpectedKind.
+-- ^ True of any sub-kind of OpenTypeKind
+isSubOpenTypeKind (TyConApp kc []) = isSubOpenTypeKindCon kc
+isSubOpenTypeKind _                = False
+
+isSubOpenTypeKindCon kc
+  | isSubArgTypeKindCon kc   = True
+  | isUbxTupleKindCon kc     = True
+  | isOpenTypeKindCon kc     = True
+  | otherwise                = False
 
 isSubArgTypeKindCon kc
   | isUnliftedTypeKindCon kc = True
@@ -210,13 +209,9 @@ isSubKind _             _                     = False
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@
 isSubKindCon kc1 kc2
-  | kc1 == kc2 = True
--- IA0:   | isLiftedTypeKindCon kc1   && isLiftedTypeKindCon kc2   = True
--- IA0:   | isUnliftedTypeKindCon kc1 && isUnliftedTypeKindCon kc2 = True
--- IA0:   | isUbxTupleKindCon kc1     && isUbxTupleKindCon kc2     = True
-  | isOpenTypeKindCon kc2                                  = True
-                           -- we already know kc1 is not a fun, its a TyCon
-  | isArgTypeKindCon kc2      && isSubArgTypeKindCon kc1   = True
+  | kc1 == kc2                                             = True
+  | isSubArgTypeKindCon kc1   && isArgTypeKindCon kc2      = True
+  | isSubOpenTypeKindCon kc1  && isOpenTypeKindCon kc2     = True
   | otherwise                                              = False
 
 defaultKind :: Kind -> Kind
@@ -243,33 +238,20 @@ defaultKind k
 -- About promoting a type to a kind
 
 isPromotableType :: Type -> Bool
-isPromotableType = go emptyVarSet
+isPromotableType = go
   where
-    go vars (TyConApp _ tys) = all (go vars) tys
-    go vars (FunTy arg res) = all (go vars) [arg,res]
-    go vars (TyVarTy tvar) = tvar `elemVarSet` vars
-    go vars (ForAllTy tvar ty) = isPromotableTyVar tvar && go (vars `extendVarSet` tvar) ty
-    go _ _ = panic "isPromotableType"
+    go (TyConApp tc _) | isPromotedDataTyCon tc = False
+    go (TyConApp _ tys) = all go tys
+    go (FunTy arg res) = all go [arg,res]
+    go _ = panic "IA0: isPromotableType"
 
-isPromotableTyVar :: TyVar -> Bool
-isPromotableTyVar = isLiftedTypeKind . varType
-
--- | Promotes a type to a kind if possible.  Assumes the argument is
--- promotable.
+-- | Promotes a type to a kind. Assumes the argument is promotable.
 promoteType :: Type -> Kind
-promoteType (TyConApp tc tys) = mkTyConApp (mkPromotedTypeTyCon tc) (map promoteType tys)
+promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
 promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
-promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
-  -- a :: *  ~~>  a :: BOX
-promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
-  -- forall (a :: *). t  ~~> forall (a :: BOX). k  where  t ~~> k
-promoteType _ = panic "promoteType"
-
--- Helpers
-promoteTyVar :: TyVar -> KindVar
-promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
+promoteType _ = panic "IA0: promoteType"
 
 -- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
 isPromotableKind :: Kind -> Maybe Int

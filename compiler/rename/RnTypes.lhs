@@ -124,24 +124,9 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
        ; -- rnForAll does the rest
          rnForAll doc Explicit forall_tyvars ctxt tau }
 
--- We make a difference between types and kinds because when parsing a
--- name in kinds, we give it the namespace TcClsName, so it is already
--- promoted.
-rnHsTyKi True _ (HsTyVar tyvar) = do
-  (promoted, name) <- lookupPromotedOccRn tyvar
-  return $ (if promoted then HsPromotedConTy else HsTyVar) name
-
-rnHsTyKi False _ (HsTyVar kivar)
-  | Just name <- isExact_maybe kivar  -- handles * and !
-  = return (HsTyVar name)
-  | otherwise
-  = do
-    kivar' <- lookupOccRn kivar
-    return (HsPromotedConTy kivar')
-
-rnHsTyKi _ _ (HsPromotedConTy con) = do
-    con' <- lookupOccRn con
-    return (HsPromotedConTy con')
+rnHsTyKi isType _ (HsTyVar rdr_name) = do
+  name <- (if isType then lookupPromotedOccRn else lookupOccRn) rdr_name
+  return (HsTyVar name)
 
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
@@ -204,9 +189,9 @@ rnHsTyKi isType doc (HsTupleTy tup_con tys) = ASSERT ( isType ) do
     tys' <- mapM (rnLHsType doc) tys
     return (HsTupleTy tup_con tys')
 
-rnHsTyKi isType doc (HsAppTy ty1 ty2) = do
-    ty1' <- rnLHsTyKi isType doc ty1
-    ty2' <- rnLHsTyKi isType doc ty2
+rnHsTyKi isType doc (HsAppTy ty1 ty2) = ASSERT ( isType ) do
+    ty1' <- rnLHsType doc ty1
+    ty2' <- rnLHsType doc ty2
     return (HsAppTy ty1' ty2')
 
 rnHsTyKi isType doc (HsPredTy pred) = ASSERT ( isType ) do

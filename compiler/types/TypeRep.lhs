@@ -116,7 +116,7 @@ to cut all loops.  The other members of the loop may be marked 'non-recursive'.
 \begin{code}
 -- | The key representation of types within the compiler
 data Type
-  = TyVarTy Var 	-- ^ Vanilla type or kind variable (*never* a coercion variable)
+  = TyVarTy Var	-- ^ Vanilla type or kind variable (*never* a coercion variable)
 
   | AppTy
 	Type
@@ -150,7 +150,7 @@ data Type
 			-- See Note [Equality-constrained types]
 
   | ForAllTy
-	Var             -- Type or kind variable
+	Var         -- Type or kind variable
 	Type	        -- ^ A polymorphic type
 
   | PredTy
@@ -633,12 +633,7 @@ See Trac #2766.
 \begin{code}
 pprTcApp :: Prec -> (Prec -> a -> SDoc) -> TyCon -> [a] -> SDoc
 pprTcApp _ _ tc []      -- No brackets for SymOcc
-  | tc `hasKey` liftedTypeKindTyConKey   = ptext (sLit "*")
-  | tc `hasKey` unliftedTypeKindTyConKey = ptext (sLit "#")
-  | tc `hasKey` openTypeKindTyConKey     = ptext (sLit "(?)")
-  | tc `hasKey` ubxTupleKindTyConKey     = ptext (sLit "(#)")
-  | tc `hasKey` argTypeKindTyConKey      = ptext (sLit "??")
-  | otherwise = pp_nt_debug <> ppr tc
+  = pp_nt_debug <> ppr tc
   where
    pp_nt_debug | isNewTyCon tc = ifPprDebug (if isRecursiveTyCon tc 
 				             then ptext (sLit "<recnt>")
@@ -648,20 +643,25 @@ pprTcApp _ _ tc []      -- No brackets for SymOcc
 pprTcApp _ pp tc [ty]
   | tc `hasKey` listTyConKey = brackets (pp TopPrec ty)
   | tc `hasKey` parrTyConKey = ptext (sLit "[:") <> pp TopPrec ty <> ptext (sLit ":]")
+  | tc `hasKey` liftedTypeKindTyConKey   = ptext (sLit "*")
+  | tc `hasKey` unliftedTypeKindTyConKey = ptext (sLit "#")
+  | tc `hasKey` openTypeKindTyConKey     = ptext (sLit "(?)")
+  | tc `hasKey` ubxTupleKindTyConKey     = ptext (sLit "(#)")
+  | tc `hasKey` argTypeKindTyConKey      = ptext (sLit "??")
 
 pprTcApp p pp tc tys
   | isTupleTyCon tc && tyConArity tc == length tys
   = tupleParens (tupleTyConBoxity tc) (sep (punctuate comma (map (pp TopPrec) tys)))
   | otherwise
-  = pprTypeNameApp p pp tc tys
+  = pprTypeNameApp p pp (getName tc) tys
 
 ----------------
-pprTypeApp :: (NamedThing a, Outputable a) => a -> [Type] -> SDoc
+pprTypeApp :: NamedThing a => a -> [Type] -> SDoc
 -- The first arg is the tycon, or sometimes class
 -- Print infix if the tycon/class looks like an operator
-pprTypeApp tc tys = pprTypeNameApp TopPrec ppr_type tc tys
+pprTypeApp tc tys = pprTypeNameApp TopPrec ppr_type (getName tc) tys
 
-pprTypeNameApp :: (NamedThing b, Outputable b) => Prec -> (Prec -> a -> SDoc) -> b -> [a] -> SDoc
+pprTypeNameApp :: Prec -> (Prec -> a -> SDoc) -> Name -> [a] -> SDoc
 -- Used for classes and coercions as well as types; that's why it's separate from pprTcApp
 pprTypeNameApp p pp tc tys
   | is_sym_occ           -- Print infix if possible
@@ -671,7 +671,7 @@ pprTypeNameApp p pp tc tys
   | otherwise
   = pprPrefixApp p (pprPrefixVar is_sym_occ (ppr tc)) (map (pp TyConPrec) tys)
   where
-    is_sym_occ = isSymOcc (getOccName (getName tc))
+    is_sym_occ = isSymOcc (getOccName tc)
 
 ----------------
 pprPrefixApp :: Prec -> SDoc -> [SDoc] -> SDoc
