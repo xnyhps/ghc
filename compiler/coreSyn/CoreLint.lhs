@@ -609,12 +609,18 @@ lintInCo co
 
 -------------------
 lintKind :: Kind -> LintM ()
--- Check well-formedness of kinds: *, *->*, etc
+-- Check well-formedness of kinds: *, *->*, Either * (* -> *), etc
 lintKind (TyConApp tc []) 
   | getUnique tc `elem` kindKeys
   = return ()
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
+lintKind kind@(TyConApp tc kis)  -- T k1 .. kn
+  | not (getUnique tc `elem` (funTyConKey : kindKeys))
+  = let tc_kind = tyConKind tc in
+    case isPromotableKind tc_kind of
+      Just n | n == length kis -> return ()
+      _ -> addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
 lintKind kind 
   = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
 
@@ -745,7 +751,7 @@ lintType ty@(PredTy (EqPred t1 t2))
 lint_ty_app :: Type -> Kind -> [OutType] -> LintM Kind
 lint_ty_app ty k tys 
   = do { ks <- mapM lintType tys
-       ; lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k ks }
+       ; lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k tys ks }
 
 lint_eq_pred :: Type -> [OutType] -> LintM Kind
 lint_eq_pred ty arg_tys
@@ -762,23 +768,31 @@ lint_eq_pred ty arg_tys
 check_co_app :: Coercion -> Kind -> [OutType] -> LintM ()
 check_co_app ty k tys 
   = do { _ <- lint_kind_app (ptext (sLit "coercion") <+> quotes (ppr ty))  
-                            k (map typeKind tys)
+                            k tys (map typeKind tys)
        ; return () }
                       
 ----------------
-lint_kind_app :: SDoc -> Kind -> [Kind] -> LintM Kind
-lint_kind_app doc kfn ks = go kfn ks
+lint_kind_app :: SDoc -> Kind -> [Type] -> [Kind] -> LintM Kind
+lint_kind_app doc kfn tys ks = go kfn tys ks
   where
     fail_msg = vcat [hang (ptext (sLit "Kind application error in")) 2 doc,
                	     nest 2 (ptext (sLit "Function kind =") <+> ppr kfn),
                	     nest 2 (ptext (sLit "Arg kinds =") <+> ppr ks)]
 
-    go kfn []     = return kfn
-    go kfn (k:ks) = case splitKindFunTy_maybe kfn of
-       	              Nothing         -> failWithL fail_msg
-		      Just (kfa, kfb) -> do { unless (k `isSubKind` kfa)
-                                                     (addErrL fail_msg)
-                                            ; go kfb ks } 
+    go kfn [] [] = return kfn
+    go kfn (ty:tys) (k:ks) =
+      case splitKindFunTy_maybe kfn of
+        Nothing ->
+          case splitForAllTy_maybe kfn of
+            Nothing -> failWithL fail_msg
+            Just (kv, body) -> do
+              unless (isSuperKind (tyVarKind kv) && isSuperKind k) (addErrL fail_msg)
+              go (substKiWith [kv] [ty] body) tys ks
+        Just (kfa, kfb) -> do
+          unless (k `isSubKind` kfa) (addErrL fail_msg)
+          go kfb tys ks
+    go _ _ _ = panic "lint_kind_app"  -- length tys should be equal to length ks
+
 \end{code}
     
 %************************************************************************
