@@ -1187,12 +1187,13 @@ unifyKind' (FunTy a1 r1) sk (FunTy a2 r2)
                 -- so that the sub-kinding works right
 unifyKind' (TyVarTy kv1) sk k2 = uKVar kv1 sk k2
 unifyKind' k1 sk (TyVarTy kv2) = uKVar kv2 (invSubKinding sk) k1
-unifyKind' k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s) =  -- IA0: new equation for unifyKind
-  if kc_are_equal  -- check that kind constructors are the same
+unifyKind' k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
+  | not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2)
+  =  -- IA0: new equation for unifyKind
+  if kc1 == kc2
   then unifyKinds k1s k2s
   else unifyKindMisMatch k1 sk k2
   where
-    kc_are_equal = ASSERT( not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2) ) (kc1 == kc2)
     unifyKinds [] [] = return ()
     unifyKinds (k1:k1s) (k2:k2s) = do
       unifyKind' k1  SKEq k2
