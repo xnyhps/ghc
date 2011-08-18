@@ -1071,10 +1071,10 @@ mkRecSelBinds tycons
 
 mkRecSelBind :: (TyCon, FieldLabel) -> (LSig Name, LHsBinds Name)
 mkRecSelBind (tycon, sel_name)
-  = (L loc (IdSig sel_id), unitBag (L loc sel_bind))
+  = (L sel_loc (IdSig sel_id), unitBag (L sel_loc sel_bind))
   where
-    loc    	= getSrcSpan tycon    
-    sel_id 	= Var.mkLocalVar rec_details sel_name sel_ty vanillaIdInfo
+    sel_id      = Var.mkLocalVar rec_details sel_name sel_ty vanillaIdInfo
+    sel_loc     = getSrcSpan sel_name
     rec_details = RecSelId { sel_tycon = tycon, sel_naughty = is_naughty }
 
     -- Find a representative constructor, con1
@@ -1100,15 +1100,15 @@ mkRecSelBind (tycon, sel_name)
     --    where cons_w_field = [C2,C7]
     sel_bind | is_naughty = mkFunBind sel_lname [mkSimpleMatch [] unit_rhs]
              | otherwise  = mkFunBind sel_lname (map mk_match cons_w_field ++ deflt)
-    mk_match con = mkSimpleMatch [L loc (mk_sel_pat con)] 
-                                 (L loc (HsVar field_var))
-    mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon rec_fields)
+    mk_match con = mkSimpleMatch [noLoc (mk_sel_pat con)]
+                                 (noLoc (HsVar field_var))
+    mk_sel_pat con = ConPatIn (noLoc (getName con)) (RecCon rec_fields)
     rec_fields = HsRecFields { rec_flds = [rec_field], rec_dotdot = Nothing }
     rec_field  = HsRecField { hsRecFieldId = sel_lname
                             , hsRecFieldArg = nlVarPat field_var
                             , hsRecPun = False }
-    sel_lname = L loc sel_name
-    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) loc
+    sel_lname = L sel_loc sel_name
+    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) sel_loc
 
     -- Add catch-all default case unless the case is exhaustive
     -- We do this explicitly so that we get a nice error message that
