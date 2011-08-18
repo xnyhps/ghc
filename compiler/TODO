@@ -1,9 +1,20 @@
 ## TODO FIRST
 
+* write a testsuite named kinds with everything I can think of
+  - translate Faking it (Conor)
+  - when translating, add a reference to the thing being translated
+
+* write a user manual
+  - haskell.org/haskellwiki/GHC/kinds
+    describe informally how we can use them
+
+
 ## TODO NEXT
 
-* Kind polymorphism
-  * Implicit kind polymorphism
+* step2(notations)
+  data HsType name = ... | HsOpTy (LHsType name) (LHsTyOp name) (LHsType name) | ...
+  type HsTyOp name = (HsTyWrapper, name)
+
 
 ## BUGS
 
@@ -22,6 +33,7 @@
   (*, *) instead of '(*, *)
   [*] instead of '[*]
   We might add a Promoted flag in HsTupleTy and HsListTy.
+
 
 ## OPTIONAL
 
@@ -55,6 +67,20 @@
 
   ? and ?? only appear at top level, and they always get set to star
   when unified with a meta kind variable
+
+* data HsExpr id = ... | HsOpApp .. (HsOp id) .. | ...
+  type HsOp name = (name, Fixity, HsWrapper)
+
+* Make `+' be a TcClsName instead of VarName:
+  data a + b = Left a | Right b
+
+* Kind generalize instead of zonking to kind
+  > data SList s as where
+  >   SNil :: SList s Nil
+  >   SCons :: s a -> SList s as -> SList s (Cons a as)
+  would return SList :: forall (k :: BOX). (k -> *) -> List k -> *
+  and not SList :: (* -> *) -> List * -> *
+
 
 ----------------------------------------------------------------------
 --                             HELPERS                              --
