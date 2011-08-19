@@ -1403,6 +1403,7 @@ data HsDocContext
   | GHCiCtx
   | SpliceTypeCtx (LHsType RdrName)
   | ClassInstanceCtx
+  | VectDeclCtx (Located RdrName)
 
 docOfHsDocContext :: HsDocContext -> SDoc
 docOfHsDocContext (TypeSigCtx doc) = text "In the type signature for" <+> doc
@@ -1423,5 +1424,6 @@ docOfHsDocContext HsTypeCtx = text "In a type argument"
 docOfHsDocContext GHCiCtx = ptext (sLit "In GHCi input")
 docOfHsDocContext (SpliceTypeCtx hs_ty) = ptext (sLit "In the spliced type") <+> ppr hs_ty
 docOfHsDocContext ClassInstanceCtx = ptext (sLit "TcSplice.classInstances")
+docOfHsDocContext (VectDeclCtx tycon) = text "In the VECTORISE pragma for type constructor" <+> quotes (ppr tycon)
 
 \end{code}

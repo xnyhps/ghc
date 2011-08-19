@@ -672,8 +672,7 @@ rnHsVectDecl (HsVectTypeIn tycon (Just ty))
        ; (ty', fv_ty) <- rnHsTypeFVs vect_doc ty
        ; return (HsVectTypeIn tycon' (Just ty'), fv_ty `addOneFV` unLoc tycon')
        }
-  where
-    vect_doc = text "In the VECTORISE pragma for type constructor" <+> quotes (ppr tycon)
+  where vect_doc = VectDeclCtx tycon
 rnHsVectDecl (HsVectTypeOut _ _)
   = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectTypeOut'"
 \end{code}
