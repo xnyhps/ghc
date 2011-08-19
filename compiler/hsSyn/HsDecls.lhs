@@ -63,6 +63,7 @@ import HsDoc
 import TyCon
 import NameSet
 import Name
+import {- Kind parts of -} Type
 import BasicTypes
 import ForeignCall
 
