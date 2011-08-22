@@ -529,6 +529,7 @@ kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
         _                       -> wrongThingErr "type" thing name
     where wrap x = return (HsTyVar name, x)
 
+-- IA0_STEP3: split this function in two (promotion-related and wrapping-related) and update wrap above
 kcDataCon :: DataCon -> TcM (HsType Name, TcKind)
 kcDataCon dc = do
   let ty = dataConUserType dc
@@ -1068,7 +1069,7 @@ sc_ds_app ki kis = do
 sc_ds_var_app :: Name -> [Kind] -> TcM Kind
 sc_ds_var_app name arg_kis
   | name == liftedTypeKindTyConName = do
-    MASSERT( null arg_kis )
+    unless (null arg_kis) (failWithTc (ptext (sLit "Kind * cannot be applied")))
     traceTc "lps3" (ppr name)
     thing <- tcLookup name
     traceTc "lps4" (ppr name <+> ppr thing)

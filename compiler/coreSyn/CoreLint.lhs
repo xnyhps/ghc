@@ -749,9 +749,7 @@ lintType ty@(PredTy (EqPred t1 t2))
 
 ----------------
 lint_ty_app :: Type -> Kind -> [OutType] -> LintM Kind
-lint_ty_app ty k tys 
-  = do { ks <- mapM lintType tys
-       ; lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k tys ks }
+lint_ty_app ty k tys = lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k tys
 
 lint_eq_pred :: Type -> [OutType] -> LintM Kind
 lint_eq_pred ty arg_tys
@@ -766,35 +764,33 @@ lint_eq_pred ty arg_tys
 
 ----------------
 check_co_app :: Coercion -> Kind -> [OutType] -> LintM ()
-check_co_app ty k tys 
-  = do { _ <- lint_kind_app (ptext (sLit "coercion") <+> quotes (ppr ty))  
-                            k tys (map typeKind tys)
-       ; return () }
-                      
-----------------
-lint_kind_app :: SDoc -> Kind -> [Type] -> [Kind] -> LintM Kind
-lint_kind_app doc kfn tys ks = go kfn tys ks
-  where
-    fail_msg = vcat [hang (ptext (sLit "Kind application error in")) 2 doc,
-               	     nest 2 (ptext (sLit "Function kind =") <+> ppr kfn),
-               	     nest 2 (ptext (sLit "Arg kinds =") <+> ppr ks)]
+check_co_app ty k tys = lint_kind_app (ptext (sLit "coercion") <+> quotes (ppr ty)) k tys >> return ()
 
-    go kfn [] [] = return kfn
-    go kfn (ty:tys) (k:ks) =
+----------------
+lint_kind_app :: SDoc -> Kind -> [Type] -> LintM Kind
+lint_kind_app doc kfn tys = go kfn tys
+  where
+    fail_msg = vcat [ hang (ptext (sLit "Kind application error in")) 2 doc
+                    , nest 2 (ptext (sLit "Function kind =") <+> ppr kfn)
+                    , nest 2 (ptext (sLit "Arg types =") <+> ppr tys) ]
+
+    go kfn [] = return kfn
+    go kfn (ty:tys) =
       case splitKindFunTy_maybe kfn of
         Nothing ->
           case splitForAllTy_maybe kfn of
             Nothing -> failWithL fail_msg
             Just (kv, body) -> do
-              unless (isSuperKind (tyVarKind kv) && isSuperKind k) (addErrL fail_msg)
-              go (substKiWith [kv] [ty] body) tys ks
+              unless (isSuperKind (tyVarKind kv)) (addErrL fail_msg)
+              lintKind ty
+              go (substKiWith [kv] [ty] body) tys
         Just (kfa, kfb) -> do
+          k <- lintType ty
           unless (k `isSubKind` kfa) (addErrL fail_msg)
-          go kfb tys ks
-    go _ _ _ = panic "lint_kind_app"  -- length tys should be equal to length ks
+          go kfb tys
 
 \end{code}
-    
+
 %************************************************************************
 %*									*
 \subsection[lint-monad]{The Lint monad}
