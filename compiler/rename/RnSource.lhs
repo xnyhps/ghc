@@ -701,12 +701,14 @@ rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
 -- Renamed the declarations and do depedency analysis on them
 rnTyClDecls tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM rnTyClDecl) (concat tycl_ds)
+       ; traceRn (text "IA0 1" <+> ppr ds_w_fvs)
 
        ; let sccs :: [SCC (LTyClDecl Name)]
              sccs = depAnalTyClDecls ds_w_fvs
 
              all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs
 
+       ; traceRn (text "IA0 2" <+> ppr (map flattenSCC sccs))
        ; return (map flattenSCC sccs, all_fvs) }
 
 rnTyClDecl :: TyClDecl RdrName -> RnM (TyClDecl Name, FreeVars)
@@ -866,10 +868,19 @@ depAnalTyClDecls ds_w_fvs
     edges = [ (d, tcdName (unLoc d), map get_assoc (nameSetToList fvs))
             | (d, fvs) <- ds_w_fvs ]
     get_assoc n = lookupNameEnv assoc_env n `orElse` n
-    assoc_env = mkNameEnv [ (tcdName assoc_decl, cls_name) 
-                          | (L _ (ClassDecl { tcdLName = L _ cls_name
-                                            , tcdATs   = ats }) ,_) <- ds_w_fvs
-                          , L _ assoc_decl <- ats ]
+    assoc_env = mkNameEnv assoc_env_list
+    assoc_env_list = do
+      (L _ d, _) <- ds_w_fvs
+      case d of
+        ClassDecl { tcdLName = L _ cls_name
+                  , tcdATs = ats } -> do
+                       L _ assoc_decl <- ats
+                       return (tcdName assoc_decl, cls_name)
+        TyData { tcdLName = L _ data_name
+               , tcdCons = cons } -> do
+                       L _ dc <- cons
+                       return (unLoc (con_name dc), data_name)
+        _ -> []
 \end{code}
 
 Note [Dependency analysis of type and class decls]
