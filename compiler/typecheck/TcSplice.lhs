@@ -1106,6 +1106,7 @@ reifyThing (ATyVar tv ty)
 	; return (TH.TyVarI (reifyName tv) ty2) }
 
 reifyThing (AThing {}) = panic "reifyThing AThing"
+reifyThing ANothing = panic "reifyThing ANothing"
 
 ------------------------------
 reifyAxiom :: CoAxiom -> TcM TH.Info

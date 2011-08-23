@@ -527,6 +527,7 @@ data TcTyThing
 
   | AThing  TcKind 		-- Used temporarily, during kind checking, for the
 				--	tycons and clases in this recursive group
+  | ANothing
 
 instance Outputable TcTyThing where	-- Debugging only
    ppr (AGlobal g)      = pprTyThing g
@@ -536,12 +537,14 @@ instance Outputable TcTyThing where	-- Debugging only
 				 <+> ppr (tct_level elt))
    ppr (ATyVar tv _)    = text "Type variable" <+> quotes (ppr tv)
    ppr (AThing k)       = text "AThing" <+> ppr k
+   ppr ANothing         = text "ANothing"
 
 pprTcTyThingCategory :: TcTyThing -> SDoc
 pprTcTyThingCategory (AGlobal thing) = pprTyThingCategory thing
 pprTcTyThingCategory (ATyVar {})     = ptext (sLit "Type variable")
 pprTcTyThingCategory (ATcId {})      = ptext (sLit "Local identifier")
 pprTcTyThingCategory (AThing {})     = ptext (sLit "Kinded thing")
+pprTcTyThingCategory ANothing        = ptext (sLit "Nothing")  -- IA0: put something better
 \end{code}
 
 Note [Bindings with closed types]

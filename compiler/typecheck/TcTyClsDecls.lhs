@@ -99,7 +99,8 @@ tcTyAndClassDecls boot_details decls_s
     go [] = return []
     go (tyclds:tyclds_s) = do
     { tyclss <- fixM $ \ rec_tyclss ->
-        tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $ do
+        tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
+        tcExtendNothingEnv (dc_names tyclds) $ do
         -- We must populate the environment with the loop-tied
         -- T's right away (even before kind checking), because
         -- the kind checker may "fault in" some type constructors
@@ -115,6 +116,11 @@ tcTyAndClassDecls boot_details decls_s
                   tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
                   go tyclds_s
     ; return (tyclss ++ tyclss_s) }
+    dc_names :: [LTyClDecl Name] -> [Name]
+    dc_names decls =
+      [ unLoc (con_name con)
+      | L _ (TyData {tcdCons = cons}) <- decls
+      , L _ con <- cons ]
 
 zipRecTyClss :: [LTyClDecl Name]
              -> [TyThing]           -- Knot-tied
