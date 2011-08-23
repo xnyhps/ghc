@@ -192,39 +192,52 @@ instance (OutputableBndr idL, OutputableBndr idR) => Outputable (HsLocalBindsLR 
 
 instance (OutputableBndr idL, OutputableBndr idR) => Outputable (HsValBindsLR idL idR) where
   ppr (ValBindsIn binds sigs)
-   = pprValBindsForUser binds sigs
+   = pprDeclList (pprLHsBindsForUser binds sigs)
 
   ppr (ValBindsOut sccs sigs) 
     = getPprStyle $ \ sty ->
       if debugStyle sty then	-- Print with sccs showing
 	vcat (map ppr sigs) $$ vcat (map ppr_scc sccs)
      else
-	pprValBindsForUser (unionManyBags (map snd sccs)) sigs
+	pprDeclList (pprLHsBindsForUser (unionManyBags (map snd sccs)) sigs)
    where
      ppr_scc (rec_flag, binds) = pp_rec rec_flag <+> pprLHsBinds binds
      pp_rec Recursive    = ptext (sLit "rec")
      pp_rec NonRecursive = ptext (sLit "nonrec")
 
---  *not* pprLHsBinds because we don't want braces; 'let' and
--- 'where' include a list of HsBindGroups and we don't want
--- several groups of bindings each with braces around.
--- Sort by location before printing
-pprValBindsForUser :: (OutputableBndr idL, OutputableBndr idR, OutputableBndr id2)
-		   => LHsBindsLR idL idR -> [LSig id2] -> SDoc
-pprValBindsForUser binds sigs
-  = pprDeeperList vcat (map snd (sort_by_loc decls))
+pprLHsBinds :: (OutputableBndr idL, OutputableBndr idR) => LHsBindsLR idL idR -> SDoc
+pprLHsBinds binds 
+  | isEmptyLHsBinds binds = empty
+  | otherwise = pprDeclList (map ppr (bagToList binds))
+
+pprLHsBindsForUser :: (OutputableBndr idL, OutputableBndr idR, OutputableBndr id2)
+		   => LHsBindsLR idL idR -> [LSig id2] -> [SDoc]
+--  pprLHsBindsForUser is different to pprLHsBinds because 
+--  a) No braces: 'let' and 'where' include a list of HsBindGroups
+--     and we don't want several groups of bindings each 
+--     with braces around
+--  b) Sort by location before printing
+--  c) Include signatures
+pprLHsBindsForUser binds sigs
+  = map snd (sort_by_loc decls)
   where
 
     decls :: [(SrcSpan, SDoc)]
     decls = [(loc, ppr sig)  | L loc sig <- sigs] ++
-    	     [(loc, ppr bind) | L loc bind <- bagToList binds]
+    	    [(loc, ppr bind) | L loc bind <- bagToList binds]
 
     sort_by_loc decls = sortLe (\(l1,_) (l2,_) -> l1 <= l2) decls
 
-pprLHsBinds :: (OutputableBndr idL, OutputableBndr idR) => LHsBindsLR idL idR -> SDoc
-pprLHsBinds binds 
-  | isEmptyLHsBinds binds = empty
-  | otherwise = lbrace <+> pprDeeperList vcat (map ppr (bagToList binds)) <+> rbrace
+pprDeclList :: [SDoc] -> SDoc   -- Braces with a space
+-- Print a bunch of declarations
+-- One could choose  { d1; d2; ... }, using 'sep'
+-- or      d1
+--         d2
+--	   ..
+--    using vcat
+-- At the moment we chose the latter
+-- Also we do the 'pprDeeperList' thing.
+pprDeclList ds = pprDeeperList vcat ds
 
 ------------
 emptyLocalBinds :: HsLocalBindsLR a b

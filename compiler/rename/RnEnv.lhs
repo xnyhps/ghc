@@ -238,7 +238,7 @@ lookupExactOcc name
            _     -> pprPanic "lookupExactOcc" (ppr name $$ ppr gres) }
 
 -----------------------------------------------
-lookupInstDeclBndr :: Name -> RdrName -> RnM Name
+lookupInstDeclBndr :: Name -> SDoc -> RdrName -> RnM Name
 -- This is called on the method name on the left-hand side of an 
 -- instance declaration binding. eg.  instance Functor T where
 --                                       fmap = ...
@@ -250,7 +250,10 @@ lookupInstDeclBndr :: Name -> RdrName -> RnM Name
 -- name is only in scope qualified.  I.e. even if method op is
 -- in scope as M.op, we still allow plain 'op' on the LHS of
 -- an instance decl
-lookupInstDeclBndr cls rdr
+--
+-- The "what" parameter says "method" or "associated type",
+-- depending on what we are looking up
+lookupInstDeclBndr cls what rdr
   = do { when (isQual rdr)
        	      (addErr (badQualBndrErr rdr)) 
 	       	-- In an instance decl you aren't allowed
@@ -258,7 +261,7 @@ lookupInstDeclBndr cls rdr
 		-- (Although it'd make perfect sense.)
        ; lookupSubBndr (ParentIs cls) doc rdr }
   where
-    doc = ptext (sLit "method of class") <+> quotes (ppr cls)
+    doc = what <+> ptext (sLit "of class") <+> quotes (ppr cls)
 
 -----------------------------------------------
 lookupConstructorFields :: Name -> RnM [Name]
@@ -465,7 +468,9 @@ lookupOccRn_maybe rdr_name
                -- and only happens for failed lookups
        ; if isQual rdr_name && allow_qual && is_ghci
          then lookupQualifiedName rdr_name
-         else return Nothing } } } } }
+         else do { traceRn (text "lookupOccRn" <+> ppr rdr_name)
+                 ; return Nothing } } } } } }
+
 
 lookupGlobalOccRn :: RdrName -> RnM Name
 -- lookupGlobalOccRn is like lookupOccRn, except that it looks in the global 
@@ -474,7 +479,8 @@ lookupGlobalOccRn rdr_name
   = do { mb_name <- lookupGlobalOccRn_maybe rdr_name
        ; case mb_name of
            Just n  -> return n
-           Nothing -> unboundName WL_Global rdr_name }
+           Nothing -> do { traceRn (text "lookupGlobalOccRn" <+> ppr rdr_name)
+                         ; unboundName WL_Global rdr_name } }
 
 lookupGlobalOccRn_maybe :: RdrName -> RnM (Maybe Name)
 -- No filter function; does not report an error on failure
@@ -510,7 +516,8 @@ lookupGreRn rdr_name
 	; case mb_gre of {
 	    Just gre -> return gre ;
 	    Nothing  -> do
-	{ name <- unboundName WL_Global rdr_name
+	{ traceRn (text "lookupGreRn" <+> ppr rdr_name)
+        ; name <- unboundName WL_Global rdr_name
 	; return (GRE { gre_name = name, gre_par = NoParent,
 		        gre_prov = LocalDef }) }}}
 
@@ -570,7 +577,8 @@ lookupQualifiedName rdr_name
     	   name  <- availNames avail,
     	   nameOccName name == occ ] of
       (n:ns) -> ASSERT (null ns) return (Just n)
-      _ -> return Nothing
+      _ -> do { traceRn (text "lookupQualified" <+> ppr rdr_name)
+              ; return Nothing }
 
   | otherwise
   = pprPanic "RnEnv.lookupQualifiedName" (ppr rdr_name)
@@ -665,14 +673,14 @@ lookupBindGroupOcc mb_bound_names what rdr_name
 ---------------
 lookupLocalDataTcNames :: NameSet -> SDoc -> RdrName -> RnM [Name]
 -- GHC extension: look up both the tycon and data con 
--- for con-like things
+-- for con-like things.  Used for top-level fixity signatures
 -- Complain if neither is in scope
-lookupLocalDataTcNames bound_names what rdr_name
+lookupLocalDataTcNames bndr_set what rdr_name
   | Just n <- isExact_maybe rdr_name	
 	-- Special case for (:), which doesn't get into the GlobalRdrEnv
   = do { n' <- lookupExactOcc n; return [n'] }	-- For this we don't need to try the tycon too
   | otherwise
-  = do	{ mb_gres <- mapM (lookupBindGroupOcc (Just bound_names) what)
+  = do	{ mb_gres <- mapM (lookupBindGroupOcc (Just bndr_set) what)
 			  (dataTcOccs rdr_name)
 	; let (errs, names) = splitEithers mb_gres
 	; when (null names) (addErr (head errs))	-- Bleat about one only
@@ -1423,7 +1431,7 @@ docOfHsDocContext TypBrCtx = ptext (sLit "In a Template-Haskell quoted type")
 docOfHsDocContext HsTypeCtx = text "In a type argument"
 docOfHsDocContext GHCiCtx = ptext (sLit "In GHCi input")
 docOfHsDocContext (SpliceTypeCtx hs_ty) = ptext (sLit "In the spliced type") <+> ppr hs_ty
-docOfHsDocContext ClassInstanceCtx = ptext (sLit "TcSplice.classInstances")
-docOfHsDocContext (VectDeclCtx tycon) = text "In the VECTORISE pragma for type constructor" <+> quotes (ppr tycon)
+docOfHsDocContext ClassInstanceCtx = ptext (sLit "TcSplice.reifyInstances")
+docOfHsDocContext (VectDeclCtx tycon) = ptext (sLit "In the VECTORISE pragma for type constructor") <+> quotes (ppr tycon)
 
 \end{code}

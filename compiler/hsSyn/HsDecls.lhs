@@ -74,6 +74,7 @@ import Util
 import SrcLoc
 import FastString
 
+import Bag
 import Control.Monad    ( liftM )
 import Data.Data        hiding (TyCon)
 import Data.Maybe       ( isJust )
@@ -641,17 +642,13 @@ instance OutputableBndr name
       = top_matter
 
       | otherwise	-- Laid out
-      = sep [hsep [top_matter, ptext (sLit "where {")],
-	     nest 4 (sep [ sep (map ppr_semi ats)
-			 , sep (map ppr_semi sigs)
-			 , pprLHsBinds methods
-			 , char '}'])]
+      = vcat [ top_matter <+> ptext (sLit "where")
+	     , nest 2 $ pprDeclList (map ppr ats ++
+			             pprLHsBindsForUser methods sigs) ]
       where
-        top_matter    =     ptext (sLit "class") 
-		        <+> pp_decl_head (unLoc context) lclas tyvars Nothing
-		        <+> pprFundeps (map unLoc fds)
-        ppr_semi :: Outputable a => a -> SDoc
-	ppr_semi decl = ppr decl <> semi
+        top_matter = ptext (sLit "class") 
+		     <+> pp_decl_head (unLoc context) lclas tyvars Nothing
+		     <+> pprFundeps (map unLoc fds)
 
 pp_decl_head :: OutputableBndr name
    => HsContext name
@@ -820,12 +817,16 @@ data InstDecl name
   deriving (Data, Typeable)
 
 instance (OutputableBndr name) => Outputable (InstDecl name) where
+    ppr (InstDecl inst_ty binds sigs ats)
+      | null sigs && null ats && isEmptyBag binds  -- No "where" part
+      = top_matter
 
-    ppr (InstDecl inst_ty binds uprags ats)
-      = vcat [hsep [ptext (sLit "instance"), ppr inst_ty, ptext (sLit "where")]
-             , nest 4 $ vcat (map ppr ats)
- 	     , nest 4 $ vcat (map ppr uprags)
-	     , nest 4 $ pprLHsBinds binds ]
+      | otherwise	-- Laid out
+      = vcat [ top_matter <+> ptext (sLit "where")
+             , nest 2 $ pprDeclList (map ppr ats ++
+	                             pprLHsBindsForUser binds sigs) ]
+      where
+        top_matter = ptext (sLit "instance") <+> ppr inst_ty
 
 -- Extract the declarations of associated types from an instance
 --
