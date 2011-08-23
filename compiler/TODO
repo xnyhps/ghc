@@ -18,21 +18,15 @@
 
 ## BUGS
 
-* We do not track ticks in Iface, so [ 'List * ] gets printed [ List * ].
-  We can look at the namespace of the OccName to know if we print a tick (works only for lifted data, since we don't know if we are in a type or kind context).
+* Do some sharing for promoted things, so that when I lookup K in a
+  type, I verify only once that it is promotable, and I don't build
+  several identical PromotedDataTyCon.
 
 * Error messages for things like:
-  data T (a : 'T -> *) = MkT (a 'MkT)
+  data T a = K (a K)
 
 * Promoted primitive negative integers are not parsed.
   > f :: -1
-
-* Operators are not printed correctly. See bug/Operators.hs.
-
-* Kinds are not always printed correctly.
-  (*, *) instead of '(*, *)
-  [*] instead of '[*]
-  We might add a Promoted flag in HsTupleTy and HsListTy.
 
 
 ## OPTIONAL
@@ -41,10 +35,6 @@
   The problem is already there in master.
 
 * No wildpat in types.  Neither is there a warning on unused variables.
-
-* What about lifting type operators?
-
-* Maybe want to merge UserTyVar and KindedTyVar
 
 * ''a' -> ITtyvar a'
   instead of ITsimplequote 'a'
