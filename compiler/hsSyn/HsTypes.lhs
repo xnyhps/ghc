@@ -174,7 +174,7 @@ data HsType name
 
 -- IA0:   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
   | HsExplicitListTy PostTcKind [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
-  | HsExplicitTupleTy PostTcKind [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
+  | HsExplicitTupleTy [PostTcKind] [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
 
   | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
   deriving (Data, Typeable)

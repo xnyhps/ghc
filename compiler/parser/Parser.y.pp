@@ -1047,7 +1047,7 @@ atype :: { LHsType RdrName }
 	| SIMPLEQUOTE qconid                          { LL $ HsTyVar $ unLoc $2 }
 -- IA0: 	| typelit                                     { L1 $ HsLitTy $! unLoc $1 }
 	| SIMPLEQUOTE  '(' ')'                        { LL $ HsTyVar $ getRdrName unitDataCon }
-	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy placeHolderKind ($3 : $5) }
+	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy [] ($3 : $5) }
  	| SIMPLEQUOTE  '[' comma_types0 ']'           { LL $ HsExplicitListTy placeHolderKind $3 }
 	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy placeHolderKind ($2 : $4) }
 

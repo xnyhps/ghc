@@ -185,8 +185,8 @@ rnHsTyKi isType doc (HsPArrTy ty) = ASSERT ( isType ) do
 
 -- Unboxed tuples are allowed to have poly-typed arguments.  These
 -- sometimes crop up as a result of CPR worker-wrappering dictionaries.
-rnHsTyKi isType doc (HsTupleTy tup_con tys) = ASSERT ( isType ) do
-    tys' <- mapM (rnLHsType doc) tys
+rnHsTyKi isType doc (HsTupleTy tup_con tys) = do
+    tys' <- mapM (rnLHsTyKi isType doc) tys
     return (HsTupleTy tup_con tys')
 
 rnHsTyKi isType doc (HsAppTy ty1 ty2) = do
@@ -220,9 +220,9 @@ rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 rnHsTyKi isType doc (HsExplicitListTy k tys) = ASSERT( isType ) do
     tys' <- mapM (rnLHsType doc) tys
     return (HsExplicitListTy k tys')
-rnHsTyKi isType doc (HsExplicitTupleTy k tys) = ASSERT( isType ) do
+rnHsTyKi isType doc (HsExplicitTupleTy kis tys) = ASSERT( isType ) do
     tys' <- mapM (rnLHsType doc) tys
-    return (HsExplicitTupleTy k tys')
+    return (HsExplicitTupleTy kis tys')
 
 --------------
 rnLHsTypes :: HsDocContext -> [LHsType RdrName]

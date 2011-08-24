@@ -446,12 +446,15 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
 
--- IA0: kc_hs_type (HsLitTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+-- IA0: kc_hs_type (HsLitTy _) = panic "IA0_UNDEFINED: kc_hs_type"
 kc_hs_type (HsExplicitListTy _ tys) = do
-    ty_k_s <- mapM kc_lhs_type tys
-    kind <- unifyKinds (text "promoted list") ty_k_s
-    return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind)
-kc_hs_type (HsExplicitTupleTy {}) = panic "IA0_UNDEFINED: kc_hs_type"
+  ty_k_s <- mapM kc_lhs_type tys
+  kind <- unifyKinds (text "promoted list") ty_k_s
+  return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind)
+kc_hs_type (HsExplicitTupleTy _ tys) = do
+  ty_k_s <- mapM kc_lhs_type tys
+  return ( HsExplicitTupleTy (map snd ty_k_s) (map fst ty_k_s)
+         , mkTyConApp (tupleTyCon Boxed (length tys)) (map snd ty_k_s))
 
 kc_hs_type (HsWrapTy {}) = panic "kc_hs_type"
 
@@ -656,7 +659,11 @@ ds_type (HsExplicitListTy kind tys) = do
       tau_head <- dsHsType ty
       return $ mkTyConApp (buildPromotedDataTyCon consDataCon) [k, tau_head, tau_tail]
 
-ds_type (HsExplicitTupleTy _ _) = panic "IA0_UNDEFINED: ds_type"
+ds_type (HsExplicitTupleTy kis tys) = do
+  MASSERT( length kis == length tys )
+  kis' <- mapM zonkTcKindToKind kis
+  tys' <- mapM dsHsType tys
+  return $ mkTyConApp (buildPromotedDataTyCon (tupleCon Boxed (length kis))) (kis' ++ tys')
 
 ds_type (HsWrapTy (WpKiApps kappas) ty) = do
   tau <- ds_type ty
@@ -1079,7 +1086,13 @@ sc_ds_hs_kind (HsFunTy ki1 ki2) = do
   return (mkArrowKind kappa_ki1 kappa_ki2)
 sc_ds_hs_kind (HsListTy ki) = do
   kappa <- sc_ds_lhs_kind ki
+  checkWiredInTyCon listTyCon
   return $ mkListTy kappa
+sc_ds_hs_kind (HsTupleTy Boxed kis) = do  -- boxity has no meaning for promotion
+  kappas <- mapM sc_ds_lhs_kind kis
+  checkWiredInTyCon tycon
+  return $ mkTyConApp tycon kappas
+  where tycon = tupleTyCon Boxed (length kis)
 sc_ds_hs_kind _ = panic "IA0: sc_ds_hs_kind"
 
 sc_ds_app :: HsKind Name -> [LHsKind Name] -> TcM Kind
