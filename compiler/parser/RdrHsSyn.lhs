@@ -126,7 +126,7 @@ extract_lty (L loc ty) acc
       HsTupleTy _ tys          	-> extract_ltys tys acc
       HsFunTy ty1 ty2          	-> extract_lty ty1 (extract_lty ty2 acc)
       HsPredTy p		-> extract_pred p acc
-      HsOpTy ty1 (L loc tv) ty2 -> extract_tv loc tv (extract_lty ty1 (extract_lty ty2 acc))
+      HsOpTy ty1 (_, (L loc tv)) ty2 -> extract_tv loc tv (extract_lty ty1 (extract_lty ty2 acc))
       HsParTy ty               	-> extract_lty ty acc
       HsCoreTy {}               -> acc  -- The type is closed
       HsQuasiQuoteTy {}	        -> acc  -- Quasi quotes mention no type variables
@@ -481,7 +481,7 @@ checkDictTy :: LHsType RdrName -> P (LHsType RdrName)
 checkDictTy (L spn ty) = check ty []
   where
   check (HsTyVar tc)            args | isRdrTc tc = done tc args
-  check (HsOpTy t1 (L _ tc) t2) args | isRdrTc tc = done tc (t1:t2:args)
+  check (HsOpTy t1 (_, (L _ tc)) t2) args | isRdrTc tc = done tc (t1:t2:args)
   check (HsAppTy l r) args = check (unLoc l) (r:args)
   check (HsParTy t)   args = check (unLoc t) args
   check _ _ = parseErrorSDoc spn (text "Malformed instance header:" <+> ppr ty)
@@ -556,7 +556,7 @@ checkTyClHdr ty
     go l (HsTyVar tc) acc 
 	| isRdrTc tc 	     = return (L l tc, acc)
 				     
-    go _ (HsOpTy t1 ltc@(L _ tc) t2) acc
+    go _ (HsOpTy t1 (_, ltc@(L _ tc)) t2) acc
 	| isRdrTc tc	     = return (ltc, t1:t2:acc)
     go _ (HsParTy ty)    acc = goL ty acc
     go _ (HsAppTy t1 t2) acc = goL t1 (t2:acc)
@@ -609,7 +609,7 @@ checkPred (L spn ty)
     check _loc (HsTyVar t)             args | not (isRdrTyVar t) 
 		 		  	    = return (L spn (HsClassP t args))
     check _loc (HsAppTy l r)           args = checkl l (r:args)
-    check _loc (HsOpTy l (L loc tc) r) args = check loc (HsTyVar tc) (l:r:args)
+    check _loc (HsOpTy l (_, (L loc tc)) r) args = check loc (HsTyVar tc) (l:r:args)
     check _loc (HsParTy t)  	       args = checkl t args
     check loc _                        _    = parseErrorSDoc loc
                                 (text "malformed class assertion:" <+> ppr ty)

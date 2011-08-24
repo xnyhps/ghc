@@ -388,11 +388,14 @@ kc_hs_type (HsFunTy ty1 ty2) = do
     ty2' <- kcTypeType ty2
     return (HsFunTy ty1' ty2', liftedTypeKind)
 
-kc_hs_type (HsOpTy ty1 op ty2) = do
-    (tyvar, op_kind) <- addLocM kcTyVar op
-    MASSERT( [ name | HsTyVar name <- [tyvar] ] == [unLoc op] )  -- op is not promoted
-    ([ty1',ty2'], res_kind) <- kcApps op op_kind [ty1,ty2]
-    return (HsOpTy ty1' op ty2', res_kind)
+kc_hs_type (HsOpTy ty1 (_, l_op@(L loc op)) ty2) = do
+    (wop, op_kind) <- kcTyVar op
+    ([ty1',ty2'], res_kind) <- kcApps l_op op_kind [ty1,ty2]
+    let op' = case wop of
+                HsTyVar name -> (WpKiApps [], L loc name)
+                HsWrapTy wrap (HsTyVar name) -> (wrap, L loc name)
+                _ -> panic "kc_hs_type HsOpTy"
+    return (HsOpTy ty1' op' ty2', res_kind)
 
 kc_hs_type (HsAppTy ty1 ty2) = do
     let (fun_ty, arg_tys) = splitHsAppTys ty1 [ty2]
@@ -615,10 +618,8 @@ ds_type (HsFunTy ty1 ty2) = do
     tau_ty2 <- dsHsType ty2
     return (mkFunTy tau_ty1 tau_ty2)
 
-ds_type (HsOpTy ty1 (L span op) ty2) = do
-    tau_ty1 <- dsHsType ty1
-    tau_ty2 <- dsHsType ty2
-    setSrcSpan span (ds_var_app op [tau_ty1,tau_ty2])
+ds_type (HsOpTy ty1 (wrap, (L span op)) ty2) =
+    setSrcSpan span (ds_app (HsWrapTy wrap (HsTyVar op)) [ty1,ty2])
 
 ds_type ty@(HsAppTy _ _)
   = ds_app ty []
@@ -660,7 +661,7 @@ ds_type (HsExplicitTupleTy _ _) = panic "IA0_UNDEFINED: ds_type"
 ds_type (HsWrapTy (WpKiApps kappas) ty) = do
   tau <- ds_type ty
   kappas' <- mapM zonkTcKindToKind kappas
-  return (mkAppTys tau kappas')  -- IA0: we cannot differentiate between type application and kind instantiation for pretty-printing
+  return (mkAppTys tau kappas')
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
 dsHsTypes arg_tys = mapM dsHsType arg_tys

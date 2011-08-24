@@ -954,8 +954,8 @@ sigtypes1 :: { [LHsType RdrName] }	-- Always HsForAllTys
 -- Types
 
 infixtype :: { LHsType RdrName }
-	: btype qtyconop type         { LL $ HsOpTy $1 $2 $3 }
-        | btype tyvarop  type  	 { LL $ HsOpTy $1 $2 $3 }
+	: btype qtyconop type         { LL $ mkHsOpTy $1 $2 $3 }
+        | btype tyvarop  type  	 { LL $ mkHsOpTy $1 $2 $3 }
 
 strict_mark :: { Located HsBang }
 	: '!'				{ L1 HsStrict }
@@ -1005,18 +1005,21 @@ context :: { LHsContext RdrName }
 
 type :: { LHsType RdrName }
         : btype                         { $1 }
-        | btype qtyconop type           { LL $ HsOpTy $1 $2 $3 }
-        | btype tyvarop  type     	{ LL $ HsOpTy $1 $2 $3 }
+        | btype qtyconop type           { LL $ mkHsOpTy $1 $2 $3 }
+        | btype tyvarop  type     	{ LL $ mkHsOpTy $1 $2 $3 }
  	| btype '->'     ctype		{ LL $ HsFunTy $1 $3 }
         | btype '~'      btype  	{ LL $ HsPredTy (HsEqualP $1 $3) }
+                                        -- see Note [Promotion]
+        | btype SIMPLEQUOTE qconop type     { LL $ mkHsOpTy $1 $3 $4 }
+        | btype SIMPLEQUOTE varop  type     { LL $ mkHsOpTy $1 $3 $4 }
 
 typedoc :: { LHsType RdrName }
         : btype                          { $1 }
         | btype docprev                  { LL $ HsDocTy $1 $2 }
-        | btype qtyconop type            { LL $ HsOpTy $1 $2 $3 }
-        | btype qtyconop type docprev    { LL $ HsDocTy (L (comb3 $1 $2 $3) (HsOpTy $1 $2 $3)) $4 }
-        | btype tyvarop  type            { LL $ HsOpTy $1 $2 $3 }
-        | btype tyvarop  type docprev    { LL $ HsDocTy (L (comb3 $1 $2 $3) (HsOpTy $1 $2 $3)) $4 }
+        | btype qtyconop type            { LL $ mkHsOpTy $1 $2 $3 }
+        | btype qtyconop type docprev    { LL $ HsDocTy (L (comb3 $1 $2 $3) (mkHsOpTy $1 $2 $3)) $4 }
+        | btype tyvarop  type            { LL $ mkHsOpTy $1 $2 $3 }
+        | btype tyvarop  type docprev    { LL $ HsDocTy (L (comb3 $1 $2 $3) (mkHsOpTy $1 $2 $3)) $4 }
         | btype '->'     ctypedoc        { LL $ HsFunTy $1 $3 }
         | btype docprev '->' ctypedoc    { LL $ HsFunTy (L (comb2 $1 $2) (HsDocTy $1 $2)) $4 }
         | btype '~'      btype           { LL $ HsPredTy (HsEqualP $1 $3) }

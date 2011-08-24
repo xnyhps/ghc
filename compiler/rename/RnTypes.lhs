@@ -131,18 +131,18 @@ rnHsTyKi isType _ (HsTyVar rdr_name) = do
 -- If we see (forall a . ty), without foralls on, the forall will give
 -- a sensible error message, but we don't want to complain about the dot too
 -- Hence the jiggery pokery with ty1
-rnHsTyKi isType doc ty@(HsOpTy ty1 (L loc op) ty2)
+rnHsTyKi isType doc ty@(HsOpTy ty1 (wrapper, L loc op) ty2)
   = ASSERT ( isType ) setSrcSpan loc $ 
     do	{ ops_ok <- xoptM Opt_TypeOperators
 	; op' <- if ops_ok
-		 then lookupOccRn op 
+		 then lookupPromotedOccRn op
 		 else do { addErr (opTyErr op ty)
 			 ; return (mkUnboundName op) }	-- Avoid double complaint
 	; let l_op' = L loc op'
 	; fix <- lookupTyFixityRn l_op'
 	; ty1' <- rnLHsType doc ty1
 	; ty2' <- rnLHsType doc ty2
-	; mkHsOpTyRn (\t1 t2 -> HsOpTy t1 l_op' t2) op' fix ty1' ty2' }
+	; mkHsOpTyRn (\t1 t2 -> HsOpTy t1 (wrapper, l_op') t2) op' fix ty1' ty2' }
 
 rnHsTyKi isType doc (HsParTy ty) = do
     ty' <- rnLHsTyKi isType doc ty
@@ -354,10 +354,10 @@ mkHsOpTyRn :: (LHsType Name -> LHsType Name -> HsType Name)
 	   -> Name -> Fixity -> LHsType Name -> LHsType Name 
 	   -> RnM (HsType Name)
 
-mkHsOpTyRn mk1 pp_op1 fix1 ty1 (L loc2 (HsOpTy ty21 op2 ty22))
+mkHsOpTyRn mk1 pp_op1 fix1 ty1 (L loc2 (HsOpTy ty21 (w2, op2) ty22))
   = do  { fix2 <- lookupTyFixityRn op2
 	; mk_hs_op_ty mk1 pp_op1 fix1 ty1 
-		      (\t1 t2 -> HsOpTy t1 op2 t2)
+		      (\t1 t2 -> HsOpTy t1 (w2, op2) t2)
 		      (unLoc op2) fix2 ty21 ty22 loc2 }
 
 mkHsOpTyRn mk1 pp_op1 fix1 ty1 (L loc2 (HsFunTy ty21 ty22))

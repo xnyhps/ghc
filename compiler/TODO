@@ -11,10 +11,6 @@
 
 ## TODO NEXT
 
-* step2(notations)
-  data HsType name = ... | HsOpTy (LHsType name) (LHsTyOp name) (LHsType name) | ...
-  type HsTyOp name = (HsTyWrapper, name)
-
 
 ## BUGS
 

@@ -517,7 +517,7 @@ makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
     getTypeName :: HsType Name -> Maybe Name
     getTypeName (HsForAllTy _ _ _ (L _ n))      = getTypeName n
     getTypeName (HsTyVar n)                     = Just n
-    getTypeName (HsOpTy _ (L _ n) _)            = Just n
+    getTypeName (HsOpTy _ (_, (L _ n)) _)       = Just n
     getTypeName (HsPredTy (HsClassP _ [L _ n])) = getTypeName n
     getTypeName (HsAppTy (L _ n) _)             = getTypeName n
     getTypeName (HsParTy (L _ n))               = getTypeName n

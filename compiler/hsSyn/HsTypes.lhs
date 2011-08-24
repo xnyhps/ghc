@@ -27,7 +27,7 @@ module HsTypes (
 	hsTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy, splitHsFunType,
-	splitHsAppTys, mkHsAppTys,
+	splitHsAppTys, mkHsAppTys, mkHsOpTy,
 
 	-- Printing
 	pprParendHsType, pprHsForAll, pprHsContext, ppr_hs_context,
@@ -142,7 +142,7 @@ data HsType name
   | HsTupleTy		Boxity
 			[LHsType name]	-- Element types (length gives arity)
 
-  | HsOpTy		(LHsType name) (Located name) (LHsType name)
+  | HsOpTy		(LHsType name) (LHsTyOp name) (LHsType name)
 
   | HsParTy		(LHsType name)   -- See Note [Parens in HsSyn] in HsExpr
 	-- Parenthesis preserved for the precedence re-arrangement in RnTypes
@@ -182,6 +182,12 @@ data HsType name
 data HsTyWrapper
   = WpKiApps [Kind]  -- kind instantiation: [] k1 k2 .. kn
   deriving (Data, Typeable)
+
+type LHsTyOp name = HsTyOp (Located name)
+type HsTyOp name = (HsTyWrapper, name)
+
+mkHsOpTy :: LHsType name -> Located name -> LHsType name -> HsType name
+mkHsOpTy ty1 op ty2 = HsOpTy ty1 (WpKiApps [], op) ty2
 
 {- Note [Promotions]
    ~~~~~~~~~~~~~~~~~
@@ -506,9 +512,9 @@ ppr_mono_ty ctxt_prec (HsAppTy fun_ty arg_ty)
   = maybeParen ctxt_prec pREC_CON $
     hsep [ppr_mono_lty pREC_FUN fun_ty, ppr_mono_lty pREC_CON arg_ty]
 
-ppr_mono_ty ctxt_prec (HsOpTy ty1 op ty2)  
+ppr_mono_ty ctxt_prec (HsOpTy ty1 (wrapper, op) ty2)
   = maybeParen ctxt_prec pREC_OP $
-    ppr_mono_lty pREC_OP ty1 <+> ppr op <+> ppr_mono_lty pREC_OP ty2
+    ppr_mono_lty pREC_OP ty1 <+> ppr_mono_ty pREC_CON (HsWrapTy wrapper (HsTyVar (unLoc op))) <+> ppr_mono_lty pREC_OP ty2
 
 ppr_mono_ty _         (HsParTy ty)
   = parens (ppr_mono_lty pREC_TOP ty)
