@@ -48,6 +48,7 @@ module Name (
 	nameOccName, nameModule, nameModule_maybe,
 	tidyNameOcc, 
 	hashName, localiseName,
+  mkLocalisedOccName,
 
 	nameSrcLoc, nameSrcSpan, pprNameLoc,
 
@@ -324,6 +325,19 @@ tidyNameOcc name 			    occ = name { n_occ = occ }
 -- | Make the 'Name' into an internal name, regardless of what it was to begin with
 localiseName :: Name -> Name
 localiseName n = n { n_sort = Internal }
+\end{code}
+
+\begin{code}
+-- |Create a localised variant of a name.  
+--
+-- If the name is external, encode the original's module name to disambiguate.
+--
+mkLocalisedOccName :: Module -> (Maybe String -> OccName -> OccName) -> Name -> OccName
+mkLocalisedOccName this_mod mk_occ name = mk_occ origin (nameOccName name)
+  where
+    origin 
+      | nameIsLocalOrFrom this_mod name = Nothing
+      | otherwise                       = Just (moduleNameColons . moduleName . nameModule $ name)
 \end{code}
 
 %************************************************************************
