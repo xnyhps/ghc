@@ -697,7 +697,8 @@ freeNamesIfDecl d@IfaceData{} =
 freeNamesIfDecl d@IfaceSyn{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfSynRhs (ifSynRhs d) &&&
-  freeNamesIfTcFam (ifFamInst d)
+  freeNamesIfTcFam (ifFamInst d) &&&
+  freeNamesIfKind (ifSynKind d)  -- because of promotion, we return names in the kind signature
 freeNamesIfDecl d@IfaceClass{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfContext (ifCtxt d) &&&
@@ -749,6 +750,9 @@ freeNamesIfPredType (IfaceIParam _n ty) =
 freeNamesIfPredType (IfaceEqPred ty1 ty2) =
    freeNamesIfType ty1 &&& freeNamesIfType ty2
 
+freeNamesIfKind :: IfaceType -> NameSet
+freeNamesIfKind = freeNamesIfType
+
 freeNamesIfType :: IfaceType -> NameSet
 freeNamesIfType (IfaceTyVar _)        = emptyNameSet
 freeNamesIfType (IfaceAppTy s t)      = freeNamesIfType s &&& freeNamesIfType t
@@ -776,8 +780,8 @@ freeNamesIfLetBndr (IfLetBndr _name ty info) = freeNamesIfType ty
                                              &&& freeNamesIfIdInfo info
 
 freeNamesIfTvBndr :: IfaceTvBndr -> NameSet
-freeNamesIfTvBndr (_fs,k) = freeNamesIfType k
-    -- kinds can have Names inside, when the Kind is an equality predicate
+freeNamesIfTvBndr (_fs,k) = freeNamesIfKind k
+    -- kinds can have Names inside, because of promotion
 
 freeNamesIfIdBndr :: IfaceIdBndr -> NameSet
 freeNamesIfIdBndr = freeNamesIfTvBndr
