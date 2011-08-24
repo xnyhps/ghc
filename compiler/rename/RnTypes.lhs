@@ -168,8 +168,8 @@ rnHsTyKi isType doc (HsFunTy ty1 ty2) = do
       then mkHsOpTyRn HsFunTy funTyConName funTyFixity ty1' ty2'
       else return (HsFunTy ty1' ty2')
 
-rnHsTyKi isType doc (HsListTy ty) = ASSERT ( isType ) do
-    ty' <- rnLHsType doc ty
+rnHsTyKi isType doc (HsListTy ty) = do
+    ty' <- rnLHsTyKi isType doc ty
     return (HsListTy ty')
 
 rnHsTyKi isType doc (HsKindSig ty k)
@@ -217,12 +217,12 @@ rnHsTyKi isType _ (HsCoreTy ty) = ASSERT ( isType ) return (HsCoreTy ty)
 rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 
 -- IA0: rnHsTyKi isType _ (HsLitTy lit) = ASSERT( isType ) return (HsLitTy lit)
--- IA0: rnHsTyKi isType doc (HsExplicitListTy ks) = ASSERT( isType ) do
--- IA0:     ks' <- mapM (rnLHsType doc) ks
--- IA0:     return (HsExplicitListTy ks')
--- IA0: rnHsTyKi isType doc (HsExplicitTupleTy ks) = ASSERT( isType ) do
--- IA0:     ks' <- mapM (rnLHsType doc) ks
--- IA0:     return (HsExplicitTupleTy ks')
+rnHsTyKi isType doc (HsExplicitListTy k tys) = ASSERT( isType ) do
+    tys' <- mapM (rnLHsType doc) tys
+    return (HsExplicitListTy k tys')
+rnHsTyKi isType doc (HsExplicitTupleTy k tys) = ASSERT( isType ) do
+    tys' <- mapM (rnLHsType doc) tys
+    return (HsExplicitTupleTy k tys')
 
 --------------
 rnLHsTypes :: HsDocContext -> [LHsType RdrName]

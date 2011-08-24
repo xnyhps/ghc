@@ -78,8 +78,8 @@ extractHsTyNames ty
     get (HsCoreTy {})          = emptyNameSet	-- This probably isn't quite right
     		  	       	 		-- but I don't think it matters
 -- IA0:     get (HsLitTy _lit)         = emptyNameSet
--- IA0:     get (HsExplicitListTy tys) = extractHsTyNames_s tys
--- IA0:     get (HsExplicitTupleTy tys) = extractHsTyNames_s tys
+    get (HsExplicitListTy _ tys) = extractHsTyNames_s tys
+    get (HsExplicitTupleTy _ tys) = extractHsTyNames_s tys
     get (HsWrapTy {})          = panic "IA0: extractHsTyNames"
 
 extractHsTyNames_s  :: [LHsType Name] -> NameSet

@@ -139,8 +139,8 @@ extract_lty (L loc ty) acc
 				   locals = hsLTyVarNames tvs
       HsDocTy ty _              -> extract_lty ty acc
 -- IA0:       HsLitTy _lit              -> acc
--- IA0:       HsExplicitListTy tys      -> extract_ltys tys acc
--- IA0:       HsExplicitTupleTy tys     -> extract_ltys tys acc
+      HsExplicitListTy _ tys      -> extract_ltys tys acc
+      HsExplicitTupleTy _ tys     -> extract_ltys tys acc
       HsWrapTy _ _              -> panic "IA0: extract_lty"
 
 extract_tv :: SrcSpan -> RdrName -> [Located RdrName] -> [Located RdrName]

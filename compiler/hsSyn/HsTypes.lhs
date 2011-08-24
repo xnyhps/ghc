@@ -173,8 +173,8 @@ data HsType name
     	       		-- Core Type through HsSyn.  
 
 -- IA0:   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
--- IA0:   | HsExplicitListTy [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
--- IA0:   | HsExplicitTupleTy [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
+  | HsExplicitListTy PostTcKind [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
+  | HsExplicitTupleTy PostTcKind [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
 
   | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
   deriving (Data, Typeable)
@@ -493,8 +493,8 @@ ppr_mono_ty _    (HsPredTy pred)     = ppr pred
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
 -- IA0: ppr_mono_ty _    (HsLitTy lit)       = ppr lit  -- IA0: do we want quote here?
--- IA0: ppr_mono_ty _    (HsExplicitListTy tys) = quote $ brackets (interpp'SP tys)
--- IA0: ppr_mono_ty _    (HsExplicitTupleTy tys) = quote $ parens (interpp'SP tys)
+ppr_mono_ty _    (HsExplicitListTy _ tys) = quote $ brackets (interpp'SP tys)
+ppr_mono_ty _    (HsExplicitTupleTy _ tys) = quote $ parens (interpp'SP tys)
 
 ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps []) ty) = ppr_mono_ty ctxt_prec ty
 ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps (ki:kis)) ty)

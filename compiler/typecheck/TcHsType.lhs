@@ -444,8 +444,11 @@ kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
 
 -- IA0: kc_hs_type (HsLitTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
--- IA0: kc_hs_type (HsExplicitListTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
--- IA0: kc_hs_type (HsExplicitTupleTy _) = panic "IA0: kc_hs_type"  -- IA0: UNDEFINED
+kc_hs_type (HsExplicitListTy _ tys) = do
+    ty_k_s <- mapM kc_lhs_type tys
+    kind <- unifyKinds (text "promoted list") ty_k_s
+    return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind)
+kc_hs_type (HsExplicitTupleTy {}) = panic "IA0_UNDEFINED: kc_hs_type"
 
 kc_hs_type (HsWrapTy {}) = panic "kc_hs_type"
 
@@ -641,8 +644,18 @@ ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
 -- IA0: ds_type (HsLitTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
--- IA0: ds_type (HsExplicitListTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
--- IA0: ds_type (HsExplicitTupleTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+
+ds_type (HsExplicitListTy kind tys) = do
+  kind' <- zonkTcKindToKind kind
+  go kind' tys
+  where
+    go k [] = return $ mkTyConApp (buildPromotedDataTyCon nilDataCon) [k]
+    go k (ty:tys) = do
+      tau_tail <- go k tys
+      tau_head <- dsHsType ty
+      return $ mkTyConApp (buildPromotedDataTyCon consDataCon) [k, tau_head, tau_tail]
+
+ds_type (HsExplicitTupleTy _ _) = panic "IA0_UNDEFINED: ds_type"
 
 ds_type (HsWrapTy (WpKiApps kappas) ty) = do
   tau <- ds_type ty
@@ -965,6 +978,13 @@ ekLifted, ekOpen :: ExpKind
 ekLifted = EK liftedTypeKind EkUnk
 ekOpen   = EK openTypeKind   EkUnk
 
+unifyKinds :: SDoc -> [(LHsType Name, TcKind)] -> TcM TcKind
+unifyKinds fun act_kinds = do
+  kind <- newMetaKindVar
+  let exp_kind arg_no = EK kind (EkArg fun arg_no)
+  mapM_ (\(arg_no, (ty, act_kind)) -> checkExpectedKind ty act_kind (exp_kind arg_no)) (zip [1..] act_kinds)
+  return kind
+
 checkExpectedKind :: Outputable a => a -> TcKind -> ExpKind -> TcM ()
 -- A fancy wrapper for 'unifyKind', which tries
 -- to give decent error messages.
@@ -1056,6 +1076,9 @@ sc_ds_hs_kind (HsFunTy ki1 ki2) = do
   kappa_ki1 <- sc_ds_lhs_kind ki1
   kappa_ki2 <- sc_ds_lhs_kind ki2
   return (mkArrowKind kappa_ki1 kappa_ki2)
+sc_ds_hs_kind (HsListTy ki) = do
+  kappa <- sc_ds_lhs_kind ki
+  return $ mkListTy kappa
 sc_ds_hs_kind _ = panic "IA0: sc_ds_hs_kind"
 
 sc_ds_app :: HsKind Name -> [LHsKind Name] -> TcM Kind
