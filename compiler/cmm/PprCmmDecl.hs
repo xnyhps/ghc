@@ -33,14 +33,13 @@
 --
 
 module PprCmmDecl
-    ( writeCmms, pprCmms, pprCmm, pprSection, pprStatic
+    ( writeCmms, pprCmms, pprCmmGroup, pprSection, pprStatic
     )
 where
 
-import CmmDecl
 import CLabel
 import PprCmmExpr
-
+import Cmm
 
 import Outputable
 import Platform
@@ -51,28 +50,23 @@ import System.IO
 
 -- Temp Jan08
 import SMRep
-import ClosureInfo
 #include "../includes/rts/storage/FunTypes.h"
 
 
 pprCmms :: (Outputable info, PlatformOutputable g)
-        => Platform -> [GenCmm CmmStatics info g] -> SDoc
+        => Platform -> [GenCmmGroup CmmStatics info g] -> SDoc
 pprCmms platform cmms = pprCode CStyle (vcat (intersperse separator $ map (pprPlatform platform) cmms))
         where
           separator = space $$ ptext (sLit "-------------------") $$ space
 
 writeCmms :: (Outputable info, PlatformOutputable g)
-          => Platform -> Handle -> [GenCmm CmmStatics info g] -> IO ()
+          => Platform -> Handle -> [GenCmmGroup CmmStatics info g] -> IO ()
 writeCmms platform handle cmms = printForC handle (pprCmms platform cmms)
 
 -----------------------------------------------------------------------------
 
-instance (Outputable d, Outputable info, PlatformOutputable g)
-      => PlatformOutputable (GenCmm d info g) where
-    pprPlatform platform c = pprCmm platform c
-
 instance (Outputable d, Outputable info, PlatformOutputable i)
-      => PlatformOutputable (GenCmmTop d info i) where
+      => PlatformOutputable (GenCmmDecl d info i) where
     pprPlatform platform t = pprTop platform t
 
 instance Outputable CmmStatics where
@@ -87,16 +81,16 @@ instance Outputable CmmInfoTable where
 
 -----------------------------------------------------------------------------
 
-pprCmm :: (Outputable d, Outputable info, PlatformOutputable g)
-       => Platform -> GenCmm d info g -> SDoc
-pprCmm platform (Cmm tops)
+pprCmmGroup :: (Outputable d, Outputable info, PlatformOutputable g)
+       => Platform -> GenCmmGroup d info g -> SDoc
+pprCmmGroup platform tops
     = vcat $ intersperse blankLine $ map (pprTop platform) tops
 
 -- --------------------------------------------------------------------------
 -- Top level `procedure' blocks.
 --
 pprTop :: (Outputable d, Outputable info, PlatformOutputable i)
-       => Platform -> GenCmmTop d info i -> SDoc
+       => Platform -> GenCmmDecl d info i -> SDoc
 
 pprTop platform (CmmProc info lbl graph)
 
@@ -118,55 +112,22 @@ pprTop _ (CmmData section ds) =
 -- Info tables.
 
 pprInfoTable :: CmmInfoTable -> SDoc
-pprInfoTable CmmNonInfoTable = empty
-pprInfoTable (CmmInfoTable is_local stat_clos (ProfilingInfo closure_type closure_desc) tag info) =
-    vcat [ptext (sLit "is local: ") <> ppr is_local <+>
-          ptext (sLit "has static closure: ") <> ppr stat_clos <+>
-          ptext (sLit "type: ") <> pprLit closure_type,
-          ptext (sLit "desc: ") <> pprLit closure_desc,
-          ptext (sLit "tag: ") <> integer (toInteger tag),
-          pprTypeInfo info]
+pprInfoTable CmmNonInfoTable 
+  = empty
+pprInfoTable (CmmInfoTable { cit_lbl = lbl, cit_rep = rep
+                           , cit_prof = prof_info
+                           , cit_srt = _srt })  
+  = vcat [ ptext (sLit "label:") <+> ppr lbl
+         , ptext (sLit "rep:") <> ppr rep
+         , case prof_info of
+	     NoProfilingInfo -> empty
+             ProfilingInfo ct cd -> vcat [ ptext (sLit "type:") <+> pprWord8String ct
+                                         , ptext (sLit "desc: ") <> pprWord8String cd ] ]
 
-pprTypeInfo :: ClosureTypeInfo -> SDoc
-pprTypeInfo (ConstrInfo layout constr descr) =
-    vcat [ptext (sLit "ptrs: ") <> integer (toInteger (fst layout)),
-          ptext (sLit "nptrs: ") <> integer (toInteger (snd layout)),
-          ptext (sLit "constructor: ") <> integer (toInteger constr),
-          pprLit descr]
-pprTypeInfo (FunInfo layout srt arity _args slow_entry) =
-    vcat [ptext (sLit "ptrs: ") <> integer (toInteger (fst layout)),
-          ptext (sLit "nptrs: ") <> integer (toInteger (snd layout)),
-          ptext (sLit "srt: ") <> ppr srt,
--- Temp Jan08
-          ptext (sLit ("fun_type: ")) <> integer (toInteger (argDescrType _args)),
-
-          ptext (sLit "arity: ") <> integer (toInteger arity),
-          --ptext (sLit "args: ") <> ppr args, -- TODO: needs to be printed
-          ptext (sLit "slow: ") <> pprLit slow_entry
-         ]
-pprTypeInfo (ThunkInfo layout srt) =
-    vcat [ptext (sLit "ptrs: ") <> integer (toInteger (fst layout)),
-          ptext (sLit "nptrs: ") <> integer (toInteger (snd layout)),
-          ptext (sLit "srt: ") <> ppr srt]
-pprTypeInfo (ThunkSelectorInfo offset srt) =
-    vcat [ptext (sLit "ptrs: ") <> integer (toInteger offset),
-          ptext (sLit "srt: ") <> ppr srt]
-pprTypeInfo (ContInfo stack srt) =
-    vcat [ptext (sLit "stack: ") <> ppr stack,
-          ptext (sLit "srt: ") <> ppr srt]
-
--- Temp Jan08
-argDescrType :: ArgDescr -> StgHalfWord
--- The "argument type" RTS field type
-argDescrType (ArgSpec n) = n
-argDescrType (ArgGen liveness)
-  | isBigLiveness liveness = ARG_GEN_BIG
-  | otherwise		   = ARG_GEN
-
--- Temp Jan08
-isBigLiveness :: Liveness -> Bool
-isBigLiveness (BigLiveness _)   = True
-isBigLiveness (SmallLiveness _) = False
+instance Outputable C_SRT where
+  ppr (NoC_SRT) = ptext (sLit "_no_srt_")
+  ppr (C_SRT label off bitmap) = parens (ppr label <> comma <> ppr off <> comma 
+                                         <> text (show bitmap))
 
 instance Outputable ForeignHint where
   ppr NoHint     = empty

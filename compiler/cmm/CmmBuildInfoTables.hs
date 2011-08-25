@@ -11,10 +11,15 @@ module CmmBuildInfoTables
     , TopSRT, emptySRT, srtToData
     , bundleCAFs
     , lowerSafeForeignCalls
-    , cafTransfers, liveSlotTransfers)
+    , cafTransfers, liveSlotTransfers
+    , mkLiveness )
 where
 
 #include "HsVersions.h"
+
+-- These should not be imported here!
+import StgCmmForeign
+import StgCmmUtils
 
 import Constants
 import Digraph
@@ -26,8 +31,7 @@ import BlockId
 import Bitmap
 import CLabel
 import Cmm
-import CmmDecl
-import CmmExpr
+import CmmUtils
 import CmmStackLayout
 import Module
 import FastString
@@ -41,9 +45,6 @@ import Name
 import OptimizationFuel
 import Outputable
 import SMRep
-import StgCmmClosure
-import StgCmmForeign
-import StgCmmUtils
 import UniqSupply
 
 import Compiler.Hoopl
@@ -87,13 +88,14 @@ type RegSlotInfo
      , LocalReg   -- The register
      , Int)       -- Width of the register
 
-live_ptrs :: ByteOff -> BlockEnv SubAreaSet -> AreaMap -> BlockId -> [Maybe LocalReg]
+live_ptrs :: ByteOff -> BlockEnv SubAreaSet -> AreaMap -> BlockId -> StackLayout
 live_ptrs oldByte slotEnv areaMap bid =
   -- pprTrace "live_ptrs for" (ppr bid <+> text (show oldByte ++ "-" ++ show youngByte) <+>
   --                           ppr liveSlots) $
   -- pprTrace ("stack layout for " ++ show bid ++ ": ") (ppr res) $ res
   res
-  where res = reverse $ slotsToList youngByte liveSlots []
+  where 
+        res = mkLiveness (reverse $ slotsToList youngByte liveSlots [])
  
         slotsToList :: Int -> [RegSlotInfo] -> [Maybe LocalReg] -> [Maybe LocalReg]
         -- n starts at youngByte and is decremented down to oldByte
@@ -158,10 +160,11 @@ live_ptrs oldByte slotEnv areaMap bid =
 -- Construct the stack maps for a procedure _if_ it needs an infotable.
 -- When wouldn't a procedure need an infotable? If it is a procpoint that
 -- is not the successor of a call.
-setInfoTableStackMap :: SlotEnv -> AreaMap -> CmmTop -> CmmTop
+setInfoTableStackMap :: SlotEnv -> AreaMap -> CmmDecl -> CmmDecl
 setInfoTableStackMap slotEnv areaMap
-     t@(CmmProc (TopInfo {stack_info=StackInfo {updfr_space = Just updfr_off}}) _ (CmmGraph {g_entry = eid})) =
-  updInfo (const (live_ptrs updfr_off slotEnv areaMap eid)) id t
+     t@(CmmProc (TopInfo {stack_info=StackInfo {updfr_space = Just updfr_off}}) _ 
+                (CmmGraph {g_entry = eid}))
+  = updInfo (const (live_ptrs updfr_off slotEnv areaMap eid)) id t
 setInfoTableStackMap _ _ t = t
                  
 
@@ -200,7 +203,7 @@ cafTransfers = mkBTransfer3 first middle last
                CmmLit (CmmLabelOff c _)         -> add c set
                CmmLit (CmmLabelDiffOff c1 c2 _) -> add c1 $ add c2 set
                _ -> set
-        add l s = if hasCAF l then Map.insert (cvtToClosureLbl l) () s else s
+        add l s = if hasCAF l then Map.insert (toClosureLbl l) () s else s
 
 cafAnal :: CmmGraph -> FuelUniqSM CAFEnv
 cafAnal g = liftM snd $ dataflowPassBwd g [] $ analBwd cafLattice cafTransfers
@@ -237,8 +240,8 @@ addCAF caf srt =
       , elt_map  = Map.insert caf last (elt_map srt) }
     where last  = next_elt srt
 
-srtToData :: TopSRT -> Cmm
-srtToData srt = Cmm [CmmData RelocatableReadOnlyData (Statics (lbl srt) tbl)]
+srtToData :: TopSRT -> CmmGroup
+srtToData srt = [CmmData RelocatableReadOnlyData (Statics (lbl srt) tbl)]
     where tbl = map (CmmStaticLit . CmmLabel) (reverse (rev_elts srt))
 
 -- Once we have found the CAFs, we need to do two things:
@@ -250,7 +253,7 @@ srtToData srt = Cmm [CmmData RelocatableReadOnlyData (Statics (lbl srt) tbl)]
 -- we make sure they're all close enough to the bottom of the table that the
 -- bitmap will be able to cover all of them.
 buildSRTs :: TopSRT -> Map CLabel CAFSet -> CAFSet ->
-             FuelUniqSM (TopSRT, Maybe CmmTop, C_SRT)
+             FuelUniqSM (TopSRT, Maybe CmmDecl, C_SRT)
 buildSRTs topSRT topCAFMap cafs =
   do let liftCAF lbl () z = -- get CAFs for functions without static closures
            case Map.lookup lbl topCAFMap of Just cafs -> z `Map.union` cafs
@@ -293,7 +296,7 @@ buildSRTs topSRT topCAFMap cafs =
 -- Construct an SRT bitmap.
 -- Adapted from simpleStg/SRT.lhs, which expects Id's.
 procpointSRT :: CLabel -> Map CLabel Int -> [CLabel] ->
-                FuelUniqSM (Maybe CmmTop, C_SRT)
+                FuelUniqSM (Maybe CmmDecl, C_SRT)
 procpointSRT _ _ [] =
  return (Nothing, NoC_SRT)
 procpointSRT top_srt top_table entries =
@@ -311,7 +314,7 @@ maxBmpSize :: Int
 maxBmpSize = widthInBits wordWidth `div` 2
 
 -- Adapted from codeGen/StgCmmUtils, which converts from SRT to C_SRT.
-to_SRT :: CLabel -> Int -> Int -> Bitmap -> FuelUniqSM (Maybe CmmTop, C_SRT)
+to_SRT :: CLabel -> Int -> Int -> Bitmap -> FuelUniqSM (Maybe CmmDecl, C_SRT)
 to_SRT top_srt off len bmp
   | len > maxBmpSize || bmp == [fromIntegral srt_escape]
   = do id <- getUniqueM
@@ -332,13 +335,14 @@ to_SRT top_srt off len bmp
 --  keep its CAFs live.)
 -- Any procedure referring to a non-static CAF c must keep live
 -- any CAF that is reachable from c.
-localCAFInfo :: CAFEnv -> CmmTop -> Maybe (CLabel, CAFSet)
+localCAFInfo :: CAFEnv -> CmmDecl -> Maybe (CLabel, CAFSet)
 localCAFInfo _      (CmmData _ _) = Nothing
 localCAFInfo cafEnv (CmmProc top_info top_l (CmmGraph {g_entry=entry})) =
   case info_tbl top_info of
-    CmmInfoTable _ False _ _ _ ->
-      Just (cvtToClosureLbl top_l,
-            expectJust "maybeBindCAFs" $ mapLookup entry cafEnv)
+    CmmInfoTable { cit_rep = rep } 
+      | not (isStaticRep rep) 
+      -> Just (toClosureLbl top_l,
+               expectJust "maybeBindCAFs" $ mapLookup entry cafEnv)
     _ -> Nothing
 
 -- Once we have the local CAF sets for some (possibly) mutually
@@ -368,22 +372,20 @@ mkTopCAFInfo localCAFs = foldl addToTop Map.empty g
         g = stronglyConnCompFromEdgedVertices
               (map (\n@(l, cafs) -> (n, l, Map.keys cafs)) localCAFs)
 
-type StackLayout = [Maybe LocalReg]
-
 -- Bundle the CAFs used at a procpoint.
-bundleCAFs :: CAFEnv -> CmmTop -> (CAFSet, CmmTop)
+bundleCAFs :: CAFEnv -> CmmDecl -> (CAFSet, CmmDecl)
 bundleCAFs cafEnv t@(CmmProc _ _ (CmmGraph {g_entry=entry})) =
   (expectJust "bundleCAFs" (mapLookup entry cafEnv), t)
 bundleCAFs _ t = (Map.empty, t)
 
 -- Construct the SRTs for the given procedure.
-setInfoTableSRT :: Map CLabel CAFSet -> TopSRT -> (CAFSet, CmmTop) ->
-                   FuelUniqSM (TopSRT, [CmmTop])
+setInfoTableSRT :: Map CLabel CAFSet -> TopSRT -> (CAFSet, CmmDecl) ->
+                   FuelUniqSM (TopSRT, [CmmDecl])
 setInfoTableSRT topCAFMap topSRT (cafs, t) =
   setSRT cafs topCAFMap topSRT t
 
 setSRT :: CAFSet -> Map CLabel CAFSet -> TopSRT ->
-          CmmTop -> FuelUniqSM (TopSRT, [CmmTop])
+          CmmDecl -> FuelUniqSM (TopSRT, [CmmDecl])
 setSRT cafs topCAFMap topSRT t =
   do (topSRT, cafTable, srt) <- buildSRTs topSRT topCAFMap cafs
      let t' = updInfo id (const srt) t
@@ -391,20 +393,19 @@ setSRT cafs topCAFMap topSRT t =
        Just tbl -> return (topSRT, [t', tbl])
        Nothing  -> return (topSRT, [t'])
 
-updInfo :: (StackLayout -> StackLayout) -> (C_SRT -> C_SRT) -> CmmTop -> CmmTop
+type StackLayout = Liveness
+
+updInfo :: (StackLayout -> StackLayout) -> (C_SRT -> C_SRT) -> CmmDecl -> CmmDecl
 updInfo toVars toSrt (CmmProc top_info top_l g) =
   CmmProc (top_info {info_tbl=updInfoTbl toVars toSrt (info_tbl top_info)}) top_l g
 updInfo _ _ t = t
 
 updInfoTbl :: (StackLayout -> StackLayout) -> (C_SRT -> C_SRT) -> CmmInfoTable -> CmmInfoTable
-updInfoTbl toVars toSrt (CmmInfoTable l s p t typeinfo)
-  = CmmInfoTable l s p t typeinfo'
-    where typeinfo' = case typeinfo of
-            t@(ConstrInfo _ _ _)    -> t
-            (FunInfo    c s a d e)  -> FunInfo c (toSrt s) a d e
-            (ThunkInfo  c s)        -> ThunkInfo c (toSrt s)
-            (ThunkSelectorInfo x s) -> ThunkSelectorInfo x (toSrt s)
-            (ContInfo v s)          -> ContInfo (toVars v) (toSrt s)
+updInfoTbl toVars toSrt info_tbl@(CmmInfoTable {})
+  = info_tbl { cit_srt = toSrt (cit_srt info_tbl)
+             , cit_rep = case cit_rep info_tbl of
+                           StackRep ls -> StackRep (toVars ls)
+                           other       -> other }
 updInfoTbl _ _ t@CmmNonInfoTable = t
   
 ----------------------------------------------------------------
@@ -425,7 +426,7 @@ updInfoTbl _ _ t@CmmNonInfoTable = t
 -- needed to generate the infotables along with the Cmm data and procedures.
 
 -- JD: Why not do this while splitting procedures?
-lowerSafeForeignCalls :: AreaMap -> CmmTop -> FuelUniqSM CmmTop
+lowerSafeForeignCalls :: AreaMap -> CmmDecl -> FuelUniqSM CmmDecl
 lowerSafeForeignCalls _ t@(CmmData _ _) = return t
 lowerSafeForeignCalls areaMap (CmmProc info l g@(CmmGraph {g_entry=entry})) = do
   let block b mblocks = mblocks >>= lowerSafeCallBlock entry areaMap b
@@ -493,3 +494,4 @@ lowerSafeForeignCall entry areaMap blocks bid m
                                            resume  <**> saveRetVals <**> M.mkLast jump
     return $ blocks `mapUnion` toBlockMap graph'
 lowerSafeForeignCall _ _ _ _ _ _ = panic "lowerSafeForeignCall was passed something else"
+

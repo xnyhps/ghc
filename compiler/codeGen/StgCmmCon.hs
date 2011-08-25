@@ -66,12 +66,20 @@ cgTopRhsCon id con args
 
 	-- LAY IT OUT
 	; let
-	    name          = idName id
-	    lf_info	  = mkConLFInfo con
-    	    closure_label = mkClosureLabel name $ idCafInfo id
-	    caffy         = any stgArgHasCafRefs args
-	    (closure_info, nv_args_w_offsets) 
-			= layOutStaticConstr con (addArgReps args)
+            name          = idName id
+            caffy         = idCafInfo id -- any stgArgHasCafRefs args
+            closure_label = mkClosureLabel name caffy
+
+            (tot_wds, --  #ptr_wds + #nonptr_wds
+    	     ptr_wds, --  #ptr_wds
+    	     nv_args_w_offsets) = mkVirtConstrOffsets (addArgReps args)
+
+            nonptr_wds = tot_wds - ptr_wds
+
+             -- we're not really going to emit an info table, so having
+             -- to make a CmmInfoTable is a bit overkill, but mkStaticClosureFields
+             -- needs to poke around inside it.
+            info_tbl = mkDataConInfoTable con True ptr_wds nonptr_wds
 
 	    get_lit (arg, _offset) = do { CmmLit lit <- getArgAmode arg
 				        ; return lit }
@@ -81,7 +89,7 @@ cgTopRhsCon id con args
 		-- NB2: all the amodes should be Lits!
 
 	; let closure_rep = mkStaticClosureFields
-	    		     closure_info
+                             info_tbl
 	    		     dontCareCCS		-- Because it's static data
 	    		     caffy			-- Has CAF refs
 			     payload
@@ -89,8 +97,8 @@ cgTopRhsCon id con args
 		-- BUILD THE OBJECT
 	; emitDataLits closure_label closure_rep
 
-		-- RETURN
-	; return $ litIdInfo id lf_info (CmmLabel closure_label) }
+                -- RETURN
+        ; return $ litIdInfo id (mkConLFInfo con) (CmmLabel closure_label) }
 
 
 ---------------------------------------------------------------
@@ -190,9 +198,13 @@ buildDynCon binder _cc con [arg]
 
 -------- buildDynCon: the general case -----------
 buildDynCon binder ccs con args
-  = do	{ let (cl_info, args_w_offsets) = layOutDynConstr con (addArgReps args)
+  = do	{ let (tot_wds, ptr_wds, args_w_offsets) 
+                = mkVirtConstrOffsets (addArgReps args)
 		-- No void args in args_w_offsets
-	; (tmp, init) <- allocDynClosure cl_info use_cc blame_cc args_w_offsets
+              nonptr_wds = tot_wds - ptr_wds
+              info_tbl = mkDataConInfoTable con False ptr_wds nonptr_wds
+        ; (tmp, init) <- allocDynClosure info_tbl lf_info
+                                         use_cc blame_cc args_w_offsets
 	; regIdInfo binder lf_info tmp init }
   where
     lf_info = mkConLFInfo con
@@ -217,7 +229,7 @@ bindConArgs (DataAlt con) base args
   = ASSERT(not (isUnboxedTupleCon con))
     mapM bind_arg args_w_offsets
   where
-    (_, args_w_offsets) = layOutDynConstr con (addIdReps args)
+    (_, _, args_w_offsets) = mkVirtConstrOffsets (addIdReps args)
 
     tag = tagForCon con
 

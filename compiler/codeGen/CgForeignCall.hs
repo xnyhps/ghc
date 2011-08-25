@@ -24,12 +24,12 @@ import CgMonad
 import CgUtils
 import Type
 import TysPrim
+import ClosureInfo( nonVoidArg )
 import CLabel
 import OldCmm
 import OldCmmUtils
 import SMRep
 import ForeignCall
-import ClosureInfo
 import Constants
 import StaticFlags
 import Outputable

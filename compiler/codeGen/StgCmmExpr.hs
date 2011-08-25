@@ -29,13 +29,12 @@ import StgSyn
 
 import MkGraph
 import BlockId
-import CmmExpr
+import Cmm
 import CoreSyn
 import DataCon
 import ForeignCall
 import Id
 import PrimOp
-import SMRep
 import TyCon
 import Type
 import CostCentre	( CostCentreStack, currentCCS )
@@ -317,7 +316,7 @@ cgCase (StgApp v []) bndr _ alt_type@(PrimAlt _) alts
        ; _ <- bindArgsToRegs [NonVoid bndr]
        ; cgAlts NoGcInAlts (NonVoid bndr) alt_type alts }
   where
-    reps_compatible = idCgRep v == idCgRep bndr
+    reps_compatible = idPrimRep v == idPrimRep bndr
 
 cgCase scrut@(StgApp v []) _ _ (PrimAlt _) _ 
   = -- fail at run-time, not compile-time

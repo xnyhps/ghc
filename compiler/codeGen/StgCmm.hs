@@ -17,17 +17,13 @@ import StgCmmEnv
 import StgCmmBind
 import StgCmmCon
 import StgCmmLayout
-import StgCmmHeap
 import StgCmmUtils
 import StgCmmClosure
 import StgCmmHpc
 import StgCmmTicky
 
-import MkGraph
-import CmmExpr
-import CmmDecl
+import Cmm
 import CLabel
-import PprCmm
 
 import StgSyn
 import DynFlags
@@ -50,7 +46,7 @@ codeGen :: DynFlags
          -> CollectedCCs                -- (Local/global) cost-centres needing declaring/registering.
 	 -> [(StgBinding,[(Id,[Id])])]	-- Bindings to convert, with SRTs
 	 -> HpcInfo
-	 -> IO [Cmm]		-- Output
+         -> IO [CmmGroup]         -- Output
 
 codeGen dflags this_mod data_tycons
         cost_centre_info stg_binds hpc_info
@@ -64,7 +60,7 @@ codeGen dflags this_mod data_tycons
                 ; cmm_tycons <- mapM cgTyCon data_tycons
                 ; cmm_init   <- getCmm (mkModuleInit cost_centre_info
                                              this_mod hpc_info)
-                ; return (cmm_init : cmm_binds ++ concat cmm_tycons)
+                ; return (cmm_init : cmm_binds ++ cmm_tycons)
                 }
                 -- Put datatype_stuff after code_stuff, because the
                 -- datatype closure table (for enumeration types) to
@@ -80,8 +76,6 @@ codeGen dflags this_mod data_tycons
                 -- we need to combine this block with its
                 -- initialisation routines; see Note
                 -- [pipeline-split-init].
-
-        ; dumpIfSet_dyn dflags Opt_D_dump_cmmz "New Cmm" (pprCmms (targetPlatform dflags) code_stuff)
 
         ; return code_stuff }
 
@@ -182,7 +176,7 @@ mkModuleInit cost_centre_info this_mod hpc_info
         ; initCostCentres cost_centre_info
             -- For backwards compatibility: user code may refer to this
             -- label for calling hs_add_root().
-        ; emitData Data $ Statics (mkPlainModuleInitLabel this_mod) []
+        ; emitDecl (CmmData Data (Statics (mkPlainModuleInitLabel this_mod) []))
         }
 
 ---------------------------------------------------------------
@@ -216,7 +210,7 @@ For charlike and intlike closures there is a fixed array of static
 closures predeclared.
 -}
 
-cgTyCon :: TyCon -> FCode [Cmm]  -- All constructors merged together
+cgTyCon :: TyCon -> FCode CmmGroup  -- All constructors merged together
 cgTyCon tycon
   = do	{ constrs <- mapM (getCmm . cgDataCon) (tyConDataCons tycon)
 
@@ -230,10 +224,10 @@ cgTyCon tycon
             -- code puts it before --- NR 16 Aug 2007
 	; extra <- cgEnumerationTyCon tycon
 
-        ; return (extra ++ constrs)
+        ; return (concat (extra ++ constrs))
         }
 
-cgEnumerationTyCon :: TyCon -> FCode [Cmm]
+cgEnumerationTyCon :: TyCon -> FCode [CmmGroup]
 cgEnumerationTyCon tycon
   | isEnumerationTyCon tycon
   = do	{ tbl <- getCmm $ 
@@ -250,16 +244,18 @@ cgDataCon :: DataCon -> FCode ()
 -- the static closure, for a constructor.
 cgDataCon data_con
   = do	{ let
-	    -- To allow the debuggers, interpreters, etc to cope with
-	    -- static data structures (ie those built at compile
-	    -- time), we take care that info-table contains the
-	    -- information we need.
-	    (static_cl_info, _) = layOutStaticConstr data_con arg_reps
-	    (dyn_cl_info, arg_things) = layOutDynConstr data_con arg_reps
+            (tot_wds, --  #ptr_wds + #nonptr_wds
+    	     ptr_wds, --  #ptr_wds
+    	     arg_things) = mkVirtConstrOffsets arg_reps
 
-	    emit_info cl_info ticky_code
-		= emitClosureAndInfoTable cl_info NativeDirectCall []
-                                        $ mk_code ticky_code
+            nonptr_wds   = tot_wds - ptr_wds
+
+            sta_info_tbl = mkDataConInfoTable data_con True  ptr_wds nonptr_wds
+            dyn_info_tbl = mkDataConInfoTable data_con False ptr_wds nonptr_wds
+
+            emit_info info_tbl ticky_code
+                = emitClosureAndInfoTable info_tbl NativeDirectCall []
+                             $ mk_code ticky_code
 
 	    mk_code ticky_code
 	      = 	-- NB: We don't set CC when entering data (WDP 94/06)
@@ -275,10 +271,10 @@ cgDataCon data_con
 
 	    -- Dynamic closure code for non-nullary constructors only
 	; whenC (not (isNullaryRepDataCon data_con))
-	 	(emit_info dyn_cl_info tickyEnterDynCon)
+                (emit_info dyn_info_tbl tickyEnterDynCon)
 
 		-- Dynamic-Closure first, to reduce forward references
-	; emit_info static_cl_info tickyEnterStaticCon }
+        ; emit_info sta_info_tbl tickyEnterStaticCon }
 
 
 ---------------------------------------------------------------
