@@ -17,6 +17,11 @@
 * Do some sharing for promoted things, so that when I lookup K in a
   type, I verify only once that it is promotable, and I don't build
   several identical PromotedDataTyCon.
+  Add field about promotion:
+  - in DataCon: Maybe TyCon (the promoted TyCon)
+  - in AlgTyCon: Maybe Int which means
+    - T's kind is promotable (Just n)  *^n -> *
+    - all its DataCon are promotable
 
 * Error messages for things like:
   data T a = K (a K)

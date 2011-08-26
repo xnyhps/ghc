@@ -1118,7 +1118,8 @@ sc_ds_var_app name arg_kis = do
   thing <- tcLookup name
   traceTc "lps2" (ppr name <+> ppr thing)
   case thing of
-    AGlobal (ATyCon tc) -> do
+    AGlobal (ATyCon tc)
+      | isAlgTyCon tc || isTupleTyCon tc -> do
       let tc_kind = tyConKind tc
       case isPromotableKind tc_kind of
         Just n | n == length arg_kis -> return (mkTyConApp tc arg_kis)
