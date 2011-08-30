@@ -619,7 +619,7 @@ lintKind kind@(TyConApp tc kis)  -- T k1 .. kn
   | not (getUnique tc `elem` (funTyConKey : kindKeys))
   = let tc_kind = tyConKind tc in
     case isPromotableKind tc_kind of
-      Just n | n == length kis -> return ()
+      Just n | n == length kis -> mapM_ lintKind kis
       _ -> addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
 lintKind kind 
   = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
@@ -636,9 +636,21 @@ lintCoercion (Refl ty)
        ; return (ty', ty') }
 
 lintCoercion co@(TyConAppCo tc cos)
-  = do { (ss,ts) <- mapAndUnzipM lintCoercion cos
-       ; check_co_app co (tyConKind tc) ss
-       ; return (mkTyConApp tc ss, mkTyConApp tc ts) }
+  = do { let ki = tyConKind tc
+             (kvs, _) = splitForAllTys ki
+             (cokis, cotys) = splitAt (length kvs) cos
+             -- we need to verify that kind instantiations are Refl
+       ; kis <- mapM lintKindCoercion cokis
+       ; (ss,ts) <- mapAndUnzipM lintCoercion cotys
+       ; check_co_app co ki (kis ++ ss)
+       ; return (mkTyConApp tc (kis ++ ss), mkTyConApp tc (kis ++ ts)) }
+  where
+    lintKindCoercion :: Coercion -> LintM Kind
+    lintKindCoercion (Refl k) = do
+      k' <- applySubstTy k
+      lintKind k'
+      return k'
+    lintKindCoercion _ = panic "lintCoercion lintKindCoercion"
 
 lintCoercion co@(AppCo co1 co2)
   = do { (s1,t1) <- lintCoercion co1

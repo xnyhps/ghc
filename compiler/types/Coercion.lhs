@@ -912,7 +912,7 @@ ty_co_subst subst ty
        			     -- A type variable from a non-cloned forall
 			     -- won't be in the substitution
     go (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2)
-    go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)
+    go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)  -- IA0: tys contains kind instantiations which should not be lifted
     go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2)
     go (ForAllTy v ty)   = mkForAllCo v' $! (ty_co_subst subst' ty)
                          where
