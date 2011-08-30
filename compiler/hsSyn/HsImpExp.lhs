@@ -48,7 +48,7 @@ simpleImportDecl mn = ImportDecl {
       ideclName      = noLoc mn,
       ideclPkgQual   = Nothing,
       ideclSource    = False,
-      ideclSafe      = True,
+      ideclSafe      = False,
       ideclImplicit  = False,
       ideclQualified = False,
       ideclAs        = Nothing,
@@ -111,7 +111,7 @@ data IE name
   | IEGroup             Int HsDocString  -- ^ Doc section heading
   | IEDoc               HsDocString      -- ^ Some documentation
   | IEDocNamed          String           -- ^ Reference to named doc
-  deriving (Data, Typeable)
+  deriving (Eq, Data, Typeable)
 \end{code}
 
 \begin{code}
