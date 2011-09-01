@@ -235,7 +235,7 @@ tc_hs_deriv _ other
 \begin{code}
 kcHsSigType, kcHsLiftedSigType :: LHsType Name -> TcM (LHsType Name)
 	-- Used for type signatures
-kcHsSigType ty 	     = addKcTypeCtxt ty $ kcTypeType ty
+kcHsSigType ty 	     = addKcTypeCtxt ty $ kcArgType ty
 kcHsLiftedSigType ty = addKcTypeCtxt ty $ kcLiftedType ty
 
 tcHsKindedType :: LHsType Name -> TcM Type
@@ -273,9 +273,14 @@ kcLiftedType ty = kc_check_lhs_type ty ekLifted
     
 ---------------------------
 kcTypeType :: LHsType Name -> TcM (LHsType Name)
--- The type ty must be a *type*, but it can be lifted or 
+-- The type ty must be a *type*, but it can be lifted or
 -- unlifted or an unboxed tuple.
 kcTypeType ty = kc_check_lhs_type ty ekOpen
+
+---------------------------
+kcArgType :: LHsType Name -> TcM (LHsType Name)
+-- The type ty must be an *arg* *type* (lifted or unlifted)
+kcArgType ty = kc_check_lhs_type ty ekArg
 
 ---------------------------
 kcCheckLHsType :: LHsType Name -> ExpKind -> TcM (LHsType Name)
@@ -982,9 +987,10 @@ data EkCtxt  = EkUnk		-- Unknown context
      	     | EkArg SDoc Int   -- Function, arg posn, expected kind
 
 
-ekLifted, ekOpen :: ExpKind
+ekLifted, ekOpen, ekArg :: ExpKind
 ekLifted = EK liftedTypeKind EkUnk
 ekOpen   = EK openTypeKind   EkUnk
+ekArg    = EK argTypeKind    EkUnk
 
 unifyKinds :: SDoc -> [(LHsType Name, TcKind)] -> TcM TcKind
 unifyKinds fun act_kinds = do
