@@ -7,7 +7,7 @@
 module RnEnv ( 
 	newTopSrcBinder, 
 	lookupLocatedTopBndrRn, lookupTopBndrRn,
-	lookupLocatedOccRn, lookupOccRn, lookupPromotedOccRn,
+	lookupLocatedOccRn, lookupOccRn, lookupLocalOccRn_maybe, lookupPromotedOccRn,
         lookupGlobalOccRn, lookupGlobalOccRn_maybe,
 	lookupLocalDataTcNames, lookupSigOccRn,
 	lookupFixityRn, lookupTyFixityRn, 
@@ -425,6 +425,12 @@ getLookupOccRn
 
 lookupLocatedOccRn :: Located RdrName -> RnM (Located Name)
 lookupLocatedOccRn = wrapLocM lookupOccRn
+
+lookupLocalOccRn_maybe :: RdrName -> RnM (Maybe Name)
+-- Just look in the local environment
+lookupLocalOccRn_maybe rdr_name 
+  = do { local_env <- getLocalRdrEnv
+       ; return (lookupLocalRdrEnv local_env rdr_name) }
 
 -- lookupOccRn looks up an occurrence of a RdrName
 lookupOccRn :: RdrName -> RnM Name
