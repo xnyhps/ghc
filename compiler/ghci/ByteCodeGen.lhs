@@ -444,7 +444,7 @@ schemeE d s p exp@(AnnTick (Breakpoint _id _fvs) _rhs)
    = if isUnLiftedType ty
         then do
           -- If the result type is unlifted, then we must generate
-          --   let f = \s . case tick# of _ -> e
+          --   let f = \s . tick<n> e
           --   in  f realWorld#
           -- When we stop at the breakpoint, _result will have an unlifted
           -- type and hence won't be bound in the environment, but the

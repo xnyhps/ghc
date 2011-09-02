@@ -5,6 +5,7 @@
 \begin{code}
 module Coverage (addTicksToBinds, hpcInitCode) where
 
+import Type
 import HsSyn
 import Module
 import Outputable
@@ -942,7 +943,13 @@ mkTickish :: BoxLabel -> Bool -> Bool -> SrcSpan -> OccEnv Id -> [String]
 mkTickish boxLabel countEntries topOnly pos fvs decl_path =
   TM $ \ env st ->
     let c = tickBoxCount st
-        ids = occEnvElts fvs
+        ids = filter (not . isUnLiftedType . idType) $ occEnvElts fvs
+            -- unlifted types cause two problems here:
+            --   * we can't bind them  at the GHCi prompt
+            --     (bindLocalsAtBreakpoint already fliters them out),
+            --   * the simplifier might try to substitute a literal for
+            --     the Id, and we can't handle that.
+
         mes = mixEntries st
         me = (pos, decl_path, map (nameOccName.idName) ids, boxLabel)
 

@@ -16,6 +16,7 @@ module CoreSubst (
 	substTy, substCo, substExpr, substExprSC, substBind, substBindSC,
         substUnfolding, substUnfoldingSC,
 	substUnfoldingSource, lookupIdSubst, lookupTvSubst, lookupCvSubst, substIdOcc,
+        substTickish,
 
         -- ** Operations on substitutions
 	emptySubst, mkEmptySubst, mkSubst, mkOpenSubst, substInScope, isEmptySubst, 
@@ -363,7 +364,7 @@ subst_expr subst expr
     go (Coercion co)   = Coercion (substCo subst co)
     go (Lit lit)       = Lit lit
     go (App fun arg)   = App (go fun) (go arg)
-    go (Tick tickish e) = Tick (go_tickish tickish) (go e)
+    go (Tick tickish e) = Tick (substTickish subst tickish) (go e)
     go (Cast e co)     = Cast (go e) (substCo subst co)
        -- Do not optimise even identity coercions
        -- Reason: substitution applies to the LHS of RULES, and
@@ -386,15 +387,6 @@ subst_expr subst expr
     go_alt subst (con, bndrs, rhs) = (con, bndrs', subst_expr subst' rhs)
 				 where
 				   (subst', bndrs') = substBndrs subst bndrs
-
-    go_tickish (Breakpoint b ids) =
-        Breakpoint b
-          [ id' | id <- ids,
-                  Var id' <- [lookupIdSubst (text "subst_tickish") subst id] ]
-        -- this discards from the list of Ids any that have
-        -- non-variable substitutions.  Hopefully that won't happen,
-        -- but we don't explicitly forbid it.
-    go_tickish other_tickish = other_tickish
 
 -- | Apply a substititon to an entire 'CoreBind', additionally returning an updated 'Subst'
 -- that should be used by subsequent substitutons.
@@ -752,6 +744,28 @@ substVarSet subst fvs
     subst_fv subst fv 
         | isId fv   = exprFreeVars (lookupIdSubst (text "substVarSet") subst fv)
         | otherwise = Type.tyVarsOfType (lookupTvSubst subst fv)
+
+------------------
+substTickish :: Subst -> Tickish Id -> Tickish Id
+substTickish subst (Breakpoint n ids) = Breakpoint n (map do_one ids)
+ where do_one = getIdFromTrivialExpr . lookupIdSubst (text "subst_tickish") subst
+substTickish _subst other = other
+
+{- Note [substTickish]
+
+A Breakpoint contains a list of Ids.  What happens if we ever want to
+substitute an expression for one of these Ids?
+
+First, we ensure that we only ever substitute trivial expressions for
+these Ids, by marking them as NoOccInfo in the occurrence analyser.
+Then, when substituting for the Id, we unwrap any type applications
+and abstractions to get back to an Id, with getIdFromTrivialExpr.
+
+Second, we have to ensure that we never try to substitute a literal
+for an Id in a breakpoint.  We ensure this by never storing an Id with
+an unlifted type in a Breakpoint - see Coverage.mkTickish.
+Breakpoints can't handle free variables with unlifted types anyway.
+-}
 \end{code}
 
 Note [Worker inlining]
@@ -842,7 +856,7 @@ simple_opt_expr' subst expr
     go (Type ty)        = Type     (substTy subst ty)
     go (Coercion co)    = Coercion (optCoercion (getCvSubst subst) co)
     go (Lit lit)        = Lit lit
-    go (Tick tickish e) = Tick (go_tickish tickish) (go e)
+    go (Tick tickish e) = Tick (substTickish subst tickish) (go e)
     go (Cast e co)      | isReflCo co' = go e
        	                | otherwise    = Cast (go e) co' 
                         where
@@ -876,15 +890,6 @@ simple_opt_expr' subst expr
        where
          bs = reverse bs'
          e' = simple_opt_expr subst e
-
-    go_tickish (Breakpoint b ids) =
-        Breakpoint b
-          [ id' | id <- ids,
-                  Var id' <- [lookupIdSubst (text "subst_tickish") subst id] ]
-        -- this discards from the list of Ids any that have
-        -- non-variable substitutions.  Hopefully that won't happen,
-        -- but we don't explicitly forbid it.
-    go_tickish other_tickish = other_tickish
 
 ----------------------
 -- simple_app collects arguments for beta reduction

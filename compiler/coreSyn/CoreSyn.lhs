@@ -341,6 +341,9 @@ data Tickish id =
     , breakpointFVs    :: [id]  -- ^ the order of this list is important:
                                 -- it matches the order of the lists in the
                                 -- appropriate entry in HscTypes.ModBreaks.
+                                --
+                                -- Careful about substitution!  See
+                                -- Note [substTickish] in CoreSubst.
     }
 
   deriving (Eq, Ord, Data, Typeable)

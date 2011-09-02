@@ -647,13 +647,8 @@ completeBind env top_lvl old_bndr new_bndr new_rhs
       	-- Simplify the unfolding
       ; new_unfolding <- simplUnfolding env top_lvl old_bndr final_rhs old_unf
 
-      ; dflags <- getDOptsSmpl
       ; if postInlineUnconditionally env top_lvl new_bndr occ_info
                                      final_rhs new_unfolding
-           && not (hscTarget dflags == HscInterpreted)
-              -- we cannot postInlineUnconditionally in GHCi, because that might
-              -- cause expressions to be substituted for the Ids in a
-              -- Breakpoint.
 
 	                -- Inline and discard the binding
 	then do  { tick (PostInlineUnconditionally old_bndr)
@@ -1054,6 +1049,7 @@ simplTick env tickish expr cont
     | otherwise = tickish
 
   getDoneId (DoneId id) = id
+  getDoneId (DoneEx e)  = getIdFromTrivialExpr e -- Note [substTickish] in CoreSubst
   getDoneId other = pprPanic "getDoneId" (ppr other)
 \end{code}
 

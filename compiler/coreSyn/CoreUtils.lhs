@@ -25,7 +25,7 @@ module CoreUtils (
 
 	-- * Properties of expressions
 	exprType, coreAltType, coreAltsType,
-	exprIsDupable, exprIsTrivial, exprIsBottom,
+        exprIsDupable, exprIsTrivial, getIdFromTrivialExpr, exprIsBottom,
         exprIsCheap, exprIsExpandable, exprIsCheap', CheapAppFun,
 	exprIsHNF, exprOkForSpeculation, exprIsBig, exprIsConLike,
 	rhsIsStatic, isCheapApp, isExpandableApp,
@@ -432,6 +432,21 @@ exprIsTrivial (Tick _ e)       = False  -- See Note [Tick trivial]
 exprIsTrivial (Cast e _)       = exprIsTrivial e
 exprIsTrivial (Lam b body)     = not (isRuntimeVar b) && exprIsTrivial body
 exprIsTrivial _                = False
+\end{code}
+
+When substituting in a breakpoint we need to strip away the type cruft
+from a trivial expression and get back to the Id.  The invariant is
+that the expression we're substituting was originally trivial
+according to exprIsTrivial.
+
+\begin{code}
+getIdFromTrivialExpr :: CoreExpr -> Id
+getIdFromTrivialExpr e = go e
+  where go (Var v) = v
+        go (App f t) | not (isRuntimeArg t) = go f
+        go (Cast e _) = go e
+        go (Lam b e) | not (isRuntimeVar b) = go e
+        go e = pprPanic "getIdFromTrivialExpr" (ppr e)
 \end{code}
 
 exprIsBottom is a very cheap and cheerful function; it may return
