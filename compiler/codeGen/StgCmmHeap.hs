@@ -117,11 +117,6 @@ allocDynClosureCmm cl_info use_cc _blame_cc amodes_w_offsets
         -- SAY WHAT WE ARE ABOUT TO DO
         ; tickyDynAlloc cl_info
         ; profDynAlloc cl_info use_cc
-                -- ToDo: This is almost certainly wrong
-                -- We're ignoring blame_cc. But until we've
-                -- fixed the boxing hack in chooseDynCostCentres etc,
-                -- we're worried about making things worse by "fixing"
-                -- this part to use blame_cc!
 
         -- FIND THE OFFSET OF THE INFO-PTR WORD
         ; let   info_offset = virt_hp + 1

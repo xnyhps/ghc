@@ -35,7 +35,7 @@ module DsUtils (
         dsSyntaxTable, lookupEvidence,
 
 	selectSimpleMatchVarL, selectMatchVars, selectMatchVar,
-	mkTickBox, mkOptTickBox, mkBinaryTickBox
+        mkOptTickBox, mkBinaryTickBox
     ) where
 
 #include "HsVersions.h"
@@ -70,7 +70,6 @@ import SrcLoc
 import Util
 import ListSetOps
 import FastString
-import StaticFlags
 \end{code}
 
 
@@ -744,38 +743,19 @@ CPR-friendly.  This matters a lot: if you don't get it right, you lose
 the tail call property.  For example, see Trac #3403.
 
 \begin{code}
-mkOptTickBox :: Maybe (Int,[Id]) -> CoreExpr -> DsM CoreExpr
-mkOptTickBox Nothing e   = return e
-mkOptTickBox (Just (ix,ids)) e = mkTickBox ix ids e
-
-mkTickBox :: Int -> [Id] -> CoreExpr -> DsM CoreExpr
-mkTickBox ix vars e = do
-       uq <- newUnique 	
-       mod <- getModuleDs
-       let tick | opt_Hpc   = mkTickBoxOpId uq mod ix
-                | otherwise = mkBreakPointOpId uq mod ix
-       uq2 <- newUnique 	
-       let occName = mkVarOcc "tick"
-       let name = mkInternalName uq2 occName noSrcSpan   -- use mkSysLocal?
-       let var  = Id.mkLocalId name realWorldStatePrimTy
-       scrut <- 
-          if opt_Hpc 
-            then return (Var tick)
-            else do
-              let tickVar = Var tick
-              let tickType = mkFunTys (map idType vars) realWorldStatePrimTy 
-              let scrutApTy = App tickVar (Type tickType)
-              return (mkApps scrutApTy (map Var vars) :: Expr Id)
-       return $ Case scrut var ty [(DEFAULT,[],e)]
-  where
-     ty = exprType e
+mkOptTickBox :: Maybe (Tickish Id) -> CoreExpr -> DsM CoreExpr
+mkOptTickBox Nothing e        = return e
+mkOptTickBox (Just tickish) e = return (Tick tickish e)
 
 mkBinaryTickBox :: Int -> Int -> CoreExpr -> DsM CoreExpr
 mkBinaryTickBox ixT ixF e = do
        uq <- newUnique 	
-       let bndr1 = mkSysLocal (fsLit "t1") uq boolTy 
-       falseBox <- mkTickBox ixF [] $ Var falseDataConId
-       trueBox  <- mkTickBox ixT [] $ Var trueDataConId
+       this_mod <- getModuleDs
+       let bndr1 = mkSysLocal (fsLit "t1") uq boolTy
+       let
+           falseBox = Tick (HpcTick this_mod ixF) (Var falseDataConId)
+           trueBox  = Tick (HpcTick this_mod ixT) (Var trueDataConId)
+       --
        return $ Case e bndr1 boolTy
                        [ (DataAlt falseDataCon, [], falseBox)
                        , (DataAlt trueDataCon,  [], trueBox)

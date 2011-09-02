@@ -32,7 +32,7 @@ module SimplEnv (
 	-- Floats
   	Floats, emptyFloats, isEmptyFloats, addNonRec, addFloats, extendFloats,
 	wrapFloats, floatBinds, setFloats, zapFloats, addRecFloats,
-	doFloatFromRhs, getFloats
+        doFloatFromRhs, getFloatBinds, getFloats, tickFloats
     ) where
 
 #include "HsVersions.h"
@@ -59,6 +59,7 @@ import BasicTypes
 import MonadUtils
 import Outputable
 import FastString
+import Util
 
 import Data.List
 \end{code}
@@ -227,7 +228,7 @@ seIdSubst:
 \begin{code}
 mkSimplEnv :: SimplifierMode -> SimplEnv
 mkSimplEnv mode
-  = SimplEnv { seCC = subsumedCCS
+  = SimplEnv { seCC = noCCS
              , seMode = mode
              , seInScope = init_in_scope
              , seFloats = emptyFloats
@@ -432,6 +433,14 @@ addNonRec env id rhs
     env { seFloats = seFloats env `addFlts` unitFloat (NonRec id rhs),
 	  seInScope = extendInScopeSet (seInScope env) id }
 
+tickFloats :: SimplEnv -> Tickish Id -> SimplEnv
+-- When floating out of a Tick, we have to add ticks to the floats
+tickFloats env@SimplEnv { seFloats = Floats fs ff } tickish
+   = env { seFloats = Floats (mapOL add_tick fs) ff }
+   where
+     add_tick (NonRec b e) = NonRec b (mkTick tickish e)
+     add_tick (Rec bs)     = Rec (mapSnd (mkTick tickish) bs)
+
 extendFloats :: SimplEnv -> OutBind -> SimplEnv
 -- Add these bindings to the floats, and extend the in-scope env too
 extendFloats env bind
@@ -474,8 +483,11 @@ wrapFlts (Floats bs _) body = foldrOL wrap body bs
     wrap (Rec prs)    body = Let (Rec prs) body
     wrap (NonRec b r) body = bindNonRec b r body
 
-getFloats :: SimplEnv -> [CoreBind]
-getFloats (SimplEnv {seFloats = Floats bs _}) = fromOL bs
+getFloatBinds :: SimplEnv -> [CoreBind]
+getFloatBinds env = floatBinds (seFloats env)
+
+getFloats :: SimplEnv -> Floats
+getFloats env = seFloats env
 
 isEmptyFloats :: SimplEnv -> Bool
 isEmptyFloats env = isEmptyFlts (seFloats env)

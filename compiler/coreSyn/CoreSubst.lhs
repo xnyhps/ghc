@@ -363,7 +363,7 @@ subst_expr subst expr
     go (Coercion co)   = Coercion (substCo subst co)
     go (Lit lit)       = Lit lit
     go (App fun arg)   = App (go fun) (go arg)
-    go (Note note e)   = Note (go_note note) (go e)
+    go (Tick tickish e) = Tick (go_tickish tickish) (go e)
     go (Cast e co)     = Cast (go e) (substCo subst co)
        -- Do not optimise even identity coercions
        -- Reason: substitution applies to the LHS of RULES, and
@@ -387,7 +387,14 @@ subst_expr subst expr
 				 where
 				   (subst', bndrs') = substBndrs subst bndrs
 
-    go_note note	     = note
+    go_tickish (Breakpoint b ids) =
+        Breakpoint b
+          [ id' | id <- ids,
+                  Var id' <- [lookupIdSubst (text "subst_tickish") subst id] ]
+        -- this discards from the list of Ids any that have
+        -- non-variable substitutions.  Hopefully that won't happen,
+        -- but we don't explicitly forbid it.
+    go_tickish other_tickish = other_tickish
 
 -- | Apply a substititon to an entire 'CoreBind', additionally returning an updated 'Subst'
 -- that should be used by subsequent substitutons.
@@ -835,7 +842,7 @@ simple_opt_expr' subst expr
     go (Type ty)        = Type     (substTy subst ty)
     go (Coercion co)    = Coercion (optCoercion (getCvSubst subst) co)
     go (Lit lit)        = Lit lit
-    go (Note note e)    = Note note (go e)
+    go (Tick tickish e) = Tick (go_tickish tickish) (go e)
     go (Cast e co)      | isReflCo co' = go e
        	                | otherwise    = Cast (go e) co' 
                         where
@@ -869,6 +876,15 @@ simple_opt_expr' subst expr
        where
          bs = reverse bs'
          e' = simple_opt_expr subst e
+
+    go_tickish (Breakpoint b ids) =
+        Breakpoint b
+          [ id' | id <- ids,
+                  Var id' <- [lookupIdSubst (text "subst_tickish") subst id] ]
+        -- this discards from the list of Ids any that have
+        -- non-variable substitutions.  Hopefully that won't happen,
+        -- but we don't explicitly forbid it.
+    go_tickish other_tickish = other_tickish
 
 ----------------------
 -- simple_app collects arguments for beta reduction

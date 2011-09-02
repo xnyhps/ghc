@@ -30,7 +30,7 @@ extern FILE *hp_file;
 
 #ifdef PROFILING
 
-void gen_XML_logfile    ( void );
+void genXMLLogfile    ( void );
 void reportCCSProfiling ( void );
 
 void PrintNewStackDecls ( void );

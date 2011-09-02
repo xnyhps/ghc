@@ -24,6 +24,7 @@ import {-# SOURCE #-} HsPat  ( LPat )
 
 import HsTypes
 import PprCore ()
+import CoreSyn
 import Coercion
 import Type
 import Name
@@ -125,15 +126,16 @@ data HsBindLR idL idR
 				-- Before renaming, and after typechecking, 
 				-- the field is unused; it's just an error thunk
 
-        fun_tick :: Maybe (Int,[Id])   -- ^ This is the (optional) module-local tick number.
+        fun_tick :: Maybe (Tickish Id)  -- ^ Tick to put on the rhs, if any
     }
 
   | PatBind {	-- The pattern is never a simple variable;
 		-- That case is done by FunBind
 	pat_lhs    :: LPat idL,
 	pat_rhs    :: GRHSs idR,
-	pat_rhs_ty :: PostTcType,	-- Type of the GRHSs
-	bind_fvs   :: NameSet		-- Same as for FunBind
+        pat_rhs_ty :: PostTcType,        -- ^ Type of the GRHSs
+        bind_fvs   :: NameSet,           -- ^ Same as for FunBind
+        pat_tick   :: Maybe (Tickish Id) -- ^ Tick to put on the rhs, if any
     }
 
   | VarBind {	-- Dictionary binding and suchlike 
@@ -324,9 +326,12 @@ ppr_monobind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dictvars
 pprTicks :: SDoc -> SDoc -> SDoc
 -- Print stuff about ticks only when -dppr-debug is on, to avoid
 -- them appearing in error messages (from the desugarer); see Trac # 3263
+-- Also print ticks in dumpStyle, so that -ddump-hpc actually does
+-- something useful.
 pprTicks pp_no_debug pp_when_debug
-  = getPprStyle (\ sty -> if debugStyle sty then pp_when_debug 
-                                            else pp_no_debug)
+  = getPprStyle (\ sty -> if debugStyle sty || dumpStyle sty
+                             then pp_when_debug
+                             else pp_no_debug)
 \end{code}
 
 %************************************************************************

@@ -1160,7 +1160,8 @@ hscInteractive (iface, details, cgguts) mod_summary
          prepd_binds <- {-# SCC "CorePrep" #-}
                         liftIO $ corePrepPgm dflags core_binds data_tycons ;
          -----------------  Generate byte code ------------------
-         comp_bc <- liftIO $ byteCodeGen dflags prepd_binds data_tycons mod_breaks
+         comp_bc <- liftIO $ byteCodeGen dflags this_mod prepd_binds
+                                         data_tycons mod_breaks
          ------------------ Create f-x-dynamic C-side stuff ---
          (_istub_h_exists, istub_c_exists) 
              <- liftIO $ outputForeignStubs dflags this_mod
@@ -1507,7 +1508,7 @@ hscCompileCoreExpr hsc_env srcspan ds_expr
   	      Nothing  -> return ()
 
           -- Convert to BCOs
-    bcos <- coreExprToBCOs dflags prepd_expr
+    bcos <- coreExprToBCOs dflags iNTERACTIVE prepd_expr
 
   	-- link it
     hval <- linkExpr hsc_env srcspan bcos

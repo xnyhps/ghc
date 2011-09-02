@@ -317,10 +317,11 @@ dsExpr (ExplicitTuple tup_args boxity)
 
 dsExpr (HsSCC cc expr) = do
     mod_name <- getModuleDs
-    Note (SCC (mkUserCC cc mod_name)) <$> dsLExpr expr
+    count <- doptDs Opt_ProfCountEntries
+    Tick (ProfNote (mkUserCC cc mod_name) count True) <$> dsLExpr expr
 
-dsExpr (HsCoreAnn fs expr)
-  = Note (CoreNote $ unpackFS fs) <$> dsLExpr expr
+dsExpr (HsCoreAnn _ expr)
+  = dsLExpr expr
 
 dsExpr (HsCase discrim matches@(MatchGroup _ rhs_ty)) 
   | isEmptyMatchGroup matches	-- A Core 'case' is always non-empty
@@ -586,9 +587,9 @@ dsExpr (HsProc pat cmd) = dsProcExpr pat cmd
 Hpc Support 
 
 \begin{code}
-dsExpr (HsTick ix vars e) = do
+dsExpr (HsTick tickish e) = do
   e' <- dsLExpr e
-  mkTickBox ix vars e'
+  return (Tick tickish e')
 
 -- There is a problem here. The then and else branches
 -- have no free variables, so they are open to lifting.

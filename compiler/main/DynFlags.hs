@@ -15,6 +15,7 @@ module DynFlags (
         WarningFlag(..),
         ExtensionFlag(..),
         LogAction,
+        ProfAuto(..),
         glasgowExtsFlags,
         dopt,
         dopt_set,
@@ -199,7 +200,7 @@ data DynFlag
    | Opt_D_dump_splices
    | Opt_D_dump_BCOs
    | Opt_D_dump_vect
-   | Opt_D_dump_hpc
+   | Opt_D_dump_ticked
    | Opt_D_dump_rtti
    | Opt_D_source_stats
    | Opt_D_verbose_core2core
@@ -247,9 +248,8 @@ data DynFlag
    | Opt_ExposeAllUnfoldings
 
    -- profiling opts
-   | Opt_AutoSccsOnAllToplevs
-   | Opt_AutoSccsOnExportedToplevs
    | Opt_AutoSccsOnIndividualCafs
+   | Opt_ProfCountEntries
 
    -- misc opts
    | Opt_Pp
@@ -552,8 +552,17 @@ data DynFlags = DynFlags {
   -- | Message output action: use "ErrUtils" instead of this if you can
   log_action            :: LogAction,
 
-  haddockOptions :: Maybe String
+  haddockOptions        :: Maybe String,
+
+  -- | what kind of {-# SCC #-} to add automatically
+  profAuto              :: ProfAuto
  }
+
+data ProfAuto
+  = NoProfAuto         -- ^ no SCC annotations added
+  | ProfAutoAll        -- ^ top-level and nested functions are annotated
+  | ProfAutoTop        -- ^ top-level functions annotated only
+  | ProfAutoExports    -- ^ exported functions annotated only
 
 data Settings = Settings {
   sGhcUsagePath          :: FilePath,    -- Filled in by SysTools
@@ -866,7 +875,8 @@ defaultDynFlags mySettings =
         safeHaskell = Sf_None,
         extensions = [],
         extensionFlags = flattenExtensionFlags Nothing [],
-        log_action = defaultLogAction
+        log_action = defaultLogAction,
+        profAuto = NoProfAuto
       }
 
 type LogAction = Severity -> SrcSpan -> PprStyle -> Message -> IO ()
@@ -1502,7 +1512,8 @@ dynamic_flags = [
   , flagA "ddump-hi"                (setDumpFlag Opt_D_dump_hi)
   , flagA "ddump-minimal-imports"   (setDumpFlag Opt_D_dump_minimal_imports)
   , flagA "ddump-vect"              (setDumpFlag Opt_D_dump_vect)
-  , flagA "ddump-hpc"               (setDumpFlag Opt_D_dump_hpc)
+  , flagA "ddump-hpc"               (setDumpFlag Opt_D_dump_ticked) -- back compat
+  , flagA "ddump-ticked"            (setDumpFlag Opt_D_dump_ticked)
   , flagA "ddump-mod-cycles"        (setDumpFlag Opt_D_dump_mod_cycles)
   , flagA "ddump-view-pattern-commoning" (setDumpFlag Opt_D_dump_view_pattern_commoning)
   , flagA "ddump-to-file"           (setDumpFlag Opt_DumpToFile)
@@ -1560,17 +1571,20 @@ dynamic_flags = [
 
         ------ Profiling ----------------------------------------------------
 
-  -- XXX Should the -f* flags be deprecated?
-  -- They don't seem to be documented
-  , flagA "fauto-sccs-on-all-toplevs"   	   (NoArg (setDynFlag Opt_AutoSccsOnAllToplevs))
-  , flagA "auto-all"                    	   (NoArg (setDynFlag Opt_AutoSccsOnAllToplevs))
-  , flagA "no-auto-all"                 	   (NoArg (unSetDynFlag Opt_AutoSccsOnAllToplevs))
-  , flagA "fauto-sccs-on-exported-toplevs"  (NoArg (setDynFlag Opt_AutoSccsOnExportedToplevs))
-  , flagA "auto"                            (NoArg (setDynFlag Opt_AutoSccsOnExportedToplevs))
-  , flagA "no-auto"                         (NoArg (unSetDynFlag Opt_AutoSccsOnExportedToplevs))
-  , flagA "fauto-sccs-on-individual-cafs"   (NoArg (setDynFlag Opt_AutoSccsOnIndividualCafs))
-  , flagA "caf-all"                         (NoArg (setDynFlag Opt_AutoSccsOnIndividualCafs))
-  , flagA "no-caf-all"                      (NoArg (unSetDynFlag Opt_AutoSccsOnIndividualCafs))
+        -- OLD profiling flags
+  , flagA "auto-all"              (noArg (\d -> d { profAuto = ProfAutoAll } ))
+  , flagA "no-auto-all"           (noArg (\d -> d { profAuto = NoProfAuto } ))
+  , flagA "auto"                  (noArg (\d -> d { profAuto = ProfAutoExports } ))
+  , flagA "no-auto"               (noArg (\d -> d { profAuto = NoProfAuto } ))
+
+        -- NEW profiling flags
+  , flagA "prof-auto-all"         (noArg (\d -> d { profAuto = ProfAutoAll } ))
+  , flagA "prof-auto-top"         (noArg (\d -> d { profAuto = ProfAutoTop } ))
+  , flagA "prof-auto-exported"    (noArg (\d -> d { profAuto = ProfAutoExports } ))
+  , flagA "prof-no-auto"          (noArg (\d -> d { profAuto = NoProfAuto } ))
+
+  , flagA "caf-all"               (NoArg (setDynFlag Opt_AutoSccsOnIndividualCafs))
+  , flagA "no-caf-all"            (NoArg (unSetDynFlag Opt_AutoSccsOnIndividualCafs))
 
         ------ DPH flags ----------------------------------------------------
 
@@ -1747,7 +1761,8 @@ fFlags = [
   ( "ghci-sandbox",                     AlwaysAllowed, Opt_GhciSandbox, nop ),
   ( "helpful-errors",                   AlwaysAllowed, Opt_HelpfulErrors, nop ),
   ( "building-cabal-package",           AlwaysAllowed, Opt_BuildingCabalPackage, nop ),
-  ( "implicit-import-qualified",        AlwaysAllowed, Opt_ImplicitImportQualified, nop )
+  ( "implicit-import-qualified",        AlwaysAllowed, Opt_ImplicitImportQualified, nop ),
+  ( "prof-count-entries",               AlwaysAllowed, Opt_ProfCountEntries, nop )
   ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
@@ -1919,7 +1934,8 @@ defaultFlags
       Opt_EmbedManifest,
       Opt_PrintBindContents,
       Opt_GhciSandbox,
-      Opt_HelpfulErrors
+      Opt_HelpfulErrors,
+      Opt_ProfCountEntries
     ]
 
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]

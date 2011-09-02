@@ -226,9 +226,6 @@ INFO_TABLE(stg_IND_PERM,1,0,IND_PERM,"IND_PERM","IND_PERM")
 
     LDV_ENTER(R1);
 
-    /* Enter PAP cost centre */
-    ENTER_CCS_PAP_CL(R1);
-
     /* For ticky-ticky, change the perm_ind to a normal ind on first
      * entry, so the number of ent_perm_inds is the number of *thunks*
      * entered again, not the number of subsequent entries.

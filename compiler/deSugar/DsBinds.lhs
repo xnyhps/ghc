@@ -12,7 +12,7 @@ lower levels it is preserved with @let@/@letrec@s).
 \begin{code}
 module DsBinds ( dsTopLHsBinds, dsLHsBinds, decomposeRuleLhs, dsSpec,
 		 dsHsWrapper, dsTcEvBinds, dsEvBinds, wrapDsEvBinds, 
-		 DsEvBind(..), AutoScc(..)
+                 DsEvBind(..)
   ) where
 
 #include "HsVersions.h"
@@ -38,8 +38,6 @@ import TcType
 import Type
 import Coercion
 import TysPrim  ( anyTypeOfKind )
-import CostCentre
-import Module
 import Id
 import TyCon	( tyConDataCons )
 import Class
@@ -69,69 +67,66 @@ import MonadUtils
 %************************************************************************
 
 \begin{code}
-dsTopLHsBinds :: AutoScc -> LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
-dsTopLHsBinds auto_scc binds = ds_lhs_binds auto_scc binds
+dsTopLHsBinds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
+dsTopLHsBinds binds = ds_lhs_binds binds
 
 dsLHsBinds :: LHsBinds Id -> DsM [(Id,CoreExpr)]
-dsLHsBinds binds = do { binds' <- ds_lhs_binds NoSccs binds
+dsLHsBinds binds = do { binds' <- ds_lhs_binds binds
                       ; return (fromOL binds') }
 
 ------------------------
-ds_lhs_binds :: AutoScc -> LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
+ds_lhs_binds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
 
-	 -- scc annotation policy (see below)
-ds_lhs_binds auto_scc binds = do { ds_bs <- mapBagM (dsLHsBind auto_scc) binds
-                                 ; return (foldBag appOL id nilOL ds_bs) }
+ds_lhs_binds binds = do { ds_bs <- mapBagM dsLHsBind binds
+                        ; return (foldBag appOL id nilOL ds_bs) }
 
-dsLHsBind :: AutoScc -> LHsBind Id -> DsM (OrdList (Id,CoreExpr))
-dsLHsBind auto_scc (L loc bind)
-  = putSrcSpanDs loc $ dsHsBind auto_scc bind
+dsLHsBind :: LHsBind Id -> DsM (OrdList (Id,CoreExpr))
+dsLHsBind (L loc bind)
+  = putSrcSpanDs loc $ dsHsBind bind
 
-dsHsBind :: AutoScc -> HsBind Id -> DsM (OrdList (Id,CoreExpr))
+dsHsBind :: HsBind Id -> DsM (OrdList (Id,CoreExpr))
 
-dsHsBind _ (VarBind { var_id = var, var_rhs = expr, var_inline = inline_regardless })
+dsHsBind (VarBind { var_id = var, var_rhs = expr, var_inline = inline_regardless })
   = do  { core_expr <- dsLExpr expr
 
 	        -- Dictionary bindings are always VarBinds,
 	        -- so we only need do this here
-	; core_expr' <- addDictScc var core_expr
-	; let var' | inline_regardless = var `setIdUnfolding` mkCompulsoryUnfolding core_expr'
+        ; let var' | inline_regardless = var `setIdUnfolding` mkCompulsoryUnfolding core_expr
 	      	   | otherwise         = var
 
-	; return (unitOL (makeCorePair var' False 0 core_expr')) }
+        ; return (unitOL (makeCorePair var' False 0 core_expr)) }
 
-dsHsBind auto_scc (FunBind { fun_id = L _ fun, fun_matches = matches
-		    , fun_co_fn = co_fn, fun_tick = tick 
-                    , fun_infix = inf }) 
+dsHsBind (FunBind { fun_id = L _ fun, fun_matches = matches
+                  , fun_co_fn = co_fn, fun_tick = tick
+                  , fun_infix = inf })
  = do	{ (args, body) <- matchWrapper (FunRhs (idName fun) inf) matches
 	; body'    <- mkOptTickBox tick body
-	; wrap_fn' <- dsHsWrapper co_fn 
-	; let rhs = addAutoScc auto_scc fun $ wrap_fn' (mkLams args body')
-	; return (unitOL (makeCorePair fun False 0 rhs)) }
+        ; wrap_fn' <- dsHsWrapper co_fn
+        ; let rhs = wrap_fn' (mkLams args body')
+        ; return (unitOL (makeCorePair fun False 0 rhs)) }
 
-dsHsBind auto_scc (PatBind { pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty })
+dsHsBind (PatBind { pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty
+                  , pat_tick = tick })
   = do	{ body_expr <- dsGuarded grhss ty
-	; sel_binds <- mkSelectorBinds pat body_expr
+        ; body'     <- mkOptTickBox tick body_expr
+        ; sel_binds <- mkSelectorBinds pat body'
 	  -- We silently ignore inline pragmas; no makeCorePair
 	  -- Not so cool, but really doesn't matter
-    ; let sel_binds' = [ (v, addAutoScc auto_scc v expr)
-                       | (v, expr) <- sel_binds ]
-	; return (toOL sel_binds') }
+    ; return (toOL sel_binds) }
 
 	-- A common case: one exported variable
 	-- Non-recursive bindings come through this way
 	-- So do self-recursive bindings, and recursive bindings
 	-- that have been chopped up with type signatures
-dsHsBind auto_scc (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
-               		    , abs_exports = [(tyvars, global, local, prags)]
-               		    , abs_ev_binds = ev_binds, abs_binds = binds })
+dsHsBind (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
+                   , abs_exports = [(tyvars, global, local, prags)]
+                   , abs_ev_binds = ev_binds, abs_binds = binds })
   = ASSERT( all (`elem` tyvars) all_tyvars )
-    do	{ bind_prs    <- ds_lhs_binds NoSccs binds
+    do  { bind_prs    <- ds_lhs_binds binds
         ; ds_ev_binds <- dsTcEvBinds ev_binds
 
 	; let	core_bind = Rec (fromOL bind_prs)
-	        rhs       = addAutoScc auto_scc global $
-			    mkLams tyvars $ mkLams dicts $ 
+                rhs       = mkLams tyvars $ mkLams dicts $
 	                    wrapDsEvBinds ds_ev_binds $
                             Let core_bind $
                             Var local
@@ -144,18 +139,14 @@ dsHsBind auto_scc (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
     
 	; return (main_bind `consOL` spec_binds) }
 
-dsHsBind auto_scc (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
-                            , abs_exports = exports, abs_ev_binds = ev_binds
-                       	    , abs_binds = binds })
-  = do	{ bind_prs    <- ds_lhs_binds NoSccs binds
+dsHsBind (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
+                   , abs_exports = exports, abs_ev_binds = ev_binds
+                   , abs_binds = binds })
+  = do  { bind_prs    <- ds_lhs_binds binds
         ; ds_ev_binds <- dsTcEvBinds ev_binds
 	; let env = mkABEnv exports
-	      do_one (lcl_id,rhs) | Just (_, gbl_id, _, _prags) <- lookupVarEnv env lcl_id
-			          = (lcl_id, addAutoScc auto_scc gbl_id rhs)
-				  | otherwise = (lcl_id,rhs)
-	       
-	      core_bind = Rec (map do_one (fromOL bind_prs))
-	      	-- Monomorphic recursion possible, hence Rec
+              core_bind = Rec (fromOL bind_prs)
+                -- Monomorphic recursion possible, hence Rec
 
 	      tup_expr     = mkBigCoreVarTup locals
 	      tup_ty	   = exprType tup_expr
@@ -190,7 +181,6 @@ dsHsBind auto_scc (AbsBinds { abs_tvs = all_tyvars, abs_ev_vars = dicts
 	      		| otherwise		  = dsMkArbitraryType all_tyvar
 
 	; export_binds_s <- mapM mk_bind (exports `zip` [0..])
-	     -- Don't scc (auto-)annotate the tuple itself.
 
 	; return ((poly_tup_id, poly_tup_rhs) `consOL` 
 		    concatOL export_binds_s) }
@@ -688,52 +678,6 @@ Name, and you can't bind them in a lambda or forall without getting things
 confused.   Likewise it might have an InlineRule or something, which would be
 utterly bogus. So we really make a fresh Id, with the same unique and type
 as the old one, but with an Internal name and no IdInfo.
-
-
-%************************************************************************
-%*									*
-\subsection[addAutoScc]{Adding automatic sccs}
-%*									*
-%************************************************************************
-
-\begin{code}
-data AutoScc = NoSccs 
-	     | AddSccs Module (Id -> Bool)
--- The (Id->Bool) says which Ids to add SCCs to 
--- But we never add a SCC to function marked INLINE
-
-addAutoScc :: AutoScc	
-	   -> Id	-- Binder
-	   -> CoreExpr 	-- Rhs
-	   -> CoreExpr	-- Scc'd Rhs
-
-addAutoScc NoSccs _ rhs
-  = rhs
-addAutoScc _ id rhs | isInlinePragma (idInlinePragma id)
-  = rhs
-addAutoScc (AddSccs mod add_scc) id rhs
-  | add_scc id = mkSCC (mkAutoCC id mod NotCafCC) rhs
-  | otherwise  = rhs
-\end{code}
-
-If profiling and dealing with a dict binding,
-wrap the dict in @_scc_ DICT <dict>@:
-
-\begin{code}
-addDictScc :: Id -> CoreExpr -> DsM CoreExpr
-addDictScc _ rhs = return rhs
-
-{- DISABLED for now (need to somehow make up a name for the scc) -- SDM
-  | not ( opt_SccProfilingOn && opt_AutoSccsOnDicts)
-    || not (isDictId var)
-  = return rhs				-- That's easy: do nothing
-
-  | otherwise
-  = do (mod, grp) <- getModuleAndGroupDs
-	-- ToDo: do -dicts-all flag (mark dict things with individual CCs)
-       return (Note (SCC (mkAllDictsCC mod grp False)) rhs)
--}
-\end{code}
 
 
 %************************************************************************

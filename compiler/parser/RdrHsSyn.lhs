@@ -766,7 +766,7 @@ checkPatBind :: LHsExpr RdrName
              -> P (HsBind RdrName)
 checkPatBind lhs (L _ grhss)
   = do	{ lhs <- checkPattern lhs
-	; return (PatBind lhs grhss placeHolderType placeHolderNames) }
+        ; return (PatBind lhs grhss placeHolderType placeHolderNames Nothing) }
 
 checkValSig
 	:: LHsExpr RdrName
