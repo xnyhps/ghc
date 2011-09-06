@@ -98,24 +98,21 @@ tcTyAndClassDecls boot_details decls_s
   where
     go [] = return []
     go (tyclds:tyclds_s) = do
-    { tyclss <- fixM $ \ rec_tyclss ->
+      (generalized_env, _) <- kcTyClDecls1 Nothing tyclds
+      tyclss <- fixM $ \ rec_tyclss ->
+        -- Populate environment
         tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-        tcExtendNothingEnv (dc_names tyclds) $ do
-        -- We must populate the environment with the loop-tied
-        -- T's right away (even before kind checking), because
-        -- the kind checker may "fault in" some type constructors
-        -- that recursively mention T
-        { -- Kind-check in dependency order
+          tcExtendNothingEnv (dc_names tyclds) $ do
+          -- Kind-check in dependency order
           -- See Note [Kind checking for type and class decls]
-          (_, kc_decls) <- kcTyClDecls1 tyclds
+          (_, kc_decls) <- kcTyClDecls1 (Just generalized_env) tyclds
           -- And now build the TyCons/Classes
-        ; let rec_flags = calcRecFlags boot_details rec_tyclss
-        ; tyclss <- concatMapM (tcTyClDecl rec_flags) kc_decls
-        ; return tyclss }
-    ; tyclss_s <- tcExtendGlobalEnv tyclss $
+          let rec_flags = calcRecFlags boot_details rec_tyclss
+          concatMapM (tcTyClDecl rec_flags) kc_decls
+      tyclss_s <- tcExtendGlobalEnv tyclss $
                   tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
                   go tyclds_s
-    ; return (tyclss ++ tyclss_s) }
+      return (tyclss ++ tyclss_s)
     dc_names :: [LTyClDecl Name] -> [Name]
     dc_names decls =
       [ unLoc (con_name con)
@@ -207,8 +204,8 @@ initial kind environment.  (This is handled by `allDecls').
 
 
 \begin{code}
-kcTyClDecls1 :: [LTyClDecl Name] -> TcM (TcLclEnv, [LTyClDecl Name])
-kcTyClDecls1 decls
+kcTyClDecls1 :: Maybe TcLclEnv -> [LTyClDecl Name] -> TcM (TcLclEnv, [LTyClDecl Name])
+kcTyClDecls1 Nothing decls
   = do	{       -- Omit instances of type families; they are handled together
 		-- with the *heads* of class instances
         ; let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
@@ -227,12 +224,36 @@ kcTyClDecls1 decls
         { (kc_syn_decls, tcl_env) <- kcSynDecls (calcSynCycles syn_decls)
         ; setLclEnv tcl_env $  do
         { kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
-                
-	     -- Kind checking done for this group, so zonk the kind variables
-	     -- See Note [Kind checking for type and class decls]
-        ; mapM_ (zonkTcKindToKind . snd) alg_kinds
 
-	; return (tcl_env, kc_syn_decls ++ kc_alg_decls) } } }
+	     -- Kind checking done for this group
+	     -- See Note [Kind checking for type and class decls]
+             -- Now we have to kind generalize the flexis
+        ; zonked_kinds <- mapM (zonkTcKind . snd) alg_kinds
+        ; generalized_kinds <- flip mapM zonked_kinds $ \zonked_kind -> do
+          { flexis <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType zonked_kind
+          ; traceTc "IA0_DEBUG flexis zonked" (ppr flexis <+> ppr zonked_kind)
+          ; let flexiToKind kv = if kv `elem` flexis
+                                 then do
+                                   kv' <- zonkQuantifiedTyVar kv
+                                   return (mkTyVarTy kv')
+                                 else return (mkTyVarTy kv)
+          ; kvs <- mapM zonkQuantifiedTyVar flexis
+          ; body <- zonkKind (mkZonkTcTyVar flexiToKind) zonked_kind
+          ; return $ mkForAllTys kvs body }
+        ; traceTc "IA0_DEBUG generalized" (ppr generalized_kinds)
+        ; generalized_env <- tcExtendKindEnv (zip (map fst alg_kinds) generalized_kinds) getLclEnv
+
+	; return (generalized_env, kc_syn_decls ++ kc_alg_decls) } } }
+
+kcTyClDecls1 (Just generalized_env) decls = do
+  -- Omit instances of type families; they are handled together
+  -- with the *heads* of class instances
+  let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
+  -- Kind checking; see Note [Kind checking for type and class decls]
+  setLclEnv generalized_env $ do
+    (kc_syn_decls, _) <- kcSynDecls (calcSynCycles syn_decls)
+    kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
+    return (generalized_env, kc_syn_decls ++ kc_alg_decls)
 
 flattenATs :: [LTyClDecl Name] -> [LTyClDecl Name]
 flattenATs decls = concatMap flatten decls
@@ -334,11 +355,12 @@ kcTyClDeclBody decl thing_inside
 	; let tc_kind	 = case tc_ty_thing of
                              AThing k -> k
                              _ -> pprPanic "kcTyClDeclBody" (ppr tc_ty_thing)
-	      (kinds, _) = splitKindFunTys tc_kind
+	      (kvs, body) = splitForAllTys tc_kind
+	      (kinds, _) = splitKindFunTys body
 	      hs_tvs 	 = tcdTyVars decl
 	      kinded_tvs = ASSERT( length kinds >= length hs_tvs )
 			   zipWith add_kind hs_tvs kinds
-	; tcExtendKindEnvTvs kinded_tvs thing_inside }
+	; tcExtendTyVarEnv kvs $ tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
     add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
     add_kind (L loc (KindedTyVar n hsk _)) k = L loc (KindedTyVar n hsk k)

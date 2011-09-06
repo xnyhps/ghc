@@ -45,7 +45,7 @@ import Kind
 import Var
 import VarSet
 import TyCon
-import DataCon ( DataCon, dataConUserType, dataConName )
+import DataCon ( DataCon, dataConUserType )
 import TysPrim ( liftedTypeKindTyConName )
 import Class
 import Name
@@ -531,7 +531,7 @@ kc_pred (HsEqualP ty1 ty2)
 
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
-kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
+kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     traceTc "lk1" (ppr name)
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
@@ -539,20 +539,24 @@ kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
         ATyVar _ ty             -> wrap (typeKind ty)
         AThing kind             -> wrap kind
         AGlobal (ATyCon tc)     -> wrap (tyConKind tc)
-        AGlobal (ADataCon dc)   -> kcDataCon dc
+        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap
         _                       -> wrongThingErr "type" thing name
-    where wrap x = return (HsTyVar name, x)
+    where
+      wrap kind
+        | null kvs = return (HsTyVar name, kind)
+        | otherwise = do
+          kvs' <- mapM (const newMetaKindVar) kvs
+          let ki = substKiWith kvs kvs' ki_body
+          return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
+        where (kvs, ki_body) = splitForAllTys kind
 
--- IA0_STEP3: split this function in two (promotion-related and wrapping-related) and update wrap above
-kcDataCon :: DataCon -> TcM (HsType Name, TcKind)
+kcDataCon :: DataCon -> TcM TcKind
 kcDataCon dc = do
   let ty = dataConUserType dc
   unless (isPromotableType ty) $ promoteErr dc ty
-  let (kvs, ki_body) = splitForAllTys (promoteType ty)
-  kvs' <- mapM (const newMetaKindVar) kvs
-  let ki = substKiWith kvs kvs' ki_body
+  let ki = promoteType ty
   traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki)
-  return (HsWrapTy (WpKiApps kvs') (HsTyVar (dataConName dc)), ki)
+  return ki
   where
     promoteErr dc ty = failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
       <+> quotes (ppr ty) <+> ptext (sLit "is not promotable"))

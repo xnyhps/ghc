@@ -1206,20 +1206,25 @@ unifyKind' k1 sk k2 = unifyKindMisMatch k1 sk k2
 ----------------
 uKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
 uKVar kv1 sk k2
+  | isMetaTyVar kv1
   = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
             Flexi -> uUnboundKVar kv1 sk k2
             Indirect k1 -> unifyKind' k1 sk k2 }
+  | TyVarTy kv2 <- k2, isMetaTyVar kv2 = uKVar kv2 (invSubKinding sk) (TyVarTy kv1)
+  | TyVarTy kv2 <- k2, kv1 == kv2 = return ()
+  | otherwise = unifyKindMisMatch (TyVarTy kv1) sk k2
 
 ----------------
 uUnboundKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
 uUnboundKVar kv1 sk k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
-  | otherwise   -- Distinct kind variables
+  | isMetaTyVar kv2   -- Distinct kind variables
   = do  { mb_k2 <- readMetaKindVar kv2
         ; case mb_k2 of
             Indirect k2 -> uUnboundKVar kv1 sk k2
             Flexi -> writeMetaKindVar kv1 k2 }
+  | otherwise = writeMetaKindVar kv1 k2
 
 uUnboundKVar kv1 sk non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
