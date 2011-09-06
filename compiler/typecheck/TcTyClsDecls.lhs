@@ -13,6 +13,8 @@ module TcTyClsDecls (
 
 #include "HsVersions.h"
 
+import {-# SOURCE #-} TcInstDcls (tcDefaultAssocDecl)
+
 import HsSyn
 import HscTypes
 import BuildTyCl
@@ -35,6 +37,7 @@ import IdInfo
 import Var
 import VarSet
 import Name
+import NameSet
 import NameEnv
 import Outputable
 import Maybes
@@ -108,9 +111,10 @@ tcTyAndClassDecls boot_details decls_s
 	--     the same.
 	; let {	implicit_things = concatMap implicitTyThings tyclss
 	      ; rec_sel_binds   = mkRecSelBinds [tc | ATyCon tc <- tyclss]
-              ; dm_ids          = mkDefaultMethodIds tyclss }
+              ; dm_ids          = mkDefaultMethodIds tyclss
+              ; dat_tcs         = mkDefaultATTyCons tyclss }
 
-  	; env <- tcExtendGlobalEnv implicit_things $
+  	; env <- tcExtendGlobalEnv (implicit_things ++ map ATyCon dat_tcs) $
                  tcExtendGlobalValEnv dm_ids $
                  getGblEnv
         ; return (env, rec_sel_binds) } }
@@ -407,8 +411,10 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
       | otherwise = return ()
     classTyKinds = [hsTyVarNameKind tv | L _ tv <- classTvs]
 
-kcFamilyDecl _ (TySynonym {})              -- type family defaults
-  = panic "TcTyClsDecls.kcFamilyDecl: not implemented yet"
+kcFamilyDecl _ decl@(TySynonym {})
+  = return decl
+   -- We don't have to do anything here for type family defaults:
+   -- tcClassATs will use tcAssocDecl to check them
 kcFamilyDecl _ d = pprPanic "kcFamilyDecl" (ppr d)
 \end{code}
 
@@ -509,7 +515,7 @@ tcTyClDecl1 _parent calc_isrec
 tcTyClDecl1 _parent calc_isrec 
   (ClassDecl {tcdLName = L _ class_name, tcdTyVars = tvs, 
 	      tcdCtxt = ctxt, tcdMeths = meths,
-	      tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats} )
+	      tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs} )
   = ASSERT( isNoParent _parent )
     tcTyVarBndrs tvs		$ \ tvs' -> do 
   { ctxt' <- tcHsKindedContext ctxt
@@ -521,11 +527,15 @@ tcTyClDecl1 _parent calc_isrec
 			-- need to look up its recursiveness
 		    tycon_name = tyConName (classTyCon clas)
 		    tc_isrec = calc_isrec tycon_name
-	    ; atss' <- mapM (addLocM $ tcTyClDecl1 (AssocFamilyTyCon clas) (const Recursive)) ats
-            -- NB: 'ats' only contains "type family" and "data family"
-            --     declarations as well as type family defaults
+            ; traceTc "tcTyClDecl1:before ATs" (ppr class_name)
+
+            ; at_stuff <- tcClassATs clas tvs' ats at_defs
+            -- NB: 'ats' only contains "type family" and "data family" declarations
+            -- and 'at_defs' only contains associated-type defaults
+            ; traceTc "tcTyClDecl1:before build class" (ppr class_name)
+
             ; buildClass False {- Must include unfoldings for selectors -}
-			 class_name tvs' ctxt' fds' (concat atss')
+			 class_name tvs' ctxt' fds' at_stuff
 			 sig_stuff tc_isrec }
 
   ; let gen_dm_ids = [ AnId (mkExportedLocalId gen_dm_name gen_dm_ty)
@@ -552,7 +562,35 @@ tcTyClDecl1 _ _
   = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind 0)]
 
 tcTyClDecl1 _ _ d = pprPanic "tcTyClDecl1" (ppr d)
+\end{code}
 
+\begin{code}
+tcClassATs :: Class            -- The class
+           -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
+           -> [LTyClDecl Name] -- Associated types. All FamTyCon
+           -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
+           -> TcM [ClassATItem]
+tcClassATs clas clas_tvs ats at_defs = do
+    sequence_ [ failWithTc (badATErr clas n)
+              | n <- map (tcdName . unLoc) at_defs, not (n `elemNameSet` at_names) ]
+              -- Associated type defaults for non associated-types
+    mapM tc_at ats
+  where
+    at_names = mkNameSet (map (tcdName . unLoc) ats)
+    at_defs_map = foldr (\at_def nenv -> extendNameEnv_C (++) nenv (tcdName (unLoc at_def)) [at_def]) emptyNameEnv at_defs
+
+    tc_at at = do 
+        [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas) (const Recursive)) at
+        dat <- case lookupNameEnv at_defs_map (tyConName fam_tc) of
+                 Nothing        -> return Nothing
+                 Just def_decls -> do
+                   liftM Just $ zipWithM (\n def_decl -> do
+                     rep_tc_name <- newImplicitBinder (tyConName fam_tc) (mkDefaultATTyConOcc n)
+                     tcDefaultAssocDecl clas_tvs fam_tc rep_tc_name def_decl) [1..] def_decls
+        return (fam_tc, dat)
+\end{code}
+
+\begin{code}
 dataDeclChecks :: Name -> NewOrData -> ThetaType -> [LConDecl Name] -> TcM ()
 dataDeclChecks tc_name new_or_data stupid_theta cons
   = do {   -- Check that we don't use GADT syntax in H98 world
@@ -1040,6 +1078,13 @@ mkDefaultMethodIds things
   = [ mkExportedLocalId dm_name (idType sel_id)
     | AClass cls <- things
     , (sel_id, DefMeth dm_name) <- classOpItems cls ]
+
+mkDefaultATTyCons :: [TyThing] -> [TyCon]
+mkDefaultATTyCons things
+  = [ def_tc
+    | AClass cls <- things
+    , (_, Just def_tcs) <- classATItems cls
+    , def_tc <- def_tcs ]
 \end{code}
 
 Note [Default method Ids and Template Haskell]
@@ -1305,6 +1350,11 @@ badDataConTyCon data_con res_ty_tmpl actual_res_ty
   = hang (ptext (sLit "Data constructor") <+> quotes (ppr data_con) <+>
 		ptext (sLit "returns type") <+> quotes (ppr actual_res_ty))
        2 (ptext (sLit "instead of an instance of its parent type") <+> quotes (ppr res_ty_tmpl))
+
+badATErr :: Outputable a => a -> Name -> SDoc
+badATErr clas op
+  = hsep [ptext (sLit "Class"), quotes (ppr clas), 
+          ptext (sLit "does not have an associated type"), quotes (ppr op)]
 
 badGadtDecl :: Name -> SDoc
 badGadtDecl tc_name

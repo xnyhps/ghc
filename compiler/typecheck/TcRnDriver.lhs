@@ -717,6 +717,10 @@ checkBootDecl (AClass c1)  (AClass c2)
 	  (_, rho_ty2) = splitForAllTys (idType id2)
           op_ty2 = funResultTy rho_ty2
 
+       eqAT (tc1, def_ats1) (tc2, def_ats2)
+         = checkBootTyCon tc1 tc2 &&
+           def_ats1 == def_ats2
+
        eqFD (as1,bs1) (as2,bs2) = 
          eqListBy (eqTypeX env) (mkTyVarTys as1) (mkTyVarTys as2) &&
          eqListBy (eqTypeX env) (mkTyVarTys bs1) (mkTyVarTys bs2)
@@ -730,7 +734,7 @@ checkBootDecl (AClass c1)  (AClass c2)
         ||   -- Above tests for an "abstract" class
         eqListBy (eqPredX env) sc_theta1 sc_theta2 &&
         eqListBy eqSig op_stuff1 op_stuff2 &&
-        eqListBy checkBootTyCon ats1 ats2)
+        eqListBy eqAT ats1 ats2)
 
 checkBootDecl (ADataCon dc1) (ADataCon _)
   = pprPanic "checkBootDecl" (ppr dc1)

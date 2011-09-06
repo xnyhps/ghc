@@ -7,7 +7,8 @@
 module IfaceSyn (
         module IfaceType,
 
-        IfaceDecl(..), IfaceClassOp(..), IfaceConDecl(..), IfaceConDecls(..),
+        IfaceDecl(..), IfaceClassOp(..), IfaceAT(..),
+        IfaceConDecl(..), IfaceConDecls(..),
         IfaceExpr(..), IfaceAlt, IfaceNote(..), IfaceLetBndr(..),
         IfaceBinding(..), IfaceConAlt(..),
         IfaceIdInfo(..), IfaceIdDetails(..), IfaceUnfolding(..),
@@ -87,7 +88,7 @@ data IfaceDecl
                  ifName    :: OccName,          -- Name of the class
                  ifTyVars  :: [IfaceTvBndr],    -- Type variables
                  ifFDs     :: [FunDep FastString], -- Functional dependencies
-                 ifATs     :: [IfaceDecl],      -- Associated type families
+                 ifATs     :: [IfaceAT],      -- Associated type families
                  ifSigs    :: [IfaceClassOp],   -- Method signatures
                  ifRec     :: RecFlag           -- Is newtype/datatype associated
                                                 --   with the class recursive?
@@ -101,6 +102,10 @@ data IfaceClassOp = IfaceClassOp OccName DefMethSpec IfaceType
         -- Nothing    => no default method
         -- Just False => ordinary polymorphic default method
         -- Just True  => generic default method
+
+data IfaceAT = IfaceAT IfaceDecl (Maybe [IfaceDecl])
+        -- Nothing => no default associated type instance
+        -- Just ds => default associated type instance from these TyCon decls
 
 data IfaceConDecls
   = IfAbstractTyCon Bool        -- c.f TyCon.AbstractTyCon
@@ -383,7 +388,7 @@ ifaceDeclSubBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_occ,
     --    no wrapper (class dictionaries never have a wrapper)
     [dc_occ, dcww_occ] ++
     -- associated types
-    [ifName at | at <- ats ] ++
+    [n | IfaceAT at mb_defs <- ats, n <- ifName at : maybe [] (map ifName) mb_defs ] ++
     -- superclass selectors
     [mkSuperDictSelOcc n cls_occ | n <- [1..n_ctxt]] ++
     -- operation selectors
@@ -465,6 +470,9 @@ pprFamily (Just famInst) = ptext (sLit "FamilyInstance:") <+> ppr famInst
 
 instance Outputable IfaceClassOp where
    ppr (IfaceClassOp n dm ty) = ppr n <+> ppr dm <+> dcolon <+> ppr ty
+
+instance Outputable IfaceAT where
+   ppr (IfaceAT d mb_defs) = ppr d $$ maybe empty (vcat . map ppr) mb_defs
 
 pprIfaceDeclHead :: IfaceContext -> OccName -> [IfaceTvBndr] -> SDoc
 pprIfaceDeclHead context thing tyvars
@@ -701,7 +709,7 @@ freeNamesIfDecl d@IfaceSyn{} =
 freeNamesIfDecl d@IfaceClass{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfContext (ifCtxt d) &&&
-  freeNamesIfDecls   (ifATs d) &&&
+  fnList freeNamesIfAT     (ifATs d) &&&
   fnList freeNamesIfClsSig (ifSigs d)
 
 freeNamesIfIdDetails :: IfaceIdDetails -> NameSet
@@ -722,8 +730,10 @@ freeNamesIfTcFam Nothing =
 freeNamesIfContext :: IfaceContext -> NameSet
 freeNamesIfContext = fnList freeNamesIfPredType
 
-freeNamesIfDecls :: [IfaceDecl] -> NameSet
-freeNamesIfDecls = fnList freeNamesIfDecl
+freeNamesIfAT :: IfaceAT -> NameSet
+freeNamesIfAT (IfaceAT decl mb_defs)
+  = freeNamesIfDecl decl &&&
+    maybe emptyNameSet (fnList freeNamesIfDecl) mb_defs
 
 freeNamesIfClsSig :: IfaceClassOp -> NameSet
 freeNamesIfClsSig (IfaceClassOp _n _dm ty) = freeNamesIfType ty

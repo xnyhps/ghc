@@ -7,14 +7,15 @@ The @Class@ datatype
 
 \begin{code}
 module Class (
-	Class, ClassOpItem, 
-	DefMeth (..),
+	Class,
+        ClassOpItem, DefMeth (..),
+        ClassATItem,
 	defMethSpecOfDefMeth,
 
 	FunDep,	pprFundeps, pprFunDep,
 
 	mkClass, classTyVars, classArity, 
-	classKey, className, classATs, classTyCon, classMethods,
+	classKey, className, classATs, classATItems, classTyCon, classMethods,
 	classOpItems, classBigSig, classExtraBigSig, classTvsFds, classSCTheta,
         classAllSelIds, classSCSelId
     ) where
@@ -62,7 +63,7 @@ data Class
 		     			--   superclasses from a 
 					--   dictionary of this class
 	-- Associated types
-        classATs     :: [TyCon],	-- Associated type families
+        classATStuff :: [ClassATItem],	-- Associated type families
 
         -- Class operations (methods, not superclasses)
 	classOpStuff :: [ClassOpItem],	-- Ordered by tag
@@ -76,13 +77,17 @@ type FunDep a = ([a],[a])  --  e.g. class C a b c | a b -> c, a c -> b where...
 			   --  Here fun-deps are [([a,b],[c]), ([a,c],[b])]
 
 type ClassOpItem = (Id, DefMeth)
-	-- Selector function; contains unfolding
+        -- Selector function; contains unfolding
 	-- Default-method info
 
 data DefMeth = NoDefMeth 		-- No default method
 	     | DefMeth Name  		-- A polymorphic default method
 	     | GenDefMeth Name 		-- A generic default method
-             deriving Eq  
+             deriving Eq
+
+type ClassATItem = (TyCon, Maybe [TyCon])
+  -- Nothing  => No default associated type
+  -- Just tcs => Default associated types from these templates
 
 -- | Convert a `DefMethSpec` to a `DefMeth`, which discards the name field in
 --   the `DefMeth` constructor of the `DefMeth`.
@@ -101,12 +106,12 @@ The @mkClass@ function fills in the indirect superclasses.
 mkClass :: Name -> [TyVar]
 	-> [([TyVar], [TyVar])]
 	-> [PredType] -> [Id]
-	-> [TyCon]
+	-> [ClassATItem]
 	-> [ClassOpItem]
 	-> TyCon
 	-> Class
 
-mkClass name tyvars fds super_classes superdict_sels ats 
+mkClass name tyvars fds super_classes superdict_sels at_stuff
 	op_stuff tycon
   = Class {	classKey     = getUnique name, 
 		className    = name,
@@ -114,7 +119,7 @@ mkClass name tyvars fds super_classes superdict_sels ats
 		classFunDeps = fds,
 		classSCTheta = super_classes,
 		classSCSels  = superdict_sels,
-		classATs     = ats,
+		classATStuff = at_stuff,
 		classOpStuff = op_stuff,
 		classTyCon   = tycon }
 \end{code}
@@ -150,8 +155,14 @@ classMethods (Class {classOpStuff = op_stuff})
   = [op_sel | (op_sel, _) <- op_stuff]
 
 classOpItems :: Class -> [ClassOpItem]
-classOpItems (Class { classOpStuff = op_stuff})
-  = op_stuff
+classOpItems = classOpStuff
+
+classATs :: Class -> [TyCon]
+classATs (Class { classATStuff = at_stuff })
+  = [tc | (tc, _) <- at_stuff]
+
+classATItems :: Class -> [ClassATItem]
+classATItems = classATStuff
 
 classTvsFds :: Class -> ([TyVar], [FunDep TyVar])
 classTvsFds c
@@ -162,10 +173,10 @@ classBigSig (Class {classTyVars = tyvars, classSCTheta = sc_theta,
 	 	    classSCSels = sc_sels, classOpStuff = op_stuff})
   = (tyvars, sc_theta, sc_sels, op_stuff)
 
-classExtraBigSig :: Class -> ([TyVar], [FunDep TyVar], [PredType], [Id], [TyCon], [ClassOpItem])
+classExtraBigSig :: Class -> ([TyVar], [FunDep TyVar], [PredType], [Id], [ClassATItem], [ClassOpItem])
 classExtraBigSig (Class {classTyVars = tyvars, classFunDeps = fundeps,
 			 classSCTheta = sc_theta, classSCSels = sc_sels,
-			 classATs = ats, classOpStuff = op_stuff})
+			 classATStuff = ats, classOpStuff = op_stuff})
   = (tyvars, fundeps, sc_theta, sc_sels, ats, op_stuff)
 \end{code}
 

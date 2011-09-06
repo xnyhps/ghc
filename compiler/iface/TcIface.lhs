@@ -62,6 +62,7 @@ import FastString
 
 import Control.Monad
 import Data.List
+import Data.Traversable ( traverse )
 \end{code}
 
 This module takes
@@ -479,7 +480,7 @@ tc_iface_decl _parent ignore_prags
     ; sigs <- mapM tc_sig rdr_sigs
     ; fds  <- mapM tc_fd rdr_fds
     ; cls  <- fixM $ \ cls -> do
-              { ats  <- mapM (tc_iface_decl (AssocFamilyTyCon cls) ignore_prags) rdr_ats
+              { ats  <- mapM (tc_at cls) rdr_ats
               ; buildClass ignore_prags cls_name tyvars ctxt fds ats sigs tc_isrec }
     ; return (AClass cls) }
   where
@@ -490,6 +491,17 @@ tc_iface_decl _parent ignore_prags
 		-- type of a data con; to avoid sucking in types that
 		-- it mentions unless it's necessray to do so
 	  ; return (op_name, dm, op_ty) }
+
+   tc_at cls (IfaceAT tc_decl mb_def_decls)
+     = do tc <- tc_iface_tc_decl (AssocFamilyTyCon cls) tc_decl
+          mb_def_tcs <- traverse (mapM (tc_iface_tc_decl NoParentTyCon)) mb_def_decls
+           -- Defaults are just like associated type instances: their real parent will
+           -- be filled in later by mkFamInstParentInfo (called by buildSynTyCon)
+          return (tc, mb_def_tcs)
+
+   tc_iface_tc_decl parent decl = do
+        ATyCon tc <- tc_iface_decl parent ignore_prags decl
+        return tc
 
    mk_doc op_name op_ty = ptext (sLit "Class op") <+> sep [ppr op_name, ppr op_ty]
 
