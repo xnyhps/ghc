@@ -20,7 +20,7 @@ module TcHsType (
 
                 -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
-	tcTyVarBndrs, dsHsType, kcHsLPred, dsHsLPred,
+	tcTyVarBndrs, tcTyVarBndrsKindGen, dsHsType, kcHsLPred, dsHsLPred,
 	tcDataKindSig, ExpKind(..), EkCtxt(..),
 
 		-- Pattern type signatures
@@ -60,6 +60,7 @@ import Outputable
 import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
 import Control.Monad ( unless, filterM )
+import Data.List ( mapAccumL )
 \end{code}
 
 
@@ -657,7 +658,7 @@ ds_type (HsSpliceTy _ _ kind)
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
--- IA0: ds_type (HsLitTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+-- ds_type (HsLitTy _) = panic "IA0_UNDEFINED: ds_type"
 
 ds_type (HsExplicitListTy kind tys) = do
   kind' <- zonkTcKindToKind kind
@@ -783,30 +784,49 @@ tcTyVarBndrs bndrs thing_inside = do
     zonk (KindedTyVar name _ kind) = do { kind' <- zonkTcKindToKind kind
 				        ; return (mkTyVar name kind') }
 
-kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
-                                , Kind )     -- this is the old kind where flexis got zonked
-kindGeneralizeKind kind = do
-  kind' <- zonkTcKind kind
-  flexis <- freeFlexisOfType kind'
-  kvs <- mapM zonkQuantifiedTyVar flexis
-  body <- zonkKind (mkZonkTcTyVar flexiToKind) kind'
-  traceTc "IA0_DEBUG generalizeKind" (ppr kvs <+> ppr body)
-  return (kvs, body)
+tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([KindVar] -> [TyVar] -> TcM r) -> TcM r
+tcTyVarBndrsKindGen bndrs thing_inside = do
+    (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
+    let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
+    tcExtendTyVarEnv (kvs ++ tyvars) (thing_inside kvs tyvars)
 
-flexiToKind :: KindVar -> TcM Kind
-flexiToKind kv = do
-  isFlexi <- isFlexiMetaTyVar kv
-  if isFlexi
-    then do
-      kv' <- zonkQuantifiedTyVar kv
-      return (mkTyVarTy kv')
-    else return (mkTyVarTy kv)
+kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
+kindGeneralizeKinds kinds = do
+  kinds' <- mapM zonkTcKind kinds
+  flexis <- freeFlexisOfTypes kinds'
+  traceTc "generalizeKind 1" (ppr flexis <+> ppr kinds')
+  let (_, occs) = mapAccumL tidy_one emptyTidyOccEnv flexis
+      tidy_one env flexi = tidyOccName env (getOccName (tyVarName flexi))
+  kvs <- flip mapM (zip occs flexis) $ \(occ, flexi) -> do
+         span <- getSrcSpanM
+         uniq <- newUnique
+         let name = mkInternalName uniq occ span
+             kv = mkTcTyVar name (tyVarKind flexi) vanillaSkolemTv
+         writeMetaTyVar flexi (mkTyVarTy kv)
+         return kv
+  let flexiToKind kv = case lookup kv (zip flexis kvs) of
+                         Nothing -> return (mkTyVarTy kv)
+                         Just kv -> return (mkTyVarTy kv)
+  bodys <- mapM (zonkKind (mkZonkTcTyVar flexiToKind)) kinds'
+  traceTc "generalizeKind 2" (ppr kvs <+> ppr bodys)
+  return (kvs, bodys)
+
+kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
+                                    , Kind )     -- this is the old kind where flexis got zonked
+kindGeneralizeKind kind = do
+  (kvs, [kind']) <- kindGeneralizeKinds [kind]
+  return (kvs, kind')
 
 freeFlexisOfType :: Type -> TcM [Var]
 freeFlexisOfType ty = do
   fs <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType ty
   -- IA0_TODO: remove in scope variables
   return fs
+
+freeFlexisOfTypes :: [Type] -> TcM [Var]
+freeFlexisOfTypes tys = do
+  fss <- mapM freeFlexisOfType tys
+  return $ varSetElems $ unionVarSets $ map mkVarSet fss
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]

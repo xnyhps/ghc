@@ -614,12 +614,12 @@ tcConDecl :: Bool		-- True <=> -XExistentialQuantificaton or -XGADTs
 tcConDecl existential_ok rep_tycon res_tmpl 	-- Data types
 	  con@(ConDecl {con_name = name, con_qvars = tvs, con_cxt = ctxt
                    , con_details = details, con_res = res_ty })
-  = addErrCtxt (dataConCtxt name)	$
-    tcTyVarBndrs tvs $ \ tvs' -> do
+  = addErrCtxt (dataConCtxt name) $
+    tcTyVarBndrsKindGen tvs $ \ kvs tvs' -> do
     { ctxt' <- tcHsKindedContext ctxt
     ; checkTc (existential_ok || conRepresentibleWithH98Syntax con)
 	      (badExistential name)
-    ; (univ_tvs, ex_tvs, eq_preds, res_ty') <- tcResultType res_tmpl tvs' res_ty
+    ; (univ_tvs, ex_tvs, eq_preds, res_ty') <- tcResultType res_tmpl (kvs ++ tvs') res_ty
     ; let 
 	tc_datacon is_infix field_lbls btys
 	  = do { (arg_tys, stricts) <- mapAndUnzipM tcConArg btys
@@ -936,10 +936,12 @@ checkValidDataCon tc con
               tc_kvs = fst $ splitForAllTys (tyConKind tc)
 	      res_ty_tmpl = mkFamilyTyConApp tc (mkTyVarTys (tc_kvs ++ tc_tvs))
 	      actual_res_ty = dataConOrigResTy con
-	; checkTc (isJust (tcMatchTy (mkVarSet tc_tvs)
+	; checkTc (isJust (tcMatchTy (mkVarSet (tc_kvs ++ tc_tvs))
 				res_ty_tmpl
 				actual_res_ty))
 		  (badDataConTyCon con res_ty_tmpl actual_res_ty)
+             -- IA0_TODO: we should also check that kind variables
+             -- are only instantiated with kind variables
 	; checkValidMonoType (dataConOrigResTy con)
 		-- Disallow MkT :: T (forall a. a->a)
 		-- Reason: it's really the argument of an equality constraint

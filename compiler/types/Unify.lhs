@@ -34,8 +34,6 @@ import ErrUtils
 import Util
 import Maybes
 import FastString
-
-import Control.Monad (guard)
 \end{code}
 
 
@@ -168,7 +166,7 @@ match menv subst (TyVarTy tv1) ty2
   | tv1' `elemVarSet` me_tmpls menv
   = if any (inRnEnvR rn_env) (varSetElems (tyVarsOfType ty2))
     then Nothing	-- Occurs check
-    else do { subst1 <- match_kind menv subst tv1 ty2
+    else do { subst1 <- match_kind menv subst (tyVarKind tv1) (typeKind ty2)
 			-- Note [Matching kinds]
 	    ; return (extendVarEnv subst1 tv1' ty2) }
 
@@ -202,11 +200,12 @@ match _ _ _ _
   = Nothing
 
 --------------
-match_kind :: MatchEnv -> TvSubstEnv -> TyVar -> Type -> Maybe TvSubstEnv
+match_kind :: MatchEnv -> TvSubstEnv -> Kind -> Kind -> Maybe TvSubstEnv
 -- Match the kind of the template tyvar with the kind of Type
 -- Note [Matching kinds]
-match_kind _ subst tv ty
-  = guard (typeKind ty `isSubKind` tyVarKind tv) >> return subst
+match_kind _ subst k1 k2
+  | k2 `isSubKind` k1 = return subst
+match_kind menv subst k1 k2 = match menv subst k1 k2
 
 -- Note [Matching kinds]
 -- ~~~~~~~~~~~~~~~~~~~~~
