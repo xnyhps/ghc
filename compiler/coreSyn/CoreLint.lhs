@@ -616,17 +616,22 @@ lintKind (TyConApp tc [])
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
 lintKind kind@(TyConApp tc kis)  -- T k1 .. kn
-  | not (getUnique tc `elem` (funTyConKey : kindKeys))
+  | not (getUnique tc `elem` (tySuperKindTyConKey : funTyConKey : kindKeys))
   = let tc_kind = tyConKind tc in
     case isPromotableKind tc_kind of
       Just n | n == length kis -> mapM_ lintKind kis
       _ -> addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
-lintKind kind 
+lintKind (TyVarTy kv) = checkTyCoVarInScope kv
+lintKind kind
   = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
 
 -------------------
 lintTyBndrKind :: OutTyVar -> LintM ()
-lintTyBndrKind tv = lintKind (tyVarKind tv)
+lintTyBndrKind tv =
+  let ki = tyVarKind tv in
+  if isSuperKind ki
+  then return ()  -- kind forall
+  else lintKind ki
 
 -------------------
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
