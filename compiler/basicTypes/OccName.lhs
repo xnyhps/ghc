@@ -54,7 +54,6 @@ module OccName (
   	mkClassTyConOcc, mkClassDataConOcc, mkDictOcc, mkIPOcc, 
  	mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
  	mkGenD, mkGenR, mkGenRCo, mkGenC, mkGenS,
-	mkDefaultATTyConOcc,
         mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc,
 	mkSuperDictSelOcc, mkLocalOcc, mkMethodOcc, mkInstTyTcOcc,
 	mkInstTyCoOcc, mkEqPredCoOcc,
@@ -589,11 +588,6 @@ mkGenS occ m n = mk_deriv tcName ("S1_" ++ show m ++ "_" ++ show n)
 
 mkGenR   = mk_simple_deriv tcName "Rep_"
 mkGenRCo = mk_simple_deriv tcName "CoRep_"
-
--- Used for associated type synonym defaults: we need one per given default
--- (there can be several), hence the Int
-mkDefaultATTyConOcc :: Int -> OccName -> OccName
-mkDefaultATTyConOcc n = mk_simple_deriv varName (":D" ++ show n)
 
 -- data T = MkT ... deriving( Data ) needs defintions for 
 --	$tT   :: Data.Generics.Basics.DataType

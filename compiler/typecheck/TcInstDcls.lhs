@@ -477,7 +477,7 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
                                     mini_env_subst = mkTvSubst iss mini_env
                                     fam_inst_tys' = substTys mini_env_subst fam_inst_tys
                                     rhs' = substTy mini_env_subst rhs
-                                rep_tc_name <- newFamInstTyConName (tyConName fam_tc) fam_inst_tys' noSrcSpan
+                                rep_tc_name <- newFamInstTyConName (noLoc (tyConName fam_tc)) fam_inst_tys'
                                 buildSynTyCon rep_tc_name (varSetElems (tyVarsOfType rhs'))
                                               (SynonymTyCon rhs')
                                               (tyConKind def)
