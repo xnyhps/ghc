@@ -13,6 +13,7 @@ module TcHsType (
 		-- Kind checking
 	kcHsTyVars, kcHsSigType, kcHsLiftedSigType, 
 	kcLHsType, kcCheckLHsType, kcHsContext, kcApps,
+        kindGeneralizeKind,
 
 		-- Sort checking
 	scDsLHsKind, scDsLHsMaybeKind,
@@ -58,7 +59,7 @@ import UniqSupply
 import Outputable
 import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
-import Control.Monad ( unless )
+import Control.Monad ( unless, filterM )
 \end{code}
 
 
@@ -779,7 +780,33 @@ tcTyVarBndrs bndrs thing_inside = do
   where
     zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
 				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name _ kind) = return (mkTyVar name kind)
+    zonk (KindedTyVar name _ kind) = do { kind' <- zonkTcKindToKind kind
+				        ; return (mkTyVar name kind') }
+
+kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
+                                , Kind )     -- this is the old kind where flexis got zonked
+kindGeneralizeKind kind = do
+  kind' <- zonkTcKind kind
+  flexis <- freeFlexisOfType kind'
+  kvs <- mapM zonkQuantifiedTyVar flexis
+  body <- zonkKind (mkZonkTcTyVar flexiToKind) kind'
+  traceTc "IA0_DEBUG generalizeKind" (ppr kvs <+> ppr body)
+  return (kvs, body)
+
+flexiToKind :: KindVar -> TcM Kind
+flexiToKind kv = do
+  isFlexi <- isFlexiMetaTyVar kv
+  if isFlexi
+    then do
+      kv' <- zonkQuantifiedTyVar kv
+      return (mkTyVarTy kv')
+    else return (mkTyVarTy kv)
+
+freeFlexisOfType :: Type -> TcM [Var]
+freeFlexisOfType ty = do
+  fs <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType ty
+  -- IA0_TODO: remove in scope variables
+  return fs
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]

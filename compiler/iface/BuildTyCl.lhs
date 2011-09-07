@@ -59,7 +59,7 @@ buildSynTyCon tc_name tvs rhs rhs_kind parent mb_family
     kind = mkArrowKinds (map tyVarKind tvs) rhs_kind
 
 ------------------------------------------------------
-buildAlgTyCon :: Name -> [TyVar] 
+buildAlgTyCon :: Name -> [KindVar] -> [TyVar]
 	      -> ThetaType		-- ^ Stupid theta
 	      -> AlgTyConRhs
 	      -> RecFlag
@@ -68,7 +68,7 @@ buildAlgTyCon :: Name -> [TyVar]
 	      -> Maybe (TyCon, [Type])  -- ^ family instance if applicable
 	      -> TcRnIf m n TyCon
 
-buildAlgTyCon tc_name tvs stupid_theta rhs is_rec gadt_syn
+buildAlgTyCon tc_name kvs tvs stupid_theta rhs is_rec gadt_syn
 	      parent mb_family
   | Just fam_inst_info <- mb_family
   = -- We need to tie a knot as the coercion of a data instance depends
@@ -83,7 +83,7 @@ buildAlgTyCon tc_name tvs stupid_theta rhs is_rec gadt_syn
   = return (mkAlgTyCon tc_name kind tvs stupid_theta rhs
 	               parent is_rec gadt_syn)
   where
-    kind = mkArrowKinds (map tyVarKind tvs) liftedTypeKind
+    kind = mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) liftedTypeKind
 
 -- | If a family tycon with instance types is given, the current tycon is an
 -- instance of that family and we need to
