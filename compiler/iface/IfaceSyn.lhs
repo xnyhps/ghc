@@ -103,9 +103,13 @@ data IfaceClassOp = IfaceClassOp OccName DefMethSpec IfaceType
         -- Just False => ordinary polymorphic default method
         -- Just True  => generic default method
 
-data IfaceAT = IfaceAT IfaceDecl (Maybe [IfaceDecl])
+data IfaceAT = IfaceAT IfaceDecl (Maybe [([IfaceTvBndr], [IfaceType], IfaceType)])
         -- Nothing => no default associated type instance
-        -- Just ds => default associated type instance from these TyCon decls
+        -- Just ds => default associated type instance from these templates
+        -- Each template is a triple of:
+        --   1. TyVars of the RHS and family arguments (including the class TVs)
+        --   3. The instantiated family arguments
+        --   2. The RHS of the synonym
 
 data IfaceConDecls
   = IfAbstractTyCon Bool        -- c.f TyCon.AbstractTyCon
@@ -388,7 +392,7 @@ ifaceDeclSubBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_occ,
     --    no wrapper (class dictionaries never have a wrapper)
     [dc_occ, dcww_occ] ++
     -- associated types
-    [n | IfaceAT at mb_defs <- ats, n <- ifName at : maybe [] (map ifName) mb_defs ] ++
+    [ifName at | IfaceAT at _ <- ats ] ++
     -- superclass selectors
     [mkSuperDictSelOcc n cls_occ | n <- [1..n_ctxt]] ++
     -- operation selectors
@@ -733,7 +737,11 @@ freeNamesIfContext = fnList freeNamesIfPredType
 freeNamesIfAT :: IfaceAT -> NameSet
 freeNamesIfAT (IfaceAT decl mb_defs)
   = freeNamesIfDecl decl &&&
-    maybe emptyNameSet (fnList freeNamesIfDecl) mb_defs
+    maybe emptyNameSet (fnList fn_at_def) mb_defs
+  where
+    fn_at_def (tvs, pat_tys, ty) = freeNamesIfTvBndrs tvs &&&
+                                   fnList freeNamesIfType pat_tys &&&
+                                   freeNamesIfType ty
 
 freeNamesIfClsSig :: IfaceClassOp -> NameSet
 freeNamesIfClsSig (IfaceClassOp _n _dm ty) = freeNamesIfType ty

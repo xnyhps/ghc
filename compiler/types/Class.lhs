@@ -24,7 +24,7 @@ module Class (
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TyCon	( TyCon )
-import {-# SOURCE #-} TypeRep	( PredType )
+import {-# SOURCE #-} TypeRep	( Type, PredType )
 
 import Var
 import Name
@@ -85,9 +85,13 @@ data DefMeth = NoDefMeth 		-- No default method
 	     | GenDefMeth Name 		-- A generic default method
              deriving Eq
 
-type ClassATItem = (TyCon, Maybe [TyCon])
+type ClassATItem = (TyCon, Maybe [([TyVar], [Type], Type)])
   -- Nothing  => No default associated type
-  -- Just tcs => Default associated types from these templates
+  -- Just tcs => Default associated types from these templates.
+  -- Each template is a triple of:
+  --   1. TyVars of the RHS and family arguments (including the class TVs)
+  --   3. The instantiated family arguments
+  --   2. The RHS of the synonym
 
 -- | Convert a `DefMethSpec` to a `DefMeth`, which discards the name field in
 --   the `DefMeth` constructor of the `DefMeth`.

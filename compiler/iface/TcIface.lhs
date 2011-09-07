@@ -494,14 +494,17 @@ tc_iface_decl _parent ignore_prags
 
    tc_at cls (IfaceAT tc_decl mb_def_decls)
      = do tc <- tc_iface_tc_decl (AssocFamilyTyCon cls) tc_decl
-          mb_def_tcs <- traverse (mapM (tc_iface_tc_decl NoParentTyCon)) mb_def_decls
+          mb_def_tcs <- traverse (mapM tc_iface_at_def) mb_def_decls
            -- Defaults are just like associated type instances: their real parent will
            -- be filled in later by mkFamInstParentInfo (called by buildSynTyCon)
           return (tc, mb_def_tcs)
 
    tc_iface_tc_decl parent decl = do
-        ATyCon tc <- tc_iface_decl parent ignore_prags decl
-        return tc
+      ATyCon tc <- tc_iface_decl parent ignore_prags decl
+      return tc
+
+   tc_iface_at_def (tvs, pat_tys, ty) =
+        bindIfaceTyVars_AT tvs $ \tvs' -> liftM2 ((,,) tvs') (mapM tcIfaceType pat_tys) (tcIfaceType ty)
 
    mk_doc op_name op_ty = ptext (sLit "Class op") <+> sep [ppr op_name, ppr op_ty]
 

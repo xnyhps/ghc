@@ -36,7 +36,7 @@ import DataCon
 import Class
 import Var
 import VarEnv
-import VarSet     ( mkVarSet, unionVarSet, varSetElems )
+import VarSet     ( mkVarSet, varSetElems )
 import Pair
 import CoreUtils  ( mkPiTypes )
 import CoreUnfold ( mkDFunUnfolding )
@@ -468,20 +468,16 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
                  else case mb_defs of
                         Nothing   -> return (Just (tyConName fam_tc), [])
                         Just defs -> do
-                            defs' <- forM defs $ \def -> do
-                             case tyConFamInst_maybe def of
-                              Nothing -> pprPanic "tcLocalInstDecl1:not family instance TyCon" (ppr def)
-                              Just (parent_fam_tc, fam_inst_tys) -> ASSERT(parent_fam_tc == fam_tc) do
-                                let SynonymTyCon rhs = synTyConRhs def
-                                    iss = mkInScopeSet (tyVarsOfTypes fam_inst_tys `unionVarSet` tyVarsOfType rhs)
-                                    mini_env_subst = mkTvSubst iss mini_env
-                                    fam_inst_tys' = substTys mini_env_subst fam_inst_tys
-                                    rhs' = substTy mini_env_subst rhs
-                                rep_tc_name <- newFamInstTyConName (noLoc (tyConName fam_tc)) fam_inst_tys'
-                                buildSynTyCon rep_tc_name (varSetElems (tyVarsOfType rhs'))
-                                              (SynonymTyCon rhs')
-                                              (tyConKind def)
-                                              NoParentTyCon (Just (fam_tc, fam_inst_tys'))
+                            defs' <- forM defs $ \(tvs, pat_tys, rhs) -> do
+                              let mini_env_subst = mkTvSubst (mkInScopeSet (mkVarSet tvs)) mini_env
+                                  tvs' = varSetElems (tyVarsOfType rhs')
+                                  pat_tys' = substTys mini_env_subst pat_tys
+                                  rhs' = substTy mini_env_subst rhs
+                              rep_tc_name <- newFamInstTyConName (noLoc (tyConName fam_tc)) pat_tys'
+                              buildSynTyCon rep_tc_name tvs'
+                                            (SynonymTyCon rhs')
+                                            (mkArrowKinds (map tyVarKind tvs') (typeKind rhs'))
+                                            NoParentTyCon (Just (fam_tc, pat_tys'))
                             return (Nothing, defs')
         
         ; let (omitted, idx_tycons1) = unzip missing_at_stuff

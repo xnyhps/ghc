@@ -44,7 +44,7 @@ module Util (
         sortLe, sortWith, minWith, on,
 
         -- * Comparisons
-        isEqual, eqListBy,
+        isEqual, eqListBy, eqMaybeBy,
         thenCmp, cmpList,
         removeSpaces,
         
@@ -676,6 +676,11 @@ eqListBy :: (a->a->Bool) -> [a] -> [a] -> Bool
 eqListBy _  []     []     = True
 eqListBy eq (x:xs) (y:ys) = eq x y && eqListBy eq xs ys
 eqListBy _  _      _      = False
+
+eqMaybeBy :: (a ->a->Bool) -> Maybe a -> Maybe a -> Bool
+eqMaybeBy _  Nothing  Nothing  = True
+eqMaybeBy eq (Just x) (Just y) = eq x y
+eqMaybeBy _  _        _        = False
 
 cmpList :: (a -> a -> Ordering) -> [a] -> [a] -> Ordering
     -- `cmpList' uses a user-specified comparer

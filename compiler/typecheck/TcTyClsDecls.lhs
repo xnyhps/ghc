@@ -8,7 +8,7 @@ TcTyClsDecls: Typecheck type and class declarations
 \begin{code}
 module TcTyClsDecls (
 	tcTyAndClassDecls, kcDataDecl, tcConDecls, mkRecSelBinds,
-        tcTopFamInstDecl, tcAssocDecl, tcDefaultAssocDecl,
+        tcTopFamInstDecl, tcAssocDecl,
         checkValidTyCon, dataDeclChecks
     ) where
 
@@ -583,12 +583,7 @@ tcClassATs clas clas_tvs ats at_defs = do
         dat <- case lookupNameEnv at_defs_map (tyConName fam_tc) of
                  Nothing        -> return Nothing
                  Just def_decls -> do
-                   liftM Just $ mapM (\def_decl -> do
-                     -- NB: We have to explicitly extend the environment here because
-                     -- tcDefaultAssocDecl will pull on the fam_tc when checking the default instance,
-                     -- and the the version of the fam_tc currently present in the environment is _|_
-                     tcExtendGlobalEnv [ATyCon fam_tc] $
-                       tcDefaultAssocDecl clas_tvs def_decl) def_decls
+                   liftM Just $ mapM (tcDefaultAssocDecl fam_tc clas_tvs) def_decls
         return (fam_tc, dat)
 \end{code}
 
@@ -708,35 +703,16 @@ tcFamInstDecl1 :: TyCon -> TyClDecl Name -> TcM TyCon
 
   -- "type instance"
 tcFamInstDecl1 fam_tc (decl@TySynonym {})
-  = kcIdxTyPats fam_tc decl $ \k_tvs k_typats resKind ->
-    do { -- check that the family declaration is for a synonym
-         checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
+  = do { -- (1) do the work of verifying the synonym
+       ; (t_tvs, t_typats, t_rhs) <- tcFamSynInstDecl1 fam_tc decl
 
-       ; -- (1) kind check the right-hand side of the type equation
-       ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
-                  -- ToDo: the ExpKind could be better
-
-         -- we need the exact same number of type parameters as the family
-         -- declaration
-       ; let famArity = tyConArity fam_tc
-       ; checkTc (length k_typats == famArity) $
-                 wrongNumberOfParmsErr famArity
-
-         -- (2) type check type equation
-       ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
-       { t_typats <- mapM tcHsKindedType k_typats
-       ; t_rhs    <- tcHsKindedType k_rhs
-
-         -- (3) check the well-formedness of the instance
-       ; checkValidTypeInst t_typats t_rhs
-
-         -- (4) construct representation tycon
+         -- (2) construct representation tycon
        ; rep_tc_name <- newFamInstTyConName (tcdLName decl) t_typats
        ; buildSynTyCon rep_tc_name t_tvs
                        (SynonymTyCon t_rhs)
                        (typeKind t_rhs)
                        NoParentTyCon (Just (fam_tc, t_typats))
-       }}
+       }
 
   -- "newtype instance" and "data instance"
 tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
@@ -796,6 +772,34 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
                         _ -> True
 
 tcFamInstDecl1 _ d = pprPanic "tcFamInstDecl1" (ppr d)
+
+
+tcFamSynInstDecl1 :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
+tcFamSynInstDecl1 fam_tc (decl@TySynonym {})
+  = kcIdxTyPats fam_tc decl $ \k_tvs k_typats resKind ->
+    do { -- check that the family declaration is for a synonym
+         checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
+
+       ; -- (1) kind check the right-hand side of the type equation
+       ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
+                  -- ToDo: the ExpKind could be better
+
+         -- we need the exact same number of type parameters as the family
+         -- declaration
+       ; let famArity = tyConArity fam_tc
+       ; checkTc (length k_typats == famArity) $
+                 wrongNumberOfParmsErr famArity
+
+         -- (2) type check type equation
+       ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
+       { t_typats <- mapM tcHsKindedType k_typats
+       ; t_rhs    <- tcHsKindedType k_rhs
+
+         -- (3) check the well-formedness of the instance
+       ; checkValidTypeInst t_typats t_rhs
+
+       ; return (t_tvs, t_typats, t_rhs) }}
+tcFamSynInstDecl1 _ decl = pprPanic "tcFamSynInstDecl1" (ppr decl)
 \end{code}
 
 %************************************************************************
@@ -836,21 +840,22 @@ tcAssocDecl clas mini_env (L loc decl)
       = return ()   -- Allow non-type-variable instantiation
                     -- See Note [Associated type instances]
 
-tcDefaultAssocDecl :: [TyVar]        -- ^ TyVars of associated type's class
-                   -> LTyClDecl Name -- ^ RHS
-                   -> TcM TyCon
-tcDefaultAssocDecl clas_tvs (L loc decl)
+tcDefaultAssocDecl :: TyCon                       -- ^ Family TyCon
+                   -> [TyVar]                     -- ^ TyVars of associated type's class
+                   -> LTyClDecl Name              -- ^ RHS
+                   -> TcM ([TyVar], [Type], Type) -- ^ Type checked RHS and free TyVars
+tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
   = setSrcSpan loc      $
     tcAddDeclCtxt decl  $
-    do { at_tc <- tcFamInstDecl NotTopLevel decl
-       ; let Just (_fam_tc, at_tys) = tyConFamInst_maybe at_tc
-  
+    do { (at_tvs, at_tys, at_rhs) <- tcFamSynInstDecl1 fam_tc decl
+       ; checkValidType (TySynCtxt (tyConName fam_tc)) at_rhs
+       
        -- See Note [Checking consistent instantiation]
        -- We only want to check this on the *class* TyVars,
        -- not the *family* TyVars (there may be more of these)
        ; zipWithM_ check_arg clas_tvs at_tys
 
-       ; return at_tc }
+       ; return (at_tvs, at_tys, at_rhs) }
   where
     check_arg fam_tc_tv at_ty
       = checkTc (mkTyVarTy fam_tc_tv `eqType` at_ty) 

@@ -719,7 +719,13 @@ checkBootDecl (AClass c1)  (AClass c2)
 
        eqAT (tc1, def_ats1) (tc2, def_ats2)
          = checkBootTyCon tc1 tc2 &&
-           def_ats1 == def_ats2
+           eqMaybeBy (eqListBy eqATDef) def_ats1 def_ats2
+
+       eqATDef (tvs1, ty_pats1, ty1) (tvs2, ty_pats2, ty2)
+         = eqListBy same_kind tvs1 tvs2 &&
+           eqListBy (eqTypeX env) ty_pats1 ty_pats2 &&
+           eqTypeX env ty1 ty2
+         where env = rnBndrs2 env0 tvs1 tvs2
 
        eqFD (as1,bs1) (as2,bs2) = 
          eqListBy (eqTypeX env) (mkTyVarTys as1) (mkTyVarTys as2) &&
@@ -734,7 +740,7 @@ checkBootDecl (AClass c1)  (AClass c2)
         ||   -- Above tests for an "abstract" class
         eqListBy (eqPredX env) sc_theta1 sc_theta2 &&
         eqListBy eqSig op_stuff1 op_stuff2 &&
-        eqListBy eqAT ats1 ats2)
+        eqListBy eqAT ats1 ats2) 
 
 checkBootDecl (ADataCon dc1) (ADataCon _)
   = pprPanic "checkBootDecl" (ppr dc1)

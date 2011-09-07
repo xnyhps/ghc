@@ -1339,9 +1339,13 @@ tyThingToIfaceDecl (AClass clas)
       = classExtraBigSig clas
     tycon = classTyCon clas
 
+    toIfaceAT :: ClassATItem -> IfaceAT
     toIfaceAT (tc, def_tcs)
       = IfaceAT (tyThingToIfaceDecl (ATyCon tc))
-                (fmap (map (tyThingToIfaceDecl . ATyCon)) def_tcs)
+                (fmap (map to_if_at_def) def_tcs)
+      where
+        to_if_at_def (tvs, pat_tys, ty)
+          = (toIfaceTvBndrs tvs, map toIfaceType pat_tys, toIfaceType ty)
 
     toIfaceClassOp (sel_id, def_meth)
 	= ASSERT(sel_tyvars == clas_tyvars)
