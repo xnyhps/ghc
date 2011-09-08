@@ -113,7 +113,7 @@ predKind (IParam {}) = liftedTypeKind 	-- always represented by lifted types
 
 \begin{code}
 -- | Essentially 'funResultTy' on kinds handling pi-types too
-kindFunResult :: Kind -> Type -> Kind
+kindFunResult :: Kind -> KindOrType -> Kind
 kindFunResult (FunTy _ res) _ = res
 kindFunResult (ForAllTy kv res) arg = substKiWith [kv] [arg] res
 kindFunResult k _ = pprPanic "kindFunResult" (ppr k)

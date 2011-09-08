@@ -447,7 +447,7 @@ data TyCon
     }
 
   -- | Represents promoted data constructor.
-  | PromotedDataTyCon {
+  | PromotedDataTyCon {	   	-- See Note [Promoted data constructors]
 	tyConUnique :: Unique, -- ^ Same Unique as the data constructor
 	tyConName   :: Name,   -- ^ Same Name as the data constructor
 	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
@@ -598,6 +598,34 @@ data SynTyConRhs
    -- | A type synonym family  e.g. @type family F x y :: * -> *@
    | SynFamilyTyCon
 \end{code}
+
+Note [Promoted data constructors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A data constructor can be promoted to become a type constructor,
+via the PromotedDataTyCon alternative in TyCon.
+
+* Only "vanilla" data constructors are promoted; ones with no GADT
+  stuff, no existentials, etc.  We might generalise this later.
+
+* The TyCon promoted from a DataCon has the *same* Name and Unique as
+  the DataCon.  Eg. If the data constructor Data.Maybe.Just(unique 78,
+  say) is promoted to a TyCon whose name is Data.Maybe.Just(unique 78)
+
+* The *kind* of a promoted DataCon may be polymorphic.  Example:
+    type of DataCon           Just :: forall (a:*). a -> Maybe a
+    kind of (promoted) tycon  Just :: forall (a:box). a -> Maybe a
+  The kind is not identical to the type, because of the */box 
+  kind signature on the forall'd variable; so the tc_kind field of
+  PromotedDataTyCon is not identical to the dataConUserType of the 
+  DataCon.  But it's the same modulo changing the variable kinds,
+  done by Kind.promoteType. 
+
+* Small note: We promote the *user* type of the DataCon.  Eg
+     data T = MkT {-# UNPACK #-} !(Bool, Bool)
+  The promoted kind is
+     MkT :: (Bool,Bool) -> T
+  *not* 
+     MkT :: Bool -> Bool -> T
 
 Note [Enumeration types]
 ~~~~~~~~~~~~~~~~~~~~~~~~

@@ -89,30 +89,39 @@ tcTyAndClassDecls boot_details decls_s
       --     second time here.  This doesn't matter as the definitions are
       --     the same.
     ; let implicit_things = concatMap implicitTyThings tyclss
-          rec_sel_binds   = mkRecSelBinds [tc | ATyCon tc <- tyclss]
           dm_ids          = mkDefaultMethodIds tyclss
     ; env <- tcExtendGlobalEnv implicit_things $
              tcExtendGlobalValEnv dm_ids $
              getGblEnv
     ; return (env, rec_sel_binds) } }
   where
-    go [] = return []
+    go :: [[LTyClDecl Name]] -> TcM TcGblEnv
+    go [] = getGblEnv
     go (tyclds:tyclds_s) = do
-      (generalized_env, _) <- kcTyClDecls1 Nothing tyclds
+
+tcTyClGroup :: [LTyClDecl Name] -> TcM TcGblEnv
+-- Typecheck one strongly-connected component of type and class decls
+
+tcTyClGroup tyclds
+ = do
+      generalized_env <- kcTyClDecls1 Nothing tyclds
+	-- generalized_env gives the final, possibly-polymorphic kind
+        -- of each type and class in the group
+
       tyclss <- fixM $ \ rec_tyclss ->
         -- Populate environment
         tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
           tcExtendNothingEnv (dc_names tyclds) $ do
           -- Kind-check in dependency order
           -- See Note [Kind checking for type and class decls]
-          (_, kc_decls) <- kcTyClDecls1 (Just generalized_env) tyclds
           -- And now build the TyCons/Classes
           let rec_flags = calcRecFlags boot_details rec_tyclss
           concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls
-      tyclss_s <- tcExtendGlobalEnv tyclss $
-                  tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
-                  go tyclds_s
-      return (tyclss ++ tyclss_s)
+
+      tcExtendGlobalEnv tyclss $
+          tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
+          getGblEnv
+  where
     dc_names :: [LTyClDecl Name] -> [Name]
     dc_names decls =
       [ unLoc (con_name con)

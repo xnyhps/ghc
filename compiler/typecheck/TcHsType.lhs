@@ -16,7 +16,7 @@ module TcHsType (
         kindGeneralizeKind,
 
 		-- Sort checking
-	scDsLHsKind, scDsLHsMaybeKind,
+	tcLHsKind, tcLHsMaybeKind,
 
                 -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
@@ -538,19 +538,23 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
-        ATyVar _ ty             -> wrap (typeKind ty)
-        AThing kind             -> wrap kind
-        AGlobal (ATyCon tc)     -> wrap (tyConKind tc)
-        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap
+        ATyVar _ ty             -> wrap_mono (typeKind ty)
+        AThing kind             -> wrap_mono kind
+        AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
+        AGlobal (ADataCon dc) | Just tc <- promotedDataConTyCon_maybe dc
+                                -> wrap_poly (tyConKind tc)
         _                       -> wrongThingErr "type" thing name
     where
-      wrap kind
-        | null kvs = return (HsTyVar name, kind)
+      wrap_mono kind = return (HsTyVar name, kind)
+      wrap_poly kind
+        | null kvs = wrap_mono kind
         | otherwise = do
           kvs' <- mapM (const newMetaKindVar) kvs
           let ki = substKiWith kvs kvs' ki_body
           return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
         where (kvs, ki_body) = splitForAllTys kind
+
+DataCon.promotedDataConTyCon :: DataCon -> Maybe TyCon
 
 kcDataCon :: DataCon -> TcM TcKind
 kcDataCon dc = do
@@ -752,6 +756,18 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 %*									*
 %************************************************************************
 
+\begin{code}
+Note [Kind-checking kind-polymorphic types]  Julien fix
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider    f :: forall k (a::k). a -> a
+or (bogus)  g :: forall k (a::k). a -> k
+or (ok)     h :: forall k a.      a -> k
+
+When we encounter the 'forall k' we don't yet know whether 'k' will
+turn out to be a kind variable or a type variable.  No matter.  We
+just allocate a fresh meta-variable (kk) for the kind of k, and unify
+away. 
+\end{code}
 
 \begin{code}
 kcHsTyVars :: [LHsTyVarBndr Name] 
@@ -763,7 +779,9 @@ kcHsTyVars tvs thing_inside
        ; tcExtendKindEnvTvs kinded_tvs thing_inside }
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
-	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
+-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
+-- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
+-- See Note [Kind-checking kind-polymorphic types]
 kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
 kcHsTyVar (KindedTyVar name kind _) = do
   kind' <- scDsLHsKind kind

@@ -129,7 +129,7 @@ data Type
 
   | TyConApp
 	TyCon
-	[Type]		-- ^ Application of a 'TyCon', including newtypes /and/ synonyms.
+	[KindOrType]	-- ^ Application of a 'TyCon', including newtypes /and/ synonyms.
 	                -- Invariant: saturated appliations of 'FunTyCon' must
 	                -- use 'FunTy' and saturated synonyms must use their own
                         -- constructors. However, /unsaturated/ 'FunTyCon's
@@ -161,6 +161,10 @@ data Type
 			-- (see Type.predTypeRep)
 
   deriving (Data.Data, Data.Typeable)
+
+type KindOrType = Type -- See note [Arguments to type constructors]	
+  -- *** Julien write this!
+  -- NB: only for TyConApp; not AppTy
 
 -- | The key type representing kinds in the compiler.
 -- Invariant: a kind is always in one of these forms:
@@ -377,12 +381,13 @@ instance NamedThing TyThing where	-- Can't put this with the type
 -- 3. The substition is only applied ONCE! This is because
 -- in general such application will not reached a fixed point.
 data TvSubst 		
-  = TvSubst InScopeSet 	-- The in-scope type variables
-	    TvSubstEnv	-- Substitution of types
+  = TvSubst InScopeSet 	-- The in-scope type and kind variables
+	    TvSubstEnv  -- Substitutes both type and kind variables
 	-- See Note [Apply Once]
 	-- and Note [Extending the TvSubstEnv]
 
 -- | A substitition of 'Type's for 'TyVar's
+--                 and 'Kind's for 'KindVar's
 type TvSubstEnv = TyVarEnv Type
 	-- A TvSubstEnv is used both inside a TvSubst (with the apply-once
 	-- invariant discussed in Note [Apply Once]), and also independently
