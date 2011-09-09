@@ -16,7 +16,7 @@ module TcHsType (
         kindGeneralizeKind,
 
 		-- Sort checking
-	tcLHsKind, tcLHsMaybeKind,
+	scDsLHsKind, scDsLHsMaybeKind,
 
                 -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
@@ -541,8 +541,7 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
         ATyVar _ ty             -> wrap_mono (typeKind ty)
         AThing kind             -> wrap_mono kind
         AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
-        AGlobal (ADataCon dc) | Just tc <- promotedDataConTyCon_maybe dc
-                                -> wrap_poly (tyConKind tc)
+        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
         _                       -> wrongThingErr "type" thing name
     where
       wrap_mono kind = return (HsTyVar name, kind)
@@ -554,8 +553,7 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
           return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
         where (kvs, ki_body) = splitForAllTys kind
 
-DataCon.promotedDataConTyCon :: DataCon -> Maybe TyCon
-
+-- IA0_TODO: this function should disapear, and use the dcPromoted field of DataCon
 kcDataCon :: DataCon -> TcM TcKind
 kcDataCon dc = do
   let ty = dataConUserType dc
@@ -756,18 +754,19 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 %*									*
 %************************************************************************
 
-\begin{code}
-Note [Kind-checking kind-polymorphic types]  Julien fix
+Note [Kind-checking kind-polymorphic types]  IA0_TODO
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider    f :: forall k (a::k). a -> a
-or (bogus)  g :: forall k (a::k). a -> k
-or (ok)     h :: forall k a.      a -> k
+Consider:
+  f :: forall k f (a::k). f a -> Int
 
-When we encounter the 'forall k' we don't yet know whether 'k' will
-turn out to be a kind variable or a type variable.  No matter.  We
-just allocate a fresh meta-variable (kk) for the kind of k, and unify
-away. 
-\end{code}
+The renamer (or parser) already decided for us if k, f or a are type
+or kind variables. It did so by clissifying them with the correct data
+constructor.
+
+  UserTyVar -> type variable without kind annotation
+  KindedTyVar -> type variable with kind annotation
+  UserKiVar -> kind variable (they don't need annotation,
+                              since we only have BOX for a super kind)
 
 \begin{code}
 kcHsTyVars :: [LHsTyVarBndr Name] 

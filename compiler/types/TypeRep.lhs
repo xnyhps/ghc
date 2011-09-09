@@ -12,8 +12,8 @@ module TypeRep (
 	TyThing(..), 
 	Type(..),
         Pred(..),                       -- to friends
-	
-        Kind, SuperKind,
+
+        KindOrType, Kind, SuperKind,
         PredType, ThetaType,      -- Synonyms
 
         -- Functions over types
@@ -162,9 +162,7 @@ data Type
 
   deriving (Data.Data, Data.Typeable)
 
-type KindOrType = Type -- See note [Arguments to type constructors]	
-  -- *** Julien write this!
-  -- NB: only for TyConApp; not AppTy
+type KindOrType = Type -- See Note [Arguments to type constructors]
 
 -- | The key type representing kinds in the compiler.
 -- Invariant: a kind is always in one of these forms:
@@ -181,6 +179,30 @@ type Kind = Type
 -- > TyConApp SuperKindTyCon ...
 type SuperKind = Type
 \end{code}
+
+
+Note [Arguments to type constructors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Because of kind polymorphism, in addition to type application we now
+have kind instantiation. We reuse the same notations to do so.
+
+For example:
+
+  Just (* -> *) Maybe
+  Right * Nat Zero
+
+are represented by:
+
+  TyConApp (PromotedDataCon Just) [* -> *, Maybe]
+  TyConApp (PromotedDataCon Right) [*, Nat, (PromotedDataCon Zero)]
+
+Important note: Nat is used as a *kind* and not as a type. This can be
+confusing, since type-level Nat and kind-level Nat are identical. We
+use the kind of (PromotedDataCon Right) to know if its arguments are
+kinds or types.
+
+This kind instantiation only happens in TyConApp currently.
+
 
 Note [Equality-constrained types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
