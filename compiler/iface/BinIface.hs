@@ -1416,7 +1416,7 @@ instance Binary OverlapFlag where
 		  _ -> panic ("get OverlapFlag " ++ show h)
 
 instance Binary IfaceConDecls where
-    put_ bh IfAbstractTyCon = putByte bh 0
+    put_ bh (IfAbstractTyCon d) = do { putByte bh 0; put_ bh d }
     put_ bh IfOpenDataTyCon = putByte bh 1
     put_ bh (IfDataTyCon cs) = do { putByte bh 2
 				  ; put_ bh cs }
@@ -1425,7 +1425,7 @@ instance Binary IfaceConDecls where
     get bh = do
 	    h <- getByte bh
 	    case h of
-	      0 -> return IfAbstractTyCon
+	      0 -> do { d <- get bh; return (IfAbstractTyCon d) }
 	      1 -> return IfOpenDataTyCon
 	      2 -> do cs <- get bh
 		      return (IfDataTyCon cs)
@@ -1455,6 +1455,21 @@ instance Binary IfaceConDecl where
 		a9 <- get bh
 		a10 <- get bh
 	        return (IfCon a1 a2 a3 a4 a5 a6 a7 a8 a9 a10)
+
+instance Binary IfaceAT where
+    put_ bh (IfaceAT dec defs) = do
+            put_ bh dec
+            put_ bh defs
+    get bh = do dec <- get bh
+                defs <- get bh
+                return (IfaceAT dec defs)
+
+instance Binary IfaceATDefault where
+    put_ bh (IfaceATD tvs pat_tys ty) = do
+        put_ bh tvs
+        put_ bh pat_tys
+        put_ bh ty
+    get bh = liftM3 IfaceATD (get bh) (get bh) (get bh)
 
 instance Binary IfaceClassOp where
    put_ bh (IfaceClassOp n def ty) = do	

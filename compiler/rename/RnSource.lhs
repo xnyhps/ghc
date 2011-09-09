@@ -789,12 +789,13 @@ rnTyClDecl mb_cls tydecl@(TySynonym { tcdTyVars = tyvars, tcdLName = name,
 
 rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls, 
 		         tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
-		         tcdMeths = mbinds, tcdATs = ats, tcdDocs = docs})
+		         tcdMeths = mbinds, tcdATs = ats, tcdATDefs = at_defs,
+                         tcdDocs = docs})
   = do	{ lcls' <- lookupLocatedTopBndrRn lcls
         ; let cls' = unLoc lcls'
 
 	-- Tyvars scope over superclass context and method signatures
-	; ((tyvars', context', fds', ats', sigs'), stuff_fvs)
+	; ((tyvars', context', fds', ats', at_defs', sigs'), stuff_fvs)
 	    <- bindTyVarsFV cls_doc tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
@@ -802,11 +803,13 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
              ; let rn_at = rnTyClDecl (Just cls')
              ; (ats', fv_ats) <- mapAndUnzipM (wrapLocFstM rn_at) ats
 	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
+             ; (at_defs', fv_at_defs) <- mapAndUnzipM (wrapLocFstM rn_at) at_defs
 	     ; let fvs = extractHsCtxtTyNames context'	`plusFV`
 	                 hsSigsFVs sigs'                `plusFV`
-                         plusFVs fv_ats
+                         plusFVs fv_ats                 `plusFV`
+                         plusFVs fv_at_defs
 			 -- The fundeps have no free variables
-	     ; return ((tyvars', context', fds', ats', sigs'), fvs) }
+	     ; return ((tyvars', context', fds', ats', at_defs', sigs'), fvs) }
 
 	-- No need to check for duplicate associated type decls
 	-- since that is done by RnNames.extendGlobalRdrEnvRn
@@ -840,7 +843,8 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 
 	; return (ClassDecl { tcdCtxt = context', tcdLName = lcls', 
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
-			      tcdMeths = mbinds', tcdATs = ats', tcdDocs = docs'},
+			      tcdMeths = mbinds', tcdATs = ats', tcdATDefs = at_defs',
+                              tcdDocs = docs'},
 	     	  extractHsTyVarBndrNames_s tyvars' (meth_fvs `plusFV` stuff_fvs)) }
   where
     cls_doc  = ClassDeclCtx lcls
