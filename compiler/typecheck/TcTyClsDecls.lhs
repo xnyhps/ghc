@@ -63,10 +63,9 @@ import Data.List
 \begin{code}
 
 tcTyAndClassDecls :: ModDetails
-                   -> [[LTyClDecl Name]]     -- Mutually-recursive groups in dependency order
-                   -> TcM (TcGblEnv,         -- Input env extended by types and classes
+                   -> [TyClGroup Name]       -- Mutually-recursive groups in dependency order
+                   -> TcM (TcGblEnv)         -- Input env extended by types and classes
                                              -- and their implicit Ids,DataCons
-                           HsValBinds Name)  -- Renamed bindings for record selectors
 -- Fails if there are any errors
 tcTyAndClassDecls boot_details decls_s
   = checkNoErrs $ do    -- The code recovers internally, but if anything gave rise to
@@ -74,61 +73,58 @@ tcTyAndClassDecls boot_details decls_s
   { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
                    -- Remove family instance decls altogether
                    -- They are dealt with by TcInstDcls
-  ; tyclss <- go tyclds_s
-  ; traceTc "tcTyAndCl3" (ppr tyclss)
-  ; tcExtendGlobalEnv tyclss $ do
+  ; env <- go tyclds_s
+  ; setGblEnv env $ do
       -- Perform the validity check
       -- We can do this now because we are done with the recursive knot
-    { traceTc "ready for validity check" empty
-    ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
-    ; traceTc "done" empty
+  { traceTc "ready for validity check" empty
+  ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
+  ; traceTc "done" empty
       -- Add the implicit things;
       -- we want them in the environment because
       -- they may be mentioned in interface files
       -- NB: All associated types and their implicit things will be added a
       --     second time here.  This doesn't matter as the definitions are
       --     the same.
-    ; let implicit_things = concatMap implicitTyThings tyclss
-          dm_ids          = mkDefaultMethodIds tyclss
-    ; env <- tcExtendGlobalEnv implicit_things $
-             tcExtendGlobalValEnv dm_ids $
-             getGblEnv
-    ; return (env, rec_sel_binds) } }
+  ; return env } }
   where
-    go :: [[LTyClDecl Name]] -> TcM TcGblEnv
+    go :: [TyClGroup Name] -> TcM TcGblEnv
     go [] = getGblEnv
-    go (tyclds:tyclds_s) = do
+    go (tyclds:tyclds_s)
+      = do { env <- tcTyClGroup boot_details tyclds
+           ; setGblEnv env $ go tyclds_s }
 
-tcTyClGroup :: [LTyClDecl Name] -> TcM TcGblEnv
+tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
-
-tcTyClGroup tyclds
- = do
-      generalized_env <- kcTyClDecls1 Nothing tyclds
-	-- generalized_env gives the final, possibly-polymorphic kind
-        -- of each type and class in the group
-
-      tyclss <- fixM $ \ rec_tyclss ->
-        -- Populate environment
-        tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-          tcExtendNothingEnv (dc_names tyclds) $ do
-          -- Kind-check in dependency order
-          -- See Note [Kind checking for type and class decls]
-          -- And now build the TyCons/Classes
-          let rec_flags = calcRecFlags boot_details rec_tyclss
-          concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls
-
-      tcExtendGlobalEnv tyclss $
-          tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
-          getGblEnv
+tcTyClGroup boot_details tyclds
+ = do { (generalized_env, _) <- kcTyClGroup Nothing tyclds
+	    -- generalized_env gives the final, possibly-polymorphic kind
+            -- of each type and class in the group
+      ; tyclss <- fixM $ \ rec_tyclss -> do
+                -- Populate environment
+          { tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
+              tcExtendNothingEnv (dc_names tyclds) $ do
+                -- Kind-check in dependency order
+                -- See Note [Kind checking for type and class decls]
+                -- And now build the TyCons/Classes
+          { (_, kc_decls) <- kcTyClGroup (Just generalized_env) tyclds
+          ; let rec_flags = calcRecFlags boot_details rec_tyclss
+          ; concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls } }
+      ; traceTc "tcTyGroup" (ppr tyclss)
+      ; let implicit_things = concatMap implicitTyThings tyclss
+            dm_ids          = mkDefaultMethodIds tyclss
+      ; tcExtendGlobalEnv tyclss $
+          tcExtendGlobalEnv implicit_things $
+          tcExtendGlobalValEnv dm_ids $
+          getGblEnv }
   where
-    dc_names :: [LTyClDecl Name] -> [Name]
+    dc_names :: TyClGroup Name -> [Name]
     dc_names decls =
       [ unLoc (con_name con)
       | L _ (TyData {tcdCons = cons}) <- decls
       , L _ con <- cons ]
 
-zipRecTyClss :: [LTyClDecl Name]
+zipRecTyClss :: TyClGroup Name
              -> [TyThing]           -- Knot-tied
              -> [(Name,TyThing)]
 -- Build a name-TyThing mapping for the things bound by decls
@@ -213,8 +209,8 @@ initial kind environment.  (This is handled by `allDecls').
 
 
 \begin{code}
-kcTyClDecls1 :: Maybe TcLclEnv -> [LTyClDecl Name] -> TcM (TcLclEnv, [LTyClDecl Name])
-kcTyClDecls1 Nothing decls
+kcTyClGroup :: Maybe TcLclEnv -> TyClGroup Name -> TcM (TcLclEnv, TyClGroup Name)
+kcTyClGroup Nothing decls
   = do	{       -- Omit instances of type families; they are handled together
 		-- with the *heads* of class instances
         ; let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
@@ -245,7 +241,7 @@ kcTyClDecls1 Nothing decls
 
 	; return (generalized_env, kc_syn_decls ++ kc_alg_decls) } } }
 
-kcTyClDecls1 (Just generalized_env) decls = do
+kcTyClGroup (Just generalized_env) decls = do
   -- Omit instances of type families; they are handled together
   -- with the *heads* of class instances
   let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls

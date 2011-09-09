@@ -14,7 +14,7 @@ module HsDecls (
   -- * Toplevel declarations
   HsDecl(..), LHsDecl,
   -- ** Class or type declarations
-  TyClDecl(..), LTyClDecl,
+  TyClDecl(..), LTyClDecl, TyClGroup,
   isClassDecl, isSynDecl, isDataDecl, isTypeDecl, isFamilyDecl,
   isFamInstDecl, tcdName, tyClDeclTyVars,
   countTyClDecls,
@@ -429,6 +429,8 @@ Interface file code:
 -- In both cases, 'tcdVars' collects all variables we need to quantify over.
 
 type LTyClDecl name = Located (TyClDecl name)
+type TyClGroup name = [LTyClDecl name]  -- this is used in TcTyClsDecls to represent
+                                        -- strongly connected components of decls
 
 -- | A type or class declaration.
 data TyClDecl name
