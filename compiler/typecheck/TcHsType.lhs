@@ -769,13 +769,15 @@ tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-
 	     -> TcM r
 -- Used when type-checking types/classes/type-decls
 -- Brings into scope immutable TyVars, not mutable ones that require later zonking
+-- Fix #5426: avoid abstraction over kinds containing # or (#)
 tcTyVarBndrs bndrs thing_inside = do
-    tyvars <- mapM (zonk . unLoc) bndrs
+    tyvars <- mapM (zonk . hsTyVarNameKind . unLoc) bndrs
     tcExtendTyVarEnv tyvars (thing_inside tyvars)
   where
-    zonk (UserTyVar name kind) = do { kind' <- zonkTcKindToKind kind
-				    ; return (mkTyVar name kind') }
-    zonk (KindedTyVar name _ kind) = return (mkTyVar name kind)
+    zonk (name, kind)
+      = do { kind' <- zonkTcKindToKind kind
+           ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
+	   ; return (mkTyVar name kind') }
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]

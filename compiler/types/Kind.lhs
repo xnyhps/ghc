@@ -29,7 +29,7 @@ module Kind (
         isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
         isUbxTupleKind, isArgTypeKind, isKind, isTySuperKind, 
         isSuperKind, isCoercionKind, 
-        isLiftedTypeKindCon,
+        isLiftedTypeKindCon, noHashInKind,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon, isSubOpenTypeKindCon,
@@ -67,6 +67,18 @@ isTySuperKind _                = False
 
 isLiftedTypeKindCon :: TyCon -> Bool
 isLiftedTypeKindCon tc    = tc `hasKey` liftedTypeKindTyConKey
+
+-- This checks that its argument does not contain # or (#).
+-- It is used in tcTyVarBndrs.
+noHashInKind :: Kind -> Bool
+noHashInKind (TyVarTy {}) = True
+noHashInKind (FunTy k1 k2) = noHashInKind k1 && noHashInKind k2
+noHashInKind (ForAllTy _ ki) = noHashInKind ki
+noHashInKind (TyConApp kc kis)
+  =  not (kc `hasKey` unliftedTypeKindTyConKey)
+  && not (kc `hasKey` ubxTupleKindTyConKey)
+  && all noHashInKind kis
+noHashInKind _ = panic "noHashInKind"
 \end{code}
 
 %************************************************************************
