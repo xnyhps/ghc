@@ -562,8 +562,6 @@ tcTyClDecl1 _parent calc_isrec
 tcTyClDecl1 _ _
   (ForeignType {tcdLName = L _ tc_name, tcdExtName = tc_ext_name})
   = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind 0)]
-
-tcTyClDecl1 _ _ d = pprPanic "tcTyClDecl1" (ppr d)
 \end{code}
 
 \begin{code}
