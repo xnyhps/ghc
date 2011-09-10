@@ -7,12 +7,17 @@
 --
 -- Binary interface file support.
 
-module BinIface ( writeBinIface, readBinIface,
+module BinIface ( writeBinIface, readBinIface, getSymtabName, getDictFastString,
                   CheckHiWay(..), TraceBinIFaceReading(..) ) where
 
 #include "HsVersions.h"
 
 import TcRnMonad
+import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon)
+import DataCon    (dataConName, dataConWorkId, dataConTyCon)
+import PrelInfo   (wiredInThings, basicKnownKeyNames)
+import Id         (idName, isDataConWorkId_maybe)
+import TysWiredIn
 import IfaceEnv
 import HscTypes
 import BasicTypes
@@ -38,11 +43,13 @@ import Outputable
 import FastString
 import Constants
 
+import Data.Bits
 import Data.List
 import Data.Word
 import Data.Array
 import Data.IORef
 import Control.Monad
+import System.IO     ( fixIO )
 
 data CheckHiWay = CheckHiWay | IgnoreHiWay
     deriving Eq
@@ -125,18 +132,19 @@ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
   seekBin bh data_p             -- Back to where we were before
 
         -- Initialise the user-data field of bh
-  ud <- newReadState dict
-  bh <- return (setUserData bh ud)
-        
-  symtab_p <- Binary.get bh     -- Get the symtab ptr
-  data_p <- tellBin bh          -- Remember where we are now
-  seekBin bh symtab_p
-  symtab <- getSymbolTable bh update_nc
-  seekBin bh data_p             -- Back to where we were before
-  let ud = getUserData bh
-  bh <- return $! setUserData bh ud{ud_symtab = symtab}
-  iface <- get bh
-  return iface
+  (bh, _) <- fixIO $ \(~(_, symtab)) -> do
+    ud <- newReadState (getSymtabName symtab) (getDictFastString dict)
+    bh <- return $ setUserData bh ud
+
+    symtab_p <- Binary.get bh     -- Get the symtab ptr
+    data_p <- tellBin bh          -- Remember where we are now
+    seekBin bh symtab_p
+    symtab <- getSymbolTable bh update_nc
+    seekBin bh data_p             -- Back to where we were before
+    return (bh, symtab)
+
+        -- Read the interface file
+  get bh
 
 
 writeBinIface :: DynFlags -> FilePath -> ModIface -> IO ()
@@ -236,7 +244,7 @@ putSymbolTable bh next_off symtab = do
   mapM_ (\n -> serialiseName bh n symtab) names
 
 getSymbolTable :: BinHandle -> NameCacheUpdater (Array Int Name)
-               -> IO (Array Int Name)
+               -> IO SymbolTable
 getSymbolTable bh update_namecache = do
   sz <- get bh
   od_names <- sequence (replicate sz (get bh))
@@ -276,21 +284,96 @@ serialiseName bh name _ = do
   put_ bh (modulePackageId mod, moduleName mod, nameOccName name)
 
 
+-- Note [Symbol table representation of names]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- An occurrence of a name in an interface file is serialized as a single 32-bit word.
+-- The format of this word is:
+--   1. A 2-bit tag
+--   2. A 30-bit payload
+--
+-- The tag determines how the payload is interpreted. The available tags are:
+--  00b ==> a normal name. The payload is an index into the symbol table
+--  01b ==> a known-key name. The payload is the actual Unique
+--  10b ==> a tuple. The payload is:
+--    1. A 2-bit tuple sort (00b ==> boxed, 01b ==> unboxed, 10b ==> constraint)
+--    2. A 2-bit thing tag  (00b ==> tycon, 01b ==> datacon, 10b ==> datacon worker)
+--    3. A 26-bit arity
+--
+-- Note that we have to have special representation for tuples because they form
+-- an "infinite" family and hence are not recorded explicitly in wiredInTyThings or
+-- basicKnownKeyNames.
+
+knownKeyNamesMap :: UniqFM Name
+knownKeyNamesMap = listToUFM_Directly [(nameUnique n, n) | n <- knownKeyNames]
+  where
+    knownKeyNames :: [Name]
+    knownKeyNames = map getName wiredInThings
+                    ++ basicKnownKeyNames
+
+
 putName :: BinSymbolTable -> BinHandle -> Name -> IO ()
 putName BinSymbolTable{ 
             bin_symtab_map = symtab_map_ref,
             bin_symtab_next = symtab_next }    bh name
-  = do
-    symtab_map <- readIORef symtab_map_ref
-    case lookupUFM symtab_map name of
-      Just (off,_) -> put_ bh (fromIntegral off :: Word32)
-      Nothing -> do
-         off <- readFastMutInt symtab_next
-         writeFastMutInt symtab_next (off+1)
-         writeIORef symtab_map_ref
-             $! addToUFM symtab_map name (off,name)
-         put_ bh (fromIntegral off :: Word32)
+  | name `elemUFM` knownKeyNamesMap
+  , let u = getKey (nameUnique name)
+  = -- ASSERT(u < 2^30)
+    put_ bh (0x40000000 .|. (fromIntegral u :: Word32))
+  | otherwise
+  = case wiredInNameTyThing_maybe name of
+     Just (ATyCon tc)
+       | isTupleTyCon tc -> putTupleName_ bh tc 0
+     Just (ADataCon dc)
+       | let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 1
+     Just (AnId x)
+       | Just dc <- isDataConWorkId_maybe x, let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 2
+     _ -> do
+       symtab_map <- readIORef symtab_map_ref
+       case lookupUFM symtab_map name of
+         Just (off,_) -> put_ bh (fromIntegral off :: Word32)
+         Nothing -> do
+            off <- readFastMutInt symtab_next
+            -- MASSERT(off < 2^30)
+            writeFastMutInt symtab_next (off+1)
+            writeIORef symtab_map_ref
+                $! addToUFM symtab_map name (off,name)
+            put_ bh (fromIntegral off :: Word32)
 
+putTupleName_ :: BinHandle -> TyCon -> Word32 -> IO ()
+putTupleName_ bh tc thing_tag
+  = -- ASSERT(arity < 2^26)
+    put_ bh (0x80000000 .|. (sort_tag `shiftL` 28) .|. (thing_tag `shiftL` 26) .|. arity)
+  where
+    arity = fromIntegral (tupleTyConArity tc)
+    sort_tag = case tupleTyConSort tc of
+        BoxedTuple      -> 0
+        UnboxedTuple    -> 1
+        ConstraintTuple -> 2
+
+getSymtabName :: SymbolTable -> BinHandle -> IO Name
+getSymtabName symtab bh = do
+    i <- get bh
+    return $! case i .&. 0xC0000000 of
+        0x00000000 -> symtab ! fromIntegral (i ::  Word32)
+        0x40000000 -> case lookupUFM_Directly knownKeyNamesMap (mkUniqueGrimily (fromIntegral i .&. 0x3FFFFFFF)) of
+                        Nothing -> pprPanic "getSymtabName:unknown known-key unique" (ppr i)
+                        Just n  -> n
+        0x80000000 -> case thing_tag of
+                        0 -> tyConName (tupleTyCon sort arity)
+                        1 -> dataConName dc
+                        2 -> idName (dataConWorkId dc)
+                        _ -> pprPanic "getSymtabName:unknown tuple thing" (ppr i)
+          where
+            dc = tupleCon sort arity
+            sort = case (i .&. 0x30000000) `shiftR` 28 of
+                     0 -> BoxedTuple
+                     1 -> UnboxedTuple
+                     2 -> ConstraintTuple
+                     _ -> pprPanic "getSymtabName:unknown tuple sort" (ppr i)
+            thing_tag = (i .&. 0x0CFFFFFF) `shiftR` 26
+            arity = fromIntegral (i .&. 0x03FFFFFF )
+        _          -> pprPanic "getSymtabName:unknown name tag" (ppr i)
 
 data BinSymbolTable = BinSymbolTable {
         bin_symtab_next :: !FastMutInt, -- The next index to use
@@ -313,6 +396,10 @@ putFastString BinDictionary { bin_dict_next = j_r,
            writeFastMutInt j_r (j + 1)
            writeIORef out_r $! addToUFM out uniq (j, f)
 
+getDictFastString :: Dictionary -> BinHandle -> IO FastString
+getDictFastString dict bh = do
+    j <- get bh
+    return $! (dict ! fromIntegral (j :: Word32))
 
 data BinDictionary = BinDictionary {
         bin_dict_next :: !FastMutInt, -- The next index to use
@@ -891,27 +978,11 @@ instance Binary IfaceType where
 	    put_ bh ah
     
 	-- Simple compression for common cases of TyConApp
-    put_ bh (IfaceTyConApp IfaceIntTc  [])   = putByte bh 6
-    put_ bh (IfaceTyConApp IfaceCharTc [])   = putByte bh 7
-    put_ bh (IfaceTyConApp IfaceBoolTc [])   = putByte bh 8
-    put_ bh (IfaceTyConApp IfaceListTc [ty]) = do { putByte bh 9; put_ bh ty }
-	-- Unit tuple and pairs
-    put_ bh (IfaceTyConApp (IfaceTupTc BoxedTuple 0) []) 	 = putByte bh 10
-    put_ bh (IfaceTyConApp (IfaceTupTc BoxedTuple 2) [t1,t2]) = do { putByte bh 11; put_ bh t1; put_ bh t2 }
-        -- Kind cases
-    put_ bh (IfaceTyConApp IfaceLiftedTypeKindTc [])   = putByte bh 12
-    put_ bh (IfaceTyConApp IfaceOpenTypeKindTc [])     = putByte bh 13
-    put_ bh (IfaceTyConApp IfaceUnliftedTypeKindTc []) = putByte bh 14
-    put_ bh (IfaceTyConApp IfaceUbxTupleKindTc [])     = putByte bh 15
-    put_ bh (IfaceTyConApp IfaceArgTypeKindTc [])      = putByte bh 16
-    put_ bh (IfaceTyConApp IfaceConstraintKindTc [])   = putByte bh 21
-    put_ bh (IfaceTyConApp (IfaceAnyTc k) []) 	       = do { putByte bh 17; put_ bh k }
+    put_ bh (IfaceTyConApp (IfaceAnyTc k) []) = do { putByte bh 4; put_ bh k }
+    put_ bh (IfaceTyConApp (IfaceTc tc) tys) = do { putByte bh 5; put_ bh tc; put_ bh tys }
+    put_ bh (IfaceTyConApp tc tys) 	     = do { putByte bh 6; put_ bh tc; put_ bh tys }
 
-	-- Generic cases
-    put_ bh (IfaceTyConApp (IfaceTc tc) tys) = do { putByte bh 18; put_ bh tc; put_ bh tys }
-    put_ bh (IfaceTyConApp tc tys) 	     = do { putByte bh 19; put_ bh tc; put_ bh tys }
-
-    put_ bh (IfaceCoConApp cc tys) = do { putByte bh 20; put_ bh cc; put_ bh tys }
+    put_ bh (IfaceCoConApp cc tys) = do { putByte bh 7; put_ bh cc; put_ bh tys }
 
     get bh = do
 	    h <- getByte bh
@@ -927,62 +998,22 @@ instance Binary IfaceType where
 	      3 -> do ag <- get bh
 		      ah <- get bh
 		      return (IfaceFunTy ag ah)
-	      
-		-- Now the special cases for TyConApp
-	      6 -> return (IfaceTyConApp IfaceIntTc [])
-	      7 -> return (IfaceTyConApp IfaceCharTc [])
-	      8 -> return (IfaceTyConApp IfaceBoolTc [])
-	      9 -> do { ty <- get bh; return (IfaceTyConApp IfaceListTc [ty]) }
-	      10 -> return (IfaceTyConApp (IfaceTupTc BoxedTuple 0) [])
-	      11 -> do { t1 <- get bh; t2 <- get bh; return (IfaceTyConApp (IfaceTupTc BoxedTuple 2) [t1,t2]) }
-              12 -> return (IfaceTyConApp IfaceLiftedTypeKindTc [])
-              13 -> return (IfaceTyConApp IfaceOpenTypeKindTc [])
-              14 -> return (IfaceTyConApp IfaceUnliftedTypeKindTc [])
-              15 -> return (IfaceTyConApp IfaceUbxTupleKindTc [])
-              16 -> return (IfaceTyConApp IfaceArgTypeKindTc [])
-              21 -> return (IfaceTyConApp IfaceConstraintKindTc [])
-              17 -> do { k <- get bh; return (IfaceTyConApp (IfaceAnyTc k) []) }
-
-	      18 -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp (IfaceTc tc) tys) }
-	      19  -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp tc tys) }
-	      _  -> do { cc <- get bh; tys <- get bh; return (IfaceCoConApp cc tys) }
+              4 -> do { k <- get bh; return (IfaceTyConApp (IfaceAnyTc k) []) }
+	      5 -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp (IfaceTc tc) tys) }
+	      6 -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp tc tys) }
+	      _ -> do { cc <- get bh; tys <- get bh; return (IfaceCoConApp cc tys) }
 
 instance Binary IfaceTyCon where
-	-- Int,Char,Bool can't show up here because they can't not be saturated
-   put_ bh IfaceIntTc  	      = putByte bh 1
-   put_ bh IfaceBoolTc 	      = putByte bh 2
-   put_ bh IfaceCharTc 	      = putByte bh 3
-   put_ bh IfaceListTc 	      = putByte bh 4
-   put_ bh IfacePArrTc 	      = putByte bh 5
-   put_ bh IfaceLiftedTypeKindTc   = putByte bh 6
-   put_ bh IfaceOpenTypeKindTc     = putByte bh 7
-   put_ bh IfaceUnliftedTypeKindTc = putByte bh 8
-   put_ bh IfaceUbxTupleKindTc     = putByte bh 9
-   put_ bh IfaceArgTypeKindTc      = putByte bh 10
-   put_ bh IfaceConstraintKindTc   = putByte bh 15
-   put_ bh (IfaceTupTc bx ar)  = do { putByte bh 11; put_ bh bx; put_ bh ar }
-   put_ bh (IfaceTc ext)       = do { putByte bh 12; put_ bh ext }
-   put_ bh (IfaceIPTc n)       = do { putByte bh 13; put_ bh n }
-   put_ bh (IfaceAnyTc k)      = do { putByte bh 14; put_ bh k }
+   put_ bh (IfaceTc ext)  = do { putByte bh 1; put_ bh ext }
+   put_ bh (IfaceIPTc n)  = do { putByte bh 2; put_ bh n }
+   put_ bh (IfaceAnyTc k) = do { putByte bh 3; put_ bh k }
 
    get bh = do
 	h <- getByte bh
 	case h of
-	  1 -> return IfaceIntTc
-	  2 -> return IfaceBoolTc
-	  3 -> return IfaceCharTc
-	  4 -> return IfaceListTc
-	  5 -> return IfacePArrTc
-          6 -> return IfaceLiftedTypeKindTc 
-          7 -> return IfaceOpenTypeKindTc 
-          8 -> return IfaceUnliftedTypeKindTc
-          9 -> return IfaceUbxTupleKindTc
-          10 -> return IfaceArgTypeKindTc
-          15 -> return IfaceConstraintKindTc
-	  11 -> do { bx <- get bh; ar <- get bh; return (IfaceTupTc bx ar) }
-	  12 -> do { ext <- get bh; return (IfaceTc ext) }
-	  13 -> do { n <- get bh; return (IfaceIPTc n) }
-          _  -> do { k <- get bh; return (IfaceAnyTc k) }
+	  1 -> do { ext <- get bh; return (IfaceTc ext) }
+	  2 -> do { n <- get bh; return (IfaceIPTc n) }
+          _ -> do { k <- get bh; return (IfaceAnyTc k) }
 
 instance Binary IfaceCoCon where
    put_ bh (IfaceCoAx n)       = do { putByte bh 0; put_ bh n }
@@ -1063,10 +1094,6 @@ instance Binary IfaceExpr where
             putByte bh 13
             put_ bh m
             put_ bh ix
-    put_ bh (IfaceTupId aa ab) = do
-      putByte bh 14
-      put_ bh aa
-      put_ bh ab
     get bh = do
 	    h <- getByte bh
 	    case h of
@@ -1108,9 +1135,6 @@ instance Binary IfaceExpr where
               13 -> do m <- get bh
                        ix <- get bh
                        return (IfaceTick m ix)
-              14 -> do aa <- get bh
-                       ab <- get bh
-                       return (IfaceTupId aa ab)
               _ -> panic ("get IfaceExpr " ++ show h)
 
 instance Binary IfaceConAlt where
@@ -1119,11 +1143,8 @@ instance Binary IfaceConAlt where
     put_ bh (IfaceDataAlt aa) = do
 	    putByte bh 1
 	    put_ bh aa
-    put_ bh (IfaceTupleAlt ab) = do
-	    putByte bh 2
-	    put_ bh ab
     put_ bh (IfaceLitAlt ac) = do
-	    putByte bh 3
+	    putByte bh 2
 	    put_ bh ac
     get bh = do
 	    h <- getByte bh
@@ -1131,8 +1152,6 @@ instance Binary IfaceConAlt where
 	      0 -> do return IfaceDefault
 	      1 -> do aa <- get bh
 		      return (IfaceDataAlt aa)
-	      2 -> do ab <- get bh
-		      return (IfaceTupleAlt ab)
 	      _ -> do ac <- get bh
 		      return (IfaceLitAlt ac)
 

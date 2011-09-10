@@ -1581,23 +1581,6 @@ mzipIdKey       = mkPreludeMiscIdUnique 197
 
 %************************************************************************
 %*                                                                      *
-\subsection{Standard groups of types}
-%*                                                                      *
-%************************************************************************
-
-\begin{code}
-kindKeys :: [Unique]
-kindKeys = [ liftedTypeKindTyConKey
-           , openTypeKindTyConKey
-           , unliftedTypeKindTyConKey
-           , ubxTupleKindTyConKey
-           , argTypeKindTyConKey
-           , constraintKindTyConKey ]
-\end{code}
-
-
-%************************************************************************
-%*                                                                      *
 \subsection[Class-std-groups]{Standard groups of Prelude classes}
 %*                                                                      *
 %************************************************************************
