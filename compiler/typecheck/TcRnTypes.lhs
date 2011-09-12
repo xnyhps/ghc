@@ -527,7 +527,28 @@ data TcTyThing
 
   | AThing  TcKind 		-- Used temporarily, during kind checking, for the
 				--	tycons and clases in this recursive group
-  | ANothing
+
+  | ANothing                    -- see Note [ANothing]
+
+{-
+Note [ANothing]
+~~~~~~~~~~~~~~~
+
+We don't want to allow promotion in a strongly connected component
+when kind checking.
+
+Consider:
+  data T f = K (f (K Any))
+
+When kind checking the `data T' declaration the local env contains the
+mappings:
+  T -> AThing <some initial kind>
+  K -> ANothing
+
+ANothing is only used for DataCons, and only used during type checking
+in tcTyClGroup.
+-}
+
 
 instance Outputable TcTyThing where	-- Debugging only
    ppr (AGlobal g)      = pprTyThing g

@@ -107,7 +107,9 @@ tcTyClGroup boot_details tyclds
 	    -- generalized_env gives the final, possibly-polymorphic kind
             -- of each type and class in the group
       ; tyclss <- fixM $ \ rec_tyclss -> do
-                -- Populate environment
+                -- Populate environment with tieknoted ATyCon for TyCons
+                -- and ANothing for DataCons (to avoid recursive promotion)
+                -- see Note [ANothing] in typecheck/TcRnTypes.lhs
           { tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
               tcExtendNothingEnv (dc_names tyclds) $ do
                 -- Kind-check in dependency order
