@@ -1,9 +1,7 @@
 ## TODO FIRST
 
 * tcTyClGroup
-  kind check to find out generalized_env
   type check (kind check and desugar) using generalized_env at once
-  forget about record selectors, and rebuild them when needed (only one place apparently)
 
 * kind substitution in types, substTyVarBndr
   look at CoreSubst, substIdBndr
@@ -20,10 +18,7 @@
   - or it zonks to a kind variable: alpha -> k7
   When we kind generalize, we gather the free kind variables and quantify over them.
 
-
-## TODO after merge with no-pred-ty
-
-* Get rid of (~), make it polymorphic and behave like any other TyCon.
+* Get rid special cases for Any and (~), make them polymorphic and behave like any other TyCon.
 
 
 ## TODO NEXT

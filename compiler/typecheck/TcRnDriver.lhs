@@ -875,7 +875,7 @@ tcTopSrcDecls boot_details
         traceTc "Tc2" empty ;
 
 	tcg_env <- tcTyAndClassDecls boot_details tycl_decls ;
-	aux_binds <- return $ mkRecSelBinds [tc | ATyCon tc <- nameEnvElts (tcg_type_env tcg_env)] ;
+	let { aux_binds = mkRecSelBinds [tc | ATyCon tc <- nameEnvElts (tcg_type_env tcg_env)] } ;
 		-- If there are any errors, tcTyAndClassDecls fails here
 
 	setGblEnv tcg_env	$ do {

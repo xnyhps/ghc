@@ -624,17 +624,23 @@ lintInCo co
 -------------------
 lintKind :: Kind -> LintM ()
 -- Check well-formedness of kinds: *, *->*, Either * (* -> *), etc
-lintKind (TyConApp tc []) 
-  | getUnique tc `elem` kindKeys
-  = return ()
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
-lintKind kind@(TyConApp tc kis)  -- T k1 .. kn
-  | not (getUnique tc `elem` (tySuperKindTyConKey : funTyConKey : kindKeys))
-  = let tc_kind = tyConKind tc in
-    case isPromotableKind tc_kind of
-      Just n | n == length kis -> mapM_ lintKind kis
-      _ -> addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
+
+lintKind kind@(TyConApp tc kis)
+  | isSuperKind tc_kind  -- handles *, #, Constraint, etc.
+  , null kis
+  = return ()
+
+  | Just n <- isPromotableKind tc_kind  -- handles promoted TyCons
+  , n == length kis
+  = mapM_ lintKind kis
+
+  | otherwise
+  = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
+  where
+    tc_kind = tyConKind tc
+
 lintKind (TyVarTy kv) = checkTyCoVarInScope kv
 lintKind kind
   = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
