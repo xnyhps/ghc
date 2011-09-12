@@ -443,7 +443,8 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
 	    { stupid_theta <- tcIfaceCtxt ctxt
 	    ; cons <- tcIfaceDataCons tc_name tycon tyvars rdr_cons
 	    ; mb_fam_inst  <- tcFamInst mb_family
-	    ; buildAlgTyCon tc_name tyvars stupid_theta cons is_rec
+	    ; buildAlgTyCon tc_name [] tyvars stupid_theta cons is_rec
+                              --    ^- IA0_TODO: check this
 			    gadt_syn parent mb_fam_inst
 	    })
     ; traceIf (text "tcIfaceDecl4" <+> ppr tycon)

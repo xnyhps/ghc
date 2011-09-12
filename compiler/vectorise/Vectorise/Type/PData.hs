@@ -27,7 +27,7 @@ buildPDataTyCon orig_tc vect_tc repr = fixV $ \repr_tc ->
     rhs   <- buildPDataTyConRhs orig_name vect_tc repr_tc repr
     pdata <- builtin pdataTyCon
 
-    liftDs $ buildAlgTyCon name'
+    liftDs $ buildAlgTyCon name' []
                            tyvars
                            []          -- no stupid theta
                            rhs

@@ -11,7 +11,7 @@
 module TypeRep (
 	TyThing(..),
 	Type(..),
-        Kind, SuperKind,
+        KindOrType, Kind, SuperKind,
         PredType, ThetaType,      -- Synonyms
 
         -- Functions over types
@@ -123,7 +123,7 @@ data Type
 
   | TyConApp
 	TyCon
-	[Type]		-- ^ Application of a 'TyCon', including newtypes /and/ synonyms.
+	[KindOrType]	-- ^ Application of a 'TyCon', including newtypes /and/ synonyms.
 	                -- Invariant: saturated appliations of 'FunTyCon' must
 	                -- use 'FunTy' and saturated synonyms must use their own
                         -- constructors. However, /unsaturated/ 'FunTyCon's
@@ -149,6 +149,8 @@ data Type
 
   deriving (Data.Data, Data.Typeable)
 
+type KindOrType = Type -- See Note [Arguments to type constructors]
+
 -- | The key type representing kinds in the compiler.
 -- Invariant: a kind is always in one of these forms:
 --
@@ -164,6 +166,30 @@ type Kind = Type
 -- > TyConApp SuperKindTyCon ...
 type SuperKind = Type
 \end{code}
+
+
+Note [Arguments to type constructors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Because of kind polymorphism, in addition to type application we now
+have kind instantiation. We reuse the same notations to do so.
+
+For example:
+
+  Just (* -> *) Maybe
+  Right * Nat Zero
+
+are represented by:
+
+  TyConApp (PromotedDataCon Just) [* -> *, Maybe]
+  TyConApp (PromotedDataCon Right) [*, Nat, (PromotedDataCon Zero)]
+
+Important note: Nat is used as a *kind* and not as a type. This can be
+confusing, since type-level Nat and kind-level Nat are identical. We
+use the kind of (PromotedDataCon Right) to know if its arguments are
+kinds or types.
+
+This kind instantiation only happens in TyConApp currently.
+
 
 Note [Equality-constrained types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -334,12 +360,13 @@ instance NamedThing TyThing where	-- Can't put this with the type
 -- 3. The substition is only applied ONCE! This is because
 -- in general such application will not reached a fixed point.
 data TvSubst 		
-  = TvSubst InScopeSet 	-- The in-scope type variables
-	    TvSubstEnv	-- Substitution of types
+  = TvSubst InScopeSet 	-- The in-scope type and kind variables
+	    TvSubstEnv  -- Substitutes both type and kind variables
 	-- See Note [Apply Once]
 	-- and Note [Extending the TvSubstEnv]
 
 -- | A substitition of 'Type's for 'TyVar's
+--                 and 'Kind's for 'KindVar's
 type TvSubstEnv = TyVarEnv Type
 	-- A TvSubstEnv is used both inside a TvSubst (with the apply-once
 	-- invariant discussed in Note [Apply Once]), and also independently

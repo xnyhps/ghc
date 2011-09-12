@@ -23,7 +23,7 @@ module HsTypes (
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
 	hsTyVarName, hsTyVarNames, replaceTyVarName, replaceLTyVarName,
-	hsTyVarKind, hsTyVarNameKind,
+	hsTyVarKind, hsLTyVarKind, hsTyVarNameKind,
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy_maybe, splitLHsInstDeclTy_maybe,
         splitHsForAllTy, splitLHsForAllTy,
@@ -304,6 +304,9 @@ hsTyVarName (KindedTyVar n _ _) = n
 hsTyVarKind :: HsTyVarBndr name -> Kind
 hsTyVarKind (UserTyVar _ k)   = k
 hsTyVarKind (KindedTyVar _ _ k) = k
+
+hsLTyVarKind :: LHsTyVarBndr name -> Kind
+hsLTyVarKind  = hsTyVarKind . unLoc
 
 hsTyVarNameKind :: HsTyVarBndr name -> (name, Kind)
 hsTyVarNameKind (UserTyVar n k)   = (n,k)

@@ -49,7 +49,7 @@ module TcMType (
 
   --------------------------------
   -- Zonking
-  zonkType, mkZonkTcTyVar, zonkTcPredType, 
+  zonkType, zonkKind, mkZonkTcTyVar, zonkTcPredType, 
   zonkTcTypeCarefully, skolemiseUnboundMetaTyVar,
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
@@ -697,6 +697,9 @@ simplifier knows how to deal with.
 -- For unbound, mutable tyvars, zonkType uses the function given to it
 -- For tyvars bound at a for-all, zonkType zonks them to an immutable
 --	type variable and zonks the kind too
+
+zonkKind :: (TcTyVar -> TcM Kind) -> TcKind -> TcM Kind
+zonkKind = zonkType
 
 zonkType :: (TcTyVar -> TcM Type)  -- What to do with TcTyVars
          -> TcType -> TcM Type

@@ -604,7 +604,7 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
                    DataType -> return (mkDataTyConRhs data_cons)
                    NewType  -> ASSERT( not (null data_cons) )
                                mkNewTyConRhs rep_tc_name rep_tycon (head data_cons)
-             ; buildAlgTyCon rep_tc_name t_tvs stupid_theta tc_rhs Recursive
+             ; buildAlgTyCon rep_tc_name [] t_tvs stupid_theta tc_rhs Recursive
                              h98_syntax NoParentTyCon (Just (fam_tc, t_typats))
                  -- We always assume that indexed types are recursive.  Why?
                  -- (1) Due to their open nature, we can never be sure that a

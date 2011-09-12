@@ -322,7 +322,7 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
 	-- any mutually recursive types are done right
 	-- Just discard the auxiliary bindings; they are generated 
 	-- only for Haskell source code, and should already be in Core
-   (tcg_env, _aux_binds) <- tcTyAndClassDecls emptyModDetails rn_decls ;
+   tcg_env <- tcTyAndClassDecls emptyModDetails rn_decls ;
 
    setGblEnv tcg_env $ do {
 	-- Make the new type env available to stuff slurped from interface files
@@ -525,8 +525,8 @@ tcRnHsBootDecls decls
 
 		-- Typecheck type/class decls
 	; traceTc "Tc2" empty
-	; (tcg_env, aux_binds) 
-               <- tcTyAndClassDecls emptyModDetails tycl_decls
+	; tcg_env <- tcTyAndClassDecls emptyModDetails tycl_decls
+        ; let aux_binds = mkRecSelBinds [tc | ATyCon tc <- nameEnvElts (tcg_type_env tcg_env)]
 	; setGblEnv tcg_env    $ do {
 
 		-- Typecheck instance decls
@@ -874,9 +874,10 @@ tcTopSrcDecls boot_details
 		-- The latter come in via tycl_decls
         traceTc "Tc2" empty ;
 
-	(tcg_env, aux_binds) <- tcTyAndClassDecls boot_details tycl_decls ;
+	tcg_env <- tcTyAndClassDecls boot_details tycl_decls ;
+	aux_binds <- return $ mkRecSelBinds [tc | ATyCon tc <- nameEnvElts (tcg_type_env tcg_env)] ;
 		-- If there are any errors, tcTyAndClassDecls fails here
-	
+
 	setGblEnv tcg_env	$ do {
 
 		-- Source-language instances, including derivings,

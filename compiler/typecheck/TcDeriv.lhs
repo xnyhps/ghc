@@ -1589,7 +1589,7 @@ genGenericRepExtras tc =
                         | (u,n) <- zip us [0..] ] | (us,m) <- zip uniqsS [0..] ]
         
         mkTyCon name = ASSERT( isExternalName name )
-                       buildAlgTyCon name [] [] distinctAbstractTyConRhs
+                       buildAlgTyCon name [] [] [] distinctAbstractTyConRhs
                            NonRecursive False NoParentTyCon Nothing
 
       metaDTyCon  <- mkTyCon d_name

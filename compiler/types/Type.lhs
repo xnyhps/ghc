@@ -715,12 +715,12 @@ applyTy, applyTys
 --
 -- We use @applyTys type-of-f [t1,t2]@ to compute the type of the expression.
 -- Panics if no application is possible.
-applyTy :: Type -> Type -> Type
+applyTy :: Type -> KindOrType -> Type
 applyTy ty arg | Just ty' <- coreView ty = applyTy ty' arg
 applyTy (ForAllTy tv ty) arg = substTyWith [tv] [arg] ty
 applyTy _                _   = panic "applyTy"
 
-applyTys :: Type -> [Type] -> Type
+applyTys :: Type -> [KindOrType] -> Type
 -- ^ This function is interesting because:
 --
 --	1. The function may have more for-alls than there are args
@@ -731,12 +731,12 @@ applyTys :: Type -> [Type] -> Type
 --
 -- > applyTys (forall a.a) [forall b.b, Int]
 --
--- This really can happen, via dressing up polymorphic types with newtype
--- clothing.  Here's an example:
---
--- > newtype R = R (forall a. a->a)
--- > foo = case undefined :: R of
--- >            R f -> f ()
+-- This really can happen, but only (I think) in situations involving
+-- undefined.  For example:
+--       undefined :: forall a. a
+-- Term: undefined @(forall b. b->b) @Int 
+-- This term should have type (Int -> Int), but notice that
+-- there are more type args than foralls in 'undefined's type.
 
 applyTys ty args = applyTysD empty ty args
 

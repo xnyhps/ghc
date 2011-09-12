@@ -90,7 +90,7 @@ noHashInKind _ = panic "noHashInKind"
 
 \begin{code}
 -- | Essentially 'funResultTy' on kinds handling pi-types too
-kindFunResult :: Kind -> Type -> Kind
+kindFunResult :: Kind -> KindOrType -> Kind
 kindFunResult (FunTy _ res) _ = res
 kindFunResult (ForAllTy kv res) arg = substKiWith [kv] [arg] res
 kindFunResult k _ = pprPanic "kindFunResult" (ppr k)
@@ -193,8 +193,9 @@ isSubKind (FunTy a1 r1) (FunTy a2 r2)	      = (a2 `isSubKind` a1) && (r1 `isSubK
 isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) =
   not (isSubOpenTypeKindCon kc1) && kc1 == kc2
   && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
-isSubKind (ForAllTy {}) (ForAllTy {})         = panic "IA0: isSubKind on ForAllTy"
-isSubKind _             _                     = False
+isSubKind (TyVarTy kv1) (TyVarTy kv2) = kv1 == kv2
+isSubKind (ForAllTy {}) (ForAllTy {}) = panic "IA0: isSubKind on ForAllTy"
+isSubKind _ _ = False
 
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@

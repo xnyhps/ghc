@@ -13,13 +13,14 @@ module TcHsType (
 		-- Kind checking
 	kcHsTyVars, kcHsSigType, kcHsLiftedSigType, 
 	kcLHsType, kcCheckLHsType, kcHsContext, kcApps,
+        kindGeneralizeKind,
 
 		-- Sort checking
 	scDsLHsKind, scDsLHsMaybeKind,
 
                 -- Typechecking kinded types
 	tcHsKindedContext, tcHsKindedType, tcHsBangType,
-	tcTyVarBndrs, dsHsType,
+	tcTyVarBndrs, tcTyVarBndrsKindGen, dsHsType,
 	tcDataKindSig,
 
         ExpKind(..), EkCtxt(..), ekConstraint,
@@ -47,7 +48,7 @@ import Kind
 import Var
 import VarSet
 import TyCon
-import DataCon ( DataCon, dataConUserType, dataConName )
+import DataCon ( DataCon, dataConUserType )
 import TysPrim ( liftedTypeKindTyConName, constraintKindTyConName )
 import Class
 import Name
@@ -61,7 +62,8 @@ import UniqSupply
 import Outputable
 import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
-import Control.Monad ( unless )
+import Control.Monad ( unless, filterM )
+import Data.List ( mapAccumL )
 \end{code}
 
 
@@ -528,28 +530,34 @@ kcHsLPredType pred = kc_check_lhs_type pred ekConstraint
 
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
-kcTyVar name = do	-- Could be a tyvar, a tycon, or a datacon
+kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     traceTc "lk1" (ppr name)
     thing <- tcLookup name
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
-        ATyVar _ ty             -> wrap (typeKind ty)
-        AThing kind             -> wrap kind
-        AGlobal (ATyCon tc)     -> wrap (tyConKind tc)
-        AGlobal (ADataCon dc)   -> kcDataCon dc
+        ATyVar _ ty             -> wrap_mono (typeKind ty)
+        AThing kind             -> wrap_mono kind
+        AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
+        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
         _                       -> wrongThingErr "type" thing name
-    where wrap x = return (HsTyVar name, x)
+    where
+      wrap_mono kind = return (HsTyVar name, kind)
+      wrap_poly kind
+        | null kvs = wrap_mono kind
+        | otherwise = do
+          kvs' <- mapM (const newMetaKindVar) kvs
+          let ki = substKiWith kvs kvs' ki_body
+          return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
+        where (kvs, ki_body) = splitForAllTys kind
 
--- IA0_STEP3: split this function in two (promotion-related and wrapping-related) and update wrap above
-kcDataCon :: DataCon -> TcM (HsType Name, TcKind)
+-- IA0_TODO: this function should disapear, and use the dcPromoted field of DataCon
+kcDataCon :: DataCon -> TcM TcKind
 kcDataCon dc = do
   let ty = dataConUserType dc
   unless (isPromotableType ty) $ promoteErr dc ty
-  let (kvs, ki_body) = splitForAllTys (promoteType ty)
-  kvs' <- mapM (const newMetaKindVar) kvs
-  let ki = substKiWith kvs kvs' ki_body
+  let ki = promoteType ty
   traceTc "prm" (ppr ty <+> ptext (sLit "~~>") <+> ppr ki)
-  return (HsWrapTy (WpKiApps kvs') (HsTyVar (dataConName dc)), ki)
+  return ki
   where
     promoteErr dc ty = failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
       <+> quotes (ppr ty) <+> ptext (sLit "is not promotable"))
@@ -663,7 +671,7 @@ ds_type (HsSpliceTy _ _ kind)
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
--- IA0: ds_type (HsLitTy _) = panic "IA0: ds_type"  -- IA0: UNDEFINED
+-- ds_type (HsLitTy _) = panic "IA0_UNDEFINED: ds_type"
 
 ds_type (HsExplicitListTy kind tys) = do
   kind' <- zonkTcKindToKind kind
@@ -731,6 +739,19 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 %*									*
 %************************************************************************
 
+Note [Kind-checking kind-polymorphic types]  IA0_TODO
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider:
+  f :: forall k f (a::k). f a -> Int
+
+The renamer (or parser) already decided for us if k, f or a are type
+or kind variables. It did so by clissifying them with the correct data
+constructor.
+
+  UserTyVar -> type variable without kind annotation
+  KindedTyVar -> type variable with kind annotation
+  UserKiVar -> kind variable (they don't need annotation,
+                              since we only have BOX for a super kind)
 
 \begin{code}
 kcHsTyVars :: [LHsTyVarBndr Name] 
@@ -742,7 +763,9 @@ kcHsTyVars tvs thing_inside
        ; tcExtendKindEnvTvs kinded_tvs thing_inside }
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
-	-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
+-- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
+-- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
+-- See Note [Kind-checking kind-polymorphic types]
 kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
 kcHsTyVar (KindedTyVar name kind _) = do
   kind' <- scDsLHsKind kind
@@ -763,6 +786,50 @@ tcTyVarBndrs bndrs thing_inside = do
       = do { kind' <- zonkTcKindToKind kind
            ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
 	   ; return (mkTyVar name kind') }
+
+tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([KindVar] -> [TyVar] -> TcM r) -> TcM r
+tcTyVarBndrsKindGen bndrs thing_inside = do
+    (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
+    let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
+    tcExtendTyVarEnv (kvs ++ tyvars) (thing_inside kvs tyvars)
+
+kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
+kindGeneralizeKinds kinds = do
+  kinds' <- mapM zonkTcKind kinds
+  flexis <- freeFlexisOfTypes kinds'
+  traceTc "generalizeKind 1" (ppr flexis <+> ppr kinds')
+  let (_, occs) = mapAccumL tidy_one emptyTidyOccEnv flexis
+      tidy_one env flexi = tidyOccName env (getOccName (tyVarName flexi))
+  kvs <- flip mapM (zip occs flexis) $ \(occ, flexi) -> do
+         span <- getSrcSpanM
+         uniq <- newUnique
+         let name = mkInternalName uniq occ span
+             kv = mkTcTyVar name (tyVarKind flexi) vanillaSkolemTv
+         writeMetaTyVar flexi (mkTyVarTy kv)
+         return kv
+  let flexiToKind kv = case lookup kv (zip flexis kvs) of
+                         Nothing -> return (mkTyVarTy kv)
+                         Just kv -> return (mkTyVarTy kv)
+  bodys <- mapM (zonkKind (mkZonkTcTyVar flexiToKind)) kinds'
+  traceTc "generalizeKind 2" (ppr kvs <+> ppr bodys)
+  return (kvs, bodys)
+
+kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
+                                    , Kind )     -- this is the old kind where flexis got zonked
+kindGeneralizeKind kind = do
+  (kvs, [kind']) <- kindGeneralizeKinds [kind]
+  return (kvs, kind')
+
+freeFlexisOfType :: Type -> TcM [Var]
+freeFlexisOfType ty = do
+  fs <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType ty
+  -- IA0_TODO: remove in scope variables
+  return fs
+
+freeFlexisOfTypes :: [Type] -> TcM [Var]
+freeFlexisOfTypes tys = do
+  fss <- mapM freeFlexisOfType tys
+  return $ varSetElems $ unionVarSets $ map mkVarSet fss
 
 -----------------------------------
 tcDataKindSig :: Maybe Kind -> TcM [TyVar]
