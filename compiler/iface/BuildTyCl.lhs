@@ -9,8 +9,8 @@ module BuildTyCl (
         buildAlgTyCon, 
         buildDataCon,
         buildPromotedDataTyCon,
-	TcMethInfo, buildClass,
-	mkAbstractTyConRhs, 
+        TcMethInfo, buildClass,
+	distinctAbstractTyConRhs, totallyAbstractTyConRhs,
 	mkNewTyConRhs, mkDataTyConRhs, 
         newImplicitBinder
     ) where
@@ -59,7 +59,7 @@ buildSynTyCon tc_name tvs rhs rhs_kind parent mb_family
     kind = mkArrowKinds (map tyVarKind tvs) rhs_kind
 
 ------------------------------------------------------
-buildAlgTyCon :: Name -> [KindVar] -> [TyVar]
+buildAlgTyCon :: Name -> [TyVar] 
 	      -> ThetaType		-- ^ Stupid theta
 	      -> AlgTyConRhs
 	      -> RecFlag
@@ -68,7 +68,7 @@ buildAlgTyCon :: Name -> [KindVar] -> [TyVar]
 	      -> Maybe (TyCon, [Type])  -- ^ family instance if applicable
 	      -> TcRnIf m n TyCon
 
-buildAlgTyCon tc_name kvs tvs stupid_theta rhs is_rec gadt_syn
+buildAlgTyCon tc_name tvs stupid_theta rhs is_rec gadt_syn
 	      parent mb_family
   | Just fam_inst_info <- mb_family
   = -- We need to tie a knot as the coercion of a data instance depends
@@ -83,7 +83,7 @@ buildAlgTyCon tc_name kvs tvs stupid_theta rhs is_rec gadt_syn
   = return (mkAlgTyCon tc_name kind tvs stupid_theta rhs
 	               parent is_rec gadt_syn)
   where
-    kind = mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) liftedTypeKind
+    kind = mkArrowKinds (map tyVarKind tvs) liftedTypeKind
 
 -- | If a family tycon with instance types is given, the current tycon is an
 -- instance of that family and we need to
@@ -108,8 +108,9 @@ mkFamInstParentInfo tc_name tvs (family, instTys) rep_tycon
        ; return $ FamInstTyCon family instTys co_tycon }
     
 ------------------------------------------------------
-mkAbstractTyConRhs :: AlgTyConRhs
-mkAbstractTyConRhs = AbstractTyCon
+distinctAbstractTyConRhs, totallyAbstractTyConRhs :: AlgTyConRhs
+distinctAbstractTyConRhs = AbstractTyCon True
+totallyAbstractTyConRhs  = AbstractTyCon False
 
 mkDataTyConRhs :: [DataCon] -> AlgTyConRhs
 mkDataTyConRhs cons
@@ -218,7 +219,7 @@ mkDataConStupidTheta tycon arg_tys univ_tvs
 
     arg_tyvars      = tyVarsOfTypes arg_tys
     in_arg_tys pred = not $ isEmptyVarSet $ 
-		      tyVarsOfPred pred `intersectVarSet` arg_tyvars
+		      tyVarsOfType pred `intersectVarSet` arg_tyvars
 
 buildPromotedDataTyCon :: DataCon -> TyCon
 buildPromotedDataTyCon dc = ASSERT ( isPromotableType ty )
@@ -238,15 +239,14 @@ buildClass :: Bool		-- True <=> do not include unfoldings
 				-- Used when importing a class without -O
 	   -> Name -> [TyVar] -> ThetaType
 	   -> [FunDep TyVar]		   -- Functional dependencies
-	   -> [TyThing]			   -- Associated types
+	   -> [ClassATItem]		   -- Associated types
 	   -> [TcMethInfo]                 -- Method info
 	   -> RecFlag			   -- Info for type constructor
 	   -> TcRnIf m n Class
 
-buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
+buildClass no_unf tycon_name tvs sc_theta fds at_items sig_stuff tc_isrec
   = do	{ traceIf (text "buildClass")
-	; tycon_name <- newImplicitBinder class_name mkClassTyConOcc
-	; datacon_name <- newImplicitBinder class_name mkClassDataConOcc
+	; datacon_name <- newImplicitBinder tycon_name mkClassDataConOcc
 		-- The class name is the 'parent' for this datacon, not its tycon,
 		-- because one should import the class to get the binding for 
 		-- the datacon
@@ -257,7 +257,7 @@ buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
 	  		-- Build the selector id and default method id
 
 	      -- Make selectors for the superclasses 
-	; sc_sel_names <- mapM  (newImplicitBinder class_name . mkSuperDictSelOcc) 
+	; sc_sel_names <- mapM  (newImplicitBinder tycon_name . mkSuperDictSelOcc) 
 				[1..length sc_theta]
         ; let sc_sel_ids = [ mkDictSelId no_unf sc_name rec_clas 
                            | sc_name <- sc_sel_names]
@@ -269,13 +269,12 @@ buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
 	      -- (We used to call them D_C, but now we can have two different
 	      --  superclasses both called C!)
 	
-	; let use_newtype = isSingleton arg_tys && not (any isEqPred sc_theta)
+	; let use_newtype = isSingleton arg_tys
 		-- Use a newtype if the data constructor 
 		--   (a) has exactly one value field
 		--       i.e. exactly one operation or superclass taken together
-                --   (b) it's of lifted type 
-		-- (NB: for (b) don't look at the classes in sc_theta, because
-		--      they are part of the knot!  Hence isEqPred.)
+                --   (b) that value is of lifted type (which they always are, because
+                --       we box equality superclasses)
 		-- See note [Class newtypes and equality predicates]
 
 		-- We treat the dictionary superclasses as ordinary arguments.  
@@ -285,7 +284,7 @@ buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
 	      args      = sc_sel_names ++ op_names
 	      op_tys	= [ty | (_,_,ty) <- sig_stuff]
 	      op_names  = [op | (op,_,_) <- sig_stuff]
-	      arg_tys   = map mkPredTy sc_theta ++ op_tys
+	      arg_tys   = sc_theta ++ op_tys
               rec_tycon = classTyCon rec_clas
                
 	; dict_con <- buildDataCon datacon_name
@@ -303,7 +302,7 @@ buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
 		 then mkNewTyConRhs tycon_name rec_tycon dict_con
 		 else return (mkDataTyConRhs [dict_con])
 
-	; let {	clas_kind = mkArrowKinds (map tyVarKind tvs) liftedTypeKind
+	; let {	clas_kind = mkArrowKinds (map tyVarKind tvs) constraintKind
 
  	      ; tycon = mkClassTyCon tycon_name clas_kind tvs
  	                             rhs rec_clas tc_isrec
@@ -315,10 +314,9 @@ buildClass no_unf class_name tvs sc_theta fds ats sig_stuff tc_isrec
 		-- [If we don't make it a recursive newtype, we'll expand the
 		-- newtype like a synonym, but that will lead to an infinite
 		-- type]
-	      ; atTyCons = [tycon | ATyCon tycon <- ats]
 
-	      ; result = mkClass class_name tvs fds 
-			         sc_theta sc_sel_ids atTyCons
+	      ; result = mkClass tvs fds 
+			         sc_theta sc_sel_ids at_items
 				 op_items tycon
 	      }
 	; traceIf (text "buildClass" <+> ppr tycon) 
@@ -351,4 +349,3 @@ Moreover,
 Here we can't use a newtype either, even though there is only
 one field, because equality predicates are unboxed, and classes
 are boxed.
-

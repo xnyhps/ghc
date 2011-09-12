@@ -1,55 +1,5 @@
 ## TODO FIRST
 
-* tcTyClGroup
-  kind check to find out generalized_env
-  type check (kind check and desugar) using generalized_env at once
-  forget about record selectors, and rebuild them when needed (only one place apparently)
-
-* kind substitution in types, substTyVarBndr
-  look at CoreSubst, substIdBndr
-  no_kind_change : verify that kind is closed
-
-* UserKiVar (in Parser mkHsForAll or renamer)
-  look at kind annotation to know if a UserTyvar is a kind variable
-  (UserKiVar) or a type variable (UserTyVar)
-  forall k f (a :: k). f a -> Int
-  HsForAll Explicit [UserKiVar k, UserTyVar f, KindedTyVar a k] ...
-
-* ds_type takes a flag
-  - either it does defaulting: alpha -> star
-  - or it zonks to a kind variable: alpha -> k7
-  When we kind generalize, we gather the free kind variables and quantify over them.
-
-
-## TODO after merge with no-pred-ty
-
-* Get rid of (~), make it polymorphic and behave like any other TyCon.
-
-
-## TODO NEXT
-
-* Promotion of DataCon (and associated AlgTyCon)
-  In DataCon:
-    Add field dcPromoted :: Maybe TyCon
-    A DataCon is promotable if:
-      - dcVanilla == True
-      - isPromotableType dataConUserType
-      - all its siblings are promotable (Just tc)
-  In AlgTyCon:
-    Add field algTcPromoted :: Maybe Int
-      where the Int is the number of kind arguments it takes
-    A TyCon is promotable if:
-      - it's kind is promotable  * -> * ... -> *
-      - all its DataCon are promotable
-
-* Renaming in TcHsType
-  scDs -> tc
-  tcHsKindedType -> dsHsKindedType
-  Explain that:
-  kc = kind check
-  ds = desugar
-  tc = kc + ds
-
 * write a testsuite named kinds with everything I can think of
   - translate Faking it (Conor)
   - when translating, add a reference to the thing being translated
@@ -59,7 +9,19 @@
     describe informally how we can use them
 
 
+## TODO NEXT
+
+
 ## BUGS
+
+* Do some sharing for promoted things, so that when I lookup K in a
+  type, I verify only once that it is promotable, and I don't build
+  several identical PromotedDataTyCon.
+  Add field about promotion:
+  - in DataCon: Maybe TyCon (the promoted TyCon)
+  - in AlgTyCon: Maybe Int which means
+    - T's kind is promotable (Just n)  *^n -> *
+    - all its DataCon are promotable
 
 * Error messages for things like:
   data T a = K (a K)

@@ -14,7 +14,7 @@ module HsDecls (
   -- * Toplevel declarations
   HsDecl(..), LHsDecl,
   -- ** Class or type declarations
-  TyClDecl(..), LTyClDecl, TyClGroup,
+  TyClDecl(..), LTyClDecl,
   isClassDecl, isSynDecl, isDataDecl, isTypeDecl, isFamilyDecl,
   isFamInstDecl, tcdName, tyClDeclTyVars,
   countTyClDecls,
@@ -429,8 +429,6 @@ Interface file code:
 -- In both cases, 'tcdVars' collects all variables we need to quantify over.
 
 type LTyClDecl name = Located (TyClDecl name)
-type TyClGroup name = [LTyClDecl name]  -- this is used in TcTyClsDecls to represent
-                                        -- strongly connected components of decls
 
 -- | A type or class declaration.
 data TyClDecl name
@@ -503,7 +501,9 @@ data TyClDecl name
 		tcdSigs    :: [LSig name],		-- ^ Methods' signatures
 		tcdMeths   :: LHsBinds name,		-- ^ Default methods
 		tcdATs	   :: [LTyClDecl name],		-- ^ Associated types; ie
-							--   only 'TyFamily' 
+							--   only 'TyFamily'
+                tcdATDefs  :: [LTyClDecl name],         -- ^ Associated type defaults; ie
+                                                        --   only 'TySynonym'
 		tcdDocs    :: [LDocDecl]		-- ^ Haddock docs
     }
   deriving (Data, Typeable)
@@ -650,14 +650,16 @@ instance OutputableBndr name
 	ppr_sigx (Just kind) = dcolon <+> ppr kind
 
     ppr (ClassDecl {tcdCtxt = context, tcdLName = lclas, tcdTyVars = tyvars, 
-		    tcdFDs  = fds, 
-		    tcdSigs = sigs, tcdMeths = methods, tcdATs = ats})
-      | null sigs && null ats  -- No "where" part
+		    tcdFDs  = fds,
+                    tcdSigs = sigs, tcdMeths = methods,
+                    tcdATs = ats, tcdATDefs = at_defs})
+      | null sigs && isEmptyBag methods && null ats && null at_defs -- No "where" part
       = top_matter
 
       | otherwise	-- Laid out
       = vcat [ top_matter <+> ptext (sLit "where")
 	     , nest 2 $ pprDeclList (map ppr ats ++
+                                     map ppr at_defs ++
 			             pprLHsBindsForUser methods sigs) ]
       where
         top_matter = ptext (sLit "class") 

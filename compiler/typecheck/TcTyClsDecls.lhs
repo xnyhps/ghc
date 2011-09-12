@@ -7,8 +7,13 @@ TcTyClsDecls: Typecheck type and class declarations
 
 \begin{code}
 module TcTyClsDecls (
-	tcTyAndClassDecls, kcDataDecl, tcConDecls, mkRecSelBinds,
-        checkValidTyCon, dataDeclChecks
+	tcTyAndClassDecls, mkRecSelBinds,
+
+	-- Functions used by TcInstDcls to check 
+	-- data/type family instance declarations
+        kcDataDecl, tcConDecls, dataDeclChecks, checkValidTyCon,
+        tcSynFamInstDecl, kcFamTyPats, 
+        wrongKindOfFamily, badATErr, wrongATArgErr
     ) where
 
 #include "HsVersions.h"
@@ -35,6 +40,7 @@ import IdInfo
 import Var
 import VarSet
 import Name
+import NameSet
 import NameEnv
 import Outputable
 import Maybes
@@ -63,9 +69,10 @@ import Data.List
 \begin{code}
 
 tcTyAndClassDecls :: ModDetails
-                   -> [TyClGroup Name]       -- Mutually-recursive groups in dependency order
-                   -> TcM (TcGblEnv)         -- Input env extended by types and classes
+                   -> [[LTyClDecl Name]]     -- Mutually-recursive groups in dependency order
+                   -> TcM (TcGblEnv,         -- Input env extended by types and classes
                                              -- and their implicit Ids,DataCons
+                           HsValBinds Name)  -- Renamed bindings for record selectors
 -- Fails if there are any errors
 tcTyAndClassDecls boot_details decls_s
   = checkNoErrs $ do    -- The code recovers internally, but if anything gave rise to
@@ -73,63 +80,60 @@ tcTyAndClassDecls boot_details decls_s
   { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
                    -- Remove family instance decls altogether
                    -- They are dealt with by TcInstDcls
-  ; env <- go tyclds_s
-  ; setGblEnv env $ do
+  ; tyclss <- go tyclds_s
+  ; traceTc "tcTyAndCl" (ppr tyclss)
+  ; tcExtendGlobalEnv tyclss $ do
       -- Perform the validity check
       -- We can do this now because we are done with the recursive knot
-  { traceTc "ready for validity check" empty
-  ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
-  ; traceTc "done" empty
+    { traceTc "ready for validity check" empty
+    ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
+    ; traceTc "done" empty
       -- Add the implicit things;
       -- we want them in the environment because
       -- they may be mentioned in interface files
       -- NB: All associated types and their implicit things will be added a
       --     second time here.  This doesn't matter as the definitions are
       --     the same.
-  ; return env } }
+    ; let implicit_things = concatMap implicitTyThings tyclss
+          rec_sel_binds   = mkRecSelBinds [tc | ATyCon tc <- tyclss]
+          dm_ids          = mkDefaultMethodIds tyclss
+    ; env <- tcExtendGlobalEnv implicit_things $
+             tcExtendGlobalValEnv dm_ids $
+             getGblEnv
+    ; return (env, rec_sel_binds) } }
   where
-    go :: [TyClGroup Name] -> TcM TcGblEnv
-    go [] = getGblEnv
-    go (tyclds:tyclds_s)
-      = do { env <- tcTyClGroup boot_details tyclds
-           ; setGblEnv env $ go tyclds_s }
-
-tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
--- Typecheck one strongly-connected component of type and class decls
-tcTyClGroup boot_details tyclds
- = do { (generalized_env, _) <- kcTyClGroup Nothing tyclds
-	    -- generalized_env gives the final, possibly-polymorphic kind
-            -- of each type and class in the group
-      ; tyclss <- fixM $ \ rec_tyclss -> do
-                -- Populate environment
-          { tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-              tcExtendNothingEnv (dc_names tyclds) $ do
-                -- Kind-check in dependency order
-                -- See Note [Kind checking for type and class decls]
-                -- And now build the TyCons/Classes
-          { (_, kc_decls) <- kcTyClGroup (Just generalized_env) tyclds
-          ; let rec_flags = calcRecFlags boot_details rec_tyclss
-          ; concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls } }
-      ; traceTc "tcTyGroup" (ppr tyclss)
-      ; let implicit_things = concatMap implicitTyThings tyclss
-            dm_ids          = mkDefaultMethodIds tyclss
-      ; tcExtendGlobalEnv tyclss $
-          tcExtendGlobalEnv implicit_things $
-          tcExtendGlobalValEnv dm_ids $
-          getGblEnv }
-  where
-    dc_names :: TyClGroup Name -> [Name]
+    go [] = return []
+    go (tyclds:tyclds_s) = do
+    { tyclss <- fixM $ \ rec_tyclss ->
+        tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
+        tcExtendNothingEnv (dc_names tyclds) $ do
+        -- We must populate the environment with the loop-tied
+        -- T's right away (even before kind checking), because
+        -- the kind checker may "fault in" some type constructors
+        -- that recursively mention T
+        { -- Kind-check in dependency order
+          -- See Note [Kind checking for type and class decls]
+          (_, kc_decls) <- kcTyClDecls1 tyclds
+          -- And now build the TyCons/Classes
+        ; let rec_flags = calcRecFlags boot_details rec_tyclss
+        ; tyclss <- concatMapM (tcTyClDecl rec_flags) kc_decls
+        ; return tyclss }
+    ; tyclss_s <- tcExtendGlobalEnv tyclss $
+                  tcExtendGlobalEnv (concatMap implicitTyThings tyclss) $
+                  go tyclds_s
+    ; return (tyclss ++ tyclss_s) }
+    dc_names :: [LTyClDecl Name] -> [Name]
     dc_names decls =
       [ unLoc (con_name con)
       | L _ (TyData {tcdCons = cons}) <- decls
       , L _ con <- cons ]
 
-zipRecTyClss :: TyClGroup Name
+zipRecTyClss :: [LTyClDecl Name]
              -> [TyThing]           -- Knot-tied
              -> [(Name,TyThing)]
 -- Build a name-TyThing mapping for the things bound by decls
 -- being careful not to look at the [TyThing]
--- The TyThings in the result list must have a visible ATyCon/AClass,
+-- The TyThings in the result list must have a visible ATyCon,
 -- because typechecking types (in, say, tcTyClDecl) looks at this outer constructor
 zipRecTyClss decls rec_things
   = [ get decl | L _ decl <- flattenATs decls ]
@@ -138,9 +142,6 @@ zipRecTyClss decls rec_things
     rec_type_env = mkTypeEnv rec_things
 
     get :: TyClDecl Name -> (Name, TyThing)
-    get (ClassDecl {tcdLName = L _ name}) = (name, AClass cl)
-      where
-        Just (AClass cl) = lookupTypeEnv rec_type_env name
     get decl = (name, ATyCon tc)
       where
         name = tcdName decl
@@ -209,8 +210,8 @@ initial kind environment.  (This is handled by `allDecls').
 
 
 \begin{code}
-kcTyClGroup :: Maybe TcLclEnv -> TyClGroup Name -> TcM (TcLclEnv, TyClGroup Name)
-kcTyClGroup Nothing decls
+kcTyClDecls1 :: [LTyClDecl Name] -> TcM (TcLclEnv, [LTyClDecl Name])
+kcTyClDecls1 decls
   = do	{       -- Omit instances of type families; they are handled together
 		-- with the *heads* of class instances
         ; let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
@@ -219,37 +220,23 @@ kcTyClGroup Nothing decls
 	; mod <- getModule
 	; traceTc "tcTyAndCl" (ptext (sLit "module") <+> ppr mod $$ vcat (map ppr decls))
 
-        	-- First check for cyclic classes
-	; checkClassCycleErrs alg_decls
-
-	   -- Kind checking; see Note [Kind checking for type and class decls]
+          -- Kind checking; see Note [Kind checking for type and class decls]
 	; alg_kinds <- mapM getInitialKind alg_at_decls
 	; tcExtendKindEnv alg_kinds $  do
 
         { (kc_syn_decls, tcl_env) <- kcSynDecls (calcSynCycles syn_decls)
+
+          -- Now check for cyclic classes
+        ; checkClassCycleErrs syn_decls alg_decls
+
         ; setLclEnv tcl_env $  do
         { kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
-
-	     -- Kind checking done for this group
+                
+	     -- Kind checking done for this group, so zonk the kind variables
 	     -- See Note [Kind checking for type and class decls]
-             -- Now we have to kind generalize the flexis
-        ; generalized_kinds <- flip mapM (map snd alg_kinds) $ \zonked_kind -> do
-          { (kvs, body) <- kindGeneralizeKind zonked_kind
-          ; return $ mkForAllTys kvs body }
-        ; traceTc "IA0_DEBUG generalized" (ppr generalized_kinds)
-        ; generalized_env <- tcExtendKindEnv (zip (map fst alg_kinds) generalized_kinds) getLclEnv
+        ; mapM_ (zonkTcKindToKind . snd) alg_kinds
 
-	; return (generalized_env, kc_syn_decls ++ kc_alg_decls) } } }
-
-kcTyClGroup (Just generalized_env) decls = do
-  -- Omit instances of type families; they are handled together
-  -- with the *heads* of class instances
-  let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
-  -- Kind checking; see Note [Kind checking for type and class decls]
-  setLclEnv generalized_env $ do
-    (kc_syn_decls, _) <- kcSynDecls (calcSynCycles syn_decls)
-    kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
-    return (generalized_env, kc_syn_decls ++ kc_alg_decls)
+	; return (tcl_env, kc_syn_decls ++ kc_alg_decls) } } }
 
 flattenATs :: [LTyClDecl Name] -> [LTyClDecl Name]
 flattenATs decls = concatMap flatten decls
@@ -273,7 +260,8 @@ getInitialKind (L _ decl)
     mk_res_kind (TyData   { tcdKindSig = Just kind }) = scDsLHsKind kind
 	-- On GADT-style declarations we allow a kind signature
 	--	data T :: *->* where { ... }
-    mk_res_kind _ = return liftedTypeKind
+    mk_res_kind (ClassDecl {}) = return constraintKind
+    mk_res_kind _              = return liftedTypeKind
 
 
 ----------------
@@ -351,12 +339,11 @@ kcTyClDeclBody decl thing_inside
 	; let tc_kind	 = case tc_ty_thing of
                              AThing k -> k
                              _ -> pprPanic "kcTyClDeclBody" (ppr tc_ty_thing)
-	      (kvs, body) = splitForAllTys tc_kind
-	      (kinds, _) = splitKindFunTys body
+	      (kinds, _) = splitKindFunTys tc_kind
 	      hs_tvs 	 = tcdTyVars decl
 	      kinded_tvs = ASSERT( length kinds >= length hs_tvs )
 			   zipWith add_kind hs_tvs kinds
-	; tcExtendTyVarEnv kvs $ tcExtendKindEnvTvs kinded_tvs thing_inside }
+	; tcExtendKindEnvTvs kinded_tvs thing_inside }
   where
     add_kind (L loc (UserTyVar n _))   k = L loc (UserTyVar n k)
     add_kind (L loc (KindedTyVar n hsk _)) k = L loc (KindedTyVar n hsk k)
@@ -427,8 +414,10 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
       | otherwise = return ()
     classTyKinds = [hsTyVarNameKind tv | L _ tv <- classTvs]
 
-kcFamilyDecl _ (TySynonym {})              -- type family defaults
-  = panic "TcTyClsDecls.kcFamilyDecl: not implemented yet"
+kcFamilyDecl _ decl@(TySynonym {})
+  = return decl
+   -- We don't have to do anything here for type family defaults:
+   -- tcClassATs will use tcAssocDecl to check them
 kcFamilyDecl _ d = pprPanic "kcFamilyDecl" (ppr d)
 \end{code}
 
@@ -440,23 +429,16 @@ kcFamilyDecl _ d = pprPanic "kcFamilyDecl" (ppr d)
 %************************************************************************
 
 \begin{code}
-kvOfName :: Name -> TcLclEnv -> TcM [KindVar]
-kvOfName name env = do
-  ty_thing <- setLclEnv env $ tcLookup name
-  case ty_thing of
-    AThing k -> return $ fst (splitForAllTys k)
-    _ -> panic "kvOfName"
+tcTyClDecl :: (Name -> RecFlag) -> LTyClDecl Name -> TcM [TyThing]
 
-tcTyClDecl :: (Name -> RecFlag) -> TcLclEnv -> LTyClDecl Name -> TcM [TyThing]
--- generalized_env is used to learn about kind polymorphism
-tcTyClDecl calc_isrec generalized_env (L loc decl)
+tcTyClDecl calc_isrec (L loc decl)
   = setSrcSpan loc $ tcAddDeclCtxt decl $
     traceTc "tcTyAndCl-x" (ppr decl) >>
-    tcTyClDecl1 NoParentTyCon calc_isrec generalized_env decl
+    tcTyClDecl1 NoParentTyCon calc_isrec decl
 
   -- "type family" declarations
-tcTyClDecl1 :: TyConParent -> (Name -> RecFlag) -> TcLclEnv -> TyClDecl Name -> TcM [TyThing]
-tcTyClDecl1 parent _calc_isrec _
+tcTyClDecl1 :: TyConParent -> (Name -> RecFlag) -> TyClDecl Name -> TcM [TyThing]
+tcTyClDecl1 parent _calc_isrec 
   (TyFamily {tcdFlavour = TypeFamily, 
 	     tcdLName = L _ tc_name, tcdTyVars = tvs,
              tcdTcKind = kind}) -- NB: kind at latest added during kind checking
@@ -468,7 +450,7 @@ tcTyClDecl1 parent _calc_isrec _
   }
 
   -- "data family" declaration
-tcTyClDecl1 parent _calc_isrec _
+tcTyClDecl1 parent _calc_isrec 
   (TyFamily {tcdFlavour = DataFamily, 
 	     tcdLName = L _ tc_name, tcdTyVars = tvs, tcdTcKind = mb_kind})
   = tcTyVarBndrs tvs  $ \ tvs' -> do 
@@ -476,15 +458,14 @@ tcTyClDecl1 parent _calc_isrec _
   ; checkFamFlag tc_name
   ; extra_tvs <- tcDataKindSig (Just mb_kind)
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
-  ; tycon <- buildAlgTyCon tc_name [] final_tvs [] 
-                            --     ^- IA0_TODO: check this
+  ; tycon <- buildAlgTyCon tc_name final_tvs [] 
                DataFamilyTyCon Recursive True 
                parent Nothing
   ; return [ATyCon tycon]
   }
 
   -- "type" synonym declaration
-tcTyClDecl1 _parent _calc_isrec _
+tcTyClDecl1 _parent _calc_isrec
   (TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty})
   = ASSERT( isNoParent _parent )
     tcTyVarBndrs tvs		$ \ tvs' -> do 
@@ -496,15 +477,14 @@ tcTyClDecl1 _parent _calc_isrec _
 
   -- "newtype" and "data"
   -- NB: not used for newtype/data instances (whether associated or not)
-tcTyClDecl1 _parent calc_isrec generalized_env
+tcTyClDecl1 _parent calc_isrec
   (TyData {tcdND = new_or_data, tcdCtxt = ctxt, tcdTyVars = tvs,
 	   tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons})
   = ASSERT( isNoParent _parent )
-    tcTyVarBndrs tvs $ \ tvs' -> do
-  { mb_ksig' <- scDsLHsMaybeKind mb_ksig
+    tcTyVarBndrs tvs	$ \ tvs' -> do
+  { mb_ksig' <- scDsLHsMaybeKind mb_ksig  -- IA0: added sort checking, maybe it should be done before
   ; extra_tvs <- tcDataKindSig mb_ksig'
   ; let final_tvs = tvs' ++ extra_tvs
-  ; kvs <- kvOfName tc_name generalized_env
   ; stupid_theta <- tcHsKindedContext ctxt
   ; kind_signatures <- xoptM Opt_KindSignatures
   ; existential_ok <- xoptM Opt_ExistentialQuantification
@@ -517,17 +497,17 @@ tcTyClDecl1 _parent calc_isrec generalized_env
 
   ; dataDeclChecks tc_name new_or_data stupid_theta cons
 
-  ; tycon <- fixM (\ tycon -> do
-	{ let res_ty = mkTyConApp tycon (mkTyVarTys (kvs ++ final_tvs))
-	; data_cons <- tcConDecls ex_ok tycon (kvs ++ final_tvs, res_ty) cons
+  ; tycon <- fixM (\ tycon -> do 
+	{ let res_ty = mkTyConApp tycon (mkTyVarTys final_tvs)
+	; data_cons <- tcConDecls ex_ok tycon (final_tvs, res_ty) cons
 	; tc_rhs <-
-	    if null cons && is_boot 	-- In a hs-boot file, empty cons means
-	    then return AbstractTyCon	-- "don't know"; hence Abstract
+	    if null cons && is_boot 	      -- In a hs-boot file, empty cons means
+	    then return totallyAbstractTyConRhs  -- "don't know"; hence totally Abstract
 	    else case new_or_data of
 		   DataType -> return (mkDataTyConRhs data_cons)
 		   NewType  -> ASSERT( not (null data_cons) )
                                mkNewTyConRhs tc_name tycon (head data_cons)
-	; buildAlgTyCon tc_name kvs final_tvs stupid_theta tc_rhs is_rec
+	; buildAlgTyCon tc_name final_tvs stupid_theta tc_rhs is_rec
 	    (not h98_syntax) NoParentTyCon Nothing
 	})
   ; return [ATyCon tycon]
@@ -536,26 +516,28 @@ tcTyClDecl1 _parent calc_isrec generalized_env
     is_rec   = calc_isrec tc_name
     h98_syntax = consUseH98Syntax cons
 
-tcTyClDecl1 _parent calc_isrec generalized_env
-  (ClassDecl {tcdLName = L _ class_name, tcdTyVars = tvs, 
+tcTyClDecl1 _parent calc_isrec 
+  (ClassDecl {tcdLName = L _ class_tycon_name, tcdTyVars = tvs, 
 	      tcdCtxt = ctxt, tcdMeths = meths,
-	      tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats} )
+	      tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs} )
   = ASSERT( isNoParent _parent )
     tcTyVarBndrs tvs		$ \ tvs' -> do 
   { ctxt' <- tcHsKindedContext ctxt
   ; fds' <- mapM (addLocM tc_fundep) fundeps
-  ; (sig_stuff, gen_dm_env) <- tcClassSigs class_name sigs meths
+  ; (sig_stuff, gen_dm_env) <- tcClassSigs class_tycon_name sigs meths
   ; clas <- fixM $ \ clas -> do
 	    { let 	-- This little knot is just so we can get
 			-- hold of the name of the class TyCon, which we
 			-- need to look up its recursiveness
 		    tycon_name = tyConName (classTyCon clas)
 		    tc_isrec = calc_isrec tycon_name
-	    ; atss' <- mapM (addLocM $ tcTyClDecl1 (AssocFamilyTyCon clas) (const Recursive) generalized_env) ats
-            -- NB: 'ats' only contains "type family" and "data family"
-            --     declarations as well as type family defaults
+            
+            ; at_stuff <- tcClassATs clas tvs' ats at_defs
+            -- NB: 'ats' only contains "type family" and "data family" declarations
+            -- and 'at_defs' only contains associated-type defaults
+            
             ; buildClass False {- Must include unfoldings for selectors -}
-			 class_name tvs' ctxt' fds' (concat atss')
+			 class_tycon_name tvs' ctxt' fds' at_stuff
 			 sig_stuff tc_isrec }
 
   ; let gen_dm_ids = [ AnId (mkExportedLocalId gen_dm_name gen_dm_ty)
@@ -568,7 +550,7 @@ tcTyClDecl1 _parent calc_isrec generalized_env
                      ]
         class_ats = map ATyCon (classATs clas)
 
-  ; return (AClass clas : gen_dm_ids ++ class_ats )
+  ; return (ATyCon (classTyCon clas) : gen_dm_ids ++ class_ats )
       -- NB: Order is important due to the call to `mkGlobalThings' when
       --     tying the the type and class declaration type checking knot.
   }
@@ -577,10 +559,178 @@ tcTyClDecl1 _parent calc_isrec generalized_env
 				; tvs2' <- mapM tcLookupTyVar tvs2 ;
 				; return (tvs1', tvs2') }
 
-tcTyClDecl1 _ _ _
+tcTyClDecl1 _ _
   (ForeignType {tcdLName = L _ tc_name, tcdExtName = tc_ext_name})
   = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind 0)]
+\end{code}
 
+%************************************************************************
+%*									*
+               Typechecking associated types (in class decls)
+	       (including the associated-type defaults)
+%*									*
+%************************************************************************
+
+Example:     class C a where
+               data D a 
+
+               type F a b :: *
+               type F a Z = [a]        -- Default
+               type F a (S n) = F a n  -- Default
+
+We can get default defns only for type families, not data families
+	
+\begin{code}
+tcClassATs :: Class            -- The class
+           -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
+           -> [LTyClDecl Name] -- Associated types. All FamTyCon
+           -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
+           -> TcM [ClassATItem]
+tcClassATs clas clas_tvs ats at_defs
+  = do {  -- Complain about associated type defaults for non associated-types
+         sequence_ [ failWithTc (badATErr clas n)
+                   | n <- map (tcdName . unLoc) at_defs
+                   , not (n `elemNameSet` at_names) ]
+       ; mapM tc_at ats }
+  where
+    at_names = mkNameSet (map (tcdName . unLoc) ats)
+
+    at_defs_map :: NameEnv [LTyClDecl Name]
+    -- Maps an AT in 'ats' to a list of all its default defs in 'at_defs'
+    at_defs_map = foldr (\at_def nenv -> extendNameEnv_C (++) nenv (tcdName (unLoc at_def)) [at_def]) 
+                        emptyNameEnv at_defs
+
+    tc_at at = do { [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas) (const Recursive)) at
+                  ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs)
+                                (lookupNameEnv at_defs_map (tyConName fam_tc) `orElse` []) 
+                  ; return (fam_tc, atd) }
+
+
+-------------------------
+tcDefaultAssocDecl :: TyCon              -- ^ Family TyCon
+                   -> [TyVar]            -- ^ TyVars of associated type's class
+                   -> LTyClDecl Name     -- ^ RHS
+                   -> TcM ATDefault      -- ^ Type checked RHS and free TyVars
+tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
+  = setSrcSpan loc      $
+    tcAddDeclCtxt decl  $
+    do { (at_tvs, at_tys, at_rhs) <- tcSynFamInstDecl fam_tc decl
+       
+       -- See Note [Checking consistent instantiation]
+       -- We only want to check this on the *class* TyVars,
+       -- not the *family* TyVars (there may be more of these)
+       ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
+
+       ; return (ATD at_tvs at_tys at_rhs) }
+  where
+    check_arg fam_tc_tv at_ty
+      = checkTc (not (fam_tc_tv `elem` clas_tvs) || mkTyVarTy fam_tc_tv `eqType` at_ty) 
+                (wrongATArgErr at_ty (mkTyVarTy fam_tc_tv))
+
+-------------------------
+tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
+tcSynFamInstDecl fam_tc (decl@TySynonym {})
+  = kcFamTyPats fam_tc decl $ \k_tvs k_typats resKind ->
+    do { -- check that the family declaration is for a synonym
+         checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
+
+       ; -- (1) kind check the right-hand side of the type equation
+       ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
+                  -- ToDo: the ExpKind could be better
+
+         -- we need the exact same number of type parameters as the family
+         -- declaration
+       ; let famArity = tyConArity fam_tc
+       ; checkTc (length k_typats == famArity) $
+                 wrongNumberOfParmsErr famArity
+
+         -- (2) type check type equation
+       ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
+       { t_typats <- mapM tcHsKindedType k_typats
+       ; t_rhs    <- tcHsKindedType k_rhs
+
+        -- NB: we don't check well-formedness of the instance here because we call
+        -- this function from within the TcTyClsDecls fixpoint. The callers must do
+        -- the check.
+
+       ; return (t_tvs, t_typats, t_rhs) }}
+
+tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
+
+-------------------------
+-- Kind check type patterns and kind annotate the embedded type variables.
+--
+-- * Here we check that a type instance matches its kind signature, but we do
+--   not check whether there is a pattern for each type index; the latter
+--   check is only required for type synonym instances.
+
+kcFamTyPats :: TyCon
+            -> TyClDecl Name
+            -> ([LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
+               -- ^^kinded tvs         ^^kinded ty pats  ^^res kind
+            -> TcM a
+kcFamTyPats fam_tc decl thing_inside
+  = kcHsTyVars (tcdTyVars decl) $ \tvs ->
+    do { let { (kinds, resKind) = splitKindFunTys (tyConKind fam_tc)
+             ; hs_typats        = fromJust $ tcdTyPats decl }
+
+         -- We may not have more parameters than the kind indicates
+       ; checkTc (length kinds >= length hs_typats) $
+                 tooManyParmsErr (tcdLName decl)
+
+         -- Type functions can have a higher-kinded result
+       ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind
+       ; typats <- zipWithM kcCheckLHsType hs_typats
+                            [ EK kind (EkArg (ppr fam_tc) n)
+                            | (kind,n) <- kinds `zip` [1..]]
+       ; thing_inside tvs typats resultKind 
+       }
+\end{code}
+
+Note [Associated type instances]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We allow this:
+  class C a where
+    type T x a
+  instance C Int where
+    type T (S y) Int = y
+    type T Z     Int = Char
+
+Note that 
+  a) The variable 'x' is not bound by the class decl
+  b) 'x' is instantiated to a non-type-variable in the instance
+  c) There are several type instance decls for T in the instance
+
+All this is fine.  Of course, you can't give any *more* instances
+for (T ty Int) elsewhere, becuase it's an *associated* type.
+
+Note [Checking consistent instantiation]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  class C a b where
+    type T a x b
+
+  instance C [p] Int
+    type T [p] y Int = (p,y,y)  -- Induces the family instance TyCon
+                                --    type TR p y = (p,y,y)
+
+So we 
+  * Form the mini-envt from the class type variables a,b
+    to the instance decl types [p],Int:   [a->[p], b->Int]
+
+  * Look at the tyvars a,x,b of the type family constructor T
+    (it shares tyvars with the class C)
+
+  * Apply the mini-evnt to them, and check that the result is
+    consistent with the instance types [p] y Int
+
+
+%************************************************************************
+%*                                                                      *
+               Data types
+%*                                                                      *
+%************************************************************************
+
+\begin{code}
 dataDeclChecks :: Name -> NewOrData -> ThetaType -> [LConDecl Name] -> TcM ()
 dataDeclChecks tc_name new_or_data stupid_theta cons
   = do {   -- Check that we don't use GADT syntax in H98 world
@@ -619,12 +769,12 @@ tcConDecl :: Bool		-- True <=> -XExistentialQuantificaton or -XGADTs
 tcConDecl existential_ok rep_tycon res_tmpl 	-- Data types
 	  con@(ConDecl {con_name = name, con_qvars = tvs, con_cxt = ctxt
                    , con_details = details, con_res = res_ty })
-  = addErrCtxt (dataConCtxt name) $
-    tcTyVarBndrsKindGen tvs $ \ kvs tvs' -> do
+  = addErrCtxt (dataConCtxt name)	$ 
+    tcTyVarBndrs tvs			$ \ tvs' -> do 
     { ctxt' <- tcHsKindedContext ctxt
     ; checkTc (existential_ok || conRepresentibleWithH98Syntax con)
 	      (badExistential name)
-    ; (univ_tvs, ex_tvs, eq_preds, res_ty') <- tcResultType res_tmpl (kvs ++ tvs') res_ty
+    ; (univ_tvs, ex_tvs, eq_preds, res_ty') <- tcResultType res_tmpl tvs' res_ty
     ; let 
 	tc_datacon is_infix field_lbls btys
 	  = do { (arg_tys, stricts) <- mapAndUnzipM tcConArg btys
@@ -818,16 +968,16 @@ Validity checking is done once the mutually-recursive knot has been
 tied, so we can look at things freely.
 
 \begin{code}
-checkClassCycleErrs :: [LTyClDecl Name] -> TcM ()
-checkClassCycleErrs tyclss
+checkClassCycleErrs :: [LTyClDecl Name] -> [LTyClDecl Name] -> TcM ()
+checkClassCycleErrs syn_decls alg_decls
   | null cls_cycles
   = return ()
   | otherwise
-  = do	{ mapM_ recClsErr cls_cycles
-	; failM	}	-- Give up now, because later checkValidTyCl
-			-- will loop if the synonym is recursive
+  = do { mapM_ recClsErr cls_cycles
+       ; failM }       -- Give up now, because later checkValidTyCl
+                       -- will loop if the synonym is recursive
   where
-    cls_cycles = calcClassCycles tyclss
+    cls_cycles = calcClassCycles syn_decls alg_decls
 
 checkValidTyCl :: TyClDecl Name -> TcM ()
 -- We do the validity check over declarations, rather than TyThings
@@ -835,11 +985,13 @@ checkValidTyCl :: TyClDecl Name -> TcM ()
 checkValidTyCl decl
   = tcAddDeclCtxt decl $
     do	{ thing <- tcLookupLocatedGlobal (tcdLName decl)
-	; traceTc "Validity of" (ppr thing)
+	; traceTc "Validity of" (ppr thing)	
 	; case thing of
-	    ATyCon tc -> traceTc "  of kind" (ppr (tyConKind tc)) >> checkValidTyCon tc
-	    AClass cl -> do { checkValidClass cl 
-                            ; mapM_ (addLocM checkValidTyCl) (tcdATs decl) }
+	    ATyCon tc -> do
+                checkValidTyCon tc
+                case decl of
+                  ClassDecl { tcdATs = ats } -> mapM_ (addLocM checkValidTyCl) ats
+                  _                          -> return ()
             AnId _    -> return ()  -- Generic default methods are checked
 	    	      	 	    -- with their parent class
             _         -> panic "checkValidTyCl"
@@ -863,6 +1015,9 @@ checkValidTyCl decl
 
 checkValidTyCon :: TyCon -> TcM ()
 checkValidTyCon tc 
+  | Just cl <- tyConClass_maybe tc
+  = checkValidClass cl
+
   | isSynTyCon tc 
   = case synTyConRhs tc of
       SynFamilyTyCon {} -> return ()
@@ -936,17 +1091,14 @@ checkValidDataCon :: TyCon -> DataCon -> TcM ()
 checkValidDataCon tc con
   = setSrcSpan (srcLocSpan (getSrcLoc con))	$
     addErrCtxt (dataConCtxt con)		$ 
-    do	{ traceTc "Validity of data con" (ppr con <+> ppr (dataConRepType con))
+    do	{ traceTc "Validity of data con" (ppr con)
         ; let tc_tvs = tyConTyVars tc
-              tc_kvs = fst $ splitForAllTys (tyConKind tc)
-	      res_ty_tmpl = mkFamilyTyConApp tc (mkTyVarTys (tc_kvs ++ tc_tvs))
+	      res_ty_tmpl = mkFamilyTyConApp tc (mkTyVarTys tc_tvs)
 	      actual_res_ty = dataConOrigResTy con
-	; checkTc (isJust (tcMatchTy (mkVarSet (tc_kvs ++ tc_tvs))
+	; checkTc (isJust (tcMatchTy (mkVarSet tc_tvs)
 				res_ty_tmpl
 				actual_res_ty))
 		  (badDataConTyCon con res_ty_tmpl actual_res_ty)
-             -- IA0_TODO: we should also check that kind variables
-             -- are only instantiated with kind variables
 	; checkValidMonoType (dataConOrigResTy con)
 		-- Disallow MkT :: T (forall a. a->a)
 		-- Reason: it's really the argument of an equality constraint
@@ -997,13 +1149,16 @@ checkValidClass cls
 	-- Check the class operations
 	; mapM_ (check_op constrained_class_methods) op_stuff
 
+        -- Check the associated type defaults are well-formed
+        ; mapM_ check_at at_stuff
+
   	-- Check that if the class has generic methods, then the
 	-- class has only one parameter.  We can't do generic
 	-- multi-parameter type classes!
 	; checkTc (unary || no_generics) (genericMultiParamErr cls)
 	}
   where
-    (tyvars, fundeps, theta, _, _, op_stuff) = classExtraBigSig cls
+    (tyvars, fundeps, theta, _, at_stuff, op_stuff) = classExtraBigSig cls
     unary 	= isSingleton tyvars
     no_generics = null [() | (_, (GenDefMeth _)) <- op_stuff]
 
@@ -1045,6 +1200,9 @@ checkValidClass cls
 		-- in the context of a for-all must mention at least one quantified
 		-- type variable.  What a mess!
 
+    check_at (_fam_tc, defs)
+      = mapM_ (\(ATD _tvs pats rhs) -> checkValidFamInst pats rhs) defs
+
 checkFamFlag :: Name -> TcM ()
 -- Check that we don't use families without -XTypeFamilies
 -- The parser won't even parse them, but I suppose a GHC API
@@ -1069,7 +1227,8 @@ mkDefaultMethodIds :: [TyThing] -> [Id]
 -- See Note [Default method Ids and Template Haskell]
 mkDefaultMethodIds things
   = [ mkExportedLocalId dm_name (idType sel_id)
-    | AClass cls <- things
+    | ATyCon tc <- things
+    , Just cls <- [tyConClass_maybe tc]
     , (sel_id, DefMeth dm_name) <- classOpItems cls ]
 \end{code}
 
@@ -1321,7 +1480,7 @@ recClsErr :: [Located (TyClDecl Name)] -> TcRn ()
 recClsErr cls_decls
   = setSrcSpan (getLoc (head sorted_decls)) $
     addErr (sep [ptext (sLit "Cycle in class declarations (via superclasses):"),
-		 nest 2 (vcat (map ppr_decl sorted_decls))])
+                nest 2 (vcat (map ppr_decl sorted_decls))])
   where
     sorted_decls = sortLocated cls_decls
     ppr_decl (L loc decl) = ppr loc <> colon <+> ppr (decl { tcdSigs = [] })
@@ -1336,6 +1495,11 @@ badDataConTyCon data_con res_ty_tmpl actual_res_ty
   = hang (ptext (sLit "Data constructor") <+> quotes (ppr data_con) <+>
 		ptext (sLit "returns type") <+> quotes (ppr actual_res_ty))
        2 (ptext (sLit "instead of an instance of its parent type") <+> quotes (ppr res_ty_tmpl))
+
+badATErr :: Outputable a => a -> Name -> SDoc
+badATErr clas op
+  = hsep [ptext (sLit "Class"), quotes (ppr clas), 
+          ptext (sLit "does not have an associated type"), quotes (ppr op)]
 
 badGadtDecl :: Name -> SDoc
 badGadtDecl tc_name
@@ -1387,4 +1551,30 @@ emptyConDeclsErr :: Name -> SDoc
 emptyConDeclsErr tycon
   = sep [quotes (ppr tycon) <+> ptext (sLit "has no constructors"),
 	 nest 2 $ ptext (sLit "(-XEmptyDataDecls permits this)")]
+
+wrongATArgErr :: Type -> Type -> SDoc
+wrongATArgErr ty instTy =
+  sep [ ptext (sLit "Type indexes must match class instance head")
+      , ptext (sLit "Found") <+> quotes (ppr ty)
+        <+> ptext (sLit "but expected") <+> quotes (ppr instTy)
+      ]
+
+tooManyParmsErr :: Located Name -> SDoc
+tooManyParmsErr tc_name
+  = ptext (sLit "Family instance has too many parameters:") <+>
+    quotes (ppr tc_name)
+
+wrongNumberOfParmsErr :: Arity -> SDoc
+wrongNumberOfParmsErr exp_arity
+  = ptext (sLit "Number of parameters must match family declaration; expected")
+    <+> ppr exp_arity
+
+wrongKindOfFamily :: TyCon -> SDoc
+wrongKindOfFamily family
+  = ptext (sLit "Wrong category of family instance; declaration was for a")
+    <+> kindOfFamily
+  where
+    kindOfFamily | isSynTyCon family = ptext (sLit "type synonym")
+                 | isAlgTyCon family = ptext (sLit "data type")
+                 | otherwise = pprPanic "wrongKindOfFamily" (ppr family)
 \end{code}

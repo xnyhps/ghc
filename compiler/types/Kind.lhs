@@ -9,12 +9,12 @@ module Kind (
 
 	-- Kinds
 	liftedTypeKind, unliftedTypeKind, openTypeKind,
-        argTypeKind, ubxTupleKind,
+        argTypeKind, ubxTupleKind, constraintKind,
         mkArrowKind, mkArrowKinds,
 
         -- Kind constructors...
         liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
-        argTypeKindTyCon, ubxTupleKindTyCon,
+        argTypeKindTyCon, ubxTupleKindTyCon, constraintKindTyCon,
 
         -- Super Kinds
 	tySuperKind, tySuperKindTyCon, 
@@ -27,9 +27,9 @@ module Kind (
 
         -- ** Predicates on Kinds
         isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
-        isUbxTupleKind, isArgTypeKind, isKind, isTySuperKind, 
-        isSuperKind, isCoercionKind, 
-        isLiftedTypeKindCon,
+        isUbxTupleKind, isArgTypeKind, isConstraintKind, isKind, isTySuperKind,
+        isSuperKind, noHashInKind,
+        isLiftedTypeKindCon, isConstraintKindCon,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon, isSubOpenTypeKindCon,
@@ -41,10 +41,11 @@ module Kind (
 
 #include "HsVersions.h"
 
+import {-# SOURCE #-} Type ( typeKind, substKiWith, eqKind )
+
 import TypeRep
 import TysPrim
 import TyCon
-import Type ( substKiWith, eqKind )
 import Var
 import VarSet
 import PrelNames
@@ -67,42 +68,18 @@ isTySuperKind _                = False
 
 isLiftedTypeKindCon :: TyCon -> Bool
 isLiftedTypeKindCon tc    = tc `hasKey` liftedTypeKindTyConKey
-\end{code}
 
-%************************************************************************
-%*									*
-        The kind of a type
-%*									*
-%************************************************************************
-
-\begin{code}
-typeKind :: Type -> Kind
-typeKind _ty@(TyConApp tc tys) 
-  = ASSERT2( not (tc `hasKey` eqPredPrimTyConKey) || length tys == 2, ppr _ty )
-    	     -- Assertion checks for unsaturated application of (~)
-	     -- See Note [The (~) TyCon] in TysPrim
-    kindAppResult (tyConKind tc) tys
-
-typeKind (PredTy pred)	      = predKind pred
-typeKind (AppTy fun arg)      = kindAppResult (typeKind fun) [arg]
-typeKind (ForAllTy _ ty)      = typeKind ty
-typeKind (TyVarTy tyvar)      = tyVarKind tyvar
-typeKind (FunTy _arg res)
-    -- Hack alert.  The kind of (Int -> Int#) is liftedTypeKind (*), 
-    --              not unliftedTypKind (#)
-    -- The only things that can be after a function arrow are
-    --   (a) types (of kind openTypeKind or its sub-kinds)
-    --   (b) kinds (of super-kind TY) (e.g. * -> (* -> *))
-    | isTySuperKind k         = k
-    | otherwise               = ASSERT( isSubOpenTypeKind k) liftedTypeKind 
-    where
-      k = typeKind res
-
-------------------
-predKind :: PredType -> Kind
-predKind (EqPred {}) = unliftedTypeKind	-- Coercions are unlifted
-predKind (ClassP {}) = liftedTypeKind	-- Class and implicitPredicates are
-predKind (IParam {}) = liftedTypeKind 	-- always represented by lifted types
+-- This checks that its argument does not contain # or (#).
+-- It is used in tcTyVarBndrs.
+noHashInKind :: Kind -> Bool
+noHashInKind (TyVarTy {}) = True
+noHashInKind (FunTy k1 k2) = noHashInKind k1 && noHashInKind k2
+noHashInKind (ForAllTy _ ki) = noHashInKind ki
+noHashInKind (TyConApp kc kis)
+  =  not (kc `hasKey` unliftedTypeKindTyConKey)
+  && not (kc `hasKey` ubxTupleKindTyConKey)
+  && all noHashInKind kis
+noHashInKind _ = panic "noHashInKind"
 \end{code}
 
 %************************************************************************
@@ -113,7 +90,7 @@ predKind (IParam {}) = liftedTypeKind 	-- always represented by lifted types
 
 \begin{code}
 -- | Essentially 'funResultTy' on kinds handling pi-types too
-kindFunResult :: Kind -> KindOrType -> Kind
+kindFunResult :: Kind -> Type -> Kind
 kindFunResult (FunTy _ res) _ = res
 kindFunResult (ForAllTy kv res) arg = substKiWith [kv] [arg] res
 kindFunResult k _ = pprPanic "kindFunResult" (ppr k)
@@ -147,9 +124,9 @@ synTyConResKind :: TyCon -> Kind
 synTyConResKind tycon = kindAppResult (tyConKind tycon) (map mkTyVarTy (tyConTyVars tycon))
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
-isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind :: Kind -> Bool
+isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind, isConstraintKind :: Kind -> Bool
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
-        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon :: TyCon -> Bool
+        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon, isConstraintKindCon :: TyCon -> Bool
 
 isOpenTypeKindCon tc    = tyConUnique tc == openTypeKindTyConKey
 
@@ -171,6 +148,11 @@ isUnliftedTypeKindCon tc = tyConUnique tc == unliftedTypeKindTyConKey
 isUnliftedTypeKind (TyConApp tc _) = isUnliftedTypeKindCon tc
 isUnliftedTypeKind _               = False
 
+isConstraintKindCon tc = tyConUnique tc == constraintKindTyConKey
+
+isConstraintKind (TyConApp tc _) = isConstraintKindCon tc
+isConstraintKind _               = False
+
 isSubOpenTypeKind :: Kind -> Bool
 -- ^ True of any sub-kind of OpenTypeKind
 isSubOpenTypeKind (TyConApp kc []) = isSubOpenTypeKindCon kc
@@ -186,6 +168,7 @@ isSubArgTypeKindCon kc
   | isUnliftedTypeKindCon kc = True
   | isLiftedTypeKindCon kc   = True
   | isArgTypeKindCon kc      = True
+  | isConstraintKindCon kc   = True
   | otherwise                = False
 
 isSubArgTypeKind :: Kind -> Bool
@@ -210,9 +193,8 @@ isSubKind (FunTy a1 r1) (FunTy a2 r2)	      = (a2 `isSubKind` a1) && (r1 `isSubK
 isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) =
   not (isSubOpenTypeKindCon kc1) && kc1 == kc2
   && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
-isSubKind (TyVarTy kv1) (TyVarTy kv2) = kv1 == kv2
-isSubKind (ForAllTy {}) (ForAllTy {}) = panic "IA0: isSubKind on ForAllTy"
-isSubKind _ _ = False
+isSubKind (ForAllTy {}) (ForAllTy {})         = panic "IA0: isSubKind on ForAllTy"
+isSubKind _             _                     = False
 
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@

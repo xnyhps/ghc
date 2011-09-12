@@ -744,7 +744,7 @@ declExtras fix_fn rule_env inst_env decl
                         (map (id_extras . ifConOcc) (visibleIfConDecls cons))
       IfaceClass{ifSigs=sigs, ifATs=ats} -> 
                      IfaceClassExtras (fix_fn n)
-                        (map ifDFun $ (concatMap (lookupOccEnvL inst_env . ifName) ats)
+                        (map ifDFun $ (concatMap at_extras ats)
                                     ++ lookupOccEnvL inst_env n)
 		           -- Include instances of the associated types
 			   -- as well as instances of the class (Trac #5147)
@@ -754,6 +754,7 @@ declExtras fix_fn rule_env inst_env decl
   where
         n = ifName decl
         id_extras occ = (fix_fn occ, lookupOccEnvL rule_env occ)
+        at_extras (IfaceAT decl _) = lookupOccEnvL inst_env (ifName decl)
 
 --
 -- When hashing an instance, we hash only the DFunId, because that
@@ -1325,38 +1326,10 @@ tyThingToIfaceDecl (AnId id)
 	      ifIdDetails = toIfaceIdDetails (idDetails id),
 	      ifIdInfo    = toIfaceIdInfo (idInfo id) }
 
-tyThingToIfaceDecl (AClass clas)
-  = IfaceClass { ifCtxt	  = toIfaceContext sc_theta,
-		 ifName	  = getOccName clas,
-		 ifTyVars = toIfaceTvBndrs clas_tyvars,
-		 ifFDs    = map toIfaceFD clas_fds,
-		 ifATs	  = map (tyThingToIfaceDecl . ATyCon) clas_ats,
-		 ifSigs	  = map toIfaceClassOp op_stuff,
-	  	 ifRec    = boolToRecFlag (isRecursiveTyCon tycon) }
-  where
-    (clas_tyvars, clas_fds, sc_theta, _, clas_ats, op_stuff) 
-      = classExtraBigSig clas
-    tycon = classTyCon clas
-
-    toIfaceClassOp (sel_id, def_meth)
-	= ASSERT(sel_tyvars == clas_tyvars)
-	  IfaceClassOp (getOccName sel_id) (toDmSpec def_meth) (toIfaceType op_ty)
-	where
-		-- Be careful when splitting the type, because of things
-		-- like  	class Foo a where
-		--		  op :: (?x :: String) => a -> a
-		-- and  	class Baz a where
-		--		  op :: (Ord a) => a -> a
-	  (sel_tyvars, rho_ty) = splitForAllTys (idType sel_id)
-	  op_ty		       = funResultTy rho_ty
-
-    toDmSpec NoDefMeth      = NoDM
-    toDmSpec (GenDefMeth _) = GenericDM
-    toDmSpec (DefMeth _)    = VanillaDM
-
-    toIfaceFD (tvs1, tvs2) = (map getFS tvs1, map getFS tvs2)
-
 tyThingToIfaceDecl (ATyCon tycon)
+  | Just clas <- tyConClass_maybe tycon
+  = classToIfaceDecl clas
+
   | isSynTyCon tycon
   = IfaceSyn {	ifName    = getOccName tycon,
 		ifTyVars  = toIfaceTvBndrs tyvars,
@@ -1391,7 +1364,7 @@ tyThingToIfaceDecl (ATyCon tycon)
     ifaceConDecls (DataTyCon { data_cons = cons })  = 
       IfDataTyCon (map ifaceConDecl cons)
     ifaceConDecls DataFamilyTyCon {}                = IfOpenDataTyCon
-    ifaceConDecls AbstractTyCon			    = IfAbstractTyCon
+    ifaceConDecls (AbstractTyCon distinct)	    = IfAbstractTyCon distinct
 	-- The last case happens when a TyCon has been trimmed during tidying
 	-- Furthermore, tyThingToIfaceDecl is also used
 	-- in TcRnDriver for GHCi, when browsing a module, in which case the
@@ -1422,6 +1395,47 @@ tyThingToIfaceDecl c@(ACoAxiom _) = pprPanic "tyThingToIfaceDecl (ACoCon _)" (pp
 
 tyThingToIfaceDecl (ADataCon dc)
  = pprPanic "toIfaceDecl" (ppr dc)	-- Should be trimmed out earlier
+
+
+classToIfaceDecl :: Class -> IfaceDecl
+classToIfaceDecl clas
+  = IfaceClass { ifCtxt   = toIfaceContext sc_theta,
+                 ifName   = getOccName (classTyCon clas),
+                 ifTyVars = toIfaceTvBndrs clas_tyvars,
+                 ifFDs    = map toIfaceFD clas_fds,
+                 ifATs    = map toIfaceAT clas_ats,
+                 ifSigs   = map toIfaceClassOp op_stuff,
+                 ifRec    = boolToRecFlag (isRecursiveTyCon tycon) }
+  where
+    (clas_tyvars, clas_fds, sc_theta, _, clas_ats, op_stuff) 
+      = classExtraBigSig clas
+    tycon = classTyCon clas
+
+    toIfaceAT :: ClassATItem -> IfaceAT
+    toIfaceAT (tc, defs)
+      = IfaceAT (tyThingToIfaceDecl (ATyCon tc))
+                (map to_if_at_def defs)
+      where
+        to_if_at_def (ATD tvs pat_tys ty)
+          = IfaceATD (toIfaceTvBndrs tvs) (map toIfaceType pat_tys) (toIfaceType ty)
+
+    toIfaceClassOp (sel_id, def_meth)
+        = ASSERT(sel_tyvars == clas_tyvars)
+          IfaceClassOp (getOccName sel_id) (toDmSpec def_meth) (toIfaceType op_ty)
+        where
+                -- Be careful when splitting the type, because of things
+                -- like         class Foo a where
+                --                op :: (?x :: String) => a -> a
+                -- and          class Baz a where
+                --                op :: (Ord a) => a -> a
+          (sel_tyvars, rho_ty) = splitForAllTys (idType sel_id)
+          op_ty                = funResultTy rho_ty
+
+    toDmSpec NoDefMeth      = NoDM
+    toDmSpec (GenDefMeth _) = GenericDM
+    toDmSpec (DefMeth _)    = VanillaDM
+
+    toIfaceFD (tvs1, tvs2) = (map getFS tvs1, map getFS tvs2)
 
 
 getFS :: NamedThing a => a -> FastString
@@ -1633,8 +1647,10 @@ toIfaceAlt (c,bs,r) = (toIfaceCon c, map getFS bs, toIfaceExpr r)
 
 ---------------------
 toIfaceCon :: AltCon -> IfaceConAlt
-toIfaceCon (DataAlt dc) | isTupleTyCon tc = IfaceTupleAlt (tupleTyConBoxity tc)
-	   		| otherwise       = IfaceDataAlt (getName dc)
+toIfaceCon (DataAlt dc) | isTupleTyCon tc
+                        = IfaceTupleAlt (tupleTyConSort tc)
+                        | otherwise
+                        = IfaceDataAlt (getName dc)
 	   		where
 	   		  tc = dataConTyCon dc
 	   
@@ -1648,7 +1664,7 @@ toIfaceApp (Var v) as
   = case isDataConWorkId_maybe v of
 	-- We convert the *worker* for tuples into IfaceTuples
 	Just dc |  isTupleTyCon tc && saturated 
-		-> IfaceTuple (tupleTyConBoxity tc) tup_args
+		-> IfaceTuple (tupleTyConSort tc) tup_args
 	  where
 	    val_args  = dropWhile isTypeArg as
 	    saturated = val_args `lengthIs` idArity v
@@ -1664,13 +1680,15 @@ mkIfaceApps f as = foldl (\f a -> IfaceApp f (toIfaceExpr a)) f as
 
 ---------------------
 toIfaceVar :: Id -> IfaceExpr
-toIfaceVar v 
-  | Just fcall <- isFCallId_maybe v = IfaceFCall fcall (toIfaceType (idType v))
+toIfaceVar v = case isDataConWorkId_maybe v of
+    Just dc | isTupleTyCon tc -> IfaceTupId (tupleTyConSort tc) (tupleTyConArity tc)
+      where tc = dataConTyCon dc
+          -- Tuple workers also have special syntax, so we get their
+          -- Uniques right (they are wired-in but infinite)
+    _ | Just fcall <- isFCallId_maybe v            -> IfaceFCall fcall (toIfaceType (idType v))
 	  -- Foreign calls have special syntax
-  | isExternalName name		    = IfaceExt name
-  | Just (TickBox m ix) <- isTickBoxOp_maybe v
-				    = IfaceTick m ix
-  | otherwise			    = IfaceLcl (getFS name)
-  where
-    name = idName v
+      | isExternalName name		           -> IfaceExt name
+      | Just (TickBox m ix) <- isTickBoxOp_maybe v -> IfaceTick m ix
+      | otherwise			           -> IfaceLcl (getFS name)
+  where name = idName v
 \end{code}

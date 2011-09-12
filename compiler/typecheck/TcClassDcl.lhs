@@ -8,7 +8,7 @@ Typechecking class declarations
 \begin{code}
 module TcClassDcl ( tcClassSigs, tcClassDecl2, 
 		    findMethodBind, instantiateMethod, tcInstanceMethodBody,
-		    mkGenericDefMethBind,
+                    mkGenericDefMethBind,
 		    tcAddDeclCtxt, badMethodErr
 		  ) where
 
@@ -21,6 +21,7 @@ import TcBinds
 import TcUnify
 import TcHsType
 import TcMType
+import Type     ( getClassPredTys_maybe )
 import TcType
 import TcRnMonad
 import BuildTyCl( TcMethInfo )

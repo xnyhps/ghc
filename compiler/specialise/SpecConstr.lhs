@@ -1489,6 +1489,20 @@ The function calcSpecStrictness performs the calculation.
 This code deals with analysing call-site arguments to see whether
 they are constructor applications.
 
+Note [Free type variables of the qvar types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In a call (f @a x True), that we want to specialise, what variables should
+we quantify over.  Clearly over 'a' and 'x', but what about any type variables
+free in x's type?  In fact we don't need to worry about them because (f @a)
+can only be a well-typed application if its type is compatible with x, so any
+variables free in x's type must be free in (f @a), and hence either be gathered
+via 'a' itself, or be in scope at f's defn.  Hence we just take 
+  (exprsFreeVars pats).
+
+BUT phantom type synonyms can mess this reasoning up, 
+  eg   x::T b   with  type T b = Int
+So we apply expandTypeSynonyms to the bound Ids.  
+See Trac # 5458.  Yuk.
 
 \begin{code}
 type CallPat = ([Var], [CoreExpr])	-- Quantified variables and arguments
@@ -1520,15 +1534,20 @@ callToPats env bndr_occs (con_env, args)
   = do	{ let in_scope = substInScope (sc_subst env)
 	; (interesting, pats) <- argsToPats env in_scope con_env args bndr_occs
 	; let pat_fvs = varSetElems (exprsFreeVars pats)
-	      qvars   = filterOut (`elemInScopeSet` in_scope) pat_fvs
+	      in_scope_vars = getInScopeVars in_scope
+	      qvars   = filterOut (`elemVarSet` in_scope_vars) pat_fvs
 		-- Quantify over variables that are not in sccpe
 		-- at the call site
+		-- See Note [Free type variables of the qvar types]
 		-- See Note [Shadowing] at the top
 		
 	      (tvs, ids) = partition isTyVar qvars
-	      qvars'     = tvs ++ ids
+	      qvars'     = tvs ++ map sanitise ids
 		-- Put the type variables first; the type of a term
 		-- variable may mention a type variable
+
+	      sanitise id = id `setIdType` expandTypeSynonyms (idType id)
+	        -- See Note [Free type variables of the qvar types]
 
 	; -- pprTrace "callToPats"  (ppr args $$ ppr prs $$ ppr bndr_occs) $
 	  if interesting
@@ -1599,7 +1618,7 @@ argToPat env in_scope val_env (Cast arg co) arg_occ
 	{ -- Make a wild-card pattern for the coercion
 	  uniq <- getUniqueUs
 	; let co_name = mkSysTvName uniq (fsLit "sg")
-	      co_var = mkCoVar co_name (mkCoType ty1 ty2)
+	      co_var = mkCoVar co_name (mkCoercionType ty1 ty2)
 	; return (interesting, Cast arg' (mkCoVarCo co_var)) } }
   where
     Pair ty1 ty2 = coercionKind co

@@ -155,8 +155,8 @@ tcLookupClass :: Name -> TcM Class
 tcLookupClass name = do
     thing <- tcLookupGlobal name
     case thing of
-	AClass cls -> return cls
-	_          -> wrongThingErr "class" (AGlobal thing) name
+	ATyCon tc | Just cls <- tyConClass_maybe tc -> return cls
+	_                                           -> wrongThingErr "class" (AGlobal thing) name
 
 tcLookupTyCon :: Name -> TcM TyCon
 tcLookupTyCon name = do
@@ -721,8 +721,8 @@ Make a name for the representation tycon of a family instance.  It's an
 newGlobalBinder.
 
 \begin{code}
-newFamInstTyConName :: Name -> [Type] -> SrcSpan -> TcM Name
-newFamInstTyConName tc_name tys loc
+newFamInstTyConName :: Located Name -> [Type] -> TcM Name
+newFamInstTyConName (L loc tc_name) tys
   = do	{ mod   <- getModule
 	; let info_string = occNameString (getOccName tc_name) ++ 
 			    concatMap (occNameString.getDFunTyKey) tys

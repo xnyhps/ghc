@@ -27,6 +27,7 @@ import RnNames       	( getLocalNonValBinders, extendGlobalRdrEnvRn, lookupTcdNa
 import HscTypes      	( AvailInfo(..) )
 import RnHsDoc          ( rnHsDoc, rnMbLHsDoc )
 import TcRnMonad
+import Kind             ( liftedTypeKind )
 
 import ForeignCall	( CCallTarget(..) )
 import Module
@@ -42,7 +43,6 @@ import Util		( filterOut )
 import SrcLoc
 import DynFlags
 import HscTypes		( HscEnv, hsc_dflags )
-import BasicTypes       ( Boxity(..) )
 import ListSetOps       ( findDupsEq )
 import Digraph		( SCC, flattenSCC, stronglyConnCompFromEdgedVertices )
 
@@ -420,7 +420,7 @@ rnSrcInstDecl :: InstDecl RdrName -> RnM (InstDecl Name, FreeVars)
 rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	-- Used for both source and interface file decls
   = do { inst_ty' <- rnHsSigType (text "an instance decl") inst_ty
-       ; let (inst_tyvars, _, L _ cls, _) = splitHsInstDeclTy inst_ty'
+       ; let Just (inst_tyvars, _, L _ cls,_) = splitLHsInstDeclTy_maybe inst_ty'
 
 	-- Rename the bindings
 	-- The typechecker (not the renamer) checks that all 
@@ -789,12 +789,13 @@ rnTyClDecl mb_cls tydecl@(TySynonym { tcdTyVars = tyvars, tcdLName = name,
 
 rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls, 
 		         tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
-		         tcdMeths = mbinds, tcdATs = ats, tcdDocs = docs})
+		         tcdMeths = mbinds, tcdATs = ats, tcdATDefs = at_defs,
+                         tcdDocs = docs})
   = do	{ lcls' <- lookupLocatedTopBndrRn lcls
         ; let cls' = unLoc lcls'
 
 	-- Tyvars scope over superclass context and method signatures
-	; ((tyvars', context', fds', ats', sigs'), stuff_fvs)
+	; ((tyvars', context', fds', ats', at_defs', sigs'), stuff_fvs)
 	    <- bindTyVarsFV cls_doc tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
@@ -802,11 +803,13 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
              ; let rn_at = rnTyClDecl (Just cls')
              ; (ats', fv_ats) <- mapAndUnzipM (wrapLocFstM rn_at) ats
 	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
+             ; (at_defs', fv_at_defs) <- mapAndUnzipM (wrapLocFstM rn_at) at_defs
 	     ; let fvs = extractHsCtxtTyNames context'	`plusFV`
 	                 hsSigsFVs sigs'                `plusFV`
-                         plusFVs fv_ats
+                         plusFVs fv_ats                 `plusFV`
+                         plusFVs fv_at_defs
 			 -- The fundeps have no free variables
-	     ; return ((tyvars', context', fds', ats', sigs'), fvs) }
+	     ; return ((tyvars', context', fds', ats', at_defs', sigs'), fvs) }
 
 	-- No need to check for duplicate associated type decls
 	-- since that is done by RnNames.extendGlobalRdrEnvRn
@@ -840,7 +843,8 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 
 	; return (ClassDecl { tcdCtxt = context', tcdLName = lcls', 
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
-			      tcdMeths = mbinds', tcdATs = ats', tcdDocs = docs'},
+			      tcdMeths = mbinds', tcdATs = ats', tcdATDefs = at_defs',
+                              tcdDocs = docs'},
 	     	  extractHsTyVarBndrNames_s tyvars' (meth_fvs `plusFV` stuff_fvs)) }
   where
     cls_doc  = ClassDeclCtx lcls
@@ -1002,7 +1006,7 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
                        , con_details = new_details', con_res = new_res_ty, con_doc = mb_doc' }) }}
  where
     doc = ConDeclCtx name
-    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy Boxed tys))
+    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy (HsBoxyTuple liftedTypeKind) tys))
 
 rnConResult :: HsDocContext
             -> HsConDetails (LHsType Name) [ConDeclField Name]
