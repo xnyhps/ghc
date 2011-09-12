@@ -8,7 +8,8 @@ module RnTypes (
 	-- Type related stuff
 	rnHsType, rnLHsType, rnLHsTypes, rnContext,
         rnHsKind, rnLHsKind, rnLHsMaybeKind,
-	rnHsSigType, rnHsTypeFVs, rnConDeclFields, rnLPred,
+	rnHsSigType, rnHsTypeFVs, rnConDeclFields,
+        rnIPName,
 
 	-- Precence related stuff
 	mkOpAppRn, mkNegAppRn, mkOpFormRn, mkConOpPatRn,
@@ -33,6 +34,7 @@ import RnHsSyn		( extractHsTyNames, extractHsTyVarBndrNames_s )
 import RnHsDoc          ( rnLHsDoc, rnMbLHsDoc )
 import RnEnv
 import TcRnMonad
+import IfaceEnv         ( newIPName )
 import RdrName
 import PrelNames
 import TysPrim          ( funTyConName )
@@ -41,7 +43,7 @@ import SrcLoc
 import NameSet
 
 import Util		( filterOut )
-import BasicTypes	( compareFixity, funTyFixity, negateFixity, 
+import BasicTypes	( IPName(..), ipNameName, compareFixity, funTyFixity, negateFixity, 
 			  Fixity(..), FixityDirection(..) )
 import Outputable
 import FastString
@@ -194,9 +196,15 @@ rnHsTyKi isType doc (HsAppTy ty1 ty2) = do
     ty2' <- rnLHsTyKi isType doc ty2
     return (HsAppTy ty1' ty2')
 
-rnHsTyKi isType doc (HsPredTy pred) = ASSERT ( isType ) do
-    pred' <- rnPred doc pred
-    return (HsPredTy pred')
+rnHsTyKi isType doc (HsIParamTy n ty) = ASSERT( isType ) do
+    ty' <- rnLHsType doc ty
+    n' <- rnIPName n
+    return (HsIParamTy n' ty')
+
+rnHsTyKi isType doc (HsEqTy ty1 ty2) = ASSERT( isType ) do
+    ty1' <- rnLHsType doc ty1
+    ty2' <- rnLHsType doc ty2
+    return (HsEqTy ty1' ty2')
 
 rnHsTyKi isType _ (HsSpliceTy sp _ k)
   = ASSERT ( isType ) do { (sp', fvs) <- rnSplice sp	-- ToDo: deal with fvs
@@ -298,28 +306,10 @@ rnContext :: HsDocContext -> LHsContext RdrName -> RnM (LHsContext Name)
 rnContext doc = wrapLocM (rnContext' doc)
 
 rnContext' :: HsDocContext -> HsContext RdrName -> RnM (HsContext Name)
-rnContext' doc ctxt = mapM (rnLPred doc) ctxt
+rnContext' doc ctxt = mapM (rnLHsType doc) ctxt
 
-rnLPred :: HsDocContext -> LHsPred RdrName -> RnM (LHsPred Name)
-rnLPred doc  = wrapLocM (rnPred doc)
-
-rnPred :: HsDocContext -> HsPred RdrName
-       -> IOEnv (Env TcGblEnv TcLclEnv) (HsPred Name)
-rnPred doc (HsClassP clas tys)
-  = do { clas_name <- lookupOccRn clas
-       ; tys' <- rnLHsTypes doc tys
-       ; return (HsClassP clas_name tys')
-       }
-rnPred doc (HsEqualP ty1 ty2)
-  = do { ty1' <- rnLHsType doc ty1
-       ; ty2' <- rnLHsType doc ty2
-       ; return (HsEqualP ty1' ty2')
-       }
-rnPred doc (HsIParam n ty)
-  = do { name <- newIPNameRn n
-       ; ty' <- rnLHsType doc ty
-       ; return (HsIParam name ty')
-       }
+rnIPName :: IPName RdrName -> RnM (IPName Name)
+rnIPName n = newIPName (occNameFS (rdrNameOcc (ipNameName n)))
 \end{code}
 
 

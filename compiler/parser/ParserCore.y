@@ -245,7 +245,6 @@ akind	:: { IfaceKind }
 kind 	:: { IfaceKind }
 	: akind 	   { $1 }
 	| akind '->' kind  { ifaceArrow $1 $3 }
-        | ty ':=:' ty      { ifaceEq $1 $3 }
 
 -----------------------------------------
 --             Expressions
@@ -375,8 +374,6 @@ ifaceOpenTypeKind     = ifaceTcType IfaceOpenTypeKindTc
 ifaceUnliftedTypeKind = ifaceTcType IfaceUnliftedTypeKindTc
 
 ifaceArrow ifT1 ifT2 = IfaceFunTy ifT1 ifT2
-
-ifaceEq ifT1 ifT2 = IfacePredTy (IfaceEqPred ifT1 ifT2)
 
 toHsTvBndr :: IfaceTvBndr -> LHsTyVarBndr RdrName
 toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toHsKind k) placeHolderKind
