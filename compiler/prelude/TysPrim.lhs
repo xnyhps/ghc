@@ -120,6 +120,7 @@ primTyCons
     , word32PrimTyCon
     , word64PrimTyCon
     , anyTyCon
+    , constraintKindTyCon
     , eqPrimTyCon
     ]
 

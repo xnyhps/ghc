@@ -42,7 +42,6 @@ import IfaceEnv		( lookupOrig, newGlobalBinder, updNameCache, extendNameCache )
 import HsSyn
 import RdrHsSyn		( extractHsTyRdrTyVars )
 import RdrName
-import TysPrim          ( constraintKindTyConName )
 import HscTypes		( NameCache(..), availNames, ModIface(..), FixItem(..), lookupFixity)
 import TcEnv		( tcLookupDataCon, tcLookupField, isBrackStage )
 import TcRnMonad
@@ -461,16 +460,6 @@ lookupOccRn_maybe rdr_name
        ; case mb_name of {
                 Just name  -> return (Just name) ;
                 Nothing -> do
-       { -- Check if the RdrName is Constraint
-         traceRn (ppr (nameRdrName constraintKindTyConName) <+> ppr rdr_name)
-       ; if rdrNameOcc rdr_name == nameOccName constraintKindTyConName
-           then do
-             constraint_ok <- xoptM Opt_ConstraintKinds
-             if constraint_ok
-               then return (Just constraintKindTyConName)
-               else failWith (hang (ptext (sLit "Constraint is not in scope"))
-                                 2 (ptext (sLit "Perhaps you meant to use -XConstraintKinds?")))
-         else do
        { -- We allow qualified names on the command line to refer to
          --  *any* name exported by any module in scope, just as if there
          -- was an "import qualified M" declaration for every module.
@@ -481,7 +470,7 @@ lookupOccRn_maybe rdr_name
        ; if isQual rdr_name && allow_qual && is_ghci
          then lookupQualifiedName rdr_name
          else do { traceRn (text "lookupOccRn" <+> ppr rdr_name)
-                 ; return Nothing } } } } } } }
+                 ; return Nothing } } } } } }
 
 
 lookupGlobalOccRn :: RdrName -> RnM Name
