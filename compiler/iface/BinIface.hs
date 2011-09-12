@@ -13,8 +13,9 @@ module BinIface ( writeBinIface, readBinIface, getSymtabName, getDictFastString,
 #include "HsVersions.h"
 
 import TcRnMonad
-import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon)
+import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon, tyConIP_maybe)
 import DataCon    (dataConName, dataConWorkId, dataConTyCon)
+import IParam     (ipFastString, ipTyConName)
 import PrelInfo   (wiredInThings, basicKnownKeyNames)
 import Id         (idName, isDataConWorkId_maybe)
 import TysWiredIn
@@ -44,6 +45,7 @@ import FastString
 import Constants
 
 import Data.Bits
+import Data.Char
 import Data.List
 import Data.Word
 import Data.Array
@@ -63,14 +65,14 @@ data TraceBinIFaceReading = TraceBinIFaceReading | QuietBinIFaceReading
 readBinIface :: CheckHiWay -> TraceBinIFaceReading -> FilePath
              -> TcRnIf a b ModIface
 readBinIface checkHiWay traceBinIFaceReading hi_path = do
-  update_nc <- mkNameCacheUpdater
+  ncu <- mkNameCacheUpdater
   dflags <- getDOpts
-  liftIO $ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc
+  liftIO $ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu
 
 readBinIface_ :: DynFlags -> CheckHiWay -> TraceBinIFaceReading -> FilePath
-              -> NameCacheUpdater (Array Int Name)
+              -> NameCacheUpdater
               -> IO ModIface
-readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
+readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu = do
   let printer :: SDoc -> IO ()
       printer = case traceBinIFaceReading of
                 TraceBinIFaceReading -> \sd -> printSDoc sd defaultDumpStyle
@@ -133,13 +135,13 @@ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
 
         -- Initialise the user-data field of bh
   (bh, _) <- fixIO $ \(~(_, symtab)) -> do
-    ud <- newReadState (getSymtabName symtab) (getDictFastString dict)
+    ud <- newReadState (getSymtabName ncu dict symtab) (getDictFastString dict)
     bh <- return $ setUserData bh ud
 
     symtab_p <- Binary.get bh     -- Get the symtab ptr
     data_p <- tellBin bh          -- Remember where we are now
     seekBin bh symtab_p
-    symtab <- getSymbolTable bh update_nc
+    symtab <- getSymbolTable bh ncu
     seekBin bh data_p             -- Back to where we were before
     return (bh, symtab)
 
@@ -185,7 +187,7 @@ writeBinIface dflags hi_path mod_iface = do
   let bin_dict = BinDictionary {
                       bin_dict_next = dict_next_ref,
                       bin_dict_map  = dict_map_ref }
-  ud <- newWriteState (putName bin_symtab) (putFastString bin_dict)
+  ud <- newWriteState (putName bin_dict bin_symtab) (putFastString bin_dict)
 
 	-- Put the main thing, 
   bh <- return $ setUserData bh ud
@@ -243,12 +245,12 @@ putSymbolTable bh next_off symtab = do
   let names = elems (array (0,next_off-1) (eltsUFM symtab))
   mapM_ (\n -> serialiseName bh n symtab) names
 
-getSymbolTable :: BinHandle -> NameCacheUpdater (Array Int Name)
+getSymbolTable :: BinHandle -> NameCacheUpdater
                -> IO SymbolTable
-getSymbolTable bh update_namecache = do
+getSymbolTable bh ncu = do
   sz <- get bh
   od_names <- sequence (replicate sz (get bh))
-  update_namecache $ \namecache ->
+  updateNameCache ncu $ \namecache ->
     let
         arr = listArray (0,sz-1) names
         (namecache', names) =    
@@ -289,19 +291,20 @@ serialiseName bh name _ = do
 --
 -- An occurrence of a name in an interface file is serialized as a single 32-bit word.
 -- The format of this word is:
---   1. A 2-bit tag
---   2. A 30-bit payload
+--  00xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+--   A normal name. x is an index into the symbol table
+--  01xxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyy
+--   A known-key name. x is the Unique's Char, y is the int part
+--  10xxyyzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+--   A tuple name:
+--    x is the tuple sort (00b ==> boxed, 01b ==> unboxed, 10b ==> constraint)
+--    y is the thing (00b ==> tycon, 01b ==> datacon, 10b ==> datacon worker)
+--    z is the arity
+--  11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+--   An implicit parameter TyCon name. x is an index into the FastString *dictionary*
 --
--- The tag determines how the payload is interpreted. The available tags are:
---  00b ==> a normal name. The payload is an index into the symbol table
---  01b ==> a known-key name. The payload is the actual Unique
---  10b ==> a tuple. The payload is:
---    1. A 2-bit tuple sort (00b ==> boxed, 01b ==> unboxed, 10b ==> constraint)
---    2. A 2-bit thing tag  (00b ==> tycon, 01b ==> datacon, 10b ==> datacon worker)
---    3. A 26-bit arity
---
--- Note that we have to have special representation for tuples because they form
--- an "infinite" family and hence are not recorded explicitly in wiredInTyThings or
+-- Note that we have to have special representation for tuples and IP TyCons because they
+-- form an "infinite" family and hence are not recorded explicitly in wiredInTyThings or
 -- basicKnownKeyNames.
 
 knownKeyNamesMap :: UniqFM Name
@@ -312,18 +315,22 @@ knownKeyNamesMap = listToUFM_Directly [(nameUnique n, n) | n <- knownKeyNames]
                     ++ basicKnownKeyNames
 
 
-putName :: BinSymbolTable -> BinHandle -> Name -> IO ()
-putName BinSymbolTable{ 
-            bin_symtab_map = symtab_map_ref,
-            bin_symtab_next = symtab_next }    bh name
+putName :: BinDictionary -> BinSymbolTable -> BinHandle -> Name -> IO ()
+putName dict BinSymbolTable{ 
+               bin_symtab_map = symtab_map_ref,
+               bin_symtab_next = symtab_next }    bh name
   | name `elemUFM` knownKeyNamesMap
-  , let u = getKey (nameUnique name)
-  = -- ASSERT(u < 2^30)
-    put_ bh (0x40000000 .|. (fromIntegral u :: Word32))
+  , let (c, u) = unpkUnique (nameUnique name) -- INVARIANT: (ord c) fits in 8 bits
+  = -- ASSERT(u < 2^(22 :: Int))
+    put_ bh (0x40000000 .|. (fromIntegral (ord c) `shiftL` 22) .|. (fromIntegral u :: Word32))
   | otherwise
   = case wiredInNameTyThing_maybe name of
      Just (ATyCon tc)
-       | isTupleTyCon tc -> putTupleName_ bh tc 0
+       | isTupleTyCon tc             -> putTupleName_ bh tc 0
+       | Just ip <- tyConIP_maybe tc -> do
+         off <- allocateFastString dict (ipFastString ip)
+         -- MASSERT(off < 2^(30 :: Int))
+         put_ bh (0xC0000000 .|. off)
      Just (ADataCon dc)
        | let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 1
      Just (AnId x)
@@ -334,7 +341,7 @@ putName BinSymbolTable{
          Just (off,_) -> put_ bh (fromIntegral off :: Word32)
          Nothing -> do
             off <- readFastMutInt symtab_next
-            -- MASSERT(off < 2^30)
+            -- MASSERT(off < 2^(30 :: Int))
             writeFastMutInt symtab_next (off+1)
             writeIORef symtab_map_ref
                 $! addToUFM symtab_map name (off,name)
@@ -342,7 +349,7 @@ putName BinSymbolTable{
 
 putTupleName_ :: BinHandle -> TyCon -> Word32 -> IO ()
 putTupleName_ bh tc thing_tag
-  = -- ASSERT(arity < 2^26)
+  = -- ASSERT(arity < 2^(30 :: Int))
     put_ bh (0x80000000 .|. (sort_tag `shiftL` 28) .|. (thing_tag `shiftL` 26) .|. arity)
   where
     arity = fromIntegral (tupleTyConArity tc)
@@ -351,15 +358,19 @@ putTupleName_ bh tc thing_tag
         UnboxedTuple    -> 1
         ConstraintTuple -> 2
 
-getSymtabName :: SymbolTable -> BinHandle -> IO Name
-getSymtabName symtab bh = do
+getSymtabName :: NameCacheUpdater
+              -> Dictionary -> SymbolTable
+              -> BinHandle -> IO Name
+getSymtabName ncu dict symtab bh = do
     i <- get bh
-    return $! case i .&. 0xC0000000 of
-        0x00000000 -> symtab ! fromIntegral (i ::  Word32)
-        0x40000000 -> case lookupUFM_Directly knownKeyNamesMap (mkUniqueGrimily (fromIntegral i .&. 0x3FFFFFFF)) of
+    case i .&. 0xC0000000 of
+        0x00000000 -> return $! symtab ! fromIntegral (i ::  Word32)
+        0x40000000 -> return $! case lookupUFM_Directly knownKeyNamesMap (mkUnique tag ix) of
                         Nothing -> pprPanic "getSymtabName:unknown known-key unique" (ppr i)
                         Just n  -> n
-        0x80000000 -> case thing_tag of
+          where tag = chr (fromIntegral ((i .&. 0x3FC00000) `shiftR` 22))
+                ix = fromIntegral i .&. 0x003FFFFF
+        0x80000000 -> return $! case thing_tag of
                         0 -> tyConName (tupleTyCon sort arity)
                         1 -> dataConName dc
                         2 -> idName (dataConWorkId dc)
@@ -373,6 +384,7 @@ getSymtabName symtab bh = do
                      _ -> pprPanic "getSymtabName:unknown tuple sort" (ppr i)
             thing_tag = (i .&. 0x0CFFFFFF) `shiftR` 26
             arity = fromIntegral (i .&. 0x03FFFFFF )
+        0xC0000000 -> liftM ipTyConName $ updateNameCache ncu $ flip allocateIPName (dict ! fromIntegral (i .&. 0x3FFFFFFF))
         _          -> pprPanic "getSymtabName:unknown name tag" (ppr i)
 
 data BinSymbolTable = BinSymbolTable {
@@ -383,18 +395,20 @@ data BinSymbolTable = BinSymbolTable {
 
 
 putFastString :: BinDictionary -> BinHandle -> FastString -> IO ()
-putFastString BinDictionary { bin_dict_next = j_r,
-                              bin_dict_map  = out_r}  bh f
-  = do
+putFastString dict bh fs = allocateFastString dict fs >>= put_ bh
+
+allocateFastString :: BinDictionary -> FastString -> IO Word32
+allocateFastString BinDictionary { bin_dict_next = j_r,
+                                   bin_dict_map  = out_r} f = do
     out <- readIORef out_r
     let uniq = getUnique f
     case lookupUFM out uniq of
-        Just (j, _)  -> put_ bh (fromIntegral j :: Word32)
+        Just (j, _)  -> return (fromIntegral j :: Word32)
         Nothing -> do
            j <- readFastMutInt j_r
-           put_ bh (fromIntegral j :: Word32)
            writeFastMutInt j_r (j + 1)
            writeIORef out_r $! addToUFM out uniq (j, f)
+           return (fromIntegral j :: Word32)
 
 getDictFastString :: Dictionary -> BinHandle -> IO FastString
 getDictFastString dict bh = do
@@ -1005,15 +1019,13 @@ instance Binary IfaceType where
 
 instance Binary IfaceTyCon where
    put_ bh (IfaceTc ext)  = do { putByte bh 1; put_ bh ext }
-   put_ bh (IfaceIPTc n)  = do { putByte bh 2; put_ bh n }
-   put_ bh (IfaceAnyTc k) = do { putByte bh 3; put_ bh k }
+   put_ bh (IfaceAnyTc k) = do { putByte bh 2; put_ bh k }
 
    get bh = do
 	h <- getByte bh
 	case h of
 	  1 -> do { ext <- get bh; return (IfaceTc ext) }
-	  2 -> do { n <- get bh; return (IfaceIPTc n) }
-          _ -> do { k <- get bh; return (IfaceAnyTc k) }
+	  _ -> do { k <- get bh; return (IfaceAnyTc k) }
 
 instance Binary IfaceCoCon where
    put_ bh (IfaceCoAx n)       = do { putByte bh 0; put_ bh n }

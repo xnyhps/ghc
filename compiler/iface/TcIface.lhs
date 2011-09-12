@@ -1232,8 +1232,6 @@ tcIfaceGlobal name
 -- emasculated form (e.g. lacking data constructors).
 
 tcIfaceTyCon :: IfaceTyCon -> IfL TyCon
-tcIfaceTyCon (IfaceIPTc n)      = do { n' <- newIPName n
-                                     ; tcWiredInTyCon (ipTyCon n') }
 tcIfaceTyCon (IfaceAnyTc kind)  = do { tc_kind <- tcIfaceType kind
                                      ; tcWiredInTyCon (anyTyConOfKind tc_kind) }
 tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name 

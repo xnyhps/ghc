@@ -80,12 +80,12 @@ data IfaceType	   -- A kind of universal type, used for types, kinds, and coerci
 type IfacePredType = IfaceType
 type IfaceContext = [IfacePredType]
 
-data IfaceTyCon 	-- Encodes type consructors, kind constructors
-     			-- coercion constructors, the lot
-  = IfaceTc IfExtName	-- The common case
-  | IfaceIPTc IfIPName       -- Used for implicit parameter TyCons
-  | IfaceAnyTc IfaceKind     -- Used for AnyTyCon (see Note [Any Types] in TysPrim)
-    	       		     -- other than 'Any :: *' itself
+data IfaceTyCon 	 -- Encodes type consructors, kind constructors
+     			 -- coercion constructors, the lot
+  = IfaceTc IfExtName	 -- The common case
+  | IfaceAnyTc IfaceKind -- Used for AnyTyCon (see Note [Any Types] in TysPrim)
+    	       		 -- other than 'Any :: *' itself
+                         -- XXX: remove this case after Any becomes kind-polymorphic
 
   -- Coercion constructors
 data IfaceCoCon
@@ -97,10 +97,8 @@ data IfaceCoCon
 
 ifaceTyConName :: IfaceTyCon -> Name
 ifaceTyConName (IfaceTc ext)           = ext
-ifaceTyConName (IfaceIPTc n)           = pprPanic "ifaceTyConName:IPTc" (ppr n)
 ifaceTyConName (IfaceAnyTc k)          = pprPanic "ifaceTyConName:AnyTc" (ppr k)
 	       		    	       	 -- Note [The Name of an IfaceAnyTc]
-                                         -- The same caveat applies to IfaceIPTc
 \end{code}
 
 Note [The Name of an IfaceAnyTc]
@@ -258,10 +256,13 @@ ppr_tc_app _         (IfaceTc n) tys
   , Just sort <- tyConTuple_maybe tc
   , tyConArity tc == length tys 
   = tupleParens sort (sep (punctuate comma (map pprIfaceType tys)))
-ppr_tc_app _         (IfaceIPTc n) [ty] = parens (ppr (IPName n) <> dcolon <> pprIfaceType ty)
-ppr_tc_app ctxt_prec tc tys 
+  | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
+  , Just ip <- tyConIP_maybe tc
+  , [ty] <- tys
+  = parens (ppr ip <> dcolon <> pprIfaceType ty)
+ppr_tc_app ctxt_prec tc tys
   = maybeParen ctxt_prec tYCON_PREC 
-	       (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
+               (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
 
 ppr_tc :: IfaceTyCon -> SDoc
 -- Wrap infix type constructors in parens
@@ -270,9 +271,8 @@ ppr_tc tc		   = ppr tc
 
 -------------------
 instance Outputable IfaceTyCon where
-  ppr (IfaceIPTc n)  = ppr (IPName n)
   ppr (IfaceAnyTc k) = ptext (sLit "Any") <> pprParendIfaceType k
-      		       	     -- We can't easily get the Name of an IfaceAnyTc/IfaceIPTc
+      		       	     -- We can't easily get the Name of an IfaceAnyTc
 			     -- (see Note [The Name of an IfaceAnyTc])
 			     -- so we fake it.  It's only for debug printing!
   ppr (IfaceTc ext)  = ppr ext
@@ -344,7 +344,6 @@ toIfaceCoVar = occNameFS . getOccName
 toIfaceTyCon :: TyCon -> IfaceTyCon
 toIfaceTyCon tc 
   | isAnyTyCon tc              = IfaceAnyTc (toIfaceKind (tyConKind tc))
-  | Just n <- tyConIP_maybe tc = IfaceIPTc (ipFastString n)
   | otherwise	               = IfaceTc (tyConName tc)
 
 toIfaceTyCon_name :: Name -> IfaceTyCon
@@ -357,7 +356,6 @@ toIfaceTyCon_name nm
 toIfaceWiredInTyCon :: TyCon -> Name -> IfaceTyCon
 toIfaceWiredInTyCon tc nm
   | isAnyTyCon tc                   = IfaceAnyTc (toIfaceKind (tyConKind tc))
-  | Just n <- tyConIP_maybe tc      = IfaceIPTc (ipFastString n)
   | otherwise		            = IfaceTc nm
 
 ----------------
