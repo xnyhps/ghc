@@ -1114,8 +1114,7 @@ bkind   :: { LHsKind RdrName }
 akind	:: { LHsKind RdrName }
 	: '*'			{ L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
 	| '(' kind ')'		{ LL $ HsParTy $2 }
-        | SIMPLEQUOTE pkind     { LL $ unLoc $2 }
-        |             pkind     { $1 }
+        | pkind                 { $1 }
 
 pkind   :: { LHsKind RdrName }  -- promoted type, see Note [Promotion]
         : qtycon                          { L1 $ HsTyVar $ unLoc $1 }
