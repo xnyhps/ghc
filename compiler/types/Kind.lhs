@@ -183,12 +183,15 @@ isKind k = isSuperKind (typeKind k)
 
 isSubKind :: Kind -> Kind -> Bool
 -- ^ @k1 \`isSubKind\` k2@ checks that @k1@ <: @k2@
-isSubKind (TyConApp kc1 []) (TyConApp kc2 []) = kc1 `isSubKindCon` kc2
--- IA0: isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) = panic "IA0: isSubKind"  -- IA0_WHEN: *^n -> *
-isSubKind (FunTy a1 r1) (FunTy a2 r2)	      = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
-isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s) =
-  not (isSubOpenTypeKindCon kc1) && kc1 == kc2
-  && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
+isSubKind (FunTy a1 r1) (FunTy a2 r2) = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
+isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
+  | isSuperKindTyCon kc1 =  -- handles BOX
+    isSuperKindTyCon kc2 && null k1s && null k2s
+  | isSuperKind (tyConKind kc1) =  -- handles not promoted kinds (*, #, (#), etc.)
+    ASSERT( isSuperKind (tyConKind kc2) && null k1s && null k2s )
+    kc1 `isSubKindCon` kc2
+  | otherwise =  -- handles promoted kinds (List *, Nat, etc.)
+    kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
 isSubKind (TyVarTy kv1) (TyVarTy kv2) = kv1 == kv2
 isSubKind (ForAllTy {}) (ForAllTy {}) = panic "IA0: isSubKind on ForAllTy"
 isSubKind _ _ = False

@@ -1,9 +1,5 @@
 ## TODO FIRST
 
-* kind substitution in types, substTyVarBndr
-  look at CoreSubst, substIdBndr
-  no_kind_change : verify that kind is closed
-
 * UserKiVar (in Parser mkHsForAll or renamer)
   look at kind annotation to know if a UserTyvar is a kind variable
   (UserKiVar) or a type variable (UserTyVar)
