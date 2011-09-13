@@ -27,7 +27,7 @@ module Kind (
 
         -- ** Predicates on Kinds
         isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
-        isUbxTupleKind, isArgTypeKind, isConstraintKind, isKind, isTySuperKind,
+        isUbxTupleKind, isArgTypeKind, isConstraintKind, isKind,
         isSuperKind, noHashInKind,
         isLiftedTypeKindCon, isConstraintKindCon,
 
@@ -59,10 +59,6 @@ import Outputable
 %************************************************************************
 
 \begin{code}
-isTySuperKind :: SuperKind -> Bool
-isTySuperKind (TyConApp kc []) = kc `hasKey` tySuperKindTyConKey
-isTySuperKind _                = False
-
 -------------------
 -- Lastly we need a few functions on Kinds
 

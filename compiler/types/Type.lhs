@@ -139,7 +139,7 @@ module Type (
 -- We import the representation and primitive functions from TypeRep.
 -- Many things are reexported, but not the representation!
 
-import Kind    ( kindAppResult, isTySuperKind, isSubOpenTypeKind )
+import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind )
 import TypeRep
 
 -- friends:
@@ -776,7 +776,9 @@ noParenPred :: PredType -> Bool
 noParenPred p = isClassPred p || isEqPred p
 
 isPredTy :: Type -> Bool
-isPredTy ty = typeKind ty `eqKind` constraintKind
+isPredTy ty
+  | isSuperKind ty = False
+  | otherwise = typeKind ty `eqKind` constraintKind
 
 isClassPred, isEqPred, isIPPred :: PredType -> Bool
 isClassPred ty = case tyConAppTyCon_maybe ty of
@@ -1487,7 +1489,7 @@ typeKind (FunTy _arg res)
     -- The only things that can be after a function arrow are
     --   (a) types (of kind openTypeKind or its sub-kinds)
     --   (b) kinds (of super-kind TY) (e.g. * -> (* -> *))
-    | isTySuperKind k         = k
+    | isSuperKind k         = k
     | otherwise               = ASSERT( isSubOpenTypeKind k) liftedTypeKind 
     where
       k = typeKind res
