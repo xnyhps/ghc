@@ -536,7 +536,7 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
         ATyVar _ ty             -> wrap_mono (typeKind ty)
-        AThing kind             -> wrap_mono kind
+        AThing kind             -> wrap_poly kind
         AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
         AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
         _                       -> wrongThingErr "type" thing name

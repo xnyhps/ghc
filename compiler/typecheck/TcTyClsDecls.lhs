@@ -91,19 +91,19 @@ tcTyAndClassDecls boot_details decls_s
 tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
 tcTyClGroup boot_details tyclds
-  = do { (generalized_env, _) <- kcTyClGroup Nothing tyclds
- 	    -- generalized_env gives the final, possibly-polymorphic kind
-             -- of each declaration in the group
+  = do { generalized_env <- kcTyClGroup tyclds
+ 	    -- Kind check this group and returns the final (possibly-polymorphic) kind
+            -- generalized_env maps TyCons to AThings
        ; tyclss <- fixM $ \ rec_tyclss -> do
+           { let rec_flags = calcRecFlags boot_details rec_tyclss
                  -- Populate environment with tieknoted ATyCon for TyCons
                  -- and ANothing for DataCons (to avoid recursive promotion)
                  -- see Note [ANothing] in typecheck/TcRnTypes.lhs
-             tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $ do
-             tcExtendNothingEnv (dc_names tyclds) $ do
+           ; tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
+             tcExtendNothingEnv (dc_names tyclds) $
                  -- See Note [Kind checking for type and class decls]
-           { (_, kc_decls) <- kcTyClGroup (Just generalized_env) tyclds
-           ; let rec_flags = calcRecFlags boot_details rec_tyclss
-           ; concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls }
+                 -- Kind and type check declarations for this group
+             concatMapM (tcTyClDecl rec_flags generalized_env) tyclds }
        ; traceTc "tcTyGroup" (ppr tyclss)
            -- Add the implicit things;
            -- we want them in the environment because
@@ -210,8 +210,9 @@ initial kind environment.  (This is handled by `allDecls').
 
 
 \begin{code}
-kcTyClGroup :: Maybe TcLclEnv -> TyClGroup Name -> TcM (TcLclEnv, TyClGroup Name)
-kcTyClGroup Nothing decls
+kcTyClGroup :: TyClGroup Name -> TcM TcLclEnv
+-- Kind check this group, kind generalize, and return the resulting local env
+kcTyClGroup decls
   = do	{       -- Omit instances of type families; they are handled together
 		-- with the *heads* of class instances
         ; let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
@@ -224,34 +225,24 @@ kcTyClGroup Nothing decls
 	; alg_kinds <- mapM getInitialKind alg_at_decls
 	; tcExtendKindEnv alg_kinds $  do
 
-        { (kc_syn_decls, tcl_env) <- kcSynDecls (calcSynCycles syn_decls)
+        { (_, tcl_env) <- kcSynDecls (calcSynCycles syn_decls)
 
           -- Now check for cyclic classes
         ; checkClassCycleErrs syn_decls alg_decls
 
         ; setLclEnv tcl_env $  do
-        { kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
+        { _ <- mapM (wrapLocM kcTyClDecl) alg_decls
 
 	     -- Kind checking done for this group
 	     -- See Note [Kind checking for type and class decls]
              -- Now we have to kind generalize the flexis
-        ; generalized_kinds <- flip mapM (map snd alg_kinds) $ \zonked_kind -> do
-          { (kvs, body) <- kindGeneralizeKind zonked_kind
+        ; let names = map fst alg_kinds
+              kc_kinds = map snd alg_kinds
+        ; generalized_kinds <- flip mapM kc_kinds $ \kc_kind -> do
+          { (kvs, body) <- kindGeneralizeKind kc_kind
           ; return $ mkForAllTys kvs body }
         ; traceTc "IA0_DEBUG generalized" (ppr generalized_kinds)
-        ; generalized_env <- tcExtendKindEnv (zip (map fst alg_kinds) generalized_kinds) getLclEnv
-
-	; return (generalized_env, kc_syn_decls ++ kc_alg_decls) } } }
-
-kcTyClGroup (Just generalized_env) decls = do
-  -- Omit instances of type families; they are handled together
-  -- with the *heads* of class instances
-  let (syn_decls, alg_decls) = partition (isSynDecl . unLoc) decls
-  -- Kind checking; see Note [Kind checking for type and class decls]
-  setLclEnv generalized_env $ do
-    (kc_syn_decls, _) <- kcSynDecls (calcSynCycles syn_decls)
-    kc_alg_decls <- mapM (wrapLocM kcTyClDecl) alg_decls
-    return (generalized_env, kc_syn_decls ++ kc_alg_decls)
+        ; tcExtendKindEnv (zip names generalized_kinds) getLclEnv } } }
 
 flattenATs :: [LTyClDecl Name] -> [LTyClDecl Name]
 flattenATs decls = concatMap flatten decls
@@ -286,28 +277,33 @@ kcSynDecls :: [SCC (LTyClDecl Name)]
 kcSynDecls []
   = do { tcl_env <- getLclEnv; return ([], tcl_env) }
 kcSynDecls (group : groups)
-  = do	{ (decl,  nk)      <- kcSynDecl group
+  = do	{ (decl,  nk)      <- kcSynDecl1 group
 	; (decls, tcl_env) <- tcExtendKindEnv [nk] (kcSynDecls groups)
 	; return (decl:decls, tcl_env) }
 			
 ----------------
-kcSynDecl :: SCC (LTyClDecl Name) 
+kcSynDecl1 :: SCC (LTyClDecl Name) 
 	   -> TcM (LTyClDecl Name, 	-- Kind-annotated decls
 		   (Name,TcKind))	-- Kind bindings
-kcSynDecl (AcyclicSCC (L loc decl))
-  = tcAddDeclCtxt decl	$
-    kcHsTyVars (tcdTyVars decl) (\ k_tvs ->
-    do { traceTc "kcd1" (ppr (unLoc (tcdLName decl)) <+> brackets (ppr (tcdTyVars decl)) 
+kcSynDecl1 (AcyclicSCC (L loc decl))
+  = do { (kc_syn, nk) <- kcSynDecl decl
+       ; return (L loc kc_syn, nk) }
+
+kcSynDecl1 (CyclicSCC decls)
+  = do { recSynErr decls; failM }	-- Fail here to avoid error cascade
+					-- of out-of-scope tycons
+
+kcSynDecl :: TyClDecl Name -> TcM (TyClDecl Name, (Name, TcKind))
+kcSynDecl decl
+  = tcAddDeclCtxt decl $
+    kcHsTyVars (tcdTyVars decl) $ \ k_tvs ->
+    do { traceTc "kcd1" (ppr (unLoc (tcdLName decl)) <+> brackets (ppr (tcdTyVars decl))
 			<+> brackets (ppr k_tvs))
        ; (k_rhs, rhs_kind) <- kcLHsType (tcdSynRhs decl)
        ; traceTc "kcd2" (ppr (unLoc (tcdLName decl)))
        ; let tc_kind = foldr (mkArrowKind . hsTyVarKind . unLoc) rhs_kind k_tvs
-       ; return (L loc (decl { tcdTyVars = k_tvs, tcdSynRhs = k_rhs }),
-		 (unLoc (tcdLName decl), tc_kind)) })
-
-kcSynDecl (CyclicSCC decls)
-  = do { recSynErr decls; failM }	-- Fail here to avoid error cascade
-					-- of out-of-scope tycons
+       ; return ( decl {tcdTyVars = k_tvs, tcdSynRhs = k_rhs}
+                , (unLoc (tcdLName decl), tc_kind) ) }
 
 ------------------------------------------------------------------------
 kcTyClDecl :: TyClDecl Name -> TcM (TyClDecl Name)
@@ -319,11 +315,11 @@ kcTyClDecl decl@(TyData {})
       kcDataDecl decl
 
 kcTyClDecl decl@(TyFamily {})
-  = kcFamilyDecl [] decl      -- the empty list signals a toplevel decl      
+  = kcFamilyDecl [] decl      -- the empty list signals a toplevel decl
 
 kcTyClDecl decl@(ClassDecl {tcdCtxt = ctxt, tcdSigs = sigs, tcdATs = ats})
   = kcTyClDeclBody decl	$ \ tvs' ->
-    do	{ ctxt' <- kcHsContext ctxt	
+    do	{ ctxt' <- kcHsContext ctxt
 	; ats'  <- mapM (wrapLocM (kcFamilyDecl tvs')) ats
 	; sigs' <- mapM (wrapLocM kc_sig) sigs
 	; return (decl {tcdTyVars = tvs', tcdCtxt = ctxt', tcdSigs = sigs',
@@ -453,7 +449,6 @@ kvOfName name env = do
     _ -> panic "kvOfName"
 
 tcTyClDecl :: (Name -> RecFlag) -> TcLclEnv -> LTyClDecl Name -> TcM [TyThing]
--- generalized_env is used to learn about kind polymorphism
 tcTyClDecl calc_isrec generalized_env (L loc decl)
   = setSrcSpan loc $ tcAddDeclCtxt decl $
     traceTc "tcTyAndCl-x" (ppr decl) >>
@@ -461,51 +456,57 @@ tcTyClDecl calc_isrec generalized_env (L loc decl)
 
   -- "type family" declarations
 tcTyClDecl1 :: TyConParent -> (Name -> RecFlag) -> TcLclEnv -> TyClDecl Name -> TcM [TyThing]
-tcTyClDecl1 parent _calc_isrec _
-  (TyFamily {tcdFlavour = TypeFamily, 
-	     tcdLName = L _ tc_name, tcdTyVars = tvs,
-             tcdTcKind = kind}) -- NB: kind at latest added during kind checking
-  = tcTyVarBndrs tvs  $ \ tvs' -> do 
-  { traceTc "type family:" (ppr tc_name) 
+tcTyClDecl1 parent _calc_isrec generalized_env
+            decl@(TyFamily {tcdFlavour = TypeFamily})
+  = do
+  { TyFamily {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdTcKind = kind}
+      <- setLclEnv generalized_env $ kcFamilyDecl [] decl
+  ; tcTyVarBndrs tvs  $ \ tvs' -> do  -- IA0_TODO: kind generalization
+  { traceTc "type family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; tycon <- buildSynTyCon tc_name tvs' SynFamilyTyCon kind parent Nothing
-  ; return [ATyCon tycon]
-  }
+  ; return [ATyCon tycon] } }
 
   -- "data family" declaration
-tcTyClDecl1 parent _calc_isrec _
-  (TyFamily {tcdFlavour = DataFamily, 
-	     tcdLName = L _ tc_name, tcdTyVars = tvs, tcdTcKind = mb_kind})
-  = tcTyVarBndrs tvs  $ \ tvs' -> do 
-  { traceTc "data family:" (ppr tc_name) 
+tcTyClDecl1 parent _calc_isrec generalized_env
+            decl@(TyFamily {tcdFlavour = DataFamily})
+  = do
+  { TyFamily {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdTcKind = mb_kind}
+      <- setLclEnv generalized_env $ kcFamilyDecl [] decl
+  ; tcTyVarBndrs tvs  $ \ tvs' -> do  -- IA0_TODO: kind generalization
+  { traceTc "data family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; extra_tvs <- tcDataKindSig (Just mb_kind)
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
-  ; tycon <- buildAlgTyCon tc_name [] final_tvs [] 
+  ; tycon <- buildAlgTyCon tc_name [] final_tvs []
                             --     ^- IA0_TODO: check this
-               DataFamilyTyCon Recursive True 
+               DataFamilyTyCon Recursive True
                parent Nothing
-  ; return [ATyCon tycon]
-  }
+  ; return [ATyCon tycon] } }
 
   -- "type" synonym declaration
-tcTyClDecl1 _parent _calc_isrec _
-  (TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty})
-  = ASSERT( isNoParent _parent )
-    tcTyVarBndrs tvs		$ \ tvs' -> do 
-    { traceTc "tcd1" (ppr tc_name) 
+tcTyClDecl1 _parent _calc_isrec generalized_env
+            decl@(TySynonym {})
+  = ASSERT( isNoParent _parent ) do
+    { (TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty}, _)
+        <- setLclEnv generalized_env $ kcSynDecl decl
+    ; tcTyVarBndrs tvs $ \ tvs' -> do  -- IA0_TODO: kind generalization
+    { traceTc "tcd1" (ppr tc_name)
     ; rhs_ty' <- tcHsKindedType rhs_ty
-    ; tycon <- buildSynTyCon tc_name tvs' (SynonymTyCon rhs_ty') 
+    ; tycon <- buildSynTyCon tc_name tvs' (SynonymTyCon rhs_ty')
       	       		     (typeKind rhs_ty') NoParentTyCon  Nothing
-    ; return [ATyCon tycon] }
+    ; return [ATyCon tycon] } }
 
   -- "newtype" and "data"
   -- NB: not used for newtype/data instances (whether associated or not)
-tcTyClDecl1 _parent calc_isrec generalized_env
-  (TyData {tcdND = new_or_data, tcdCtxt = ctxt, tcdTyVars = tvs,
-	   tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons})
-  = ASSERT( isNoParent _parent )
-    tcTyVarBndrs tvs $ \ tvs' -> do
+tcTyClDecl1 _parent calc_isrec generalized_env decl@(TyData {})
+  = ASSERT( isNoParent _parent ) do
+  { TyData { tcdND = new_or_data, tcdCtxt = ctxt, tcdTyVars = tvs
+	   , tcdLName = L _ tc_name, tcdKindSig = mb_ksig, tcdCons = cons }
+      <- setLclEnv generalized_env $ kcTyClDecl decl  -- kind check the declaration
+  ; let is_rec   = calc_isrec tc_name
+        h98_syntax = consUseH98Syntax cons
+  ; tcTyVarBndrs tvs $ \ tvs' -> do
   { mb_ksig' <- scDsLHsMaybeKind mb_ksig
   ; extra_tvs <- tcDataKindSig mb_ksig'
   ; let final_tvs = tvs' ++ extra_tvs
@@ -536,17 +537,15 @@ tcTyClDecl1 _parent calc_isrec generalized_env
 	    (not h98_syntax) NoParentTyCon Nothing
 	})
   ; return [ATyCon tycon]
-  }
-  where
-    is_rec   = calc_isrec tc_name
-    h98_syntax = consUseH98Syntax cons
+  } }
 
-tcTyClDecl1 _parent calc_isrec generalized_env
-  (ClassDecl {tcdLName = L _ class_tycon_name, tcdTyVars = tvs,
-	      tcdCtxt = ctxt, tcdMeths = meths,
-	      tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs} )
-  = ASSERT( isNoParent _parent )
-    tcTyVarBndrs tvs		$ \ tvs' -> do 
+tcTyClDecl1 _parent calc_isrec generalized_env decl@(ClassDecl {})
+  = ASSERT( isNoParent _parent ) do
+  { ClassDecl { tcdLName = L _ class_tycon_name, tcdTyVars = tvs
+	      , tcdCtxt = ctxt, tcdMeths = meths
+	      , tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs }
+      <- setLclEnv generalized_env $ kcTyClDecl decl
+  ; tcTyVarBndrs tvs $ \ tvs' -> do  -- IA0_TODO: kind generalized_env
   { ctxt' <- tcHsKindedContext ctxt
   ; fds' <- mapM (addLocM tc_fundep) fundeps
   ; (sig_stuff, gen_dm_env) <- tcClassSigs class_tycon_name sigs meths
@@ -578,7 +577,7 @@ tcTyClDecl1 _parent calc_isrec generalized_env
   ; return (ATyCon (classTyCon clas) : gen_dm_ids ++ class_ats )
       -- NB: Order is important due to the call to `mkGlobalThings' when
       --     tying the the type and class declaration type checking knot.
-  }
+  } }
   where
     tc_fundep (tvs1, tvs2) = do { tvs1' <- mapM tcLookupTyVar tvs1 ;
 				; tvs2' <- mapM tcLookupTyVar tvs2 ;
@@ -607,7 +606,7 @@ We can get default defns only for type families, not data families
 	
 \begin{code}
 tcClassATs :: Class            -- The class
-           -> TcLclEnv         -- The generalized env
+           -> TcLclEnv         -- The generalized local env
            -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
            -> [LTyClDecl Name] -- Associated types. All FamTyCon
            -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
@@ -626,7 +625,9 @@ tcClassATs clas generalized_env clas_tvs ats at_defs
     at_defs_map = foldr (\at_def nenv -> extendNameEnv_C (++) nenv (tcdName (unLoc at_def)) [at_def]) 
                         emptyNameEnv at_defs
 
-    tc_at at = do { [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas) (const Recursive) generalized_env) at
+    tc_at at = do { [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas)
+                                                              (const Recursive)
+                                                              generalized_env) at
                   ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs)
                                 (lookupNameEnv at_defs_map (tyConName fam_tc) `orElse` []) 
                   ; return (fam_tc, atd) }
