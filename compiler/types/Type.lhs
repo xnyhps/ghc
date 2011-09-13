@@ -1402,6 +1402,8 @@ substTyVarBndr subst@(TvSubst in_scope tenv) old_var
     _no_capture = not (new_var `elemVarSet` tyVarsOfTypes (varEnvElts tenv))
     -- Assertion check that we are not capturing something in the substitution
 
+    old_ki = tyVarKind old_var
+    no_kind_change = isEmptyVarSet (tyVarsOfType old_ki) -- verify that kind is closed
     no_change = new_var == old_var
 	-- no_change means that the new_var is identical in
 	-- all respects to the old_var (same unique, same kind)
@@ -1413,7 +1415,8 @@ substTyVarBndr subst@(TvSubst in_scope tenv) old_var
 	--	(\x.e) with id_subst = [x |-> e']
 	-- Here we must simply zap the substitution for x
 
-    new_var = uniqAway in_scope old_var
+    new_var | no_kind_change = uniqAway in_scope old_var
+            | otherwise = uniqAway in_scope $ setTyVarKind old_var (substTy subst old_ki)
 	-- The uniqAway part makes sure the new variable is not already in scope
 
 cloneTyVarBndr :: TvSubst -> TyVar -> Unique -> (TvSubst, TyVar)
