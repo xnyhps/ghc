@@ -3,7 +3,6 @@
 * tcTyClGroup and stuff
   - setLclEnv generalized_env tyCl...Decl
   - type check (kind check and desugar) using generalized_env at once
-  - checkValidTyCl done for each group
 
 * kind substitution in types, substTyVarBndr
   look at CoreSubst, substIdBndr

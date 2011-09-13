@@ -79,52 +79,48 @@ tcTyAndClassDecls boot_details decls_s
   { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
                    -- Remove family instance decls altogether
                    -- They are dealt with by TcInstDcls
-  ; env <- go tyclds_s
-  ; setGblEnv env $ do
-      -- Perform the validity check
-      -- We can do this now because we are done with the recursive knot
-  { traceTc "ready for validity check" empty
-  ; mapM_ (addLocM checkValidTyCl) (concat tyclds_s)
-  ; traceTc "done" empty
-      -- Add the implicit things;
-      -- we want them in the environment because
-      -- they may be mentioned in interface files
-      -- NB: All associated types and their implicit things will be added a
-      --     second time here.  This doesn't matter as the definitions are
-      --     the same.
-  ; return env } }
+  ; fold_env tyclds_s }  -- type check each group in dependency order folding the global env
   where
-    go :: [TyClGroup Name] -> TcM TcGblEnv
-    go [] = getGblEnv
-    go (tyclds:tyclds_s)
+    fold_env :: [TyClGroup Name] -> TcM TcGblEnv
+    fold_env [] = getGblEnv
+    fold_env (tyclds:tyclds_s)
       = do { env <- tcTyClGroup boot_details tyclds
-           ; setGblEnv env $ go tyclds_s }
+           ; setGblEnv env $ fold_env tyclds_s }
+             -- remaining groups are typecheck in the extended global env
 
 tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
 tcTyClGroup boot_details tyclds
- = do { (generalized_env, _) <- kcTyClGroup Nothing tyclds
-	    -- generalized_env gives the final, possibly-polymorphic kind
-            -- of each type and class in the group
-      ; tyclss <- fixM $ \ rec_tyclss -> do
-                -- Populate environment with tieknoted ATyCon for TyCons
-                -- and ANothing for DataCons (to avoid recursive promotion)
-                -- see Note [ANothing] in typecheck/TcRnTypes.lhs
-          { tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-              tcExtendNothingEnv (dc_names tyclds) $ do
-                -- Kind-check in dependency order
-                -- See Note [Kind checking for type and class decls]
-                -- And now build the TyCons/Classes
-          { (_, kc_decls) <- kcTyClGroup (Just generalized_env) tyclds
-          ; let rec_flags = calcRecFlags boot_details rec_tyclss
-          ; concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls } }
-      ; traceTc "tcTyGroup" (ppr tyclss)
-      ; let implicit_things = concatMap implicitTyThings tyclss
-            dm_ids          = mkDefaultMethodIds tyclss
-      ; tcExtendGlobalEnv tyclss $
-          tcExtendGlobalEnv implicit_things $
-          tcExtendGlobalValEnv dm_ids $
-          getGblEnv }
+  = do { (generalized_env, _) <- kcTyClGroup Nothing tyclds
+ 	    -- generalized_env gives the final, possibly-polymorphic kind
+             -- of each declaration in the group
+       ; tyclss <- fixM $ \ rec_tyclss -> do
+                 -- Populate environment with tieknoted ATyCon for TyCons
+                 -- and ANothing for DataCons (to avoid recursive promotion)
+                 -- see Note [ANothing] in typecheck/TcRnTypes.lhs
+             tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $ do
+             tcExtendNothingEnv (dc_names tyclds) $ do
+                 -- See Note [Kind checking for type and class decls]
+           { (_, kc_decls) <- kcTyClGroup (Just generalized_env) tyclds
+           ; let rec_flags = calcRecFlags boot_details rec_tyclss
+           ; concatMapM (tcTyClDecl rec_flags generalized_env) kc_decls }
+       ; traceTc "tcTyGroup" (ppr tyclss)
+           -- Add the implicit things;
+           -- we want them in the environment because
+           -- they may be mentioned in interface files
+       ; let implicit_things = concatMap implicitTyThings tyclss
+             dm_ids          = mkDefaultMethodIds tyclss
+       ; env <- tcExtendGlobalEnv tyclss $
+                tcExtendGlobalEnv implicit_things $
+                tcExtendGlobalValEnv dm_ids $
+                getGblEnv
+       ; setGblEnv env $ do
+               -- Perform the validity check
+               -- We can do this now because we are done with the recursive knot
+           { traceTc "ready for validity check" empty
+           ; mapM_ (addLocM checkValidTyCl) tyclds
+           ; traceTc "done" empty }
+       ; return env }
   where
     dc_names :: TyClGroup Name -> [Name]
     dc_names decls =
