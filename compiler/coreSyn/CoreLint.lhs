@@ -418,10 +418,13 @@ lintValApp arg fun_ty arg_ty
 checkTyKind :: OutTyVar -> OutType -> LintM ()
 -- Both args have had substitution applied
 checkTyKind tyvar arg_ty
+  | isSuperKind tyvar_kind  -- kind forall
+  = lintKind arg_ty
 	-- Arg type might be boxed for a function with an uncommitted
 	-- tyvar; notably this is used so that we can give
 	-- 	error :: forall a:*. String -> a
 	-- and then apply it to both boxed and unboxed types.
+  | otherwise  -- type forall
   = do { arg_kind <- lintType arg_ty
        ; unless (arg_kind `isSubKind` tyvar_kind)
                 (addErrL (mkKindErrMsg tyvar arg_ty)) }

@@ -871,7 +871,10 @@ tcResultType (tmpl_tvs, res_tmpl) dc_tvs (ResTyGADT res_ty)
 		= case tcGetTyVar_maybe ty of
 		    Just tv | not (tv `elem` univs)
 			    -> (tv:univs,   eqs)
-		    _other  -> (tmpl:univs, (tmpl,ty):eqs)
+		    _other  -> (new_tmpl:univs, (new_tmpl,ty):eqs)
+                               where  -- see Note [Substitution in template variables kinds]
+                                 new_kind = substTy subst (tyVarKind tmpl)
+                                 new_tmpl = setTyVarKind tmpl new_kind
 		| otherwise = pprPanic "tcResultType" (ppr res_ty)
 	      ex_tvs = dc_tvs `minusList` univ_tvs
 
@@ -888,6 +891,44 @@ tcResultType (tmpl_tvs, res_tmpl) dc_tvs (ResTyGADT res_ty)
 	      where
 		 name = tyVarName tv
 		 (env', occ') = tidyOccName env (getOccName name) 
+
+{-
+Note [Substitution in template variables kinds]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+data List a = Nil | Cons a (List a)
+data SList s as where
+  SNil :: SList s Nil
+
+We call tcResultType with
+  tmpl_tvs = [(k :: BOX), (s :: k -> *), (as :: List k)]
+  res_tmpl = SList k s as)
+  res_ty = ResTyGADT (SList k1 (s1 :: k1 -> *) (Nil k1))
+
+We get subst:
+  k -> k1
+  s -> s1
+  as -> Nil k1
+
+Now we want to find out the universal variables and the equivalences
+between some of them and types (GADT).
+
+In this example, k and s are mapped to exactly variables which are not
+already present in the universal set, so we just add them without any
+coercion.
+
+But 'as' is mapped to 'Nil k1', so we add 'as' to the universal set,
+and add the equivalence with 'Nil k1' in 'eqs'.
+
+The problem is that with kind polymorphism, as's kind may now contain
+kind variables, and we have to apply the template substitution to it,
+which is why we create new_tmpl.
+
+The template substitution only maps kind variables to kind variables,
+since GADTs are not kind indexed.
+
+-}
+
 
 consUseH98Syntax :: [LConDecl a] -> Bool
 consUseH98Syntax (L _ (ConDecl { con_res = ResTyGADT _ }) : _) = False
