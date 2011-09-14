@@ -204,16 +204,22 @@ tcSuperSkolTyVars :: [TyVar] -> [TcTyVar]
 -- Make skolem constants, but do *not* give them new names, as above
 -- Moreover, make them "super skolems"; see comments with superSkolemTv
 tcSuperSkolTyVars tyvars
-  = [ mkTcTyVar (tyVarName tv) (tyVarKind tv) superSkolemTv
-    | tv <- tyvars ]
+  = kvs' ++ tvs'
+  where
+    (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+    kvs' = [ mkTcTyVar (tyVarName kv) (tyVarKind kv) superSkolemTv
+           | kv <- kvs ]
+    tvs' = [ mkTcTyVar (tyVarName tv) (substTy subst (tyVarKind tv)) superSkolemTv
+           | tv <- tvs ]
+    subst = zipTopTvSubst kvs (map mkTyVarTy kvs')
 
-tcInstSkolTyVar :: Bool -> TyVar -> TcM TcTyVar
+tcInstSkolTyVar :: Bool -> TvSubst -> TyVar -> TcM TcTyVar
 -- Instantiate the tyvar, using 
 --	* the occ-name and kind of the supplied tyvar, 
 --	* the unique from the monad,
 --	* the location either from the tyvar (skol_info = SigSkol)
 --                     or from the monad (otherwise)
-tcInstSkolTyVar overlappable tyvar
+tcInstSkolTyVar overlappable subst tyvar
   = do	{ uniq <- newUnique
         ; loc <-  getSrcSpanM
 	; let new_name = mkInternalName uniq occ loc
@@ -221,13 +227,21 @@ tcInstSkolTyVar overlappable tyvar
   where
     old_name = tyVarName tyvar
     occ      = nameOccName old_name
-    kind     = tyVarKind tyvar
+    kind     = substTy subst (tyVarKind tyvar)
 
 tcInstSkolTyVars :: [TyVar] -> TcM [TcTyVar]
-tcInstSkolTyVars tyvars = mapM (tcInstSkolTyVar False) tyvars
+tcInstSkolTyVars tyvars
+  = do { kvs' <- mapM (tcInstSkolTyVar False (mkTopTvSubst [])) kvs
+       ; tvs' <- mapM (tcInstSkolTyVar False (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
+       ; return (kvs' ++ tvs') }
+  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
 
 tcInstSuperSkolTyVars :: [TyVar] -> TcM [TcTyVar]
-tcInstSuperSkolTyVars tyvars = mapM (tcInstSkolTyVar True) tyvars
+tcInstSuperSkolTyVars tyvars
+  = do { kvs' <- mapM (tcInstSkolTyVar True (mkTopTvSubst [])) kvs
+       ; tvs' <- mapM (tcInstSkolTyVar True (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
+       ; return (kvs' ++ tvs') }
+  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
 
 tcInstSkolType :: TcType -> TcM ([TcTyVar], TcThetaType, TcType)
 -- Instantiate a type with fresh skolem constants
@@ -242,25 +256,20 @@ tcInstSigTyVars :: [TyVar] -> TcM [TcTyVar]
 -- should become
 --     [(?k1 :: BOX), (?k2 :: BOX), (?a :: ?k1 -> ?k2), (?b :: ?k1)]
 tcInstSigTyVars tyvars
-  = do { kvs' <- mapM tcInstSigTyVar kvs
-       ; tvs' <- mapM tcInstSigTyVar tvs
-       ; let ks_tvs = map updateKind tvs'  -- kind substitued tvs
-             updateKind tv = setTyVarKind tv (substTy subst (tyVarKind tv))
-             subst = zipTopTvSubst kvs (map mkTyVarTy kvs')
-       ; return (kvs' ++ ks_tvs) }
-  where
-    (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
-    -- This function is local because we apply a substitution on the
-    -- kinds of the type variables
-    tcInstSigTyVar :: TyVar -> TcM TcTyVar
-    tcInstSigTyVar tyvar
-      = do { uniq <- newMetaUnique
-           ; ref <- newMutVar Flexi
-           ; let name = setNameUnique (tyVarName tyvar) uniq
-                        -- Use the same OccName so that the tidy-er
-                        -- doesn't rename 'a' to 'a0' etc
-                 kind = tyVarKind tyvar
-           ; return (mkTcTyVar name kind (MetaTv SigTv ref)) }
+  = do { kvs' <- mapM (tcInstSigTyVar (mkTopTvSubst [])) kvs
+       ; tvs' <- mapM (tcInstSigTyVar (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
+       ; return (kvs' ++ tvs') }
+  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+
+tcInstSigTyVar :: TvSubst -> TyVar -> TcM TcTyVar
+tcInstSigTyVar subst tyvar
+  = do { uniq <- newMetaUnique
+       ; ref <- newMutVar Flexi
+       ; let name = setNameUnique (tyVarName tyvar) uniq
+                    -- Use the same OccName so that the tidy-er
+                    -- doesn't rename 'a' to 'a0' etc
+             kind = substTy subst (tyVarKind tyvar)
+       ; return (mkTcTyVar name kind (MetaTv SigTv ref)) }
 \end{code}
 
 
