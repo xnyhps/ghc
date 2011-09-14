@@ -59,7 +59,7 @@ module Var (
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
 
 	-- ** Modifying 'TyVar's
-	setTyVarName, setTyVarUnique, setTyVarKind
+	setTyVarName, setTyVarUnique, setTyVarKind, updateTyVarKind
 
     ) where
 
@@ -268,6 +268,9 @@ setTyVarName   = setVarName
 
 setTyVarKind :: TyVar -> Kind -> TyVar
 setTyVarKind tv k = tv {varType = k}
+
+updateTyVarKind :: (Kind -> Kind) -> TyVar -> TyVar
+updateTyVarKind update tv = tv {varType = update (tyVarKind tv)}
 \end{code}
 
 \begin{code}

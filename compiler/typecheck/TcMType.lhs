@@ -70,7 +70,7 @@ module TcMType (
 import TypeRep
 import TcType
 import Type
-import Kind( isSuperKind )
+import Kind
 import Class
 import TyCon
 import Var
@@ -206,7 +206,7 @@ tcSuperSkolTyVars :: [TyVar] -> [TcTyVar]
 tcSuperSkolTyVars tyvars
   = kvs' ++ tvs'
   where
-    (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+    (kvs, tvs) = splitKiTyVars tyvars
     kvs' = [ mkTcTyVar (tyVarName kv) (tyVarKind kv) superSkolemTv
            | kv <- kvs ]
     tvs' = [ mkTcTyVar (tyVarName tv) (substTy subst (tyVarKind tv)) superSkolemTv
@@ -234,14 +234,14 @@ tcInstSkolTyVars tyvars
   = do { kvs' <- mapM (tcInstSkolTyVar False (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSkolTyVar False (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
        ; return (kvs' ++ tvs') }
-  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+  where (kvs, tvs) = splitKiTyVars tyvars
 
 tcInstSuperSkolTyVars :: [TyVar] -> TcM [TcTyVar]
 tcInstSuperSkolTyVars tyvars
   = do { kvs' <- mapM (tcInstSkolTyVar True (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSkolTyVar True (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
        ; return (kvs' ++ tvs') }
-  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+  where (kvs, tvs) = splitKiTyVars tyvars
 
 tcInstSkolType :: TcType -> TcM ([TcTyVar], TcThetaType, TcType)
 -- Instantiate a type with fresh skolem constants
@@ -259,7 +259,7 @@ tcInstSigTyVars tyvars
   = do { kvs' <- mapM (tcInstSigTyVar (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSigTyVar (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
        ; return (kvs' ++ tvs') }
-  where (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+  where (kvs, tvs) = splitKiTyVars tyvars
 
 tcInstSigTyVar :: TvSubst -> TyVar -> TcM TcTyVar
 tcInstSigTyVar subst tyvar

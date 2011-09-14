@@ -356,6 +356,27 @@ lintCoreExpr (Coercion co)
        ; return (mkCoercionType ty1 ty2) }
 \end{code}
 
+Note [Kind instantiation in coercions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Consider the following coercion axiom:
+  ax_co [(k_ag :: BOX), (f_aa :: k_ag -> Constraint)] :: T k_ag f_aa ~ f_aa
+
+Consider the following instantiation:
+  ax_co <(* -> * :: BOX)> <Monad>
+
+We need to split the co_ax_tvs into kind and type variables in order
+to find out the coercion kind instantiations. Those can only be Refl
+since we don't have kind coercions. This is just a way to represent
+kind instantiation.
+
+We use the number of kind variables to know how to split the coercions
+instantiations between kind coercions and type coercions. We lint the
+kind coercions and produce the following substitution which is to be
+applied in the type variables:
+  k_ag   |->   * -> *
+
+
 %************************************************************************
 %*									*
 \subsection[lintCoreArgs]{lintCoreArgs}
@@ -446,6 +467,16 @@ checkTyCoKind tv co
 
 checkTyCoKinds :: [TyVar] -> [OutCoercion] -> LintM [(OutType, OutType)]
 checkTyCoKinds = zipWithM checkTyCoKind
+
+checkKiCoKind :: KindVar -> OutCoercion -> LintM Kind
+-- see lintCoercion (AxiomInstCo {}) and Note [Kind instantiation in coercions]
+checkKiCoKind kv co
+  = do { ki <- lintKindCoercion co
+       ; unless (isSuperKind (tyVarKind kv)) (addErrL (mkTyCoAppErrMsg kv co))
+       ; return ki }
+
+checkKiCoKinds :: [KindVar] -> [OutCoercion] -> LintM [Kind]
+checkKiCoKinds = zipWithM checkKiCoKind
 
 checkDeadIdOcc :: Id -> LintM ()
 -- Occurrences of an Id should never be dead....
@@ -634,6 +665,8 @@ lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
 
 lintKind kind@(TyConApp tc kis)
+  | isSuperKind kind = panic "lintKind called with BOX"
+
   | isSuperKind tc_kind  -- handles *, #, Constraint, etc.
   , null kis
   = return ()
@@ -660,6 +693,13 @@ lintTyBndrKind tv =
   else lintKind ki
 
 -------------------
+lintKindCoercion :: Coercion -> LintM Kind
+lintKindCoercion (Refl k)
+  = do { k' <- applySubstTy k
+       ; lintKind k'
+       ; return k' }
+lintKindCoercion _ = panic "lintKindCoercion"
+
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
 lintCoercion (Refl ty)
@@ -675,13 +715,6 @@ lintCoercion co@(TyConAppCo tc cos)
        ; (ss,ts) <- mapAndUnzipM lintCoercion cotys
        ; check_co_app co ki (kis ++ ss)
        ; return (mkTyConApp tc (kis ++ ss), mkTyConApp tc (kis ++ ts)) }
-  where
-    lintKindCoercion :: Coercion -> LintM Kind
-    lintKindCoercion (Refl k) = do
-      k' <- applySubstTy k
-      lintKind k'
-      return k'
-    lintKindCoercion _ = panic "lintCoercion lintKindCoercion"
 
 lintCoercion co@(AppCo co1 co2)
   = do { (s1,t1) <- lintCoercion co1
@@ -690,7 +723,8 @@ lintCoercion co@(AppCo co1 co2)
        ; return (mkAppTy s1 s2, mkAppTy t1 t2) }
 
 lintCoercion (ForAllCo v co)
-  = do { lintKind (tyVarKind v)
+  = do { let kind = tyVarKind v
+       ; unless (isSuperKind kind) (lintKind kind)
        ; (s,t) <- addInScopeVar v (lintCoercion co)
        ; return (ForAllTy v s, ForAllTy v t) }
 
@@ -702,13 +736,19 @@ lintCoercion (CoVarCo cv)
   = do { checkTyCoVarInScope cv
        ; return (coVarKind cv) }
 
-lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = tvs
+lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
                                    , co_ax_lhs = lhs
                                    , co_ax_rhs = rhs }) 
                            cos)
-  = do { (tys1, tys2) <- liftM unzip (checkTyCoKinds tvs cos)
-       ; return (substTyWith tvs tys1 lhs,
-                 substTyWith tvs tys2 rhs) }
+  = do { kis <- checkKiCoKinds kvs kcos
+       ; let tvs' = map (updateTyVarKind (Type.substTy subst)) tvs
+             subst = zipOpenTvSubst kvs kis
+       ; (tys1, tys2) <- liftM unzip (checkTyCoKinds tvs' tcos)
+       ; return (substTyWith ktvs (kis ++ tys1) lhs,
+                 substTyWith ktvs (kis ++ tys2) rhs) }
+  where  -- see Note [Kind instantiation in coercions]
+    (kvs, tvs) = splitKiTyVars ktvs
+    (kcos, tcos) = splitAt (length kvs) cos
 
 lintCoercion (UnsafeCo ty1 ty2)
   = do { ty1' <- lintInTy ty1

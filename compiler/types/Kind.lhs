@@ -34,6 +34,9 @@ module Kind (
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon, isSubOpenTypeKindCon,
 
+        -- ** Functions on variables
+        splitKiTyVars,
+
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
 
@@ -228,6 +231,10 @@ defaultKind k
   | isSubOpenTypeKind k = liftedTypeKind
   | isSubArgTypeKind k  = liftedTypeKind
   | otherwise        = k
+
+splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
+-- Assumes we get [k1, k2, a, b, c], returns ([k1, k2], [a, b, c])
+splitKiTyVars = span (isSuperKind . tyVarKind)
 
 
 -- About promoting a type to a kind
