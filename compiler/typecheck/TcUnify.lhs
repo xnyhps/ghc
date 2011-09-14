@@ -192,10 +192,10 @@ matchExpectedPArrTy exp_ty
        ; return (co, elt_ty) }
 
 ----------------------
-matchExpectedTyConApp :: TyCon                -- T :: k1 -> ... -> kn -> *
+matchExpectedTyConApp :: TyCon                -- T :: forall kv1 ... kvm. k1 -> ... -> kn -> *
                       -> TcRhoType 	      -- orig_ty
-                      -> TcM (LCoercion,      -- T a b c ~ orig_ty
-                              [TcSigmaType])  -- Element types, a b c
+                      -> TcM (LCoercion,      -- T k1 k2 k3 a b c ~ orig_ty
+                              [TcSigmaType])  -- Element types, k1 k2 k3 a b c
                               
 -- It's used for wired-in tycons, so we call checkWiredInTyCon
 -- Precondition: never called with FunTyCon
@@ -221,8 +221,10 @@ matchExpectedTyConApp tc orig_ty
 
     go n_req ty@(TyConApp tycon args) tys
       | tc == tycon
-      = ASSERT( n_req == length args)   -- ty::*
+      = ASSERT( n_req == n_args)   -- ty::*
         return (mkReflCo ty, args ++ tys)
+        where n_args = length (drop (length kvs) args)  -- remove the kind arguments
+              (kvs, _) = splitForAllTys (tyConKind tycon)
 
     go n_req (AppTy fun arg) tys
       | n_req > 0
@@ -233,11 +235,13 @@ matchExpectedTyConApp tc orig_ty
 
     ----------
     defer n_req ty tys
-      = do { tau_tys <- mapM newFlexiTyVarTy arg_kinds
-           ; co <- unifyType (mkTyConApp tc tau_tys) ty
-           ; return (co, tau_tys ++ tys) }
+      = do { kappa_tys <- mapM (const newMetaKindVar) kvs
+           ; tau_tys <- mapM newFlexiTyVarTy arg_kinds
+           ; co <- unifyType (mkTyConApp tc (kappa_tys ++ tau_tys)) ty
+           ; return (co, kappa_tys ++ tau_tys ++ tys) }
       where
-        (arg_kinds, _) = splitKindFunTysN n_req (tyConKind tc)
+        (kvs, body) = splitForAllTys (tyConKind tc)
+        (arg_kinds, _) = splitKindFunTysN n_req body
 
 ----------------------
 matchExpectedAppTy :: TcRhoType                         -- orig_ty

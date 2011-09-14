@@ -140,7 +140,7 @@ mkNewTyConRhs tycon_name tycon con
                              -- Coreview looks through newtypes with a Nothing
                              -- for nt_co, or uses explicit coercions otherwise
   where
-    tvs    = tyConTyVars tycon
+    tvs    = tyConKiVars tycon ++ tyConTyVars tycon
     inst_con_ty = applyTys (dataConUserType con) (mkTyVarTys tvs)
     rhs_ty = ASSERT( isFunTy inst_con_ty ) funArgTy inst_con_ty
 	-- Instantiate the data con with the 
@@ -212,7 +212,8 @@ mkDataConStupidTheta tycon arg_tys univ_tvs
   | null stupid_theta = []	-- The common case
   | otherwise 	      = filter in_arg_tys stupid_theta
   where
-    tc_subst	 = zipTopTvSubst (tyConTyVars tycon) (mkTyVarTys univ_tvs)
+    tc_subst	 = zipTopTvSubst (tyConKiVars tycon ++ tyConTyVars tycon)  -- IA0: is this correct?
+                                 (mkTyVarTys univ_tvs)
     stupid_theta = substTheta tc_subst (tyConStupidTheta tycon)
 	-- Start by instantiating the master copy of the 
 	-- stupid theta, taken from the TyCon

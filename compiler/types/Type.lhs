@@ -33,7 +33,7 @@ module Type (
 	splitFunTys, splitFunTysN,
 	funResultTy, funArgTy, zipFunTys, 
 
-	mkTyConApp, mkTyConTy, 
+	mkTyConApp, mkTyConTy, tyConKiVars,
 	tyConAppTyCon_maybe, tyConAppArgs_maybe, tyConAppTyCon, tyConAppArgs, 
 	splitTyConApp_maybe, splitTyConApp, 
 
@@ -480,6 +480,10 @@ funArgTy ty                = pprPanic "funArgTy" (ppr ty)
 -- splitTyConApp "looks through" synonyms, because they don't
 -- mean a distinct type, but all other type-constructor applications
 -- including functions are returned as Just ..
+
+tyConKiVars :: TyCon -> [KindVar]
+-- returns the quantified kind variables of a TyCon
+tyConKiVars tc = fst (splitForAllTys (tyConKind tc))
 
 -- | The same as @fst . splitTyConApp@
 tyConAppTyCon_maybe :: Type -> Maybe TyCon

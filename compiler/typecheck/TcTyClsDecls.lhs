@@ -31,6 +31,7 @@ import TcMType
 import TcType
 import TysWiredIn	( unitTy )
 import Type
+import Kind             ( isSuperKind )
 import Class
 import TyCon
 import DataCon
@@ -237,10 +238,13 @@ kcTyClGroup decls
 	     -- See Note [Kind checking for type and class decls]
              -- Now we have to kind generalize the flexis
         ; let names = map fst alg_kinds
-              kc_kinds = map snd alg_kinds
-        ; generalized_kinds <- flip mapM kc_kinds $ \kc_kind -> do
-          { (kvs, body) <- kindGeneralizeKind kc_kind
-          ; return $ mkForAllTys kvs body }
+              kc_kinds = zip (map snd alg_kinds) (map (isDataDecl . unLoc) alg_at_decls)
+        ; generalized_kinds <- flip mapM kc_kinds $ \(kc_kind, generalize) ->
+            if generalize
+            then do
+              { (kvs, body) <- kindGeneralizeKind kc_kind
+              ; return $ mkForAllTys kvs body }
+            else zonkTcKindToKind kc_kind
         ; traceTc "IA0_DEBUG generalized" (ppr generalized_kinds)
         ; tcExtendKindEnv (zip names generalized_kinds) getLclEnv } } }
 
@@ -1354,10 +1358,17 @@ mkRecSelBind (tycon, sel_name)
     is_naughty = not (tyVarsOfType field_ty `subVarSet` data_tvs)  
     (field_tvs, field_theta, field_tau) = tcSplitSigmaTy field_ty
     sel_ty | is_naughty = unitTy  -- See Note [Naughty record selectors]
-           | otherwise  = mkForAllTys (varSetElems data_tvs ++ field_tvs) $ 
+           | otherwise  = mkForAllTys (sortVars (varSetElems data_tvs ++ field_tvs)) $
     	     	          mkPhiTy (dataConStupidTheta con1) $	-- Urgh!
     	     	          mkPhiTy field_theta               $	-- Urgh!
              	          mkFunTy data_ty field_tau
+    sortVars = sortLe le  -- brings kind variables before type variables
+      where  -- IA0: this could reuse what is done in SetLevels.lhs:abstractVars
+        is_kv = isSuperKind . tyVarKind
+        le v1 v2 = case (is_kv v1, is_kv v2) of
+                     (True, False) -> True
+                     (False, True) -> False
+                     _             -> v1 <= v2
 
     -- Make the binding: sel (C2 { fld = x }) = x
     --                   sel (C7 { fld = x }) = x

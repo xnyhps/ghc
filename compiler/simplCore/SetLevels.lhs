@@ -71,6 +71,7 @@ import Demand		( StrictSig, increaseStrictSigArity )
 import Name		( getOccName, mkSystemVarName )
 import OccName		( occNameString )
 import Type		( isUnLiftedType, Type )
+import Kind		( isSuperKind )
 import BasicTypes	( Arity )
 import UniqSupply
 import Util
@@ -987,11 +988,17 @@ abstractVars dest_lvl (LE { le_lvl_env = lvl_env, le_env = id_env }) fvs
 	-- Sort the variables so the true type variables come first;
 	-- the tyvars scope over Ids and coercion vars
     v1 `le` v2 = case (is_tv v1, is_tv v2) of
-		   (True, False) -> True
-		   (False, True) -> False
-		   _    	 -> v1 <= v2	-- Same family
+                   (True, False)  -> True
+                   (False, True)  -> False
+                   (True, True)   ->
+                     case (is_kv v1, is_kv v2) of
+                       (True, False) -> True
+                       (False, True) -> False
+                       _             -> v1 <= v2  -- Same family
+                   (False, False) -> v1 <= v2
 
-    is_tv v = isTyVar v 
+    is_tv v = isTyVar v
+    is_kv v = isSuperKind (tyVarKind v)
 
     uniq :: [Var] -> [Var]
 	-- Remove adjacent duplicates; the sort will have brought them together

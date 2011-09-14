@@ -70,6 +70,7 @@ module TcMType (
 import TypeRep
 import TcType
 import Type
+import Kind( isSuperKind )
 import Class
 import TyCon
 import Var
@@ -236,17 +237,30 @@ tcInstSkolType ty = tcInstType tcInstSkolTyVars ty
 tcInstSigTyVars :: [TyVar] -> TcM [TcTyVar]
 -- Make meta SigTv type variables for patten-bound scoped type varaibles
 -- We use SigTvs for them, so that they can't unify with arbitrary types
-tcInstSigTyVars = mapM tcInstSigTyVar
-
-tcInstSigTyVar :: TyVar -> TcM TcTyVar
-tcInstSigTyVar tyvar
-  = do	{ uniq <- newMetaUnique
- 	; ref <- newMutVar Flexi
-        ; let name = setNameUnique (tyVarName tyvar) uniq
-   	        -- Use the same OccName so that the tidy-er 
-		-- doesn't rename 'a' to 'a0' etc
-	      kind = tyVarKind tyvar
-	; return (mkTcTyVar name kind (MetaTv SigTv ref)) }
+-- We also have to substitute in the kind signatures of type variables
+--     [(k1 :: BOX), (k2 :: BOX), (a :: k1 -> k2), (b :: k1)]
+-- should become
+--     [(?k1 :: BOX), (?k2 :: BOX), (?a :: ?k1 -> ?k2), (?b :: ?k1)]
+tcInstSigTyVars tyvars
+  = do { kvs' <- mapM tcInstSigTyVar kvs
+       ; tvs' <- mapM tcInstSigTyVar tvs
+       ; let ks_tvs = map updateKind tvs'  -- kind substitued tvs
+             updateKind tv = setTyVarKind tv (substTy subst (tyVarKind tv))
+             subst = zipTopTvSubst kvs (map mkTyVarTy kvs')
+       ; return (kvs' ++ ks_tvs) }
+  where
+    (kvs, tvs) = span (isSuperKind . tyVarKind) tyvars
+    -- This function is local because we apply a substitution on the
+    -- kinds of the type variables
+    tcInstSigTyVar :: TyVar -> TcM TcTyVar
+    tcInstSigTyVar tyvar
+      = do { uniq <- newMetaUnique
+           ; ref <- newMutVar Flexi
+           ; let name = setNameUnique (tyVarName tyvar) uniq
+                        -- Use the same OccName so that the tidy-er
+                        -- doesn't rename 'a' to 'a0' etc
+                 kind = tyVarKind tyvar
+           ; return (mkTcTyVar name kind (MetaTv SigTv ref)) }
 \end{code}
 
 
