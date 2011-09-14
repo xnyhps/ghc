@@ -11,7 +11,7 @@ module CorePrep (
 
 #include "HsVersions.h"
 
-import PrelNames	( lazyIdKey, hasKey )
+import PrelNames
 import CoreUtils
 import CoreArity
 import CoreFVs
@@ -20,6 +20,7 @@ import CoreSyn
 import CoreSubst
 import OccurAnal        ( occurAnalyseExpr )
 import Type
+import Literal
 import Coercion
 import TyCon
 import Demand
@@ -28,6 +29,8 @@ import VarSet
 import VarEnv
 import Id
 import IdInfo
+import MkId
+import TysWiredIn
 import DataCon
 import PrimOp
 import BasicTypes
@@ -41,7 +44,10 @@ import Pair
 import Outputable
 import MonadUtils
 import FastString
+import Config
+import Data.Bits
 import Data.List	( mapAccumL )
+import Data.Word
 import Control.Monad
 \end{code}
 
@@ -444,10 +450,11 @@ cpeRhsE :: CorePrepEnv -> CoreExpr -> UniqSM (Floats, CpeRhs)
 -- For example
 --	f (g x)	  ===>   ([v = g x], f v)
 
-cpeRhsE _env expr@(Type {})     = return (emptyFloats, expr)
-cpeRhsE _env expr@(Coercion {}) = return (emptyFloats, expr)
-cpeRhsE _env expr@(Lit {})      = return (emptyFloats, expr)
-cpeRhsE env expr@(Var {})       = cpeApp env expr
+cpeRhsE _env expr@(Type {})      = return (emptyFloats, expr)
+cpeRhsE _env expr@(Coercion {})  = return (emptyFloats, expr)
+cpeRhsE env (Lit (LitInteger i)) = cpeRhsE env (cvtLitInteger i)
+cpeRhsE _env expr@(Lit {})       = return (emptyFloats, expr)
+cpeRhsE env expr@(Var {})        = cpeApp env expr
 
 cpeRhsE env (Var f `App` _ `App` arg)
   | f `hasKey` lazyIdKey  	  -- Replace (lazy a) by a
@@ -494,6 +501,46 @@ cpeRhsE env (Case scrut bndr ty alts)
        = do { (env2, bs') <- cpCloneBndrs env bs
             ; rhs' <- cpeBodyNF env2 rhs
             ; return (con, bs', rhs') }
+
+cvtLitInteger :: Integer -> CoreExpr
+-- Here we convert a literal Integer to the low-level
+-- represenation. Exactly how we do this depends on the
+-- library that implements Integer.  If it's GMP we 
+-- use the S# data constructor for small literals.  
+cvtLitInteger i
+  = case cIntegerLibraryType of
+      IntegerGMP 
+        | inIntRange i -> mkSmallInteger i
+        | i < 0        -> negateInteger (f (negate i))
+        | otherwise    -> f i
+        where
+          mkSmallInteger x = mkConApp integerGmpSDataCon [Lit (mkMachInt x)]
+          negateInteger x = App (Var negateIntegerId) x
+          f x = let low  = x .&. mask
+                    high = x `shiftR` bits
+                    highExpr = mkApps (Var shiftLIntegerId)
+                                      [f high,
+                                       Lit (mkMachInt (fromIntegral bits))]
+                in if high == 0 then mkSmallInteger x
+                   else if low == 0 then highExpr
+                   else mkApps (Var orIntegerId)
+                               [mkSmallInteger low, highExpr]
+          bits = bitSize (undefined :: Int) - 2
+          mask = 2 ^ bits - 1
+
+      IntegerSimple
+        -> case i `compare` 0 of
+             EQ -> Var integerSimpleNaughtId
+             GT -> App (Var integerSimplePositiveId) (f i)
+             LT -> App (Var integerSimpleNegativeId) (f (negate i))
+        where
+          bits = bitSize (undefined :: Word)
+          mask = 2 ^ bits - 1
+          f 0 = Var digitsNoneId
+          f x = let low  = x .&. mask
+                    high = x `shiftR` bits
+                in mkApps (Var digitsSomeId)
+                          [Lit (mkMachWord low), f high]
 
 -- ---------------------------------------------------------------------------
 --		CpeBody: produces a result satisfying CpeBody
