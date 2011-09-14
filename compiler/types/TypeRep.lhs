@@ -28,6 +28,7 @@ module TypeRep (
 
         -- Free variables
         tyVarsOfType, tyVarsOfTypes,
+        tyVarsOfTypeStratified, tyVarsOfTypesStratified,
 
         -- Substitutions
         TvSubst(..), TvSubstEnv
@@ -288,14 +289,32 @@ isLiftedTypeKind _                = False
 \begin{code}
 tyVarsOfType :: Type -> VarSet
 -- ^ NB: for type synonyms tyVarsOfType does /not/ expand the synonym
-tyVarsOfType (TyVarTy v)         = unitVarSet v
+-- tyVarsOfType returns variables at any level (types or kinds)
+-- see tyVarsOfTypeStratified for a function that returns only current level variables
+tyVarsOfType (TyVarTy v)         = unitVarSet v `unionVarSet` tyVarsOfType (tyVarKind v)
 tyVarsOfType (TyConApp _ tys)    = tyVarsOfTypes tys
 tyVarsOfType (FunTy arg res)     = tyVarsOfType arg `unionVarSet` tyVarsOfType res
 tyVarsOfType (AppTy fun arg)     = tyVarsOfType fun `unionVarSet` tyVarsOfType arg
-tyVarsOfType (ForAllTy tyvar ty) = delVarSet (tyVarsOfType ty) tyvar
+tyVarsOfType (ForAllTy tyvar ty) = delVarSet (tyVarsOfType ty) tyvar `unionVarSet` tyVarsOfType (tyVarKind tyvar)
 
 tyVarsOfTypes :: [Type] -> TyVarSet
 tyVarsOfTypes tys = foldr (unionVarSet . tyVarsOfType) emptyVarSet tys
+
+tyVarsOfTypeStratified :: Type -> VarSet
+-- only returns variables of the current level (don't look in kind signatures)
+tyVarsOfTypeStratified (TyVarTy v)
+  = unitVarSet v
+tyVarsOfTypeStratified (TyConApp _ tys)
+  = tyVarsOfTypesStratified tys
+tyVarsOfTypeStratified (FunTy arg res)
+  = tyVarsOfTypeStratified arg `unionVarSet` tyVarsOfTypeStratified res
+tyVarsOfTypeStratified (AppTy fun arg)
+  = tyVarsOfTypeStratified fun `unionVarSet` tyVarsOfTypeStratified arg
+tyVarsOfTypeStratified (ForAllTy tyvar ty)
+  = delVarSet (tyVarsOfTypeStratified ty) tyvar
+
+tyVarsOfTypesStratified :: [Type] -> VarSet
+tyVarsOfTypesStratified tys = foldr (unionVarSet . tyVarsOfTypeStratified) emptyVarSet tys
 \end{code}
 
 %************************************************************************
