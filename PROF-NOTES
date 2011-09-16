@@ -1,0 +1,420 @@
+TOPICS to think about:
+
+  - I think we fixed #1531 - close it (test is result001)
+
+  - First: make sure HPC still works (and that the code isn't a lot
+    worse)
+
+  - Get the entry counts right for pattern-bound variables (need to
+    generate ticks in mkSelectorBinds)
+
+  - Restore the CCS in the update code
+
+  - Check that PAPs work right
+
+  - Check performance of profiled code
+     - with/without -prof-auto-all,
+     - with/without -fno-count-entries
+     - against GHC 7.2.1
+
+  - Find out why we can't seem to get a timer resolution better than 10ms
+
+  - Make sure that we can inline values inside _scc_.  Right now in
+    OccurAnal we annotate everything occurring inside an _scc_ with
+    NoOccInfo.
+
+  - We are inlining and floating non-HNFs, which can change the shape
+    of the profile.  e.g. inlining a CAF at its single usage site
+    will change the stack from <CAF,c> to <MAIN,...,c>.  Example:
+    scc002, but put manual SCCs on yan and the lambda expression, because
+    -prof-auto-all adds an SCC to main which prevents the inlining.
+    TODO: add a test/ticket, or fix.
+
+  - how to represent recursive and mutually recursive calls.  Truncate
+    the stack on a recursive call, as now, or use the "..." notation
+    from Allwood's paper?
+
+  - getting useful costs for CAFs.  Also, keeping track of where a CAF
+    was entered from, so that we can get accurate information if a CAF
+    raises an exception. (foo = error "bar").
+
+  - profiling flags:
+    - another flag to annotate all *bindings*, not just all *functions*?
+    - we added -fno-count-entries (document it)
+    - we added -prof-auto-all, -prof-auto-top, -prof-auto-exported, -prof-no-auto
+      (document them)
+    - deprecate the old flags (fix documentation)
+
+  - Tests:
+    - test scc002 with various combinations of -prof-* flags and
+      -fprof-no-count-entries
+
+  - profiling with multiple Capabilities
+
+  - do we need to keep the XML output format?
+
+  - look into code size of profiling
+
+  - reinstate PushCC so we can compile  let x = scc "foo" (C a b)
+    properly (attribute the constructor to foo:CCCS; don't allocate
+    a thunk).
+
+  - bugs to fix: #4414 (entry counts on pat binds etc.)
+
+-----------------------------------------------------------------------------
+-- Differences between evaluation and lexical scoping
+
+      f = g . h
+
+    f will not appear in the call stack where it might be expected
+    (see profile output for clausify for some examples of this)
+
+Transformations:
+
+  (scc s (C x1..xn))  => C x1 .. xn     (both)
+
+Constant changes in cost attribution, no change in stack shape:
+
+  ((scc s e) x)   =>  scc s (e x)   (lexical scoping only)
+  (scc s \x . e)  =>  \x . scc s e  (lexical scoping only)
+
+  (scc s \x . e)  =>  \x . e        (eval scoping only)
+
+  scc c x         => x              (eval scoping, and lex scoping iff x is not
+                                     top-level)
+
+  scc c (let x = e in e')
+     => let x = scc c e in scc c e' (both)
+
+  inlining a lambda                 (eval scoping only, lex scoping can inline
+                                     top-level lambdas)
+
+  floating a lambda                 (eval scoping only)
+
+  floating non-lambda??
+
+  inlining non-lambda               (neither)
+
+-----------------------------------------------------------------------------
+
+IMPORTANT PRINCIPLE: The call stack/graph that we see should be
+independent of the evaluation order.  Adding strictness does not
+change the call stack/graph.
+   Why?  Because the compiler changes strictness and evaluation order
+   all the time, we don't want these transformations to affect the
+   call stacks, which are a property of the source code.
+
+This is reasonably straightforward to implement: in a thunk we save
+the current stack, and restore it when the thunk is evaluated.
+
+Dealing with function calls is where all the action is.
+
+
+-----------------------------------------------------------------------------
+BASIC IDEA
+
+  CALL ccs_app ccs_lam = ccs_app
+
+ie. we don't change the cost centre at all when calling a function.
+However, the function is expected to push a CC (or several CCs) on the
+stack.  A preprocessing phase copies sccs inside each lambda:
+
+  \x . e  --->  \x . scc "c1" ... scc "cn" . e
+
+where "c1" .. "cn" are the stack of sccs lexically enclosing the
+lambda IN THE ORIGINAL SOURCE CODE.
+
+We could add them on every lambda, but when there are chains of
+lambdas together it's not really necessary:
+
+  \x . scc "f" \y . scc "f" . e
+
+will behave exactly like
+
+  \x . \y . scc "f" . e
+
+because the scc "f" between the two lambdas has no effect.
+
+
+----
+Advantages
+
+ - boxing is not required, and indeed is a no-op with respect to the
+   call graph
+
+ - Entry counts are always accurate (the only operation is pushing an
+   scc).
+
+ - simple implementation: no special behaviour at a function call
+
+ - many compiler transformations are unconditionally valid
+   see Note [transformations}
+
+ - can wrap an expression in an SCC to find its costs (not possible with
+   lexical scoping alone)
+
+ - can distinguish between lexically scoped SCCs and evaluation scoped SCCs
+   (see Note [user sccs])
+
+
+
+----
+Note [auto-all]
+
+-auto-all can do something much more useful.  e.g.
+
+f xs = if b then g xs else h xs
+  where
+    g ys = ..
+    h zs = ..
+
+could translate to
+
+f = \xs . scc "f"
+          let
+              g = \ys . scc "f.g" ...
+              h = \zs . scc "f.h" ...
+          in
+          ...
+
+Since we have to put an scc on every function, we might as well make
+it a useful one ("f.g" instead of just "f").
+
+  QUESTION: should this be an option?
+     -prof               no auto sccs added (everything subsumed into callers)
+     -prof -scc-exports  exported fns only
+     -prof -scc-top      top-level fns only (copied into nested functions)
+     -prof -scc-all      top-level and nested fns get different CCs
+
+
+------
+Note [user sccs]
+
+  Maybe there should be two kinds of scc annotation:
+
+    ESCC: evaluation cost centre; the cost of evaluating the
+    expression to normal form (to the extent that it is demanded)
+
+    LSCC: lexical cost centre: the cost of evaluating the expression
+    to normal form, and the cost of evaluating any nested functions,
+    each time they are called (an LSCC would be copied into each
+    nested function).
+
+
+-----
+Note [transformations]
+
+ - inlining a lambda is valid
+ - inlining a non-lambda is only valid as long as the expression does
+   not move inside any sccs (changes cost attibution, possibly dramatically)
+
+ - floating out lambdas is valid
+ - floating out non-lambdas should collect sccs on the way out
+
+ - boxing is a no-op: it no longer matters which SCC is attached to a lambda
+
+ - scc "x" \y . e  ==>  \y . e
+  (NB. only if scc "x" is a "dupd" cost centre, that is we aren't
+  counting entries)
+  (not preserving the cost attribution, but we only change attribution
+   for the allocation of the lambda, so don't care)
+
+ - scc "x" C a b c ==> C a b c  (same as above)
+
+ - what about eta-expansion/eta-reduction??
+
+
+-----------------------------------------------------------------------------
+
+To think about: getting useful costs for CAFs.
+
+We should attribute the costs for a CAF to the site that is evaluating
+it.  This just adds more information to the profile for free.
+
+Note that the cost centres attached to lambdas in a CAF should still
+just be [CAF,...] because we don't want the evaluation site of the CAF
+showing up when we call functions from it.
+
+-----------
+
+To think about: whether we can do partial profiling.
+
+  - consistent representation of closures.  There has to be some way
+    to know for a thunk whether it is profiled or not: if profiled
+    code enters an unprofiled thunk, it sets the CCCS to "unprofiled",
+    but if unprofiled code enters a profiled thunk, the code for the
+    thunk will have to set CCCS itself (a thunk knows where it saved
+    its CCCS).
+
+-----------
+
+To think about: whether we can keep track of call stacks in
+GHCi. (related to partial profiling above).
+
+If we abstract the RTS functionality that deals with cost centres so
+that GHCi can use it, this should be feasible.
+
+
+GHCi already has ticks on every nested function - so no need for sccs,
+we just use ticks.
+
+   ** Tick behaves exactly like scc (should they be the same??!) **
+
+Interpreted thunks must save/restore the CCS.  Store the CCS in every
+thunk; save and restore the current CCS during thunk eval.
+
+So the difficulty comes when interacting with compiled code.
+
+  - entering a compiled function: do not change the current CCS
+    (do nothing)
+
+  - entering a compiled thunk: save the current CCS on the stack,
+    set the CCS to "<unknown>", eval the thunk.
+
+So this will lose information whenever we have a compiled thunk being
+evaluated from interpreted code.  e.g. suppose we call map and then
+evaluate the resulting list:
+
+  g x = error "foo"
+
+  f xs = map g xs
+
+  main = case head (f xs) of ...
+
+The backtrace could give information like:
+
+  main
+    evaluated: <unknown>
+      g
+
+by traversing the real stack (after <unkonwn> we show the CCS that was
+saved on the stack during evaluation of main).
+
+So we lose the information that the call to g was from [f,map,g], but
+we get the point in the source code that evaluated the thunk.
+
+
+-----------------------------------------------------------------------------
+[ticks and sccs]
+
+Ticks and sccs are very similar:
+
+  - They are both "side effecting", in that they both count entries.
+    Compiler transformations must preserve the entry counts.
+
+  - sccs differ in that if we float some computation outside an scc we
+    need to annotate it with that scc (but a special,
+    non-entry-counting, copy of the scc).
+
+  
+Predicates:
+
+  count-entries :: Bool
+      -- count entries accurately; True  for ticks/breakpoints
+      --                           True  for ordinary cost centres
+      --                           False for "duplicated cost centres"
+
+  cost-attrib   :: Bool
+      -- maintain cost attribution; False for ticks/breakpoints
+      --                            True  for ordinary cost centres
+      --                            True  for "duplicated cost centres"
+
+
+
+For call stacks, we want cost-attrib=True,  count-entries maybe
+    coverage,    we want cost-attrib=False, count-entries=True
+
+Breakpoints have the same requirements as coverage, except that we
+probably want to do call stacks with breakpoints too.
+
+Transformations:
+
+ Three core forms:
+
+   scc c  E    (count-entries=False, cost-attrib=True)
+   tick c E    (count-entries=True,  cost-attrib=False)
+   scctick c E (count-entries=True,  cost-attrib=True)
+
+  ------- Variables & Literals
+
+  scc c x   => x                -- a variable has no cost
+  scc c lit => lit
+
+  scctick c x   => tick x                -- a variable has no cost
+  scctick c lit => tick lit
+
+  ------- Values
+
+  scc c (\x . e)    =>  \x . e
+  scc c (C x1..xn)  =>  C x1..xn
+
+  scctick c (\x . e)    =>  tick c (\x . e)
+  scctick c (C x1..xn)  =>  tick c (C x1..xn)
+
+  ------- App
+
+  (tick e) e' => tick (e e')            -- app-of-tick
+
+  ------- Let Floating
+
+  tick c (let x = e in e')
+    => let x = e in tick c e'
+
+  scc c (let x = e in e')
+    => let x = scc c e in scc c e'
+
+  scctick c (let x = e in e')
+    => let x = scc c e in scctick c e'
+
+  ------- Case
+
+  case (tick c e) of alts               -- case-of-tick
+    => tick c (case e of alts)
+
+  case (scc c (case e of p -> e')) of alts
+    => case scc c e of p -> case scc c e' of alts
+                                        -- case-of-scc-of-case
+
+  case (scctick c (case e of p -> e')) of alts
+    => case scctick c e of p -> case scc c e' of alts
+                                        -- case-of-scctick-of-case
+
+  ------- Inlining
+
+  let x = e in e'
+    => e' [ e/x ]                       -- iff e is a value, or e does not
+                                        -- move inside an scc
+
+
+Representation:
+
+  - tick boxes contain an Int (mapping from Int->SrcLoc is stored
+    separately)
+
+  - cost centres contain a (Module,String) (String may be derived from
+    the SrcLoc when we're doing auto-sccs, otherwise it is
+    user-supplied).
+
+  - breakpoints need to hold a bunch of free variables as arguments
+
+OTOH, it will be hard to use case for cost centres, because we have to
+make the simplifier respect the scoping rules.  But we want the
+scoping rules for breakpoints too, so we can track call stacks in
+GHCi.
+
+We could make a new Id for each scc, like mkTickBoxId.  But:
+
+  - how to change an scctick into a tick or an scc?  We can't just
+    flip a flag inside the IdInfo, because then the scctick Id will
+    still have the same unique and therefore compare equal to the
+    tick/scc Id.  We could make a *new* unique for the scc/tick Id,
+    but then it won't compare equal to other scc/tick Ids generated
+    from the same scctick.
+
+  - we could pass an Int# argument to say whether to tick, scc, or
+    scctick.  A bit ugly :( What happens if the arg is not a manifest
+    constant when we need to compile it?  (very unlikely to happen,
+    but still).
+
+  - we have to generate the scc/tick Ids once and for all and put them
+    inside the scctick Id to begin with.
