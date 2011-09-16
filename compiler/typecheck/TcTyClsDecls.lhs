@@ -93,35 +93,40 @@ tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
 tcTyClGroup boot_details tyclds
   = do { generalized_env <- kcTyClGroup tyclds
- 	    -- Kind check this group and returns the final (possibly-polymorphic) kind
-            -- generalized_env maps TyCons to AThings
+ 	    -- Kind check this group and returns the final 
+            -- (possibly-polymorphic) kind of each TyCon and Class 
+	    -- 'generalized_env' maps TyCons to AThings
+
        ; tyclss <- fixM $ \ rec_tyclss -> do
            { let rec_flags = calcRecFlags boot_details rec_tyclss
-                 -- Populate environment with tieknoted ATyCon for TyCons
-                 -- and ANothing for DataCons (to avoid recursive promotion)
-                 -- see Note [ANothing] in typecheck/TcRnTypes.lhs
+
+                 -- Populate environment with knot-tied ATyCon for TyCons
+                 -- NB: if the decls mention any ill-staged data cons
+		 -- (see Note [ANothing] in typecheck/TcRnTypes.lhs) we
+                 -- will have failed arleady in kcTyClGroup, so no worries here
            ; tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-             tcExtendNothingEnv (dc_names tyclds) $
+	     setLclEnv generalized_env $
+ 
                  -- See Note [Kind checking for type and class decls]
                  -- Kind and type check declarations for this group
-             concatMapM (tcTyClDecl rec_flags generalized_env) tyclds }
-       ; traceTc "tcTyGroup" (ppr tyclss)
+             concatMapM (tcTyClDecl rec_flags) tyclds }
+
            -- Add the implicit things;
            -- we want them in the environment because
            -- they may be mentioned in interface files
        ; let implicit_things = concatMap implicitTyThings tyclss
              dm_ids          = mkDefaultMethodIds tyclss
-       ; env <- tcExtendGlobalEnv tyclss $
-                tcExtendGlobalEnv implicit_things $
-                tcExtendGlobalValEnv dm_ids $
-                getGblEnv
-       ; setGblEnv env $ do
-               -- Perform the validity check
+
+       ; tcExtendGlobalEnv tyclss $
+         tcExtendGlobalEnv implicit_things $
+         tcExtendGlobalValEnv dm_ids $ do
+       {       -- Perform the validity check
                -- We can do this now because we are done with the recursive knot
-           { traceTc "ready for validity check" empty
-           ; mapM_ (addLocM checkValidTyCl) tyclds
-           ; traceTc "done" empty }
-       ; return env }
+         traceTc "Starting validity check" (ppr tyclss)
+       ; mapM_ (addLocM checkValidTyCl) tyclds
+
+       ; traceTc "done" empty 
+       ; getGblEnv } }
   where
     dc_names :: TyClGroup Name -> [Name]
     dc_names decls =
@@ -254,10 +259,18 @@ flattenATs decls = concatMap flatten decls
     flatten decl@(L _ (ClassDecl {tcdATs = ats})) = decl : ats
     flatten decl				  = [decl]
 
-getInitialKind :: LTyClDecl Name -> TcM (Name, TcKind)
--- Only for data type, class, and indexed type declarations
--- Get as much info as possible from the data, class, or indexed type decl,
--- so as to maximise usefulness of error messages
+getInitialKind :: LTyClDecl Name -> TcM [(Name, TcTyThing)]
+-- Allocate a fresh kind variable for each TyCon and Class
+-- For each tycon, return   (tc, AThing k) 
+--                 where k is the kind of tc, derived from the LHS
+--                       of the definition (and probably including 
+--                       kind unification variables)
+--      Example: data T a b = ...
+--      return (T, kv1 -> kv2 -> *)
+--
+-- ALSO for each datacon, return (dc, ANothing)
+--      See Note [ANothing] in TcRnTypes
+
 getInitialKind (L _ decl)
   = do 	{ arg_kinds <- mapM (mk_arg_kind . unLoc) (tyClDeclTyVars decl)
 	; res_kind  <- mk_res_kind decl
@@ -490,16 +503,16 @@ tcTyClDecl1 parent _calc_isrec generalized_env
 
   -- "type" synonym declaration
 tcTyClDecl1 _parent _calc_isrec generalized_env
-            decl@(TySynonym {})
-  = ASSERT( isNoParent _parent ) do
-    { (TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty}, _)
-        <- setLclEnv generalized_env $ kcSynDecl decl
-    ; tcTyVarBndrs tvs $ \ tvs' -> do  -- IA0_TODO: kind generalization
-    { traceTc "tcd1" (ppr tc_name)
-    ; rhs_ty' <- tcHsKindedType rhs_ty
+            decl@(TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty})
+  = ASSERT( isNoParent _parent ) 
+    tcTyClTyVars tc_name tvs $ \ tvs' -> do  -- IA0_TODO: kind generalization
+    { rhs_ty' <- tcHsType rhs_ty	-- NB: kind-check, and desugar
     ; tycon <- buildSynTyCon tc_name tvs' (SynonymTyCon rhs_ty')
       	       		     (typeKind rhs_ty') NoParentTyCon  Nothing
-    ; return [ATyCon tycon] } }
+    ; return [ATyCon tycon] }
+
+tcTyClTyVars :: Name -> [HsTyVarBndr Name]	-- LHS of the type or class decl
+             -> ([TyVar] -> TcM a) -> TcM a
 
   -- "newtype" and "data"
   -- NB: not used for newtype/data instances (whether associated or not)

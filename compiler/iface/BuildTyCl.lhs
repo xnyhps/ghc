@@ -178,13 +178,15 @@ buildDataCon :: Name -> Bool
 					-- or the GADT equalities
 	    -> [Type] -> Type		-- Argument and result types
 	    -> TyCon			-- Rep tycon
+	    -> Bool			-- TyCon is promotable to be a kind
 	    -> TcRnIf m n DataCon
 -- A wrapper for DataCon.mkDataCon that
 --   a) makes the worker Id
 --   b) makes the wrapper Id if necessary, including
 --	allocating its unique (hence monadic)
 buildDataCon src_name declared_infix arg_stricts field_lbls
-	     univ_tvs ex_tvs eq_spec ctxt arg_tys res_ty rep_tycon
+	     univ_tvs ex_tvs eq_spec ctxt arg_tys res_ty 
+             rep_tycon is_promotable
   = do	{ wrap_name <- newImplicitBinder src_name mkDataConWrapperOcc
 	; work_name <- newImplicitBinder src_name mkDataConWorkerOcc
 	-- This last one takes the name of the data constructor in the source
@@ -198,7 +200,11 @@ buildDataCon src_name declared_infix arg_stricts field_lbls
 				     univ_tvs ex_tvs eq_spec ctxt
 				     arg_tys res_ty rep_tycon
 				     stupid_ctxt dc_ids
+				     promoted_tycon_maybe
 		dc_ids = mkDataConIds wrap_name work_name data_con
+		promoted_tycon_mabye
+                  | is_promotable = Just (buildPromotedDataCon data_con)
+                  | otherwise     = Nothing
 
 	; return data_con }
 

@@ -532,6 +532,8 @@ tcIfaceDataCons tycon_name tycon _ if_cons
 	IfNewTyCon con	 -> do 	{ data_con <- tc_con_decl con
 				; mkNewTyConRhs tycon_name tycon data_con }
   where
+    is_promotable = isPromotableTyCon tycon
+
     tc_con_decl (IfCon { ifConInfix = is_infix, 
 			 ifConUnivTvs = univ_tvs, ifConExTvs = ex_tvs,
 			 ifConOcc = occ, ifConCtxt = ctxt, ifConEqSpec = spec,
@@ -565,6 +567,7 @@ tcIfaceDataCons tycon_name tycon _ if_cons
 		       univ_tyvars ex_tyvars 
                        eq_spec theta 
 		       arg_tys orig_res_ty tycon
+		       is_promotable
 	}
     mk_doc con_name = ptext (sLit "Constructor") <+> ppr con_name
 
