@@ -365,7 +365,10 @@ tickishCounts Breakpoint{} = True
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
 tickishScoped HpcTick{}    = False
-tickishScoped Breakpoint{} = True -- we're going to do stacks
+tickishScoped Breakpoint{} = True
+   -- Breakpoints are scoped: eventually we're going to do call
+   -- stacks, but also this helps prevent the simplifier from moving
+   -- breakpoints around and changing their result type (see #1531).
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{} = n {profNoteCount = False}

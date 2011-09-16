@@ -158,15 +158,11 @@ emitCostCentreDecl cc = do
 	      modl,	-- char *module,
               zero,	-- StgWord time_ticks
               zero64,	-- StgWord64 mem_alloc
-	      subsumed, -- StgInt is_caf
-	      zero	-- struct _CostCentre *link
+              zero      -- struct _CostCentre *link
 	    ] 
   ; emitDataLits (mkCCLabel cc) lits
   }
-  where
-	subsumed | isCafCC cc = mkIntCLit (ord 'c')  -- 'c' == is a CAF
-		 | otherwise  = mkIntCLit (ord 'B')  -- 'B' == is boring
-	    
+
 
 emitCostCentreStackDecl
    :: CostCentreStack

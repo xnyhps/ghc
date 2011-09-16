@@ -541,10 +541,11 @@ decBackEdge( CostCentreStack *ccs, CostCentreStack *oldccs )
 static rtsBool
 ignoreCC (CostCentre *cc)
 {
-    if (    cc == CC_OVERHEAD 
+    if (RtsFlags.CcFlags.doCostCentres < COST_CENTRES_ALL &&
+        (   cc == CC_OVERHEAD
 	 || cc == CC_DONT_CARE
 	 || cc == CC_GC 
-	 || cc == CC_SYSTEM) {
+         || cc == CC_SYSTEM)) {
 	return rtsTrue;
     } else {
 	return rtsFalse;
@@ -554,11 +555,12 @@ ignoreCC (CostCentre *cc)
 static rtsBool
 ignoreCCS (CostCentreStack *ccs)
 {
-    if (    ccs == CCS_OVERHEAD 
-	 || ccs == CCS_DONT_CARE
-	 || ccs == CCS_GC 
-	 || ccs == CCS_SYSTEM) {
-	return rtsTrue;
+    if (RtsFlags.CcFlags.doCostCentres < COST_CENTRES_ALL &&
+        (   ccs == CCS_OVERHEAD
+         || ccs == CCS_DONT_CARE
+         || ccs == CCS_GC
+         || ccs == CCS_SYSTEM)) {
+        return rtsTrue;
     } else {
 	return rtsFalse;
     }
@@ -756,9 +758,8 @@ logCCS(CostCentreStack *ccs, nat indent, nat max_label_len, nat max_module_len)
 
     /* Only print cost centres with non 0 data ! */
 
-    if ( RtsFlags.CcFlags.doCostCentres >= COST_CENTRES_ALL ||
-         ! ignoreCCS(ccs))
-	/* force printing of *all* cost centres if -P -P */ 
+    if (!ignoreCCS(ccs))
+        /* force printing of *all* cost centres if -Pa */
     {
 
         fprintf(prof_file, "%-*s%-*s %-*s",
