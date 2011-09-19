@@ -33,7 +33,7 @@ module Type (
 	splitFunTys, splitFunTysN,
 	funResultTy, funArgTy, zipFunTys, 
 
-	mkTyConApp, mkTyConTy, tyConKiVars,
+	mkTyConApp, mkTyConTy,
 	tyConAppTyCon_maybe, tyConAppArgs_maybe, tyConAppTyCon, tyConAppArgs, 
 	splitTyConApp_maybe, splitTyConApp, 
 
@@ -62,7 +62,7 @@ module Type (
         funTyCon,
 
         -- ** Predicates on types
-        isTyVarTy, isFunTy, isDictTy, isPredTy,
+        isTyVarTy, isFunTy, isDictTy, isPredTy, isKindTy,
 
 	-- (Lifting and boxity)
 	isUnLiftedType, isUnboxedTupleType, isAlgType, isClosedAlgType,
@@ -482,10 +482,6 @@ funArgTy ty                = pprPanic "funArgTy" (ppr ty)
 -- mean a distinct type, but all other type-constructor applications
 -- including functions are returned as Just ..
 
-tyConKiVars :: TyCon -> [KindVar]
--- returns the quantified kind variables of a TyCon
-tyConKiVars tc = fst (splitForAllTys (tyConKind tc))
-
 -- | The same as @fst . splitTyConApp@
 tyConAppTyCon_maybe :: Type -> Maybe TyCon
 tyConAppTyCon_maybe ty | Just ty' <- coreView ty = tyConAppTyCon_maybe ty'
@@ -791,6 +787,9 @@ isPredTy :: Type -> Bool
 isPredTy ty
   | isSuperKind ty = False
   | otherwise = typeKind ty `eqKind` constraintKind
+
+isKindTy :: Type -> Bool
+isKindTy = isSuperKind . typeKind
 
 isClassPred, isEqPred, isIPPred :: PredType -> Bool
 isClassPred ty = case tyConAppTyCon_maybe ty of

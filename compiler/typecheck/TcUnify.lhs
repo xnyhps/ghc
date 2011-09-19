@@ -221,10 +221,8 @@ matchExpectedTyConApp tc orig_ty
 
     go n_req ty@(TyConApp tycon args) tys
       | tc == tycon
-      = ASSERT( n_req == n_args)   -- ty::*
+      = ASSERT( n_req == length args)   -- ty::*
         return (mkReflCo ty, args ++ tys)
-        where n_args = length (drop (length kvs) args)  -- remove the kind arguments
-              (kvs, _) = splitForAllTys (tyConKind tycon)
 
     go n_req (AppTy fun arg) tys
       | n_req > 0

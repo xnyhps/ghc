@@ -919,9 +919,11 @@ data UbxTupFlag = UT_Ok	| UT_NotOk
 	-- The "Ok" version means "ok if UnboxedTuples is on"
 
 ----------------------------------------
-check_mono_type :: Rank -> Type -> TcM ()	-- No foralls anywhere
+check_mono_type :: Rank -> KindOrType -> TcM ()	-- No foralls anywhere
 				      		-- No unlifted types of any kind
 check_mono_type rank ty
+  | isKind ty = return ()  -- IA0: Do we need to check kinds?
+  | otherwise
    = do { check_type rank UT_NotOk ty
 	; checkTc (not (isUnLiftedType ty)) (unliftedArgErr ty) }
 
@@ -953,7 +955,7 @@ check_type rank _ (AppTy ty1 ty2)
   = do	{ check_arg_type rank ty1
 	; check_arg_type rank ty2 }
 
-check_type rank ubx_tup ty@(TyConApp tc tys')
+check_type rank ubx_tup ty@(TyConApp tc tys)
   | isSynTyCon tc
   = do	{ 	-- Check that the synonym has enough args
 		-- This applies equally to open and closed synonyms
@@ -990,8 +992,6 @@ check_type rank ubx_tup ty@(TyConApp tc tys')
   = mapM_ (check_arg_type rank) tys
 
   where
-    (kvs, _) = splitForAllTys (tyConKind tc)  -- tys contain kind instantiation arguments
-    tys = drop (length kvs) tys'  -- IA0: Are there any checks to do on the kind arguments?
     ubx_tup_ok ub_tuples_allowed = case ubx_tup of
                                    UT_Ok -> ub_tuples_allowed
                                    _     -> False
@@ -1005,7 +1005,7 @@ check_type rank ubx_tup ty@(TyConApp tc tys')
 check_type _ _ ty = pprPanic "check_type" (ppr ty)
 
 ----------------------------------------
-check_arg_type :: Rank -> Type -> TcM ()
+check_arg_type :: Rank -> KindOrType -> TcM ()
 -- The sort of type that can instantiate a type variable,
 -- or be the argument of a type constructor.
 -- Not an unboxed tuple, but now *can* be a forall (since impredicativity)
@@ -1024,7 +1024,9 @@ check_arg_type :: Rank -> Type -> TcM ()
 --     But not in user code.
 -- Anyway, they are dealt with by a special case in check_tau_type
 
-check_arg_type rank ty 
+check_arg_type rank ty
+  | isKind ty = return ()  -- IA0: Do we need to check a kind?
+  | otherwise
   = do	{ impred <- xoptM Opt_ImpredicativeTypes
 	; let rank' = case rank of 	    -- Predictive => must be monotype
 	      	        MustBeMonoType     -> MustBeMonoType  -- Monotype, regardless
@@ -1414,7 +1416,7 @@ checkValidInstHead clas tys
                   all tcInstHeadTyAppAllTyVars tys)
                  (instTypeErr pp_pred head_type_args_tyvars_msg)
        ; checkTc (xopt Opt_MultiParamTypeClasses dflags ||
-                  isSingleton (dropWhile (isSuperKind.typeKind) tys))  -- only count type arguments
+                  isSingleton (dropWhile isKind tys))  -- only count type arguments
                  (instTypeErr pp_pred head_one_type_msg)
          -- May not contain type family applications
        ; mapM_ checkTyFamFreeness tys

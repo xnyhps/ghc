@@ -210,8 +210,7 @@ mkDataConStupidTheta tycon arg_tys univ_tvs
   | null stupid_theta = []	-- The common case
   | otherwise 	      = filter in_arg_tys stupid_theta
   where
-    tc_subst	 = zipTopTvSubst (tyConKiVars tycon ++ tyConTyVars tycon)  -- IA0: is this correct?
-                                 (mkTyVarTys univ_tvs)
+    tc_subst	 = zipTopTvSubst (tyConTyVars tycon) (mkTyVarTys univ_tvs)
     stupid_theta = substTheta tc_subst (tyConStupidTheta tycon)
 	-- Start by instantiating the master copy of the 
 	-- stupid theta, taken from the TyCon
