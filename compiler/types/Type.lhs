@@ -38,6 +38,7 @@ module Type (
 	splitTyConApp_maybe, splitTyConApp, 
 
         mkForAllTy, mkForAllTys, splitForAllTy_maybe, splitForAllTys, 
+        mkForAllArrowKinds,
 	applyTy, applyTys, applyTysD, isForAllTy, dropForAlls,
 	
 	-- (Newtypes)
@@ -139,7 +140,7 @@ module Type (
 -- We import the representation and primitive functions from TypeRep.
 -- Many things are reexported, but not the representation!
 
-import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind )
+import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind, splitKiTyVars )
 import TypeRep
 
 -- friends:
@@ -677,6 +678,13 @@ mkForAllTy tyvar ty
 -- | Wraps foralls over the type using the provided 'TyVar's from left to right
 mkForAllTys :: [TyVar] -> Type -> Type
 mkForAllTys tyvars ty = foldr ForAllTy ty tyvars
+
+mkForAllArrowKinds :: [TyVar] -> Kind -> Kind
+-- mkForAllArrowKinds [k1, k2, (a:k1 -> *)] k2
+-- returns forall k1 k2. (k1 -> *) -> k2
+mkForAllArrowKinds ktvs res =
+  mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) res
+  where (kvs, tvs) = splitKiTyVars ktvs
 
 isForAllTy :: Type -> Bool
 isForAllTy (ForAllTy _ _) = True

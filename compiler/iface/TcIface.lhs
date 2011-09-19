@@ -443,8 +443,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
 	    { stupid_theta <- tcIfaceCtxt ctxt
 	    ; cons <- tcIfaceDataCons tc_name tycon tyvars rdr_cons
 	    ; mb_fam_inst  <- tcFamInst mb_family
-	    ; buildAlgTyCon tc_name [] tyvars stupid_theta cons is_rec
-                              --    ^- IA0_TODO: check this
+	    ; buildAlgTyCon tc_name tyvars stupid_theta cons is_rec
 			    gadt_syn parent mb_fam_inst
 	    })
     ; traceIf (text "tcIfaceDecl4" <+> ppr tycon)
@@ -532,8 +531,6 @@ tcIfaceDataCons tycon_name tycon _ if_cons
 	IfNewTyCon con	 -> do 	{ data_con <- tc_con_decl con
 				; mkNewTyConRhs tycon_name tycon data_con }
   where
-    is_promotable = isPromotableTyCon tycon
-
     tc_con_decl (IfCon { ifConInfix = is_infix, 
 			 ifConUnivTvs = univ_tvs, ifConExTvs = ex_tvs,
 			 ifConOcc = occ, ifConCtxt = ctxt, ifConEqSpec = spec,
@@ -567,7 +564,6 @@ tcIfaceDataCons tycon_name tycon _ if_cons
 		       univ_tyvars ex_tyvars 
                        eq_spec theta 
 		       arg_tys orig_res_ty tycon
-		       is_promotable
 	}
     mk_doc con_name = ptext (sLit "Constructor") <+> ppr con_name
 

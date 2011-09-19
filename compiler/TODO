@@ -29,6 +29,7 @@
     A TyCon is promotable if:
       - it's kind is promotable  * -> * ... -> *
       - all its DataCon are promotable
+  No change to iface necessary: see bc7b69204327d72f44c17361717961e45cf91346
 
 * Renaming in TcHsType
   scDs -> tc

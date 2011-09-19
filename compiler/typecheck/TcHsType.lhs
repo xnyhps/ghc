@@ -19,9 +19,9 @@ module TcHsType (
 	scDsLHsKind, scDsLHsMaybeKind,
 
                 -- Typechecking kinded types
-	tcHsKindedContext, tcHsKindedType, tcHsBangType,
+	tcHsType, tcHsKindedContext, tcHsKindedType, tcHsBangType,
 	tcTyVarBndrs, tcTyVarBndrsKindGen, dsHsType,
-	tcDataKindSig,
+	tcDataKindSig, tcTyClTyVars,
 
         ExpKind(..), EkCtxt(..), ekConstraint,
 
@@ -51,6 +51,7 @@ import TyCon
 import DataCon ( DataCon, dataConUserType )
 import TysPrim ( liftedTypeKindTyConName, constraintKindTyConName )
 import Class
+import RdrName ( rdrNameSpace, nameRdrName )
 import Name
 import NameSet
 import TysWiredIn
@@ -166,6 +167,14 @@ tcHsSigTypeNC ctxt hs_ty
 	; ty <- tcHsKindedType kinded_ty
 	; checkValidType ctxt ty	
 	; return ty }
+
+tcHsType :: LHsType Name -> TcM Type
+-- kind check and desugar
+-- no validity checking because of knot-tying
+tcHsType hs_ty
+  = do { (kinded_ty, _) <- kc_lhs_type hs_ty
+       ; ty <- tcHsKindedType kinded_ty
+       ; return ty }
 
 tcHsInstHead :: LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
 -- Typecheck an instance head.  We can't use 
@@ -536,7 +545,7 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
         ATyVar _ ty             -> wrap_mono (typeKind ty)
-        AThing kind             -> wrap_poly kind
+        AThing kind             -> wrap_mono kind
         AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
         AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
         _                       -> wrongThingErr "type" thing name
@@ -715,12 +724,18 @@ ds_app ty tys = do
 
 ds_var_app :: Name -> [Type] -> TcM Type
 ds_var_app name arg_tys = do
-    thing <- tcLookup name
+    thing <- lookup name
     case thing of
 	ATyVar _ ty         -> return (mkAppTys ty arg_tys)
 	AGlobal (ATyCon tc) -> return (mkTyConApp tc arg_tys)
 	AGlobal (ADataCon dc) -> return (mkTyConApp (buildPromotedDataTyCon dc) arg_tys)
 	_                   -> wrongThingErr "type" thing name
+    where
+      lookup name | isTvNameSpace ns = tcLookup name
+                  | isTcClsNameSpace ns = AGlobal <$> tcLookupGlobal name
+                  | isDataConNameSpace ns = AGlobal <$> tcLookupGlobal name
+                  | otherwise = panic "ds_var_app weird name space"
+        where ns = rdrNameSpace (nameRdrName name)
 \end{code}
 
 \begin{code}
@@ -787,6 +802,26 @@ tcTyVarBndrs bndrs thing_inside = do
            ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
 	   ; return (mkTyVar name kind') }
 
+tcTyClTyVars :: Name -> [LHsTyVarBndr Name]	-- LHS of the type or class decl
+             -> ([TyVar] -> Kind -> TcM a) -> TcM a
+-- tcTyClTyVars T [a,b] calls thing_inside with
+-- [k1,k2,a,b] (k2 -> *)  where T : forall k1 k2 (a:k1 -> *) (b:k1). k2 -> *
+tcTyClTyVars tycon tyvars thing_inside
+  = do { thing <- tcLookup tycon
+       ; let { kind =
+                 case thing of
+                   AThing kind -> kind
+                   _ -> panic "tcTyClTyVars"
+                     -- We only call tcTyClTyVars during typechecking in
+                     -- TcTyClDecls, where the local env is extended with
+                     -- the generalized_env (mapping Names to AThings).
+             ; (kvs, body) = splitForAllTys kind
+             ; (kinds, res) = splitKindFunTysN (length names) body
+             ; names = hsLTyVarNames tyvars
+             ; tvs = zipWith mkTyVar names kinds
+             ; all_vs = kvs ++ tvs }
+       ; tcExtendTyVarEnv all_vs (thing_inside all_vs res) }
+
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([KindVar] -> [TyVar] -> TcM r) -> TcM r
 tcTyVarBndrsKindGen bndrs thing_inside = do
     (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
@@ -832,14 +867,13 @@ freeFlexisOfTypes tys = do
   return $ varSetElems $ unionVarSets $ map mkVarSet fss
 
 -----------------------------------
-tcDataKindSig :: Maybe Kind -> TcM [TyVar]
+tcDataKindSig :: Kind -> TcM [TyVar]
 -- GADT decls can have a (perhaps partial) kind signature
 --	e.g.  data T :: * -> * -> * where ...
 -- This function makes up suitable (kinded) type variables for 
 -- the argument kinds, and checks that the result kind is indeed *.
 -- We use it also to make up argument type variables for for data instances.
-tcDataKindSig Nothing = return []
-tcDataKindSig (Just kind)
+tcDataKindSig kind
   = do	{ checkTc (isLiftedTypeKind res_kind) (badKindSig kind)
 	; span <- getSrcSpanM
 	; us   <- newUniqueSupply 
@@ -1169,6 +1203,8 @@ sc_ds_app ki kis = do
     HsTyVar tc -> sc_ds_var_app tc arg_kis
     _ -> failWithTc (quotes (ppr ki) <+> ptext (sLit "is not a kind constructor"))
 
+-- IA0_TODO: rewrite this function in one equation and check if isSuperKind (tyConKind tc)
+-- Also I might need to add ATyVar
 sc_ds_var_app :: Name -> [Kind] -> TcM Kind
 sc_ds_var_app name arg_kis
   |  name == liftedTypeKindTyConName

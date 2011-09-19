@@ -80,7 +80,6 @@ vectTyConDecl tycon
 
         liftDs $ buildAlgTyCon 
                         name'               -- new name
-                        []                  -- no kind polymorphism
                         (tyConTyVars tycon) -- keep original type vars.
                         []                  -- no stupid theta.
                         rhs'                -- new constructor defs.

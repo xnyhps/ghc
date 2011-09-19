@@ -21,7 +21,7 @@ module TcEnv(
 	tcLookupFamInst, tcLookupDataFamInst,
 	
 	-- Local environment
-	tcExtendKindEnv, tcExtendKindEnvTvs, tcExtendNothingEnv,
+	tcExtendKindEnv, tcExtendKindEnvTvs, tcExtendTcTyThingEnv,
 	tcExtendTyVarEnv, tcExtendTyVarEnv2, 
 	tcExtendGhciEnv, tcExtendLetEnv,
 	tcExtendIdEnv, tcExtendIdEnv1, tcExtendIdEnv2, 
@@ -355,12 +355,12 @@ getInLocalScope = do { lcl_env <- getLclTypeEnv
 \end{code}
 
 \begin{code}
-tcExtendNothingEnv :: [Name] -> TcM r -> TcM r
-tcExtendNothingEnv names thing_inside
+tcExtendTcTyThingEnv :: [(Name, TcTyThing)] -> TcM r -> TcM r
+tcExtendTcTyThingEnv things thing_inside
   = updLclEnv upd thing_inside
   where
     upd lcl_env = lcl_env { tcl_env = extend (tcl_env lcl_env) }
-    extend env  = extendNameEnvList env [(n, ANothing) | n <- names]
+    extend env  = extendNameEnvList env things
 
 tcExtendKindEnv :: [(Name, TcKind)] -> TcM r -> TcM r
 tcExtendKindEnv things thing_inside

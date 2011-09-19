@@ -597,14 +597,14 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
        ; let ex_ok = True       -- Existentials ok for type families!
        ; fixM (\ rep_tycon -> do
              { let orig_res_ty = mkTyConApp fam_tc t_typats
-             ; data_cons <- tcConDecls ex_ok rep_tycon
+             ; data_cons <- tcConDecls new_or_data ex_ok rep_tycon
                                        (t_tvs, orig_res_ty) k_cons
              ; tc_rhs <-
                  case new_or_data of
                    DataType -> return (mkDataTyConRhs data_cons)
                    NewType  -> ASSERT( not (null data_cons) )
                                mkNewTyConRhs rep_tc_name rep_tycon (head data_cons)
-             ; buildAlgTyCon rep_tc_name [] t_tvs stupid_theta tc_rhs Recursive
+             ; buildAlgTyCon rep_tc_name t_tvs stupid_theta tc_rhs Recursive
                              h98_syntax NoParentTyCon (Just (fam_tc, t_typats))
                  -- We always assume that indexed types are recursive.  Why?
                  -- (1) Due to their open nature, we can never be sure that a

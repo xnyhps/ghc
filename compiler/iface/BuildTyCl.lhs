@@ -57,9 +57,11 @@ buildSynTyCon tc_name tvs rhs rhs_kind parent mb_family
   = return (mkSynTyCon tc_name kind tvs rhs parent)
   where
     kind = mkArrowKinds (map tyVarKind tvs) rhs_kind
+      -- IA0_TODO: make a smart mkForallArrowKinds tvs rhs_kind
+      -- looking at the kind of tvs to know if it is a kind var or type var
 
 ------------------------------------------------------
-buildAlgTyCon :: Name -> [KindVar] -> [TyVar]
+buildAlgTyCon :: Name -> [TyVar]        -- ^ Kind variables adn type variables
 	      -> ThetaType		-- ^ Stupid theta
 	      -> AlgTyConRhs
 	      -> RecFlag
@@ -68,22 +70,21 @@ buildAlgTyCon :: Name -> [KindVar] -> [TyVar]
 	      -> Maybe (TyCon, [Type])  -- ^ family instance if applicable
 	      -> TcRnIf m n TyCon
 
-buildAlgTyCon tc_name kvs tvs stupid_theta rhs is_rec gadt_syn
+buildAlgTyCon tc_name ktvs stupid_theta rhs is_rec gadt_syn
 	      parent mb_family
   | Just fam_inst_info <- mb_family
   = -- We need to tie a knot as the coercion of a data instance depends
      -- on the instance representation tycon and vice versa.
     ASSERT( isNoParent parent )
     fixM $ \ tycon_rec -> do 
-    { fam_parent <- mkFamInstParentInfo tc_name tvs fam_inst_info tycon_rec
-    ; return (mkAlgTyCon tc_name kind tvs stupid_theta rhs
+    { fam_parent <- mkFamInstParentInfo tc_name ktvs fam_inst_info tycon_rec
+    ; return (mkAlgTyCon tc_name kind ktvs stupid_theta rhs
 		         fam_parent is_rec gadt_syn) }
 
   | otherwise
-  = return (mkAlgTyCon tc_name kind tvs stupid_theta rhs
+  = return (mkAlgTyCon tc_name kind ktvs stupid_theta rhs
 	               parent is_rec gadt_syn)
-  where
-    kind = mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) liftedTypeKind
+  where kind = mkForAllArrowKinds ktvs liftedTypeKind
 
 -- | If a family tycon with instance types is given, the current tycon is an
 -- instance of that family and we need to
@@ -178,15 +179,13 @@ buildDataCon :: Name -> Bool
 					-- or the GADT equalities
 	    -> [Type] -> Type		-- Argument and result types
 	    -> TyCon			-- Rep tycon
-	    -> Bool			-- TyCon is promotable to be a kind
 	    -> TcRnIf m n DataCon
 -- A wrapper for DataCon.mkDataCon that
 --   a) makes the worker Id
 --   b) makes the wrapper Id if necessary, including
 --	allocating its unique (hence monadic)
 buildDataCon src_name declared_infix arg_stricts field_lbls
-	     univ_tvs ex_tvs eq_spec ctxt arg_tys res_ty 
-             rep_tycon is_promotable
+	     univ_tvs ex_tvs eq_spec ctxt arg_tys res_ty rep_tycon
   = do	{ wrap_name <- newImplicitBinder src_name mkDataConWrapperOcc
 	; work_name <- newImplicitBinder src_name mkDataConWorkerOcc
 	-- This last one takes the name of the data constructor in the source
@@ -200,11 +199,7 @@ buildDataCon src_name declared_infix arg_stricts field_lbls
 				     univ_tvs ex_tvs eq_spec ctxt
 				     arg_tys res_ty rep_tycon
 				     stupid_ctxt dc_ids
-				     promoted_tycon_maybe
 		dc_ids = mkDataConIds wrap_name work_name data_con
-		promoted_tycon_mabye
-                  | is_promotable = Just (buildPromotedDataCon data_con)
-                  | otherwise     = Nothing
 
 	; return data_con }
 

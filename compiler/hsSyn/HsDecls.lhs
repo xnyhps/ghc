@@ -445,7 +445,7 @@ data TyClDecl name
 		tcdLName  :: Located name,	        -- type constructor
 		tcdTyVars :: [LHsTyVarBndr name],	-- type variables
 		tcdKind   :: Maybe (LHsKind name),      -- result kind
-		tcdTcKind :: PostTcKind
+		tcdTcKind :: PostTcKind  -- IA0_TODO: remove this
     }
 
 
