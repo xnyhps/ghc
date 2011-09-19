@@ -40,7 +40,7 @@ import IParam
 import TyCon
 import DataCon
 import TysWiredIn
-import TysPrim          ( anyTyConOfKind )
+import TysPrim          ( anyTyConOfKind, tySuperKindTyCon )
 import BasicTypes       ( Arity, strongLoopBreaker )
 import qualified Var
 import VarEnv
@@ -1265,6 +1265,7 @@ tcIfaceTyCon IfaceUnliftedTypeKindTc = return unliftedTypeKindTyCon
 tcIfaceTyCon IfaceArgTypeKindTc      = return argTypeKindTyCon
 tcIfaceTyCon IfaceUbxTupleKindTc     = return ubxTupleKindTyCon
 tcIfaceTyCon IfaceConstraintKindTc   = return constraintKindTyCon
+tcIfaceTyCon IfaceSuperKindTc        = return tySuperKindTyCon
 
 -- Even though we are in an interface file, we want to make
 -- sure the instances and RULES of this tycon are loaded 
@@ -1331,10 +1332,18 @@ bindIfaceTyVar (occ,kind) thing_inside
 bindIfaceTyVars :: [IfaceTvBndr] -> ([TyVar] -> IfL a) -> IfL a
 bindIfaceTyVars bndrs thing_inside
   = do	{ names <- newIfaceNames (map mkTyVarOccFS occs)
-  	; tyvars <- zipWithM mk_iface_tyvar names kinds
-	; extendIfaceTyVarEnv tyvars (thing_inside tyvars) }
+        ; let (kis_kind, tys_kind) = span isSuperIfaceKind kinds
+              (kis_name, tys_name) = splitAt (length kis_kind) names
+  	; kvs <- zipWithM mk_iface_tyvar kis_name kis_kind
+	; extendIfaceTyVarEnv kvs $ do
+        { tvs <- zipWithM mk_iface_tyvar tys_name tys_kind
+        ; extendIfaceTyVarEnv tvs (thing_inside (kvs ++ tvs)) } }
   where
     (occs,kinds) = unzip bndrs
+
+isSuperIfaceKind :: IfaceKind -> Bool
+isSuperIfaceKind (IfaceTyConApp IfaceSuperKindTc []) = True
+isSuperIfaceKind _ = False
 
 mk_iface_tyvar :: Name -> IfaceKind -> IfL TyVar
 mk_iface_tyvar name ifKind
@@ -1348,12 +1357,14 @@ bindIfaceTyVars_AT :: [IfaceTvBndr] -> ([TyVar] -> IfL a) -> IfL a
 -- Here 'a' is in scope when we look at the 'data T'
 bindIfaceTyVars_AT [] thing_inside
   = thing_inside []
-bindIfaceTyVars_AT (b@(tv_occ,_) : bs) thing_inside 
-  = bindIfaceTyVars_AT bs $ \ bs' ->
-    do { mb_tv <- lookupIfaceTyVar tv_occ
-       ; case mb_tv of
-      	   Just b' -> thing_inside (b':bs')
-	   Nothing -> bindIfaceTyVar b $ \ b' -> 
-	   	      thing_inside (b':bs') }
-\end{code} 
+bindIfaceTyVars_AT (b@(tv_occ,_) : bs) thing_inside
+  = do { mb_tv <- lookupIfaceTyVar tv_occ
+       ; let bind_b :: (TyVar -> IfL a) -> IfL a
+             bind_b = case mb_tv of
+                  	Just b' -> \k -> k b'
+            	        Nothing -> bindIfaceTyVar b
+       ; bind_b $ \b' ->
+         bindIfaceTyVars_AT bs $ \bs' ->
+         thing_inside (b':bs') }
+\end{code}
 

@@ -960,6 +960,7 @@ instance Binary IfaceTyCon where
    put_ bh IfaceUbxTupleKindTc     = putByte bh 9
    put_ bh IfaceArgTypeKindTc      = putByte bh 10
    put_ bh IfaceConstraintKindTc   = putByte bh 15
+   put_ bh IfaceSuperKindTc        = putByte bh 16
    put_ bh (IfaceTupTc bx ar)  = do { putByte bh 11; put_ bh bx; put_ bh ar }
    put_ bh (IfaceTc ext)       = do { putByte bh 12; put_ bh ext }
    put_ bh (IfaceIPTc n)       = do { putByte bh 13; put_ bh n }
@@ -979,6 +980,7 @@ instance Binary IfaceTyCon where
           9 -> return IfaceUbxTupleKindTc
           10 -> return IfaceArgTypeKindTc
           15 -> return IfaceConstraintKindTc
+          16 -> return IfaceSuperKindTc
 	  11 -> do { bx <- get bh; ar <- get bh; return (IfaceTupTc bx ar) }
 	  12 -> do { ext <- get bh; return (IfaceTc ext) }
 	  13 -> do { n <- get bh; return (IfaceIPTc n) }

@@ -94,6 +94,9 @@ data IfaceTyCon 	-- Encodes type consructors, kind constructors
   | IfaceLiftedTypeKindTc | IfaceOpenTypeKindTc | IfaceUnliftedTypeKindTc
   | IfaceUbxTupleKindTc | IfaceArgTypeKindTc | IfaceConstraintKindTc
 
+  -- SuperKind constructor
+  | IfaceSuperKindTc
+
   -- Coercion constructors
 data IfaceCoCon
   = IfaceCoAx IfExtName
@@ -115,6 +118,7 @@ ifaceTyConName IfaceUnliftedTypeKindTc = unliftedTypeKindTyConName
 ifaceTyConName IfaceUbxTupleKindTc     = ubxTupleKindTyConName
 ifaceTyConName IfaceArgTypeKindTc      = argTypeKindTyConName
 ifaceTyConName IfaceConstraintKindTc   = constraintKindTyConName
+ifaceTyConName IfaceSuperKindTc        = tySuperKindTyConName
 ifaceTyConName (IfaceTc ext)           = ext
 ifaceTyConName (IfaceIPTc n)           = pprPanic "ifaceTyConName:IPTc" (ppr n)
 ifaceTyConName (IfaceAnyTc k)          = pprPanic "ifaceTyConName:AnyTc" (ppr k)
@@ -394,6 +398,7 @@ toIfaceWiredInTyCon tc nm
   | nm == argTypeKindTyConName      = IfaceArgTypeKindTc
   | nm == constraintKindTyConName   = IfaceConstraintKindTc
   | nm == ubxTupleKindTyConName     = IfaceUbxTupleKindTc
+  | nm == tySuperKindTyConName      = IfaceSuperKindTc
   | otherwise		            = IfaceTc nm
 
 ----------------

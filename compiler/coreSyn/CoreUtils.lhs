@@ -63,6 +63,7 @@ import PrimOp
 import Id
 import IdInfo
 import Type
+import Kind
 import Coercion
 import TyCon
 import CostCentre
@@ -1003,7 +1004,11 @@ dataConInstPat fss uniqs con inst_tys
         kind     = tyVarKind var
 
       -- Make the instantiating substitution
-    subst = zipOpenTvSubst (univ_tvs ++ ex_tvs) (inst_tys ++ map mkTyVarTy ex_bndrs)
+    subst = zipOpenTvSubst (univ_tvs ++ ex_tvs)
+                           (map (Type.substTy ksubst) (inst_tys ++ map mkTyVarTy ex_bndrs))
+      where  -- we need to do kind substitution first
+        ksubst = zipOpenTvSubst univ_kvs (take (length univ_kvs) inst_tys)
+        (univ_kvs, _) = splitKiTyVars univ_tvs
 
       -- Make value vars, instantiating types
     mk_id_var uniq fs ty = mkUserLocal (mkVarOccFS fs) uniq (Type.substTy subst ty) noSrcSpan
