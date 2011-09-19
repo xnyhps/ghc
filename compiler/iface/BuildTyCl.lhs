@@ -55,10 +55,7 @@ buildSynTyCon tc_name tvs rhs rhs_kind parent mb_family
 
   | otherwise
   = return (mkSynTyCon tc_name kind tvs rhs parent)
-  where
-    kind = mkArrowKinds (map tyVarKind tvs) rhs_kind
-      -- IA0_TODO: make a smart mkForallArrowKinds tvs rhs_kind
-      -- looking at the kind of tvs to know if it is a kind var or type var
+  where kind = mkForAllArrowKinds tvs rhs_kind
 
 ------------------------------------------------------
 buildAlgTyCon :: Name -> [TyVar]        -- ^ Kind variables adn type variables
@@ -141,7 +138,7 @@ mkNewTyConRhs tycon_name tycon con
                              -- Coreview looks through newtypes with a Nothing
                              -- for nt_co, or uses explicit coercions otherwise
   where
-    tvs    = tyConKiVars tycon ++ tyConTyVars tycon
+    tvs    = tyConTyVars tycon
     inst_con_ty = applyTys (dataConUserType con) (mkTyVarTys tvs)
     rhs_ty = ASSERT( isFunTy inst_con_ty ) funArgTy inst_con_ty
 	-- Instantiate the data con with the 

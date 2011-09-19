@@ -545,7 +545,12 @@ kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
     traceTc "lk2" (ppr name <+> ppr thing)
     case thing of
         ATyVar _ ty             -> wrap_mono (typeKind ty)
-        AThing kind             -> wrap_mono kind
+        AThing kind             -> wrap_poly kind
+               -- Should be wrap_mono in the first kind checking
+               -- (before kind generalization in TcTyClsDecls) and
+               -- wrap_poly in the second kind checking before
+               -- desugaring. Since we cannot make the difference,
+               -- we use wrap_poly which works for both.
         AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
         AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
         _                       -> wrongThingErr "type" thing name
@@ -822,11 +827,14 @@ tcTyClTyVars tycon tyvars thing_inside
              ; all_vs = kvs ++ tvs }
        ; tcExtendTyVarEnv all_vs (thing_inside all_vs res) }
 
-tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([KindVar] -> [TyVar] -> TcM r) -> TcM r
+tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
+-- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
+-- calls thing_inside with [(k :: BOX), (f :: k -> *), (a :: k)]
 tcTyVarBndrsKindGen bndrs thing_inside = do
     (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
     let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
-    tcExtendTyVarEnv (kvs ++ tyvars) (thing_inside kvs tyvars)
+        ktvs = kvs ++ tyvars
+    tcExtendTyVarEnv ktvs (thing_inside ktvs)
 
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 kindGeneralizeKinds kinds = do

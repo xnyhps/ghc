@@ -790,7 +790,7 @@ tcConDecl new_or_data existential_ok rep_tycon res_tmpl 	-- Data types
               , con_details = details, con_res = res_ty }
         <- kcConDecl new_or_data con
     ; addErrCtxt (dataConCtxt name) $
-    tcTyVarBndrs tvs $ \ tvs' -> do
+    tcTyVarBndrsKindGen tvs $ \ tvs' -> do
     { ctxt' <- tcHsKindedContext =<< kcHsContext ctxt
     ; checkTc (existential_ok || conRepresentibleWithH98Syntax con)
 	      (badExistential name)
@@ -866,8 +866,7 @@ tcResultType (tmpl_tvs, res_tmpl) dc_tvs (ResTyGADT res_ty)
 			    -> (tv:univs,   eqs)
 		    _other  -> (new_tmpl:univs, (new_tmpl,ty):eqs)
                                where  -- see Note [Substitution in template variables kinds]
-                                 new_kind = substTy subst (tyVarKind tmpl)
-                                 new_tmpl = setTyVarKind tmpl new_kind
+                                 new_tmpl = updateTyVarKind (substTy subst) tmpl
 		| otherwise = pprPanic "tcResultType" (ppr res_ty)
 	      ex_tvs = dc_tvs `minusList` univ_tvs
 
@@ -895,7 +894,7 @@ data SList s as where
 
 We call tcResultType with
   tmpl_tvs = [(k :: BOX), (s :: k -> *), (as :: List k)]
-  res_tmpl = SList k s as)
+  res_tmpl = SList k s as
   res_ty = ResTyGADT (SList k1 (s1 :: k1 -> *) (Nil k1))
 
 We get subst:
