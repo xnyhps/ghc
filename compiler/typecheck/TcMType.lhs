@@ -1414,7 +1414,7 @@ checkValidInstHead clas tys
                   all tcInstHeadTyAppAllTyVars tys)
                  (instTypeErr pp_pred head_type_args_tyvars_msg)
        ; checkTc (xopt Opt_MultiParamTypeClasses dflags ||
-                  isSingleton tys)
+                  isSingleton (dropWhile (isSuperKind.typeKind) tys))  -- only count type arguments
                  (instTypeErr pp_pred head_one_type_msg)
          -- May not contain type family applications
        ; mapM_ checkTyFamFreeness tys

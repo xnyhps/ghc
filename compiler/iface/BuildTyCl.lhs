@@ -301,7 +301,7 @@ buildClass no_unf tycon_name tvs sc_theta fds at_items sig_stuff tc_isrec
 		 then mkNewTyConRhs tycon_name rec_tycon dict_con
 		 else return (mkDataTyConRhs [dict_con])
 
-	; let {	clas_kind = mkArrowKinds (map tyVarKind tvs) constraintKind
+	; let {	clas_kind = mkForAllArrowKinds tvs constraintKind
 
  	      ; tycon = mkClassTyCon tycon_name clas_kind tvs
  	                             rhs rec_clas tc_isrec

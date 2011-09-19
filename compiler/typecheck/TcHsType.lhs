@@ -193,12 +193,14 @@ tcHsInstHead (L loc hs_ty)
                -- head we only allow something of kind Constraint.
             return (tv_names', ctxt', cls_ty')
           -- Now desugar the kind-checked type
-          let Just (cls_name, tys) = splitHsClassTy_maybe cls_ty
+          cls_ty' <- ds_type cls_ty
+          let Just (tc, tys) = splitTyConApp_maybe cls_ty'
           tcTyVarBndrs tvs  $ \ tvs' -> do
             ctxt' <- dsHsTypes ctxt
-            clas <- tcLookupClass cls_name
-            tys' <- dsHsTypes tys
-            return (tvs', ctxt', clas, tys')
+            clas <- case tyConClass_maybe tc of
+                      Just clas -> return clas
+                      Nothing -> failWithTc (ppr tc <+> ptext (sLit "is not a class"))
+            return (tvs', ctxt', clas, tys)
         _ -> failWithTc (ptext (sLit "Malformed instance type"))
       where (tv_names, ctxt, cls_ty) = splitHsForAllTy ty
 
