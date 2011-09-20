@@ -1222,8 +1222,8 @@ check_pred_ty' dflags ctxt (IrredPred pred)
                      (predIrredBadCtxtErr pred)
 
 -------------------------
-check_class_pred_tys :: DynFlags -> SourceTyCtxt -> [Type] -> Bool
-check_class_pred_tys dflags ctxt tys 
+check_class_pred_tys :: DynFlags -> SourceTyCtxt -> [KindOrType] -> Bool
+check_class_pred_tys dflags ctxt kts
   = case ctxt of
 	TypeCtxt      -> True	-- {-# SPECIALISE instance Eq (T Int) #-} is fine
 	InstThetaCtxt -> flexible_contexts || undecidable_ok || all tcIsTyVarTy tys
@@ -1231,8 +1231,41 @@ check_class_pred_tys dflags ctxt tys
 				-- checkInstTermination
 	_             -> flexible_contexts || all tyvar_head tys
   where
+    (_, tys) = span isKind kts  -- see Note [Kind polymorphic type classes]
     flexible_contexts = xopt Opt_FlexibleContexts dflags
     undecidable_ok = xopt Opt_UndecidableInstances dflags
+
+{-
+Note [Kind polymorphic type classes]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+class C f where
+  empty :: f a
+-- C :: forall k. k -> Constraint
+-- empty :: forall (a :: k). f a
+
+MultiParam:
+~~~~~~~~~~~
+
+instance C Maybe where
+  empty = Nothing
+
+The dictionary gets type [C * Maybe] even if it's not a MultiParam
+type class.
+
+Flexible:
+~~~~~~~~~
+
+data D a = D
+-- D :: forall k. k -> *
+
+instance C D where
+  empty = D
+
+The dictionary gets type [C * (D *)]. IA0_TODO it should be
+generalized actually.
+
+-}
 
 -------------------------
 tyvar_head :: Type -> Bool

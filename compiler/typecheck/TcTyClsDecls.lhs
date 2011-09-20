@@ -240,7 +240,7 @@ kcTyClGroup decls
         ; generalized_kinds <- flip mapM alg_kinds $ \(name, kc_kind) -> do
                     { (kvs, body) <- kindGeneralizeKind kc_kind
                     ; return $ (name, mkForAllTys kvs body) }
-        ; traceTc "IA0_DEBUG generalized" (ppr generalized_kinds)
+        ; traceTc "tcTyAndCl generalized" (ppr generalized_kinds)
         ; tcExtendKindEnv generalized_kinds getLclEnv } } }
 
 flattenATs :: [LTyClDecl Name] -> [LTyClDecl Name]

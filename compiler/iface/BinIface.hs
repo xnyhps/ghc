@@ -905,6 +905,7 @@ instance Binary IfaceType where
     put_ bh (IfaceTyConApp IfaceUbxTupleKindTc [])     = putByte bh 15
     put_ bh (IfaceTyConApp IfaceArgTypeKindTc [])      = putByte bh 16
     put_ bh (IfaceTyConApp IfaceConstraintKindTc [])   = putByte bh 21
+    put_ bh (IfaceTyConApp IfaceSuperKindTc [])        = putByte bh 22
     put_ bh (IfaceTyConApp (IfaceAnyTc k) []) 	       = do { putByte bh 17; put_ bh k }
 
 	-- Generic cases
@@ -941,6 +942,7 @@ instance Binary IfaceType where
               15 -> return (IfaceTyConApp IfaceUbxTupleKindTc [])
               16 -> return (IfaceTyConApp IfaceArgTypeKindTc [])
               21 -> return (IfaceTyConApp IfaceConstraintKindTc [])
+              22 -> return (IfaceTyConApp IfaceSuperKindTc [])
               17 -> do { k <- get bh; return (IfaceTyConApp (IfaceAnyTc k) []) }
 
 	      18 -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp (IfaceTc tc) tys) }
