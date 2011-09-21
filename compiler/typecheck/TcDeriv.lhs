@@ -1676,7 +1676,7 @@ genDtMeta (tc,metaDts) =
         d_inst = mkLocalInstance d_dfun $ NoOverlap safeOverlap
         d_binds = VanillaInst dBinds [] False
         d_dfun  = mkDictFunId d_dfun_name (tyConTyVars tc) [] dClas 
-                    [ tyConKind d_metaTycon, mkTyConTy d_metaTycon ]
+                    [ mkTyConTy d_metaTycon ]
         d_mkInst = (InstInfo { iSpec = d_inst, iBinds = d_binds }, [])
         
         -- Constructor
@@ -1685,7 +1685,7 @@ genDtMeta (tc,metaDts) =
                   | (c, ds) <- myZip1 c_metaTycons c_dfun_names ]
         c_binds = [ VanillaInst c [] False | c <- cBinds ]
         c_dfun c dfun_name = mkDictFunId dfun_name (tyConTyVars tc) [] cClas 
-                               [ tyConKind c, mkTyConTy c ]
+                               [ mkTyConTy c ]
         c_mkInst = [ (InstInfo { iSpec = is, iBinds = bs }, []) 
                    | (is,bs) <- myZip1 c_insts c_binds ]
         
@@ -1696,7 +1696,7 @@ genDtMeta (tc,metaDts) =
                     (myZip2 s_metaTycons s_dfun_names)
         s_binds = [ [ VanillaInst s [] False | s <- ss ] | ss <- sBinds ]
         s_dfun s dfun_name = mkDictFunId dfun_name (tyConTyVars tc) [] sClas
-                               [ tyConKind s, mkTyConTy s ]
+                               [ mkTyConTy s ]
         s_mkInst = map (map (\(is,bs) -> (InstInfo {iSpec=is, iBinds=bs}, [])))
                      (myZip2 s_insts s_binds)
        
