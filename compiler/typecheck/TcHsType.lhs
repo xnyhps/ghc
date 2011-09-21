@@ -186,21 +186,21 @@ tcHsInstHead (L loc hs_ty)
   where
     kc_ds_inst_head ty = case splitHsClassTy_maybe cls_ty of
         Just _ -> do -- Kind-checking first
-          (tvs, ctxt, cls_ty) <- kcHsTyVars tv_names $ \ tv_names' -> do
-            ctxt' <- mapM kcHsLPredType ctxt
-            cls_ty' <- kc_check_hs_type cls_ty ekConstraint
+        { (tvs, ctxt, cls_ty) <- kcHsTyVars tv_names $ \ tv_names' -> do
+            { ctxt' <- mapM kcHsLPredType ctxt
+            ; cls_ty' <- kc_check_hs_type cls_ty ekConstraint
                -- The body of a forall is usually lifted, but in an instance
                -- head we only allow something of kind Constraint.
-            return (tv_names', ctxt', cls_ty')
+            ; return (tv_names', ctxt', cls_ty') }
           -- Now desugar the kind-checked type
-          cls_ty' <- ds_type cls_ty
-          let Just (tc, tys) = splitTyConApp_maybe cls_ty'
-          tcTyVarBndrs tvs  $ \ tvs' -> do
+        ; tcTyVarBndrs tvs  $ \ tvs' -> do
+            cls_ty' <- ds_type cls_ty
+            let Just (tc, tys) = splitTyConApp_maybe cls_ty'
             ctxt' <- dsHsTypes ctxt
             clas <- case tyConClass_maybe tc of
                       Just clas -> return clas
                       Nothing -> failWithTc (ppr tc <+> ptext (sLit "is not a class"))
-            return (tvs', ctxt', clas, tys)
+            return (tvs', ctxt', clas, tys) }
         _ -> failWithTc (ptext (sLit "Malformed instance type"))
       where (tv_names, ctxt, cls_ty) = splitHsForAllTy ty
 
