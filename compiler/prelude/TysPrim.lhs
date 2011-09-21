@@ -223,7 +223,21 @@ funTyConName :: Name
 funTyConName = mkPrimTyConName (fsLit "(->)") funTyConKey funTyCon
 
 funTyCon :: TyCon
-funTyCon = mkFunTyCon funTyConName (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind)
+funTyCon = mkFunTyCon funTyConName (mkArrowKinds [liftedTypeKind, liftedTypeKind] liftedTypeKind)
+-- (->) :: * -> * -> *
+-- but we should have (and want) the following typing rule for fully applied arrows
+--      Gamma |- tau   :: k1    k1 in {*, #}
+--      Gamma |- sigma :: k2    k2 in {*, #, (#)}
+--      -----------------------------------------
+--      Gamma |- tau -> sigma :: *
+-- Currently we have the following rule which achieves more or less the same effect
+--      Gamma |- tau   :: ??
+--      Gamma |- sigma :: ?
+--      --------------------------
+--      Gamma |- tau -> sigma :: *
+-- In the end we don't want subkinding at all.
+
+-- funTyCon = mkFunTyCon funTyConName (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind)
         -- You might think that (->) should have type (?? -> ? -> *), and you'd be right
 	-- But if we do that we get kind errors when saying
 	--	instance Control.Arrow (->)

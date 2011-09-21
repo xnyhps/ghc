@@ -1156,6 +1156,11 @@ data SubKinding
   | SKEq  -- k1 == k2  -- new
   | SKGe  -- k1 >= k2  -- swapped == False
 
+instance Outputable SubKinding where
+  ppr SKLe = text "<="
+  ppr SKEq = text "=="
+  ppr SKGe = text ">="
+
 invSubKinding :: SubKinding -> SubKinding
 invSubKinding SKLe = SKGe
 invSubKinding SKEq = SKEq
@@ -1270,7 +1275,7 @@ kindSimpleKind orig_sk orig_kind
     go _ k@(TyVarTy _) = return k -- KindVars are always simple
     go _ k@(TyConApp tc _) | not (isSubOpenTypeKindCon tc) = return k  -- Promoted type constructors too
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
-                                  <+> ppr orig_kind)
+                                  <+> ppr orig_sk <+> ppr orig_kind)
         -- I think this can't actually happen
 
 -- T v = MkT v           v must be a type

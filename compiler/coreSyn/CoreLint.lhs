@@ -707,7 +707,11 @@ lintCoercion (Refl ty)
        ; return (ty', ty') }
 
 lintCoercion co@(TyConAppCo tc cos)
-  = do { let ki = tyConKind tc
+  = do { let ki | tc `hasKey` funTyConKey && length cos == 2
+                  = mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind
+                  -- It's a fully applied function, so we must use the
+                  -- most permissive type for the arrow constructor
+                | otherwise = tyConKind tc
              (kvs, _) = splitForAllTys ki
              (cokis, cotys) = splitAt (length kvs) cos
              -- we need to verify that kind instantiations are Refl
@@ -806,7 +810,7 @@ lintType ty@(AppTy t1 t2)
        ; lint_ty_app ty k1 [t2] }
 
 lintType ty@(FunTy t1 t2)
-  = lint_ty_app ty (tyConKind funTyCon) [t1,t2]
+  = lint_ty_app ty (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind) [t1,t2]
 
 lintType ty@(TyConApp tc tys)
   | tc `hasKey` eqPrimTyConKey	-- See Note [The ~# TyCon] in TysPrim
