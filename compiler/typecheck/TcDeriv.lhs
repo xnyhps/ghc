@@ -609,7 +609,7 @@ deriveTyData (L loc deriv_pred, L _ decl@(TyData { tcdLName = L _ tycon_name,
 	; checkTc (not (isFamilyTyCon tc) || n_args_to_drop == 0)
 		  (typeFamilyPapErr tc cls cls_tys inst_ty)
 
-	; mkEqnHelp DerivOrigin (varSetElems univ_tvs) cls cls_tys inst_ty Nothing } }
+	; mkEqnHelp DerivOrigin (varSetElemsKvsFirst univ_tvs) cls cls_tys inst_ty Nothing } }
   where
 	-- Tiresomely we must figure out the "lhs", which is awkward for type families
 	-- E.g.   data T a b = .. deriving( Eq )
@@ -1178,7 +1178,7 @@ mkNewTypeEqn orig dflags tvs
 	; dfun_name <- new_dfun_name cls tycon
   	; loc <- getSrcSpanM
 	; let spec = DS { ds_loc = loc, ds_orig = orig
-			, ds_name = dfun_name, ds_tvs = varSetElems dfun_tvs 
+			, ds_name = dfun_name, ds_tvs = varSetElemsKvsFirst dfun_tvs
 			, ds_cls = cls, ds_tys = inst_tys
 			, ds_tc = rep_tycon, ds_tc_args = rep_tc_args
 			, ds_theta =  mtheta `orElse` all_preds

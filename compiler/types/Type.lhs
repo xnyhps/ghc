@@ -87,7 +87,7 @@ module Type (
 	-- * Type free variables
 	tyVarsOfType, tyVarsOfTypes,
 	expandTypeSynonyms, 
-	typeSize,
+	typeSize, varSetElemsKvsFirst,
 
 	-- * Type comparison
         eqType, eqTypeX, eqTypes, cmpType, cmpTypes, 
@@ -130,9 +130,7 @@ module Type (
 	-- * Pretty-printing
 	pprType, pprParendType, pprTypeApp, pprTyThingCategory, pprTyThing, pprForAll,
 	pprEqPred, pprTheta, pprThetaArrowTy, pprClassPred, 
-        pprKind, pprParendKind,
-	
-	pprSourceTyCon
+        pprKind, pprParendKind, pprSourceTyCon,
     ) where
 
 #include "HsVersions.h"
@@ -940,6 +938,10 @@ typeSize (AppTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (FunTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (ForAllTy _ t)  = 1 + typeSize t
 typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
+
+varSetElemsKvsFirst :: VarSet -> [TyVar]
+-- {k1,a,k2,b} --> [k1,k2,a,b]
+varSetElemsKvsFirst set = uncurry (++) $ splitKiTyVars (varSetElems set)
 \end{code}
 
 

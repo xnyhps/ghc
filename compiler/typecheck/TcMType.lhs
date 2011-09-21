@@ -61,7 +61,7 @@ module TcMType (
   tcGetGlobalTyVars, 
 
 
-  readMetaKindVar, writeMetaKindVar
+  readMetaKindVar, writeMetaKindVar, compatKindTcM, isSubKindTcM
   ) where
 
 #include "HsVersions.h"
@@ -353,7 +353,8 @@ writeMetaTyVarRef tyvar ref ty
   , not (ty_kind `isSubKind` tv_kind)
   = WARN( True, hang (text "Ill-kinded update to meta tyvar")
                    2 (ppr tyvar $$ ppr tv_kind $$ ppr ty $$ ppr ty_kind) )
-    return ()
+    do { traceTc "writeMetaTyVar" (ppr tyvar <+> text ":=" <+> ppr ty)
+       ; writeMutVar ref (Indirect ty) }
 
   | otherwise
   = do { meta_details <- readMutVar ref; 
@@ -592,7 +593,9 @@ skolemiseUnboundMetaTyVar tv details
 	; let final_kind = defaultKind (tyVarKind tv)
               final_name = mkInternalName uniq (getOccName tv) span
               final_tv   = mkTcTyVar final_name final_kind details
-	; writeMetaTyVar tv (mkTyVarTy final_tv)
+	; (if isSuperKind final_kind
+           then writeMetaKindVar
+           else writeMetaTyVar) tv (mkTyVarTy final_tv)
 	; return final_tv }
 \end{code}
 
@@ -790,7 +793,21 @@ mkZonkTcTyVar unbound_var_fn tyvar
 readMetaKindVar  :: MetaKindVar -> TcM (MetaDetails)
 writeMetaKindVar :: MetaKindVar -> TcKind -> TcM ()
 readMetaKindVar  kv = readMutVar (kindVarRef kv)
-writeMetaKindVar kv val = writeMutVar (kindVarRef kv) (Indirect val)
+writeMetaKindVar kv val
+  = do { traceTc "writeMetaKindVar" (ppr kv <+> text ":=" <+> ppr val)
+       ; writeMutVar (kindVarRef kv) (Indirect val) }
+
+compatKindTcM :: Kind -> Kind -> TcM Bool
+compatKindTcM k1 k2
+  = do { k1' <- zonkTcKind k1
+       ; k2' <- zonkTcKind k2
+       ; return $ k1' `isSubKind` k2' || k2' `isSubKind` k1' }
+
+isSubKindTcM :: Kind -> Kind -> TcM Bool
+isSubKindTcM k1 k2
+  = do { k1' <- zonkTcKind k1
+       ; k2' <- zonkTcKind k2
+       ; return $ k1' `isSubKind` k2' }
 
 -------------
 zonkTcKind :: TcKind -> TcM TcKind
@@ -1711,7 +1728,9 @@ sizeType (AppTy fun arg)   = sizeType fun + sizeType arg
 sizeType (ForAllTy _ ty)   = sizeType ty
 
 sizeTypes :: [Type] -> Int
-sizeTypes xs               = sum (map sizeType xs)
+-- Avoid kinds.
+sizeTypes xs = sum (map sizeType tys)
+  where tys = filter (not . isKind) xs
 
 -- Size of a predicate
 --

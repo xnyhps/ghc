@@ -827,7 +827,9 @@ tcTyClTyVars tycon tyvars thing_inside
              ; names = hsLTyVarNames tyvars
              ; tvs = zipWith mkTyVar names kinds
              ; all_vs = kvs ++ tvs }
-       ; tcExtendTyVarEnv all_vs (thing_inside all_vs res) }
+       ; all_vs' <- mapM (updateTyVarKindM zonkTcKind) all_vs
+       ; res' <- zonkTcKind res
+       ; tcExtendTyVarEnv all_vs' (thing_inside all_vs' res') }
 
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
 -- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
@@ -846,11 +848,16 @@ kindGeneralizeKinds kinds = do
   let (_, occs) = mapAccumL tidy_one emptyTidyOccEnv flexis
       tidy_one env flexi = tidyOccName env (getOccName (tyVarName flexi))
   kvs <- flip mapM (zip occs flexis) $ \(occ, flexi) -> do
+         -- This is our own custom version of zonkQuantifiedTyVar
+         -- because all meta kind variables are named 'k' and
+         -- zonkQuantifiedTyVar gives exactly that name which resulted
+         -- into polymorphic kinds looking like:
+         -- forall k k. k -> k
          span <- getSrcSpanM
          uniq <- newUnique
          let name = mkInternalName uniq occ span
              kv = mkTcTyVar name (tyVarKind flexi) vanillaSkolemTv
-         writeMetaTyVar flexi (mkTyVarTy kv)
+         writeMetaKindVar flexi (mkTyVarTy kv)
          return kv
   let flexiToKind kv = case lookup kv (zip flexis kvs) of
                          Nothing -> return (mkTyVarTy kv)

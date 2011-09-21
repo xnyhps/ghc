@@ -421,12 +421,13 @@ zonk_bind env sig_warn (AbsBinds { abs_tvs = tyvars, abs_ev_vars = evs
     do { (env1, new_evs) <- zonkEvBndrsX env evs
        ; (env2, new_ev_binds) <- zonkTcEvBinds env1 ev_binds
        ; (new_val_bind, new_exports) <- fixM $ \ ~(new_val_binds, _) ->
-    	 do { let env3 = extendZonkEnv env2 (collectHsBindsBinders new_val_binds)
+         do { let env3 = extendZonkEnv env2 (collectHsBindsBinders new_val_binds)
     	    ; new_val_binds <- zonkMonoBinds env3 noSigWarn val_binds
     	    ; new_exports   <- mapM (zonkExport env3) exports
     	    ; return (new_val_binds, new_exports) } 
        ; sig_warn True (map abe_poly new_exports)
-       ; return (AbsBinds { abs_tvs = tyvars, abs_ev_vars = new_evs, abs_ev_binds = new_ev_binds
+       ; tyvars' <- mapM (updateTyVarKindM zonkTcKind) tyvars
+       ; return (AbsBinds { abs_tvs = tyvars', abs_ev_vars = new_evs, abs_ev_binds = new_ev_binds
 			  , abs_exports = new_exports, abs_binds = new_val_bind }) }
   where
     zonkExport env (ABE{ abe_wrap = wrap, abe_poly = poly_id

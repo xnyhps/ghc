@@ -793,7 +793,9 @@ back into @uTys@ if it turns out that the variable is already bound.
 \begin{code}
 uVar :: [EqOrigin] -> SwapFlag -> TcTyVar -> TcTauType -> TcM LCoercion
 uVar origin swapped tv1 ty2
-  = do  { traceTc "uVar" (vcat [ ppr origin
+  = do  { are_compat <- compatKindTcM k1 k2
+        ; unless are_compat (unifyKindEq ctxt k1 k2)
+        ; traceTc "uVar" (vcat [ ppr origin
                                 , ppr swapped
                                 , ppr tv1 <+> dcolon <+> ppr (tyVarKind tv1)
                        		, nest 2 (ptext (sLit " ~ "))
@@ -803,6 +805,13 @@ uVar origin swapped tv1 ty2
             Filled ty1  -> unSwap swapped (uType_np origin) ty1 ty2
             Unfilled details1 -> uUnfilledVar origin swapped tv1 details1 ty2
         }
+  where
+    k1 = tyVarKind tv1
+    k2 = typeKind ty2
+    ty1 = mkTyVarTy tv1
+    ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
+                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
+                               , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
 
 ----------------
 uUnfilledVar :: [EqOrigin]
@@ -854,23 +863,23 @@ uUnfilledVars :: [EqOrigin]
 --           Neither is filled in yet
 
 uUnfilledVars origin swapped tv1 details1 tv2 details2
-  = case (details1, details2) of
-      (MetaTv i1 ref1, MetaTv i2 ref2)
-          | k1_sub_k2 -> if k2_sub_k1 && nicer_to_update_tv1 i1 i2
-                         then updateMeta tv1 ref1 ty2
-                         else updateMeta tv2 ref2 ty1
-          | k2_sub_k1 -> updateMeta tv1 ref1 ty2
+  = do { k1_sub_k2 <- k1 `isSubKindTcM` k2
+       ; k2_sub_k1 <- k2 `isSubKindTcM` k1
+       ; case (details1, details2) of
+           { (MetaTv i1 ref1, MetaTv i2 ref2)
+                 | k1_sub_k2 -> if k2_sub_k1 && nicer_to_update_tv1 i1 i2
+                                then updateMeta tv1 ref1 ty2
+                                else updateMeta tv2 ref2 ty1
+                 | k2_sub_k1 -> updateMeta tv1 ref1 ty2
 
-      (_, MetaTv _ ref2) | k1_sub_k2 -> updateMeta tv2 ref2 ty1
-      (MetaTv _ ref1, _) | k2_sub_k1 -> updateMeta tv1 ref1 ty2
+           ; (_, MetaTv _ ref2) | k1_sub_k2 -> updateMeta tv2 ref2 ty1
+           ; (MetaTv _ ref1, _) | k2_sub_k1 -> updateMeta tv1 ref1 ty2
 
-      (_, _) -> unSwap swapped (uType_defer origin) ty1 ty2
-      	        -- Defer for skolems of all sorts
+           ; (_, _) -> unSwap swapped (uType_defer origin) ty1 ty2 } }
+             	        -- Defer for skolems of all sorts
   where
     k1 	      = tyVarKind tv1
     k2 	      = tyVarKind tv2
-    k1_sub_k2 = k1 `isSubKind` k2
-    k2_sub_k1 = k2 `isSubKind` k1
     ty1       = mkTyVarTy tv1
     ty2       = mkTyVarTy tv2
 
@@ -907,7 +916,9 @@ checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
 
 checkTauTvUpdate tv ty
   = do { ty' <- zonkTcType ty
-       ; if typeKind ty' `isSubKind` tyVarKind tv then
+       ; let k2 = typeKind ty'
+       ; k1 <- zonkTcKind (tyVarKind tv)
+       ; if k2 `isSubKind` k1 then
            case ok ty' of 
              Nothing -> return Nothing 
              Just ty'' -> return (Just ty'')

@@ -202,16 +202,10 @@ compatKind k1 k2 = k1 `isSubKind` k2 || k2 `isSubKind` k1
 compatKindTcS :: Kind -> Kind -> TcS Bool
 -- Because kind unification happens during constraint solving, we have
 -- to make sure that two kinds are zonked before we compare them.
-compatKindTcS k1 k2
-  = do { k1' <- wrapTcS (TcM.zonkTcKind k1)
-       ; k2' <- wrapTcS (TcM.zonkTcKind k2)
-       ; return $ k1' `isSubKind` k2' || k2' `isSubKind` k1' }
+compatKindTcS k1 k2 = wrapTcS (TcM.compatKindTcM k1 k2)
 
 isSubKindTcS :: Kind -> Kind -> TcS Bool
-isSubKindTcS k1 k2
-  = do { k1' <- wrapTcS (TcM.zonkTcKind k1)
-       ; k2' <- wrapTcS (TcM.zonkTcKind k2)
-       ; return $ k1' `isSubKind` k2' }
+isSubKindTcS k1 k2 = wrapTcS (TcM.isSubKindTcM k1 k2)
 
 unifyKindTcS :: Type -> Type     -- Context
              -> Kind -> Kind     -- Corresponding kinds
