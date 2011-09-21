@@ -1,5 +1,8 @@
 TOPICS to think about:
 
+  - profile example: ~/scratch/ants.hs
+    http://www.reddit.com/r/haskell/comments/klr63/haskell_ants_speed_differences/
+
   - I think we fixed #1531 - close it (test is result001)
 
   - First: make sure HPC still works (and that the code isn't a lot
