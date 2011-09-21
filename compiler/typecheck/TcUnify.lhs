@@ -12,7 +12,7 @@ module TcUnify (
   checkConstraints, newImplication, sigCtxt,
 
         -- Various unifications
-  unifyType, unifyTypeList, unifyTheta, unifyKind, 
+  unifyType, unifyTypeList, unifyTheta, unifyKind, unifyKindEq,
 
   --------------------------------
   -- Holes
@@ -234,7 +234,8 @@ matchExpectedTyConApp tc orig_ty
     ----------
     defer n_req ty tys
       = do { kappa_tys <- mapM (const newMetaKindVar) kvs
-           ; tau_tys <- mapM newFlexiTyVarTy arg_kinds
+           ; let arg_kinds' = map (substKiWith kvs kappa_tys) arg_kinds
+           ; tau_tys <- mapM newFlexiTyVarTy arg_kinds'
            ; co <- unifyType (mkTyConApp tc (kappa_tys ++ tau_tys)) ty
            ; return (co, kappa_tys ++ tau_tys ++ tys) }
       where
@@ -1149,18 +1150,24 @@ invSubKinding SKLe = SKGe
 invSubKinding SKEq = SKEq
 invSubKinding SKGe = SKLe
 
-unifyKind :: TcKind                 -- Expected
+unifyKind :: SDoc                   -- Error message
+          -> TcKind                 -- Expected
           -> TcKind                 -- Actual
           -> TcM ()
-unifyKind k1 k2 = unifyKind' k1 SKGe k2
+unifyKind ctxt k1 k2 = unifyKind' ctxt k1 SKGe k2
+
+unifyKindEq :: SDoc                   -- Error message
+            -> TcKind -> TcKind -> TcM ()
+-- Kinds must be exactly equal, no subkinding.
+unifyKindEq ctxt k1 k2 = unifyKind' ctxt k1 SKEq k2
 
 isSubKindCon' :: TyCon -> SubKinding -> TyCon -> Bool
 isSubKindCon' k1 SKLe k2 = isSubKindCon k1 k2
 isSubKindCon' k1 SKEq k2 = k1 == k2
 isSubKindCon' k1 SKGe k2 = isSubKindCon k2 k1
 
-unifyKind' :: TcKind -> SubKinding -> TcKind -> TcM ()
-unifyKind' (TyConApp kc1 []) sk (TyConApp kc2 [])
+unifyKind' :: SDoc -> TcKind -> SubKinding -> TcKind -> TcM ()
+unifyKind' _ (TyConApp kc1 []) sk (TyConApp kc2 [])
   | isSubKindCon' kc1 sk kc2
   , not (isConstraintKindCon kc2) || isConstraintKindCon kc1 = return ()
    -- For the purposes of the front end ONLY, only allow
@@ -1169,54 +1176,54 @@ unifyKind' (TyConApp kc1 []) sk (TyConApp kc2 [])
    -- This prevents the user from writing constraints types
    -- on the left or right of an arrow.
 
-unifyKind' (FunTy a1 r1) sk (FunTy a2 r2)
-  = do { unifyKind' a2 sk a1; unifyKind' r1 sk r2 }
+unifyKind' ctxt (FunTy a1 r1) sk (FunTy a2 r2)
+  = do { unifyKind' ctxt a2 sk a1; unifyKind' ctxt r1 sk r2 }
                 -- Notice the flip in the argument,
                 -- so that the sub-kinding works right
-unifyKind' (TyVarTy kv1) sk k2 = uKVar kv1 sk k2
-unifyKind' k1 sk (TyVarTy kv2) = uKVar kv2 (invSubKinding sk) k1
-unifyKind' k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
+unifyKind' ctxt (TyVarTy kv1) sk k2 = uKVar ctxt kv1 sk k2
+unifyKind' ctxt k1 sk (TyVarTy kv2) = uKVar ctxt kv2 (invSubKinding sk) k1
+unifyKind' ctxt k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
   | not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2)
   =  -- IA0: new equation for unifyKind
   if kc1 == kc2
   then unifyKinds k1s k2s
-  else unifyKindMisMatch k1 sk k2
+  else unifyKindMisMatch ctxt k1 sk k2
   where
     unifyKinds [] [] = return ()
     unifyKinds (k1:k1s) (k2:k2s) = do
-      unifyKind' k1  SKEq k2
-      unifyKinds k1s      k2s
+      unifyKind' ctxt k1  SKEq k2
+      unifyKinds     k1s      k2s
     unifyKinds _ _ = panic "unifyKinds"
       -- this cannot happen since the kind constructors are the same
       -- and the kind are sort checked and thus fully applied
-unifyKind' k1 sk k2 = unifyKindMisMatch k1 sk k2
+unifyKind' ctxt k1 sk k2 = unifyKindMisMatch ctxt k1 sk k2
 
 ----------------
-uKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
-uKVar kv1 sk k2
+uKVar :: SDoc -> MetaKindVar -> SubKinding -> TcKind -> TcM ()
+uKVar ctxt kv1 sk k2
   | isMetaTyVar kv1
   = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar kv1 sk k2
-            Indirect k1 -> unifyKind' k1 sk k2 }
-  | TyVarTy kv2 <- k2, isMetaTyVar kv2 = uKVar kv2 (invSubKinding sk) (TyVarTy kv1)
+            Flexi -> uUnboundKVar ctxt kv1 sk k2
+            Indirect k1 -> unifyKind' ctxt k1 sk k2 }
+  | TyVarTy kv2 <- k2, isMetaTyVar kv2 = uKVar ctxt kv2 (invSubKinding sk) (TyVarTy kv1)
   | TyVarTy kv2 <- k2, kv1 == kv2 = return ()
-  | otherwise = unifyKindMisMatch (TyVarTy kv1) sk k2
+  | otherwise = unifyKindMisMatch ctxt (TyVarTy kv1) sk k2
 
 ----------------
-uUnboundKVar :: MetaKindVar -> SubKinding -> TcKind -> TcM ()
-uUnboundKVar kv1 sk k2@(TyVarTy kv2)
+uUnboundKVar :: SDoc -> MetaKindVar -> SubKinding -> TcKind -> TcM ()
+uUnboundKVar ctxt kv1 sk k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
   | isMetaTyVar kv2   -- Distinct kind variables
   = do  { mb_k2 <- readMetaKindVar kv2
         ; case mb_k2 of
-            Indirect k2 -> uUnboundKVar kv1 sk k2
+            Indirect k2 -> uUnboundKVar ctxt kv1 sk k2
             Flexi -> writeMetaKindVar kv1 k2 }
   | otherwise = writeMetaKindVar kv1 k2
 
-uUnboundKVar kv1 sk non_var_k2
+uUnboundKVar ctxt kv1 sk non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
-        ; kindOccurCheck kv1 k2'
+        ; kindOccurCheck ctxt kv1 k2'
         ; k2'' <- kindSimpleKind sk k2'
                 -- MetaKindVars must be bound only to simple kinds
                 -- Polarities: (kindSimpleKind True ?) succeeds
@@ -1226,13 +1233,11 @@ uUnboundKVar kv1 sk non_var_k2
         ; writeMetaKindVar kv1 k2'' }
 
 ----------------
-kindOccurCheck :: TyVar -> Type -> TcM ()
-kindOccurCheck kv1 k2   -- k2 is zonked
-  = checkTc (not_in k2) (kindOccurCheckErr kv1 k2)
-  where
-    not_in (TyVarTy kv2) = kv1 /= kv2
-    not_in (FunTy a2 r2) = not_in a2 && not_in r2
-    not_in _             = True
+kindOccurCheck :: SDoc -> TyVar -> Type -> TcM ()
+kindOccurCheck ctxt kv1 k2   -- k2 is zonked
+  = if elemVarSet kv1 (tyVarsOfType k2)
+    then addErrCtxt ctxt (failWithTc (kindOccurCheckErr kv1 k2))
+    else return ()
 
 kindSimpleKind :: SubKinding -> Kind -> TcM SimpleKind
 -- (kindSimpleKind sk k) returns a simple kind k' such that k' sk k
@@ -1260,16 +1265,16 @@ kindSimpleKind orig_sk orig_kind
 -- T v = MkT v           v must be a type
 -- T v w = MkT (v -> w)  v must not be an umboxed tuple
 
-unifyKindMisMatch :: TcKind -> SubKinding -> TcKind -> TcM ()
-unifyKindMisMatch ki1 SKLe ki2 = unifyKindMisMatch ki2 SKGe ki1
-unifyKindMisMatch ki1 _ ki2 = do
+unifyKindMisMatch :: SDoc -> TcKind -> SubKinding -> TcKind -> TcM ()
+unifyKindMisMatch ctxt ki1 SKLe ki2 = unifyKindMisMatch ctxt ki2 SKGe ki1
+unifyKindMisMatch ctxt ki1 _ ki2 = do
     ki1' <- zonkTcKind ki1
     ki2' <- zonkTcKind ki2
     let msg = hang (ptext (sLit "Couldn't match kind"))
               2 (sep [quotes (ppr ki1'),
                       ptext (sLit "against"),
                       quotes (ppr ki2')])
-    failWithTc msg
+    addErrCtxt ctxt $ failWithTc msg
 
 ----------------
 kindOccurCheckErr :: Var -> Type -> SDoc

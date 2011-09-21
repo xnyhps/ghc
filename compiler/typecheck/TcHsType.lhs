@@ -1107,7 +1107,7 @@ checkExpectedKind :: Outputable a => a -> TcKind -> ExpKind -> TcM ()
 --      with the expected kind exp_kind
 -- The first argument, ty, is used only in the error message generation
 checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
-    (_errs, mb_r) <- tryTc (unifyKind exp_kind act_kind)
+    (_errs, mb_r) <- tryTc (unifyKind empty exp_kind act_kind)
     case mb_r of
         Just _  -> return ()  -- Unification succeeded
         Nothing -> do

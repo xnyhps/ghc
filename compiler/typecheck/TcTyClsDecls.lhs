@@ -435,7 +435,8 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
     unifyClassParmKinds (L _ tv) 
       | (n,k) <- hsTyVarNameKind tv
       , Just classParmKind <- lookup n classTyKinds 
-      = unifyKind k classParmKind
+      = let ctxt = ptext (sLit "When kind checking family declaration") <+> ppr (tcdLName decl) in
+        unifyKind ctxt k classParmKind
       | otherwise = return ()
     classTyKinds = [hsTyVarNameKind tv | L _ tv <- classTvs]
 

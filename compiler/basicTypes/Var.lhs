@@ -59,7 +59,8 @@ module Var (
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
 
 	-- ** Modifying 'TyVar's
-	setTyVarName, setTyVarUnique, setTyVarKind, updateTyVarKind
+	setTyVarName, setTyVarUnique, setTyVarKind, updateTyVarKind,
+        updateTyVarKindM
 
     ) where
 
@@ -190,6 +191,7 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 \begin{code}
 instance Outputable Var where
   ppr var = ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
+            -- <+> text ":: (" <+> ppr (tyVarKind var) <+> text ")"  -- IA0_DEBUG: remove this line
 
 ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})                           = ptext (sLit "tv")
@@ -271,6 +273,11 @@ setTyVarKind tv k = tv {varType = k}
 
 updateTyVarKind :: (Kind -> Kind) -> TyVar -> TyVar
 updateTyVarKind update tv = tv {varType = update (tyVarKind tv)}
+
+updateTyVarKindM :: (Monad m) => (Kind -> m Kind) -> TyVar -> m TyVar
+updateTyVarKindM update tv
+  = do { k' <- update (tyVarKind tv)
+       ; return $ tv {varType = k'} }
 \end{code}
 
 \begin{code}

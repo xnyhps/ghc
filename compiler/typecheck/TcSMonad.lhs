@@ -57,7 +57,7 @@ module TcSMonad (
     instDFunConstraints,          
     newFlexiTcSTy, instFlexiTcS,
 
-    compatKind,
+    compatKind, compatKindTcS, isSubKindTcS, unifyKindTcS,
 
     TcsUntouchables,
     isTouchableMetaTyVar,
@@ -89,6 +89,7 @@ import qualified TcRnMonad as TcM
 import qualified TcMType as TcM
 import qualified TcEnv as TcM 
        ( checkWellStaged, topIdLvl, tcLookupFamInst, tcGetDefaultTys )
+import {-# SOURCE #-} qualified TcUnify as TcM ( unifyKindEq )
 import Kind
 import TcType
 import DynFlags
@@ -197,6 +198,31 @@ mkFrozenError fl ev = CFrozenErr { cc_id = ev, cc_flavor = fl }
 
 compatKind :: Kind -> Kind -> Bool
 compatKind k1 k2 = k1 `isSubKind` k2 || k2 `isSubKind` k1 
+
+compatKindTcS :: Kind -> Kind -> TcS Bool
+-- Because kind unification happens during constraint solving, we have
+-- to make sure that two kinds are zonked before we compare them.
+compatKindTcS k1 k2
+  = do { k1' <- wrapTcS (TcM.zonkTcKind k1)
+       ; k2' <- wrapTcS (TcM.zonkTcKind k2)
+       ; return $ k1' `isSubKind` k2' || k2' `isSubKind` k1' }
+
+isSubKindTcS :: Kind -> Kind -> TcS Bool
+isSubKindTcS k1 k2
+  = do { k1' <- wrapTcS (TcM.zonkTcKind k1)
+       ; k2' <- wrapTcS (TcM.zonkTcKind k2)
+       ; return $ k1' `isSubKind` k2' }
+
+unifyKindTcS :: Type -> Type     -- Context
+             -> Kind -> Kind     -- Corresponding kinds
+             -> TcS ()
+-- IA0_TODO: Remember to tidy the types for the error context message.
+unifyKindTcS ty1 ty2 ki1 ki2
+  = wrapTcS (TcM.unifyKindEq ctxt ki1 ki2)
+  where ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
+                    , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr ki1
+                                   , ppr ty2 <+> dcolon <+> ppr ki2 ]) ]
+               -- kindErrorMsg from TcErrors is obsolete
 
 deCanonicalise :: CanonicalCt -> FlavoredEvVar
 deCanonicalise ct = mkEvVarX (cc_id ct) (cc_flavor ct)

@@ -53,6 +53,8 @@ import Var
 import VarSet
 import PrelNames
 import Outputable
+
+import Data.List ( partition )
 \end{code}
 
 %************************************************************************
@@ -233,8 +235,9 @@ defaultKind k
   | otherwise        = k
 
 splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
--- Assumes we get [k1, k2, a, b, c], returns ([k1, k2], [a, b, c])
-splitKiTyVars = span (isSuperKind . tyVarKind)
+-- We use partition and not span because sometimes the list we get
+-- comes from a varSetElems
+splitKiTyVars = partition (isSuperKind . tyVarKind)
 
 
 -- About promoting a type to a kind

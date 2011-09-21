@@ -390,21 +390,24 @@ newFlexiTyVarTys n kind = mapM newFlexiTyVarTy (nOfThem n kind)
 tcInstTyVars :: [TyVar] -> TcM ([TcTyVar], [TcType], TvSubst)
 -- Instantiate with META type variables
 tcInstTyVars tyvars
-  = do	{ tc_tvs <- mapM tcInstTyVar tyvars
-	; let tys = mkTyVarTys tc_tvs
-	; return (tc_tvs, tys, zipTopTvSubst tyvars tys) }
+  = do	{ tc_kvs <- mapM (tcInstTyVar (mkTopTvSubst [])) kvs
+        ; tc_tvs <- mapM (tcInstTyVar (zipTopTvSubst kvs (map mkTyVarTy tc_kvs))) tvs
+	; let tc_vs = tc_kvs ++ tc_tvs
+              kts = mkTyVarTys tc_vs
+	; return (tc_vs, kts, zipTopTvSubst (kvs ++ tvs) kts) }
 		-- Since the tyvars are freshly made,
 		-- they cannot possibly be captured by
 		-- any existing for-alls.  Hence zipTopTvSubst
+  where (kvs, tvs) = splitKiTyVars tyvars
 
-tcInstTyVar :: TyVar -> TcM TcTyVar
--- Make a new unification variable tyvar whose Name and Kind 
--- come from an existing TyVar
-tcInstTyVar tyvar
+tcInstTyVar :: TvSubst -> TyVar -> TcM TcTyVar
+-- Make a new unification variable tyvar whose Name and Kind come from
+-- an existing TyVar. We substitute kind variables in the kind.
+tcInstTyVar subst tyvar
   = do	{ uniq <- newMetaUnique
  	; ref <- newMutVar Flexi
         ; let name = mkSystemName uniq (getOccName tyvar)
-	      kind = tyVarKind tyvar
+	      kind = substTy subst (tyVarKind tyvar)
 	; return (mkTcTyVar name kind (MetaTv TauTv ref)) }
 \end{code}
 
@@ -490,29 +493,31 @@ zonkTcType ty = zonkType zonkTcTyVar ty
 zonkTcTyVar :: TcTyVar -> TcM TcType
 -- Simply look through all Flexis
 zonkTcTyVar tv
-  = ASSERT2( isTcTyVar tv, ppr tv )
+  = ASSERT2( isTcTyVar tv, ppr tv ) do
+    z_tv <- updateTyVarKindM zonkTcKind tv
     case tcTyVarDetails tv of
-      SkolemTv {}   -> return (TyVarTy tv)
-      RuntimeUnk {} -> return (TyVarTy tv)
+      SkolemTv {}   -> return (TyVarTy z_tv)
+      RuntimeUnk {} -> return (TyVarTy z_tv)
       FlatSkol ty   -> zonkTcType ty
       MetaTv _ ref  -> do { cts <- readMutVar ref
                           ; case cts of
-		               Flexi       -> return (TyVarTy tv)
+		               Flexi       -> return (TyVarTy z_tv)
 			       Indirect ty -> zonkTcType ty }
 
 zonkTcTypeAndSubst :: TvSubst -> TcType -> TcM TcType
 -- Zonk, and simultaneously apply a non-necessarily-idempotent substitution
 zonkTcTypeAndSubst subst ty = zonkType zonk_tv ty
   where
-    zonk_tv tv 
-      = case tcTyVarDetails tv of
-          SkolemTv {}   -> return (TyVarTy tv)
-          RuntimeUnk {} -> return (TyVarTy tv)
-          FlatSkol ty   -> zonkType zonk_tv ty
-          MetaTv _ ref  -> do { cts <- readMutVar ref
-                              ; case cts of
-			           Flexi       -> zonk_flexi tv
-			           Indirect ty -> zonkType zonk_tv ty }
+    zonk_tv tv
+      = do { z_tv <- updateTyVarKindM zonkTcKind tv
+           ; case tcTyVarDetails tv of
+                SkolemTv {}   -> return (TyVarTy z_tv)
+                RuntimeUnk {} -> return (TyVarTy z_tv)
+                FlatSkol ty   -> zonkType zonk_tv ty
+                MetaTv _ ref  -> do { cts <- readMutVar ref
+                                    ; case cts of
+      			           Flexi       -> zonk_flexi z_tv
+      			           Indirect ty -> zonkType zonk_tv ty } }
     zonk_flexi tv
       = case lookupTyVar subst tv of
           Just ty -> zonkType zonk_tv ty
@@ -533,7 +538,13 @@ zonkTcPredType = zonkTcType
 
 \begin{code}
 zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
-zonkQuantifiedTyVars = mapM zonkQuantifiedTyVar
+zonkQuantifiedTyVars tyvars
+  = do { z_kvs <- mapM zonkQuantifiedTyVar kvs
+       ; z_tvs <- mapM zonkQuantifiedTyVar tvs
+       ; let subst = zipOpenTvSubst kvs (map mkTyVarTy z_kvs)
+             zs_tvs = map (updateTyVarKind (substTy subst)) z_tvs
+       ; return $ z_kvs ++ zs_tvs }
+  where (kvs, tvs) = splitKiTyVars tyvars
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- The quantified type variables often include meta type variables
@@ -745,12 +756,12 @@ zonkType zonk_tc_tyvar ty
 
 	-- The two interesting cases!
     go (TyVarTy tyvar) | isTcTyVar tyvar = zonk_tc_tyvar tyvar
-		       | otherwise	 = return (TyVarTy tyvar)
+		       | otherwise	 = TyVarTy <$> updateTyVarKindM zonkTcKind tyvar
 		-- Ordinary (non Tc) tyvars occur inside quantified types
 
     go (ForAllTy tyvar ty) = ASSERT( isImmutableTyVar tyvar ) do
                              ty' <- go ty
-                             tyvar' <- return tyvar
+                             tyvar' <- updateTyVarKindM zonkTcKind tyvar
                              return (ForAllTy tyvar' ty')
 
 mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
