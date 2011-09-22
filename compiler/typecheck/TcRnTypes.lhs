@@ -565,7 +565,7 @@ pprTcTyThingCategory (AGlobal thing) = pprTyThingCategory thing
 pprTcTyThingCategory (ATyVar {})     = ptext (sLit "Type variable")
 pprTcTyThingCategory (ATcId {})      = ptext (sLit "Local identifier")
 pprTcTyThingCategory (AThing {})     = ptext (sLit "Kinded thing")
-pprTcTyThingCategory ANothing        = ptext (sLit "Nothing")  -- IA0: put something better
+pprTcTyThingCategory ANothing        = ptext (sLit "Opaque thing")
 \end{code}
 
 Note [Bindings with closed types]

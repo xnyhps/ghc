@@ -249,7 +249,7 @@ isPromotableType = go emptyVarSet
     go vars (FunTy arg res) = all (go vars) [arg,res]
     go vars (TyVarTy tvar) = tvar `elemVarSet` vars
     go vars (ForAllTy tvar ty) = isPromotableTyVar tvar && go (vars `extendVarSet` tvar) ty
-    go _ _ = panic "IA0: isPromotableType"
+    go _ _ = panic "isPromotableType"  -- argument was not kind-shaped
 
 isPromotableTyVar :: TyVar -> Bool
 isPromotableTyVar = isLiftedTypeKind . varType
@@ -264,7 +264,7 @@ promoteType (TyVarTy tvar) = mkTyVarTy (promoteTyVar tvar)
   -- a :: *  ~~>  a :: BOX
 promoteType (ForAllTy tvar ty) = ForAllTy (promoteTyVar tvar) (promoteType ty)
   -- forall (a :: *). t  ~~> forall (a :: BOX). k  where  t ~~> k
-promoteType _ = panic "IA0: promoteType"
+promoteType _ = panic "promoteType"  -- argument was not kind-shaped
 
 promoteTyVar :: TyVar -> KindVar
 promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
@@ -283,10 +283,14 @@ isPromotableKind kind =
 {- Note [Promoting a Type to a Kind]
    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We only promote the followings.
-* Type variable
-* Fully applied arrow type
-* Fully applied type constructor of kind @*^n -> *@ (n >= 0)
-* Polymorphic type with a type variable of kind star
+- Type variables: a
+- Fully applied arrow types: tau -> sigma
+- Fully applied type constructors of kind:
+     n >= 0
+  /-----------\
+  * -> ... -> * -> *
+- Polymorphic types over type variables of kind star:
+  forall (a::*). tau
 -}
 
 

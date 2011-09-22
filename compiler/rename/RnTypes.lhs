@@ -224,7 +224,6 @@ rnHsTyKi isType doc (HsQuasiQuoteTy qq) = ASSERT ( isType ) do { ty <- runQuasiQ
 rnHsTyKi isType _ (HsCoreTy ty) = ASSERT ( isType ) return (HsCoreTy ty)
 rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 
--- IA0: rnHsTyKi isType _ (HsLitTy lit) = ASSERT( isType ) return (HsLitTy lit)
 rnHsTyKi isType doc (HsExplicitListTy k tys) = ASSERT( isType ) do
     tys' <- mapM (rnLHsType doc) tys
     return (HsExplicitListTy k tys')

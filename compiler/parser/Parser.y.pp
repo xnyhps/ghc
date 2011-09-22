@@ -1046,16 +1046,10 @@ atype :: { LHsType RdrName }
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
                                                       -- see Note [Promotion] for the followings
 	| SIMPLEQUOTE qconid                          { LL $ HsTyVar $ unLoc $2 }
--- IA0: 	| typelit                                     { L1 $ HsLitTy $! unLoc $1 }
 	| SIMPLEQUOTE  '(' ')'                        { LL $ HsTyVar $ getRdrName unitDataCon }
 	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy [] ($3 : $5) }
  	| SIMPLEQUOTE  '[' comma_types0 ']'           { LL $ HsExplicitListTy placeHolderKind $3 }
 	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy placeHolderKind ($2 : $4) }
-
--- IA0: typelit :: { Located HsLit }  -- type literal
--- IA0: 	: CHAR 		{ L1 $ HsChar   $ getCHAR $1 }
--- IA0: 	| STRING 	{ L1 $ HsString $ getSTRING $1 }
--- IA0: 	| INTEGER       { L1 $ HsInt    $ getINTEGER $1 }
 
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
@@ -1129,26 +1123,23 @@ comma_kinds1	:: { [LHsKind RdrName] }
 {- Note [Promotion]
    ~~~~~~~~~~~~~~~~
 
-IA0_TODO update this note
-
 - Syntax of promoted qualified names
-We write 'N.Nat instead of N.'Nat when dealing with qualified names.
-We see this in rules akind (opt_quote qtycon) and atype (SIMPLEQUOTE
-qconid).
+We write 'Nat.Zero instead of Nat.'Zero when dealing with qualified
+names.  Moreover ticks are only allowed in types, not in kinds.
 
-- Syntax of kind polymorphism
+- Syntax of kind polymorphism  (not yet implemented)
 Kind abstraction is implicit. We write
-> data SList (s :: k -> *) (as :: '[k]) where ...
+> data SList (s :: k -> *) (as :: [k]) where ...
 because it looks like what we do in terms
 > id (x :: a) = x
 
 - Name resolution
 When the user write Zero instead of 'Zero in types, we parse it a
-HsTyVar ("Zero", TcClsName) instead of HsPromotedConTy ("Zero",
-DataName). We deal with this in the renamer. If a HsTyVar ("Zero",
-TcClsName) is not bounded in the type level, then we look for it in
-the term level (we change its namespace to DataName). And both become
-a TyConApp (PromotedDataTyCon ("Zero", DataName)) [] later on.
+HsTyVar ("Zero", TcClsName) instead of HsTyVar ("Zero", DataName). We
+deal with this in the renamer. If a HsTyVar ("Zero", TcClsName) is not
+bounded in the type level, then we look for it in the term level (we
+change its namespace to DataName). And both become a HsTyVar ("Zero",
+DataName) after the renamer.
 
 -}
 

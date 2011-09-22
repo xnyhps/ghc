@@ -951,7 +951,7 @@ data UbxTupFlag = UT_Ok	| UT_NotOk
 check_mono_type :: Rank -> KindOrType -> TcM ()	-- No foralls anywhere
 				      		-- No unlifted types of any kind
 check_mono_type rank ty
-  | isKind ty = return ()  -- IA0: Do we need to check kinds?
+  | isKind ty = return ()  -- IA0_NOTE: Do we need to check kinds?
   | otherwise
    = do { check_type rank UT_NotOk ty
 	; checkTc (not (isUnLiftedType ty)) (unliftedArgErr ty) }
@@ -1054,7 +1054,7 @@ check_arg_type :: Rank -> KindOrType -> TcM ()
 -- Anyway, they are dealt with by a special case in check_tau_type
 
 check_arg_type rank ty
-  | isKind ty = return ()  -- IA0: Do we need to check a kind?
+  | isKind ty = return ()  -- IA0_NOTE: Do we need to check a kind?
   | otherwise
   = do	{ impred <- xoptM Opt_ImpredicativeTypes
 	; let rank' = case rank of 	    -- Predictive => must be monotype

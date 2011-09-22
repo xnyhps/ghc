@@ -915,7 +915,10 @@ ty_co_subst subst ty
        			     -- A type variable from a non-cloned forall
 			     -- won't be in the substitution
     go (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2)
-    go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)  -- IA0: tys contains kind instantiations which should not be lifted
+    go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)
+                           -- IA0_NOTE: Do we need to do anything
+                           -- about kind instantiations? I don't think
+                           -- so.  see Note [Kind coercions]
     go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2)
     go (ForAllTy v ty)   = mkForAllCo v' $! (ty_co_subst subst' ty)
                          where
@@ -1088,3 +1091,11 @@ applyCo ty co | Just ty' <- coreView ty = applyCo ty' co
 applyCo (FunTy _ ty) _ = ty
 applyCo _            _ = panic "applyCo"
 \end{code}
+
+Note [Kind coercions]
+~~~~~~~~~~~~~~~~~~~~~
+
+Kind coercions are only of the form: Refl kind. They are only used to
+instantiate kind polymorphic type constructors in TyConAppCo. Remember
+that kind instantiation only happens with TyConApp, not AppTy.
+

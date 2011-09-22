@@ -166,7 +166,6 @@ data HsType name
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
 
--- IA0:   | HsLitTy HsLit  -- A promoted literal, see Note [Promotions (HsLitTy)]
   | HsExplicitListTy PostTcKind [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
   | HsExplicitTupleTy [PostTcKind] [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
 
@@ -186,21 +185,22 @@ mkHsOpTy ty1 op ty2 = HsOpTy ty1 (WpKiApps [], op) ty2
 {- Note [Promotions]
    ~~~~~~~~~~~~~~~~~
 
-HsTyVar: IA0_TODO explain what we do
+HsTyVar: A name in a type or kind.
+  Here are the allowed namespaces for the name.
+    In a type:
+      Var: not allowed
+      Data: promoted data constructor
+      Tv: type variable
+      TcCls before renamer: type constructor, class constructor, or promoted data constructor
+      TcCls after renamer: type constructor or class constructor
+    In a kind:
+      Var, Data: not allowed
+      Tv: kind variable
+      TcCls: kind constructor or promoted type constructor
 
-HsLitTy: A promoted literal.
-  This happens ONLY in the context of TYPE.
-  When we see
-    21
-    "haskell"
-    'c'
-  we parse it as
-    HsLitTy (HsInt 21)
-    HsLitTy (HsString "haskell")
-    HsLitTy (HsChar 'c')
 
 HsExplicitListTy: A promoted explicit list.
-  This happens ONLY in the context of TYPE.
+  This happens only in the context of type.
   When we see
     '[Int]
     [Char,Bool]
@@ -211,20 +211,19 @@ HsExplicitListTy: A promoted explicit list.
   Notice the difference between types [Int] and '[Int].
   - [Int] is a type of list of ints.  It is inhabited ([0,1,2] for
     instance) since its kind is star: [Int] :: *.
-  - '[Int] is a list of types at the type-level.  Its kind is '[*] (or
-    equivalently [*] since there is no lists of kinds).  Hence this
-    type is not inhabited.
+  - '[Int] is a list of types at the type-level.  Its kind is
+    [*]. Hence this type is not inhabited.
 
 HsExplicitTupleTy: A promoted explicit tuple.
-  This happens ONLY in the context of TYPE.
+  This happens only in the context of type.
   When we see
     '(Int,Float,Bool)
   we parse it as
     HsExplicitTupleTy [Int,Float,Bool]
 
   Notice the difference between types (Char,Bool) and '(Char,Bool).
-  - ('c,True) :: (Char,Bool) :: *
-  - '(Char,Bool) :: '(*,*)  ==  (*,*)
+  - ('c',True) :: (Char,Bool) :: *
+  -              '(Char,Bool) :: (*,*)
 
 -}
 
@@ -522,7 +521,6 @@ ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty prec (HsIParamTy n ty)   = maybeParen prec pREC_FUN (ppr n <+> dcolon <+> ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
--- IA0: ppr_mono_ty _    (HsLitTy lit)       = ppr lit  -- IA0: do we want quote here?
 ppr_mono_ty _    (HsExplicitListTy _ tys) = quote $ brackets (interpp'SP tys)
 ppr_mono_ty _    (HsExplicitTupleTy _ tys) = quote $ parens (interpp'SP tys)
 

@@ -1200,7 +1200,7 @@ unifyKind' ctxt (TyVarTy kv1) sk k2 = uKVar ctxt kv1 sk k2
 unifyKind' ctxt k1 sk (TyVarTy kv2) = uKVar ctxt kv2 (invSubKinding sk) k1
 unifyKind' ctxt k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
   | not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2)
-  =  -- IA0: new equation for unifyKind
+  =  -- IA0_TODO: update with PromotedTypeTyCon
   if kc1 == kc2
   then unifyKinds k1s k2s
   else unifyKindMisMatch ctxt k1 sk k2

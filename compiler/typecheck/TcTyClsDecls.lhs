@@ -287,6 +287,7 @@ getInitialKind (L _ decl)
 
 
 ----------------
+-- IA0_TODO: Only return the TcLclEnv
 kcSynDecls :: [SCC (LTyClDecl Name)] 
 	   -> TcM ([LTyClDecl Name], 	-- Kind-annotated decls
 		   TcLclEnv)	-- Kind bindings
@@ -322,6 +323,7 @@ kcSynDecl decl
                 , (unLoc (tcdLName decl), tc_kind) ) }
 
 ------------------------------------------------------------------------
+-- IA0_TODO: Return TcM ()
 kcTyClDecl :: TyClDecl Name -> TcM (TyClDecl Name)
 	-- Not used for type synonyms (see kcSynDecl)
 
@@ -352,7 +354,7 @@ kcTyClDecl decl@(ForeignType {})
 
 kcTyClDecl (TySynonym {}) = panic "kcTyClDecl TySynonym"
 
--- IA0_TODO: I thing this function don't need to give the HsTyVarBondr to the thing_inside
+-- IA0_TODO: I thing this function don't need to give the HsTyVarBndr to the thing_inside
 kcTyClDeclBody :: TyClDecl Name
 	       -> ([LHsTyVarBndr Name] -> TcM a)
 	       -> TcM a
@@ -432,7 +434,7 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
     do { mapM_ unifyClassParmKinds tvs'
        ; kind' <- scDsLHsMaybeKind kind
        ; return (decl {tcdTyVars = tvs', 
-		       tcdTcKind = fromMaybe liftedTypeKind kind'})  -- IA0: switch to tcdTcKind
+		       tcdTcKind = fromMaybe liftedTypeKind kind'})
 		       -- default result kind is '*'
        }
   where
@@ -666,7 +668,8 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
                  wrongNumberOfParmsErr famArity
 
          -- (2) type check type equation
-         -- IA0_TODO: kind generalization here
+         -- We kind generalize the kind patterns since they contain
+         -- all the meta kind variables
        ; (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
        ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
        { t_typats <- mapM tcHsKindedType k_typats
@@ -1363,7 +1366,7 @@ mkRecSelBind (tycon, sel_name)
     	     	          mkPhiTy field_theta               $	-- Urgh!
              	          mkFunTy data_ty field_tau
     sortVars = sortLe le  -- brings kind variables before type variables
-      where  -- IA0: this could reuse what is done in SetLevels.lhs:abstractVars
+      where  -- IA0_NOTE: this could reuse what is done in SetLevels.lhs:abstractVars
         is_kv = isSuperKind . tyVarKind
         le v1 v2 = case (is_kv v1, is_kv v2) of
                      (True, False) -> True

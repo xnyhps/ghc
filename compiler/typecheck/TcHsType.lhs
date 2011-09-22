@@ -484,7 +484,6 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
 
--- IA0: kc_hs_type (HsLitTy _) = panic "IA0_UNDEFINED: kc_hs_type"
 kc_hs_type (HsExplicitListTy _ tys) = do
   ty_k_s <- mapM kc_lhs_type tys
   kind <- unifyKinds (text "promoted list") ty_k_s
@@ -687,8 +686,6 @@ ds_type (HsSpliceTy _ _ kind)
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
--- ds_type (HsLitTy _) = panic "IA0_UNDEFINED: ds_type"
-
 ds_type (HsExplicitListTy kind tys) = do
   kind' <- zonkTcKindToKind kind
   go kind' tys
@@ -761,7 +758,7 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 %*									*
 %************************************************************************
 
-Note [Kind-checking kind-polymorphic types]  IA0_TODO
+Note [Kind-checking kind-polymorphic types]  IA0_TODO: add explicit kind polymorphism
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider:
   f :: forall k f (a::k). f a -> Int
@@ -875,7 +872,7 @@ kindGeneralizeKind kind = do
 freeFlexisOfType :: Type -> TcM [Var]
 freeFlexisOfType ty = do
   fs <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType ty
-  -- IA0_TODO: remove in scope variables
+  -- IA0_TODO: remove in scope variables, are there any?
   return fs
 
 freeFlexisOfTypes :: [Type] -> TcM [Var]
@@ -1210,7 +1207,7 @@ sc_ds_hs_kind (HsTupleTy _ kis) = do
   checkWiredInTyCon tycon
   return $ mkTyConApp tycon kappas
   where tycon = tupleTyCon BoxedTuple (length kis)
-sc_ds_hs_kind _ = panic "IA0: sc_ds_hs_kind"
+sc_ds_hs_kind _ = panic "sc_ds_hs_kind"  -- argument not kind-shaped
 
 sc_ds_app :: HsKind Name -> [LHsKind Name] -> TcM Kind
 sc_ds_app (HsAppTy ki1 ki2) kis = sc_ds_app (unLoc ki1) (ki2:kis)
@@ -1220,8 +1217,7 @@ sc_ds_app ki kis = do
     HsTyVar tc -> sc_ds_var_app tc arg_kis
     _ -> failWithTc (quotes (ppr ki) <+> ptext (sLit "is not a kind constructor"))
 
--- IA0_TODO: rewrite this function in one equation and check if isSuperKind (tyConKind tc)
--- Also I might need to add ATyVar
+-- IA0_TODO: With explicit kind polymorphism I might need to add ATyVar
 sc_ds_var_app :: Name -> [Kind] -> TcM Kind
 sc_ds_var_app name arg_kis
   |  name == liftedTypeKindTyConName
