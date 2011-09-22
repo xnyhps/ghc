@@ -564,7 +564,8 @@ tcFamInstDecl1 fam_tc (decl@TySynonym {})
   -- "newtype instance" and "data instance"
 tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
                                    , tcdCons = cons})
-  = kcFamTyPats fam_tc decl $ \k_tvs k_typats resKind ->
+  = kcFamTyPats fam_tc decl $ \_ k_tvs k_typats resKind ->
+                           --  ^- IA0_TODO like TcTyClsDecls
     do { -- check that the family declaration is for the right kind
          checkTc (isFamilyTyCon fam_tc) (notFamily fam_tc)
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)

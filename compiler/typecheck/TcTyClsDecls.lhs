@@ -647,7 +647,7 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
 -------------------------
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
 tcSynFamInstDecl fam_tc (decl@TySynonym {})
-  = kcFamTyPats fam_tc decl $ \k_tvs k_typats resKind ->
+  = kcFamTyPats fam_tc decl $ \k_kipats k_tvs k_typats resKind ->
     do { -- check that the family declaration is for a synonym
          checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
@@ -657,11 +657,13 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
 
          -- we need the exact same number of type parameters as the family
          -- declaration
-       ; let famArity = tyConArity fam_tc
+       ; let famArity = tyConArity fam_tc - length k_kipats
        ; checkTc (length k_typats == famArity) $
                  wrongNumberOfParmsErr famArity
 
          -- (2) type check type equation
+         -- IA0_TODO: kind generalization here
+       ; (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
        ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
        { t_typats <- mapM tcHsKindedType k_typats
        ; t_rhs    <- tcHsKindedType k_rhs
@@ -670,7 +672,7 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
         -- this function from within the TcTyClsDecls fixpoint. The callers must do
         -- the check.
 
-       ; return (t_tvs, t_typats, t_rhs) }}
+       ; return (t_kvs ++ t_tvs, t_kipats ++ t_typats, t_rhs) }}
 
 tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
@@ -683,12 +685,17 @@ tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
 kcFamTyPats :: TyCon
             -> TyClDecl Name
-            -> ([LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
-               -- ^^kinded tvs         ^^kinded ty pats  ^^res kind
+            -> ([TcKind]     -> [LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
+             -- ^^ meta kv  -- ^^kinded tvs    ^^kinded ty pats  ^^res kind
             -> TcM a
 kcFamTyPats fam_tc decl thing_inside
   = kcHsTyVars (tcdTyVars decl) $ \tvs ->
-    do { let { (kinds, resKind) = splitKindFunTys (tyConKind fam_tc)
+    do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
+         -- Instantiate with meta kind vars
+       ; kvs' <- mapM (const newMetaKindVar) kvs
+       ; let body' = substKiWith kvs kvs' body
+
+       ; let { (kinds, resKind) = splitKindFunTys body'
              ; hs_typats        = fromJust $ tcdTyPats decl }
 
          -- We may not have more parameters than the kind indicates
@@ -700,7 +707,7 @@ kcFamTyPats fam_tc decl thing_inside
        ; typats <- zipWithM kcCheckLHsType hs_typats
                             [ EK kind (EkArg (ppr fam_tc) n)
                             | (kind,n) <- kinds `zip` [1..]]
-       ; thing_inside tvs typats resultKind 
+       ; thing_inside kvs' tvs typats resultKind
        }
 \end{code}
 

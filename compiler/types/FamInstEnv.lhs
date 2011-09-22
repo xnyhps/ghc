@@ -280,7 +280,9 @@ lookupFamInstEnvConflicts
 -- Precondition: the tycon is saturated (or over-saturated)
 
 lookupFamInstEnvConflicts envs fam_inst skol_tvs
-  = lookup_fam_inst_env my_unify False envs fam tys'
+  = pprTrace "IA0_DEBUG" (vcat [ text "(fam, tys)" <+> ppr (fam, tys)
+                               , text "tys'" <+> (ppr tys') ]) $
+    lookup_fam_inst_env my_unify False envs fam tys'
   where
     inst_tycon = famInstTyCon fam_inst
     (fam, tys) = expectJust "FamInstEnv.lookuFamInstEnvConflicts"
@@ -295,7 +297,8 @@ lookupFamInstEnvConflicts envs fam_inst skol_tvs
 		  (ppr tpl_tvs <+> ppr tpl_tys) )
 		-- Unification will break badly if the variables overlap
 		-- They shouldn't because we allocate separate uniques for them
-         case tcUnifyTys instanceBindFun tpl_tys match_tys of
+         case pprTrace "IA0_DEBUG unify" (ppr (tpl_tys, match_tys)) $
+              tcUnifyTys instanceBindFun tpl_tys match_tys of
 	      Just subst | conflicting old_fam_inst subst -> Just subst
 	      _other	   	              	          -> Nothing
 

@@ -194,7 +194,8 @@ isSubKind (FunTy a1 r1) (FunTy a2 r2)
 
 isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
   | isSuperKindTyCon kc1 =  -- handles BOX
-    isSuperKindTyCon kc2 && null k1s && null k2s
+    ASSERT( isSuperKindTyCon kc2 && null k1s && null k2s )
+    True
 
   | isSuperKind (tyConKind kc1) =  -- handles not promoted kinds (*, #, (#), etc.)
     ASSERT( isSuperKind (tyConKind kc2) && null k1s && null k2s )
@@ -204,7 +205,6 @@ isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
     kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
 
 isSubKind k1 k2 = eqKind k1 k2
-
 
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@

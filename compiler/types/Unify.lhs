@@ -201,6 +201,7 @@ match _ _ _ _
 match_kind :: MatchEnv -> TvSubstEnv -> Kind -> Kind -> Maybe TvSubstEnv
 -- Match the kind of the template tyvar with the kind of Type
 -- Note [Matching kinds]
+-- IA0_TODO: we may need to unify k1 and k2 and modify subst
 match_kind _ subst k1 k2
   | k2 `isSubKind` k1 = return subst
 match_kind menv subst k1 k2 = match menv subst k1 k2
@@ -407,6 +408,7 @@ niSubstTvSet subst tvs
 %************************************************************************
 
 \begin{code}
+-- IA0_TODO: Do we need to unify the kinds of the type variables?
 unify :: TvSubstEnv	-- An existing substitution to extend
       -> Type -> Type 	-- Types to be unified, and witness of their equality
       -> UM TvSubstEnv		-- Just the extended substitution, 

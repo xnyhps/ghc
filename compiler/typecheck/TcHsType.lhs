@@ -13,7 +13,7 @@ module TcHsType (
 		-- Kind checking
 	kcHsTyVars, kcHsSigType, kcHsLiftedSigType, 
 	kcLHsType, kcCheckLHsType, kcHsContext, kcApps,
-        kindGeneralizeKind,
+        kindGeneralizeKind, kindGeneralizeKinds,
 
 		-- Sort checking
 	scDsLHsKind, scDsLHsMaybeKind,
