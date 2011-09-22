@@ -193,16 +193,16 @@ isSubKind (FunTy a1 r1) (FunTy a2 r2)
   = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
 
 isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
+  | isPromotedTypeTyCon kc1 =  -- handles promoted kinds (List *, Nat, etc.)
+    kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
+
   | isSuperKindTyCon kc1 =  -- handles BOX
     ASSERT( isSuperKindTyCon kc2 && null k1s && null k2s )
     True
 
-  | isSuperKind (tyConKind kc1) =  -- handles not promoted kinds (*, #, (#), etc.)
-    ASSERT( isSuperKind (tyConKind kc2) && null k1s && null k2s )
+  | otherwise =  -- handles not promoted kinds (*, #, (#), etc.)
+    ASSERT( null k1s && null k2s )
     kc1 `isSubKindCon` kc2
-
-  | otherwise =  -- handles promoted kinds (List *, Nat, etc.)
-    kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
 
 isSubKind k1 k2 = eqKind k1 k2
 
@@ -256,7 +256,7 @@ isPromotableTyVar = isLiftedTypeKind . varType
 
 -- | Promotes a type to a kind. Assumes the argument is promotable.
 promoteType :: Type -> Kind
-promoteType (TyConApp tc tys) = mkTyConApp tc (map promoteType tys)
+promoteType (TyConApp tc tys) = mkTyConApp (promoteTyCon tc) (map promoteType tys)
   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
 promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
@@ -268,6 +268,9 @@ promoteType _ = panic "IA0: promoteType"
 
 promoteTyVar :: TyVar -> KindVar
 promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
+
+promoteTyCon :: TyCon -> TyCon
+promoteTyCon = mkPromotedTypeTyCon
 
 -- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
 isPromotableKind :: Kind -> Maybe Int

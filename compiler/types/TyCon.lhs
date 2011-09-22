@@ -31,6 +31,7 @@ module TyCon(
         mkForeignTyCon,
         mkAnyTyCon,
 	mkPromotedDataTyCon,
+	mkPromotedTypeTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -41,7 +42,7 @@ module TyCon(
         isSynTyCon, isClosedSynTyCon,
         isSuperKindTyCon, isDecomposableTyCon,
         isForeignTyCon, isAnyTyCon, tyConHasKind,
-        isPromotedDataTyCon,
+        isPromotedDataTyCon, isPromotedTypeTyCon,
 
 	isInjectiveTyCon,
 	isDataTyCon, isProductTyCon, isEnumerationTyCon, 
@@ -453,6 +454,14 @@ data TyCon
 	tyConName   :: Name,   -- ^ Same Name as the data constructor
 	tc_kind     :: Kind,   -- ^ Translated type of the data constructor
         dataCon     :: DataCon -- ^ Corresponding data constructor
+    }
+
+  -- | Represents promoted type constructor.
+  | PromotedTypeTyCon {
+	tyConUnique :: Unique, -- ^ Same Unique as the type constructor
+	tyConName   :: Name,   -- ^ Same Name as the type constructor
+	tyConArity  :: Arity,  -- ^ n if ty_con :: * -> ... -> *  n times
+        ty_con      :: TyCon   -- ^ Corresponding type constructor
     }
 
   deriving Typeable
@@ -989,6 +998,16 @@ mkPromotedDataTyCon con name unique kind
         dataCon = con
   }
 
+-- | Create a promoted type constructor 'TyCon'
+mkPromotedTypeTyCon :: TyCon -> TyCon
+mkPromotedTypeTyCon con
+  = PromotedTypeTyCon {
+        tyConName = getName con,
+        tyConUnique = getUnique con,
+        tyConArity = tyConArity con,
+        ty_con = con
+  }
+
 \end{code}
 
 \begin{code}
@@ -1231,6 +1250,11 @@ isAnyTyCon _              = False
 isPromotedDataTyCon :: TyCon -> Bool
 isPromotedDataTyCon (PromotedDataTyCon {}) = True
 isPromotedDataTyCon _                      = False
+
+-- | Is this a PromotedTypeTyCon?
+isPromotedTypeTyCon :: TyCon -> Bool
+isPromotedTypeTyCon (PromotedTypeTyCon {}) = True
+isPromotedTypeTyCon _                      = False
 
 -- | Identifies implicit tycons that, in particular, do not go into interface
 -- files (because they are implicitly reconstructed when the interface is

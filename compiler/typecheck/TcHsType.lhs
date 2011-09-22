@@ -1242,7 +1242,7 @@ sc_ds_var_app name arg_kis = do
       | isAlgTyCon tc || isTupleTyCon tc -> do
       let tc_kind = tyConKind tc
       case isPromotableKind tc_kind of
-        Just n | n == length arg_kis -> return (mkTyConApp tc arg_kis)
+        Just n | n == length arg_kis -> return (mkTyConApp (mkPromotedTypeTyCon tc) arg_kis)
         Just _ -> err tc_kind "is not fully applied"
         Nothing -> err tc_kind "is not promotable"
     _ -> wrongThingErr "promoted type" thing name

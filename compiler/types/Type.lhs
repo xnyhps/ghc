@@ -1492,7 +1492,10 @@ type SimpleKind = Kind
 
 \begin{code}
 typeKind :: Type -> Kind
-typeKind ty@(TyConApp tc tys) 
+typeKind ty@(TyConApp tc tys)
+  | isPromotedTypeTyCon tc
+  = ASSERT( tyConArity tc == length tys ) tySuperKind
+  | otherwise
   = ASSERT2( not (tc `hasKey` eqPrimTyConKey) || length tys == 2, ppr ty )
              -- Assertion checks for unsaturated application of ~#
              -- See Note [The ~# TyCon] in TysPrim
