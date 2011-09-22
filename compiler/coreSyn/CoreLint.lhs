@@ -665,15 +665,13 @@ lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
 
 lintKind kind@(TyConApp tc kis)
-  | isSuperKind kind = panic "lintKind called with BOX"
+  | isPromotedTypeTyCon tc
+  , tyConArity tc == length kis
+  = mapM_ lintKind kis
 
   | isSuperKind tc_kind  -- handles *, #, Constraint, etc.
   , null kis
   = return ()
-
-  | Just n <- isPromotableKind tc_kind  -- handles promoted TyCons
-  , n == length kis
-  = mapM_ lintKind kis
 
   | otherwise
   = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
