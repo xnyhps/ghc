@@ -1431,7 +1431,7 @@ substTyVarBndr subst@(TvSubst in_scope tenv) old_var
 	-- Here we must simply zap the substitution for x
 
     new_var | no_kind_change = uniqAway in_scope old_var
-            | otherwise = uniqAway in_scope $ setTyVarKind old_var (substTy subst old_ki)
+            | otherwise = uniqAway in_scope $ updateTyVarKind (substTy subst) old_var
 	-- The uniqAway part makes sure the new variable is not already in scope
 
 cloneTyVarBndr :: TvSubst -> TyVar -> Unique -> (TvSubst, TyVar)

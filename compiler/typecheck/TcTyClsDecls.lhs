@@ -236,9 +236,13 @@ kcTyClGroup decls
 	     -- Kind checking done for this group
 	     -- See Note [Kind checking for type and class decls]
              -- Now we have to kind generalize the flexis
-        ; let alg_kinds = [ (name, kind) | (name, AThing kind) <- initial_kinds ]
-        ; generalized_kinds <- flip mapM alg_kinds $ \(name, kc_kind) -> do
-                    { (kvs, body) <- kindGeneralizeKind kc_kind
+        ; let all_names = map (unLoc . tcdLName . unLoc) (syn_decls ++ alg_at_decls)
+        ; generalized_kinds <- flip mapM all_names $ \name -> do
+                    { thing <- tcLookup name
+                    ; let kc_kind = case thing of
+                                      AThing k -> k
+                                      _ -> pprPanic "kcTyClGroup" (ppr thing)
+                    ; (kvs, body) <- kindGeneralizeKind kc_kind
                     ; return $ (name, mkForAllTys kvs body) }
         ; traceTc "tcTyAndCl generalized" (ppr generalized_kinds)
         ; tcExtendKindEnv generalized_kinds getLclEnv } } }

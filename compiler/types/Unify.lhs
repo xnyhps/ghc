@@ -179,7 +179,8 @@ match menv subst (TyVarTy tv1) ty2
     tv1' = rnOccL rn_env tv1
 
 match menv subst (ForAllTy tv1 ty1) (ForAllTy tv2 ty2) 
-  = match menv' subst ty1 ty2
+  = do { subst' <- match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)
+       ; match menv' subst' ty1 ty2 }
   where		-- Use the magic of rnBndr2 to go under the binders
     menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
 
@@ -201,10 +202,12 @@ match _ _ _ _
 match_kind :: MatchEnv -> TvSubstEnv -> Kind -> Kind -> Maybe TvSubstEnv
 -- Match the kind of the template tyvar with the kind of Type
 -- Note [Matching kinds]
--- IA0_TODO: we may need to unify k1 and k2 and modify subst
-match_kind _ subst k1 k2
-  | k2 `isSubKind` k1 = return subst
-match_kind menv subst k1 k2 = match menv subst k1 k2
+match_kind menv subst k1 k2
+  | k2 `isSubKind` k1
+  = return subst
+
+  | otherwise
+  = match menv subst k1 k2
 
 -- Note [Matching kinds]
 -- ~~~~~~~~~~~~~~~~~~~~~

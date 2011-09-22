@@ -351,6 +351,7 @@ writeMetaTyVarRef tyvar ref ty
 -- Everything from here on only happens if DEBUG is on
   | not (isPredTy tv_kind)   -- Don't check kinds for updates to coercion variables
   , not (ty_kind `isSubKind` tv_kind)
+  -- IA0_TODO: the kind are not zonked sometimes
   = WARN( True, hang (text "Ill-kinded update to meta tyvar")
                    2 (ppr tyvar $$ ppr tv_kind $$ ppr ty $$ ppr ty_kind) )
     do { traceTc "writeMetaTyVar" (ppr tyvar <+> text ":=" <+> ppr ty)
