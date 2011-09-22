@@ -951,6 +951,7 @@ tcTopSrcDecls boot_details
                                  , tcg_vects = tcg_vects tcg_env ++ vects
                                  , tcg_anns  = tcg_anns tcg_env ++ annotations
                                  , tcg_fords = tcg_fords tcg_env ++ foe_decls ++ fi_decls } } ;
+
         return (tcg_env', tcl_env)
     }}}}}}
 \end{code}

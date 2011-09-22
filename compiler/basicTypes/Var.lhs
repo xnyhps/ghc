@@ -190,8 +190,8 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 
 \begin{code}
 instance Outputable Var where
-  ppr var = ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
-            <+> text ":: (" <+> ppr (tyVarKind var) <+> text ")"  -- IA0_DEBUG: remove this line
+  ppr var = ifPprDebug (text "(") <+> ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
+            <+> ifPprDebug (text "::" <+> ppr (tyVarKind var) <+> text ")")
 
 ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})                           = ptext (sLit "tv")
