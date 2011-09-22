@@ -197,7 +197,7 @@ isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
     kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
 
   | isSuperKindTyCon kc1 =  -- handles BOX
-    ASSERT( isSuperKindTyCon kc2 && null k1s && null k2s )
+    ASSERT2( isSuperKindTyCon kc2 && null k1s && null k2s, ppr kc1 <+> ppr kc2 )
     True
 
   | otherwise =  -- handles not promoted kinds (*, #, (#), etc.)

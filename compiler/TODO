@@ -1,6 +1,6 @@
 ## TODO FIRST
 
-* data declarations in hs-boot files will always need kind signatures
+* BUG: how to solve kind polymorphic boot files?
 
 * ds_type takes a flag
   - either it does defaulting: alpha -> star

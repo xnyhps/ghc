@@ -54,7 +54,6 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
     	-- Note [Typechecking rules]
        ; vars <- tcRuleBndrs hs_bndrs
        ; let (id_bndrs, tv_bndrs) = partition isId vars
-       ; traceTc "IA0_DEBUG tv_bndrs" (ppr tv_bndrs)
        ; (lhs', lhs_lie, rhs', rhs_lie, rule_ty)
             <- tcExtendTyVarEnv tv_bndrs $
                tcExtendIdEnv id_bndrs $
@@ -96,7 +95,6 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
        	     		       `minusVarSet` gbl_tvs
        	     		       `delVarSetList` tv_bndrs
        ; qtvs <- zonkQuantifiedTyVars (varSetElems extra_bound_tvs)
-       ; traceTc "IA0_DEBUG qtvs" (ppr qtvs)
 
        	      -- The tv_bndrs are already skolems, so no need to zonk them
        ; return (HsRule name act

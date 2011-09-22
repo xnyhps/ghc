@@ -9,9 +9,9 @@ import {-# SOURCE #-} HsPat  ( LPat )
 import Data.Data
 	
 data HsExpr (i :: *)
-data HsSplice i
-data MatchGroup a
-data GRHSs a
+data HsSplice (i :: *)
+data MatchGroup (a :: *)
+data GRHSs (a :: *)
 
 instance Typeable1 HsSplice
 instance Data i => Data (HsSplice i)
