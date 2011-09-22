@@ -1,5 +1,7 @@
 ## TODO FIRST
 
+* data declarations in hs-boot files will always need kind signatures
+
 * ds_type takes a flag
   - either it does defaulting: alpha -> star
   - or it zonks to a kind variable: alpha -> k7

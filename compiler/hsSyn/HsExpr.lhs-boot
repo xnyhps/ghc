@@ -1,4 +1,5 @@
 \begin{code}
+{-# LANGUAGE KindSignatures #-}
 module HsExpr where
 
 import SrcLoc	  ( Located )
@@ -7,7 +8,7 @@ import {-# SOURCE #-} HsPat  ( LPat )
 
 import Data.Data
 	
-data HsExpr i
+data HsExpr (i :: *)
 data HsSplice i
 data MatchGroup a
 data GRHSs a

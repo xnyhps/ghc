@@ -1367,7 +1367,7 @@ abstractFloats main_tvs body_env body
 	   ; return (subst', (NonRec poly_id poly_rhs)) }
       where
 	rhs' = CoreSubst.substExpr (text "abstract_floats2") subst rhs
-	tvs_here = varSetElems (main_tv_set `intersectVarSet` exprSomeFreeVars isTyVar rhs')
+	tvs_here = varSetElemsKvsFirst (main_tv_set `intersectVarSet` exprSomeFreeVars isTyVar rhs')
 	
 		-- Abstract only over the type variables free in the rhs
 		-- wrt which the new binding is abstracted.  But the naive
@@ -1406,7 +1406,7 @@ abstractFloats main_tvs body_env body
 		-- If you ever want to be more selective, remember this bizarre case too:
 		--	x::a = x
 		-- Here, we must abstract 'x' over 'a'.
-	 tvs_here = main_tvs
+	 tvs_here = sortQuantVars main_tvs
 
     mk_poly tvs_here var
       = do { uniq <- getUniqueM
