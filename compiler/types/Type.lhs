@@ -87,7 +87,7 @@ module Type (
 	-- * Type free variables
 	tyVarsOfType, tyVarsOfTypes,
 	expandTypeSynonyms, 
-	typeSize, varSetElemsKvsFirst,
+	typeSize, varSetElemsKvsFirst, sortQuantVars,
 
 	-- * Type comparison
         eqType, eqTypeX, eqTypes, cmpType, cmpTypes, 
@@ -942,6 +942,22 @@ typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
 varSetElemsKvsFirst :: VarSet -> [TyVar]
 -- {k1,a,k2,b} --> [k1,k2,a,b]
 varSetElemsKvsFirst set = uncurry (++) $ splitKiTyVars (varSetElems set)
+
+sortQuantVars :: [Var] -> [Var]
+-- Sort the variables so the true kind then type variables come first
+sortQuantVars = sortLe le
+  where
+    v1 `le` v2 = case (is_tv v1, is_tv v2) of
+                   (True, False)  -> True
+                   (False, True)  -> False
+                   (True, True)   ->
+                     case (is_kv v1, is_kv v2) of
+                       (True, False) -> True
+                       (False, True) -> False
+                       _             -> v1 <= v2  -- Same family
+                   (False, False) -> v1 <= v2
+    is_tv v = isTyVar v
+    is_kv v = isSuperKind (tyVarKind v)
 \end{code}
 
 
@@ -1143,9 +1159,7 @@ cmpTypeX env t1 t2 | Just t1' <- coreView t1 = cmpTypeX env t1' t2
 -- So the RHS has a data type
 
 cmpTypeX env (TyVarTy tv1)       (TyVarTy tv2)       = rnOccL env tv1 `compare` rnOccR env tv2
-cmpTypeX env (ForAllTy tv1 t1)   (ForAllTy tv2 t2)
-  = cmpTypeX env (tyVarKind tv1) (tyVarKind tv2) `thenCmp`
-    cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
+cmpTypeX env (ForAllTy tv1 t1)   (ForAllTy tv2 t2)   = cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
 cmpTypeX env (AppTy s1 t1)       (AppTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
 cmpTypeX env (FunTy s1 t1)       (FunTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
 cmpTypeX env (TyConApp tc1 tys1) (TyConApp tc2 tys2) = (tc1 `compare` tc2) `thenCmp` cmpTypesX env tys1 tys2
@@ -1174,6 +1188,29 @@ cmpTypesX env (t1:tys1) (t2:tys2) = cmpTypeX env t1 t2 `thenCmp` cmpTypesX env t
 cmpTypesX _   []        _         = LT
 cmpTypesX _   _         []        = GT
 \end{code}
+
+Note [cmpTypeX]
+~~~~~~~~~~~~~~~
+
+When we compare foralls, we should look at the kinds. But if we do so,
+we get a corelint error like the following (in
+libraries/ghc-prim/GHC/PrimopWrappers.hs):
+
+    Binder's type: forall (o_abY :: *).
+                   o_abY
+                   -> GHC.Prim.State# GHC.Prim.RealWorld
+                   -> GHC.Prim.State# GHC.Prim.RealWorld
+    Rhs type: forall (a_12 :: ?).
+              a_12
+              -> GHC.Prim.State# GHC.Prim.RealWorld
+              -> GHC.Prim.State# GHC.Prim.RealWorld
+
+This is why we don't look at the kind. Maybe we should look if the
+kinds are compatible.
+
+-- cmpTypeX env (ForAllTy tv1 t1)   (ForAllTy tv2 t2)
+--   = cmpTypeX env (tyVarKind tv1) (tyVarKind tv2) `thenCmp`
+--     cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
 
 %************************************************************************
 %*									*

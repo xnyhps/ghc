@@ -1361,17 +1361,10 @@ mkRecSelBind (tycon, sel_name)
     is_naughty = not (tyVarsOfType field_ty `subVarSet` data_tvs)  
     (field_tvs, field_theta, field_tau) = tcSplitSigmaTy field_ty
     sel_ty | is_naughty = unitTy  -- See Note [Naughty record selectors]
-           | otherwise  = mkForAllTys (sortVars (varSetElems data_tvs ++ field_tvs)) $
+           | otherwise  = mkForAllTys (sortQuantVars (varSetElems data_tvs ++ field_tvs)) $
     	     	          mkPhiTy (dataConStupidTheta con1) $	-- Urgh!
     	     	          mkPhiTy field_theta               $	-- Urgh!
              	          mkFunTy data_ty field_tau
-    sortVars = sortLe le  -- brings kind variables before type variables
-      where  -- IA0_NOTE: this could reuse what is done in SetLevels.lhs:abstractVars
-        is_kv = isSuperKind . tyVarKind
-        le v1 v2 = case (is_kv v1, is_kv v2) of
-                     (True, False) -> True
-                     (False, True) -> False
-                     _             -> v1 <= v2
 
     -- Make the binding: sel (C2 { fld = x }) = x
     --                   sel (C7 { fld = x }) = x
