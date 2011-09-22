@@ -408,7 +408,9 @@ niSubstTvSet subst tvs
 %************************************************************************
 
 \begin{code}
--- IA0_TODO: Do we need to unify the kinds of the type variables?
+-- IA0_TODO: BUG: all the following function (all this file actually)
+-- needs to handle kind unification during type unification and kind
+-- match during type match !!!
 unify :: TvSubstEnv	-- An existing substitution to extend
       -> Type -> Type 	-- Types to be unified, and witness of their equality
       -> UM TvSubstEnv		-- Just the extended substitution, 
@@ -504,6 +506,7 @@ uUnrefined subst tv1 ty2 (TyVarTy tv2)
   = uUnrefined subst tv1 ty' ty'
 
   -- So both are unrefined; next, see if the kinds force the direction
+  -- IA0_TODO: we might need to call unify instead
   | eqKind k1 k2	-- Can update either; so check the bind-flags
   = do	{ b1 <- tvBindFlag tv1
 	; b2 <- tvBindFlag tv2
