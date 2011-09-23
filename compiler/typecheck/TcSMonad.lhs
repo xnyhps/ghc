@@ -88,7 +88,7 @@ import FamInstEnv
 import qualified TcRnMonad as TcM
 import qualified TcMType as TcM
 import qualified TcEnv as TcM 
-       ( checkWellStaged, topIdLvl, tcLookupFamInst, tcGetDefaultTys )
+       ( checkWellStaged, topIdLvl, tcGetDefaultTys )
 import {-# SOURCE #-} qualified TcUnify as TcM ( unifyKindEq )
 import Kind
 import TcType
@@ -977,5 +977,5 @@ matchClass clas tys
         }
 
 matchFam :: TyCon -> [Type] -> TcS (Maybe (TyCon, [Type]))
-matchFam tycon args = wrapTcS $ TcM.tcLookupFamInst tycon args
+matchFam tycon args = wrapTcS $ tcLookupFamInst tycon args
 \end{code}

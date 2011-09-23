@@ -118,7 +118,7 @@ tcTyClGroup boot_details tyclds
              dm_ids          = mkDefaultMethodIds tyclss
 
        ; tcExtendGlobalEnv tyclss $
-         tcExtendGlobalEnv implicit_things $
+         tcExtendGlobalEnvImplicit implicit_things $
          tcExtendGlobalValEnv dm_ids $ do
        {       -- Perform the validity check
                -- We can do this now because we are done with the recursive knot

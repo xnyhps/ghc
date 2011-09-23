@@ -39,9 +39,11 @@ import Class
 import IParam
 import TyCon
 import DataCon
+import PrelNames
 import TysWiredIn
 import TysPrim          ( anyTyConOfKind, tySuperKindTyCon )
 import BasicTypes       ( Arity, strongLoopBreaker )
+import Literal
 import qualified Var
 import VarEnv
 import VarSet
@@ -896,7 +898,8 @@ tcIfaceExpr (IfaceTupId boxity arity)
   = return $ Var (dataConWorkId (tupleCon boxity arity))
 
 tcIfaceExpr (IfaceLit lit)
-  = return (Lit lit)
+  = do lit' <- tcIfaceLit lit
+       return (Lit lit')
 
 tcIfaceExpr (IfaceFCall cc ty) = do
     ty' <- tcIfaceType ty
@@ -971,6 +974,16 @@ tcIfaceExpr (IfaceNote note expr) = do
         IfaceCoreNote n   -> return (Note (CoreNote n) expr')
 
 -------------------------
+tcIfaceLit :: Literal -> IfL Literal
+-- Integer literals deserialise to (LitInteeger i <error thunk>) 
+-- so tcIfaceLit just fills in the mkInteger Id 
+-- See Note [Integer literals] in Literal
+tcIfaceLit (LitInteger i _)
+  = do mkIntegerId <- tcIfaceExtId mkIntegerName
+       return (mkLitInteger i mkIntegerId)
+tcIfaceLit lit = return lit
+
+-------------------------
 tcIfaceAlt :: CoreExpr -> (TyCon, [Type])
            -> (IfaceConAlt, [FastString], IfaceExpr)
            -> IfL (AltCon, [TyVar], CoreExpr)
@@ -981,8 +994,9 @@ tcIfaceAlt _ _ (IfaceDefault, names, rhs)
   
 tcIfaceAlt _ _ (IfaceLitAlt lit, names, rhs)
   = ASSERT( null names ) do
+    lit' <- tcIfaceLit lit
     rhs' <- tcIfaceExpr rhs
-    return (LitAlt lit, [], rhs')
+    return (LitAlt lit', [], rhs')
 
 -- A case alternative is made quite a bit more complicated
 -- by the fact that we omit type annotations because we can
@@ -1014,7 +1028,7 @@ tcIfaceDataAlt con inst_tys arg_strs rhs
 
 
 \begin{code}
-tcExtCoreBindings :: [IfaceBinding] -> IfL [CoreBind]	-- Used for external core
+tcExtCoreBindings :: [IfaceBinding] -> IfL CoreProgram	-- Used for external core
 tcExtCoreBindings []     = return []
 tcExtCoreBindings (b:bs) = do_one b (tcExtCoreBindings bs)
 

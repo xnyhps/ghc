@@ -140,7 +140,7 @@ for x, solely to put in the SRTs lower down.
 %************************************************************************
 
 \begin{code}
-coreToStg :: PackageId -> [CoreBind] -> IO [StgBinding]
+coreToStg :: PackageId -> CoreProgram -> IO [StgBinding]
 coreToStg this_pkg pgm
   = return pgm'
   where (_, _, pgm') = coreTopBindsToStg this_pkg emptyVarEnv pgm
@@ -153,7 +153,7 @@ coreExprToStg expr
 coreTopBindsToStg
     :: PackageId
     -> IdEnv HowBound           -- environment for the bindings
-    -> [CoreBind]
+    -> CoreProgram
     -> (IdEnv HowBound, FreeVarsInfo, [StgBinding])
 
 coreTopBindsToStg _        env [] = (env, emptyFVInfo, [])
@@ -315,7 +315,7 @@ decisions.  Hence no black holes.
 \begin{code}
 -- No LitInteger's should be left by the time this is called. CorePrep
 -- should have converted them all to a real core representation.
-coreToStgExpr (Lit (LitInteger _)) = panic "coreToStgExpr: LitInteger"
+coreToStgExpr (Lit (LitInteger {})) = panic "coreToStgExpr: LitInteger"
 coreToStgExpr (Lit l)      = return (StgLit l, emptyFVInfo, emptyVarSet)
 coreToStgExpr (Var v)      = coreToStgApp Nothing v               []
 coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId []

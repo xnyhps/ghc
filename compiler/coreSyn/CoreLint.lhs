@@ -34,6 +34,7 @@ import Kind
 import Type
 import TypeRep
 import TyCon
+import TcType
 import BasicTypes
 import StaticFlags
 import ListSetOps
@@ -98,7 +99,7 @@ find an occurence of an Id, we fetch it from the in-scope set.
 
 
 \begin{code}
-lintCoreBindings :: [CoreBind] -> (Bag Message, Bag Message)
+lintCoreBindings :: CoreProgram -> (Bag Message, Bag Message)
 --   Returns (warnings, errors)
 lintCoreBindings binds
   = initL $ 
@@ -546,7 +547,7 @@ lintCoreAlt _ alt_ty (DEFAULT, args, rhs) =
      ; checkAltExpr rhs alt_ty }
 
 lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
-  | integerTy `eqType` scrut_ty
+  | isIntegerTy scrut_ty
     = failWithL integerScrutinisedMsg
   | otherwise
     = do { checkL (null args) (mkDefaultArgsMsg args)
