@@ -35,7 +35,7 @@ module Kind (
         isSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Functions on variables
-        splitKiTyVars,
+        splitKiTyVars, partitionKiTyVars,
 
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
@@ -235,9 +235,10 @@ defaultKind k
   | otherwise        = k
 
 splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
--- We use partition and not span because sometimes the list we get
--- comes from a varSetElems
-splitKiTyVars = partition (isSuperKind . tyVarKind)
+splitKiTyVars = span (isSuperKind . tyVarKind)
+
+partitionKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
+partitionKiTyVars = partition (isSuperKind . tyVarKind)
 
 
 -- About promoting a type to a kind

@@ -138,7 +138,7 @@ module Type (
 -- We import the representation and primitive functions from TypeRep.
 -- Many things are reexported, but not the representation!
 
-import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind, splitKiTyVars )
+import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind, splitKiTyVars, partitionKiTyVars )
 import TypeRep
 
 -- friends:
@@ -941,7 +941,7 @@ typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
 
 varSetElemsKvsFirst :: VarSet -> [TyVar]
 -- {k1,a,k2,b} --> [k1,k2,a,b]
-varSetElemsKvsFirst set = uncurry (++) $ splitKiTyVars (varSetElems set)
+varSetElemsKvsFirst set = uncurry (++) $ partitionKiTyVars (varSetElems set)
 
 sortQuantVars :: [Var] -> [Var]
 -- Sort the variables so the true kind then type variables come first

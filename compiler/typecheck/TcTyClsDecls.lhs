@@ -1237,7 +1237,7 @@ checkValidClass cls
 	}
   where
     (tyvars, fundeps, theta, _, at_stuff, op_stuff) = classExtraBigSig cls
-    unary 	= isSingleton (snd (splitKiTyVars tyvars))  -- only count type arguments
+    unary 	= isSingleton (snd (splitKiTyVars tyvars))  -- IA0_NOTE: only count type arguments
     no_generics = null [() | (_, (GenDefMeth _)) <- op_stuff]
 
     check_op constrained_class_methods (sel_id, dm) 

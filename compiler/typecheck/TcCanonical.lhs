@@ -1037,7 +1037,7 @@ instFunDepEqn :: WantedLoc -> Equation -> TcS [(Int,(EvVar,WantedLoc))]
 instFunDepEqn wl (FDEqn { fd_qtvs = qtvs, fd_eqs = eqs
                         , fd_pred1 = d1, fd_pred2 = d2 })
   = do { let tvs = varSetElems qtvs
-       ; tvs' <- mapM instFlexiTcS tvs
+       ; tvs' <- mapM instFlexiTcS tvs  -- IA0_TODO: we might need to do kind substitution
        ; let subst = zipTopTvSubst tvs (mkTyVarTys tvs')
        ; foldM (do_one subst) [] eqs }
   where 

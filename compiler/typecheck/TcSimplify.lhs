@@ -21,6 +21,7 @@ import VarSet
 import VarEnv 
 import Coercion
 import TypeRep
+import Type     ( varSetElemsKvsFirst )
 
 import Name
 import NameEnv	( emptyNameEnv )
@@ -220,7 +221,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
   = do { gbl_tvs     <- tcGetGlobalTyVars            -- Already zonked
        ; zonked_taus <- zonkTcTypes (map snd name_taus)
        ; let tvs_to_quantify = get_tau_tvs zonked_taus `minusVarSet` gbl_tvs
-       ; qtvs <- zonkQuantifiedTyVars (varSetElems tvs_to_quantify)
+       ; qtvs <- zonkQuantifiedTyVars (varSetElemsKvsFirst tvs_to_quantify)
        ; return (qtvs, [], False, emptyTcEvBinds) }
 
   | otherwise
@@ -305,7 +306,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
                         -- tidied uniformly
 
        ; gloc <- getCtLoc skol_info
-       ; qtvs_to_return <- zonkQuantifiedTyVars (varSetElems qtvs)
+       ; qtvs_to_return <- zonkQuantifiedTyVars (varSetElemsKvsFirst qtvs)
 
             -- Step 5
             -- Minimize `bound' and emit an implication
