@@ -41,7 +41,7 @@ import TyCon
 import DataCon
 import PrelNames
 import TysWiredIn
-import TysPrim          ( anyTyConOfKind, tySuperKindTyCon )
+import TysPrim          ( tySuperKindTyCon )
 import BasicTypes       ( Arity, strongLoopBreaker )
 import Literal
 import qualified Var
@@ -1262,9 +1262,7 @@ tcIfaceTyCon IfacePArrTc      	= tcWiredInTyCon parrTyCon
 tcIfaceTyCon (IfaceTupTc bx ar) = tcWiredInTyCon (tupleTyCon bx ar)
 tcIfaceTyCon (IfaceIPTc n)      = do { n' <- newIPName n
                                      ; tcWiredInTyCon (ipTyCon n') }
-tcIfaceTyCon (IfaceAnyTc kind)  = do { tc_kind <- tcIfaceType kind
-                                     ; tcWiredInTyCon (anyTyConOfKind tc_kind) }
-tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name 
+tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name
 				     ; return (check_tc (tyThingTyCon thing)) }
   where
     check_tc tc

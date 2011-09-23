@@ -7,7 +7,7 @@
   - or it zonks to a kind variable: alpha -> k7
   When we kind generalize, we gather the free kind variables and quantify over them.
 
-* Get rid special cases for Any and (~), make them polymorphic and behave like any other TyCon.
+* Get rid special cases for (~), make it polymorphic and behave like any other TyCon.
 
 * UserKiVar (in Parser mkHsForAll or renamer)
   look at kind annotation to know if a UserTyvar is a kind variable

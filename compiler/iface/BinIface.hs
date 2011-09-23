@@ -907,7 +907,6 @@ instance Binary IfaceType where
     put_ bh (IfaceTyConApp IfaceArgTypeKindTc [])      = putByte bh 16
     put_ bh (IfaceTyConApp IfaceConstraintKindTc [])   = putByte bh 21
     put_ bh (IfaceTyConApp IfaceSuperKindTc [])        = putByte bh 22
-    put_ bh (IfaceTyConApp (IfaceAnyTc k) []) 	       = do { putByte bh 17; put_ bh k }
 
 	-- Generic cases
     put_ bh (IfaceTyConApp (IfaceTc tc) tys) = do { putByte bh 18; put_ bh tc; put_ bh tys }
@@ -944,7 +943,6 @@ instance Binary IfaceType where
               16 -> return (IfaceTyConApp IfaceArgTypeKindTc [])
               21 -> return (IfaceTyConApp IfaceConstraintKindTc [])
               22 -> return (IfaceTyConApp IfaceSuperKindTc [])
-              17 -> do { k <- get bh; return (IfaceTyConApp (IfaceAnyTc k) []) }
 
 	      18 -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp (IfaceTc tc) tys) }
 	      19  -> do { tc <- get bh; tys <- get bh; return (IfaceTyConApp tc tys) }
@@ -967,7 +965,6 @@ instance Binary IfaceTyCon where
    put_ bh (IfaceTupTc bx ar)  = do { putByte bh 11; put_ bh bx; put_ bh ar }
    put_ bh (IfaceTc ext)       = do { putByte bh 12; put_ bh ext }
    put_ bh (IfaceIPTc n)       = do { putByte bh 13; put_ bh n }
-   put_ bh (IfaceAnyTc k)      = do { putByte bh 14; put_ bh k }
 
    get bh = do
 	h <- getByte bh
@@ -987,7 +984,7 @@ instance Binary IfaceTyCon where
 	  11 -> do { bx <- get bh; ar <- get bh; return (IfaceTupTc bx ar) }
 	  12 -> do { ext <- get bh; return (IfaceTc ext) }
 	  13 -> do { n <- get bh; return (IfaceIPTc n) }
-          _  -> do { k <- get bh; return (IfaceAnyTc k) }
+          _ -> panic ("get IfaceTyCon " ++ show h)
 
 instance Binary IfaceCoCon where
    put_ bh (IfaceCoAx n)       = do { putByte bh 0; put_ bh n }

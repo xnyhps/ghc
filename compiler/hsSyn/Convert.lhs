@@ -196,7 +196,7 @@ cvtDec (ForeignD ford)
 cvtDec (FamilyD flav tc tvs kind)
   = do { (_, tc', tvs') <- cvt_tycl_hdr [] tc tvs
        ; kind' <- cvtMaybeKind kind
-       ; returnL $ TyClD (TyFamily (cvtFamFlavour flav) tc' tvs' kind' placeHolderKind) }
+       ; returnL $ TyClD (TyFamily (cvtFamFlavour flav) tc' tvs' kind') }
   where
     cvtFamFlavour TypeFam = TypeFamily
     cvtFamFlavour DataFam = DataFamily

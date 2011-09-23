@@ -67,21 +67,20 @@ module TysPrim(
         eqPrimTyCon,            -- ty1 ~# ty2
 
 	-- * Any
-	anyTyCon, anyTyConOfKind, anyTypeOfKind
+	anyTyCon, anyTypeOfKind
   ) where
 
 #include "HsVersions.h"
 
-import Var		( TyVar, mkTyVar )
+import Var		( TyVar, KindVar, mkTyVar )
 import Name		( Name, BuiltInSyntax(..), mkInternalName, mkWiredInName )
-import OccName          ( mkTcOcc,mkTyVarOccFS, mkTcOccFS )
+import OccName          ( mkTyVarOccFS, mkTcOccFS )
 import TyCon
 import TypeRep
 import SrcLoc
 import Unique		( mkAlphaTyVarUnique )
 import PrelNames
 import FastString
-import Outputable
 
 import Data.Char
 \end{code}
@@ -209,6 +208,10 @@ argAlphaTyVar, argBetaTyVar :: TyVar
 argAlphaTy, argBetaTy :: Type
 argAlphaTy = mkTyVarTy argAlphaTyVar
 argBetaTy  = mkTyVarTy argBetaTyVar
+
+kKiVar :: KindVar
+kKiVar = (tyVarList tySuperKind) !! 10
+
 \end{code}
 
 
@@ -630,32 +633,6 @@ The type constructor Any::* has these properties
     For example   	length Any []
     See Note [Strangely-kinded void TyCons]
 
-In addition, we have a potentially-infinite family of types, one for
-each kind /other than/ *, needed to instantiate otherwise
-un-constrained type variables of kinds other than *.  This is a bit
-like tuples; there is a potentially-infinite family.  They have slightly
-different characteristics to Any::*:
-  
-  * They are built with TyCon.AnyTyCon
-  * They have non-user-writable names like "Any(*->*)" 
-  * They are not exported by GHC.Prim
-  * They are uninhabited (of course; not kind *)
-  * They have a unique derived from their OccName (see Note [Uniques of Any])
-  * Their Names do not live in the global name cache
-
-Note [Uniques of Any]
-~~~~~~~~~~~~~~~~~~~~~
-Although Any(*->*), say, doesn't have a binding site, it still needs
-to have a Unique.  Unlike tuples (which are also an infinite family)
-there is no convenient way to index them, so we use the Unique from
-their OccName instead.  That should be unique, 
-  - both wrt each other, because their strings differ
-
-  - and wrt any other Name, because Names get uniques with 
-    various 'char' tags, but the OccName of Any will 
-    get a Unique built with mkTcOccUnique, which has a particular 'char' 
-    tag; see Unique.mkTcOccUnique!
-
 Note [Strangely-kinded void TyCons]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 See Trac #959 for more examples
@@ -681,25 +658,9 @@ anyTyConName :: Name
 anyTyConName = mkPrimTc (fsLit "Any") anyTyConKey anyTyCon
 
 anyTyCon :: TyCon
-anyTyCon = mkLiftedPrimTyCon anyTyConName liftedTypeKind 0 PtrRep
+anyTyCon = mkLiftedPrimTyCon anyTyConName kind 1 PtrRep
+  where kind = ForAllTy kKiVar (mkTyVarTy kKiVar)
 
 anyTypeOfKind :: Kind -> Type
-anyTypeOfKind kind = mkTyConApp (anyTyConOfKind kind) []
-
-anyTyConOfKind :: Kind -> TyCon
--- Map all superkinds of liftedTypeKind to liftedTypeKind
-anyTyConOfKind kind 
-  | isLiftedTypeKind kind = anyTyCon
-  | otherwise             = tycon
-  where
-	  -- Derive the name from the kind, thus:
-	  --     Any(*->*), Any(*->*->*)
-	  -- These are names that can't be written by the user,
-	  -- and are not allocated in the global name cache
-    str = "Any" ++ showSDoc (pprParendKind kind)
-
-    occ   = mkTcOcc str
-    uniq  = getUnique occ  -- See Note [Uniques of Any]
-    name  = mkWiredInName gHC_PRIM occ uniq (ATyCon tycon) UserSyntax
-    tycon = mkAnyTyCon name kind 
+anyTypeOfKind kind = mkTyConApp anyTyCon [kind]
 \end{code}

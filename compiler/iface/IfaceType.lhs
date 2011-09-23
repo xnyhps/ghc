@@ -87,9 +87,7 @@ data IfaceTyCon 	-- Encodes type consructors, kind constructors
   | IfaceListTc | IfacePArrTc
   | IfaceTupTc TupleSort Arity 
   | IfaceIPTc IfIPName       -- Used for implicit parameter TyCons
-  | IfaceAnyTc IfaceKind     -- Used for AnyTyCon (see Note [Any Types] in TysPrim)
-    	       		     -- other than 'Any :: *' itself
-  
+
   -- Kind constructors
   | IfaceLiftedTypeKindTc | IfaceOpenTypeKindTc | IfaceUnliftedTypeKindTc
   | IfaceUbxTupleKindTc | IfaceArgTypeKindTc | IfaceConstraintKindTc
@@ -121,13 +119,15 @@ ifaceTyConName IfaceConstraintKindTc   = constraintKindTyConName
 ifaceTyConName IfaceSuperKindTc        = tySuperKindTyConName
 ifaceTyConName (IfaceTc ext)           = ext
 ifaceTyConName (IfaceIPTc n)           = pprPanic "ifaceTyConName:IPTc" (ppr n)
-ifaceTyConName (IfaceAnyTc k)          = pprPanic "ifaceTyConName:AnyTc" (ppr k)
 	       		    	       	 -- Note [The Name of an IfaceAnyTc]
                                          -- The same caveat applies to IfaceIPTc
 \end{code}
 
 Note [The Name of an IfaceAnyTc]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+IA0_NOTE: This is an old comment. It needs to be updated with IPTc which
+I don't know about.
+
 It isn't easy to get the Name of an IfaceAnyTc in a pure way.  What you
 really need to do is to transform it to a TyCon, and get the Name of that.
 But doing so needs the monad because there's an IfaceKind inside, and we
@@ -291,10 +291,6 @@ ppr_tc tc		   = ppr tc
 -------------------
 instance Outputable IfaceTyCon where
   ppr (IfaceIPTc n)  = ppr (IPName n)
-  ppr (IfaceAnyTc k) = ptext (sLit "Any") <> pprParendIfaceType k
-      		       	     -- We can't easily get the Name of an IfaceAnyTc/IfaceIPTc
-			     -- (see Note [The Name of an IfaceAnyTc])
-			     -- so we fake it.  It's only for debug printing!
   ppr other_tc       = ppr (ifaceTyConName other_tc)
 
 instance Outputable IfaceCoCon where
@@ -371,7 +367,6 @@ toIfaceCoVar = occNameFS . getOccName
 toIfaceTyCon :: TyCon -> IfaceTyCon
 toIfaceTyCon tc 
   | isTupleTyCon tc            = IfaceTupTc (tupleTyConSort tc) (tyConArity tc)
-  | isAnyTyCon tc              = IfaceAnyTc (toIfaceKind (tyConKind tc))
   | Just n <- tyConIP_maybe tc = IfaceIPTc (ipFastString n)
   | otherwise	               = toIfaceTyCon_name (tyConName tc)
 
@@ -385,7 +380,6 @@ toIfaceTyCon_name nm
 toIfaceWiredInTyCon :: TyCon -> Name -> IfaceTyCon
 toIfaceWiredInTyCon tc nm
   | isTupleTyCon tc                 = IfaceTupTc  (tupleTyConSort tc) (tyConArity tc)
-  | isAnyTyCon tc                   = IfaceAnyTc (toIfaceKind (tyConKind tc))
   | Just n <- tyConIP_maybe tc      = IfaceIPTc (ipFastString n)
   | nm == intTyConName              = IfaceIntTc
   | nm == boolTyConName             = IfaceBoolTc 

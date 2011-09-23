@@ -29,7 +29,6 @@ module TyCon(
 	mkSynTyCon,
         mkSuperKindTyCon,
         mkForeignTyCon,
-        mkAnyTyCon,
 	mkPromotedDataTyCon,
 	mkPromotedTypeTyCon,
 
@@ -41,7 +40,7 @@ module TyCon(
         isTupleTyCon, isUnboxedTupleTyCon, isBoxedTupleTyCon, 
         isSynTyCon, isClosedSynTyCon,
         isSuperKindTyCon, isDecomposableTyCon,
-        isForeignTyCon, isAnyTyCon, tyConHasKind,
+        isForeignTyCon, tyConHasKind,
         isPromotedDataTyCon, isPromotedTypeTyCon,
 
 	isInjectiveTyCon,
@@ -421,19 +420,6 @@ data TyCon
 
 	tyConExtName :: Maybe FastString   -- ^ @Just e@ for foreign-imported types, 
                                            --   holds the name of the imported thing
-    }
-
-  -- | Any types.  Like tuples, this is a potentially-infinite family of TyCons
-  --   one for each distinct Kind. They have no values at all.
-  --   Because there are infinitely many of them (like tuples) they are 
-  --   defined in GHC.Prim and have names like "Any(*->*)".  
-  --   Their Unique is derived from the OccName.
-  -- See Note [Any types] in TysPrim
-  | AnyTyCon {
-	tyConUnique  :: Unique,
-	tyConName    :: Name,
-	tc_kind      :: Kind	-- Never = *; that is done via PrimTyCon
-		     		-- See Note [Any types] in TysPrim
     }
 
   -- | Super-kinds. These are "kinds-of-kinds" and are never seen in
@@ -974,12 +960,6 @@ mkSynTyCon name kind tyvars rhs parent
         synTcParent = parent
     }
 
-mkAnyTyCon :: Name -> Kind -> TyCon
-mkAnyTyCon name kind 
-  = AnyTyCon {  tyConName = name,
-		tc_kind = kind,
-        	tyConUnique = nameUnique name }
-
 -- | Create a super-kind 'TyCon'
 mkSuperKindTyCon :: Name -> TyCon -- Super kinds always have arity zero
 mkSuperKindTyCon name
@@ -1241,11 +1221,6 @@ isSuperKindTyCon :: TyCon -> Bool
 isSuperKindTyCon (SuperKindTyCon {}) = True
 isSuperKindTyCon _                   = False
 
--- | Is this an AnyTyCon?
-isAnyTyCon :: TyCon -> Bool
-isAnyTyCon (AnyTyCon {}) = True
-isAnyTyCon _              = False
-
 -- | Is this a PromotedDataTyCon?
 isPromotedDataTyCon :: TyCon -> Bool
 isPromotedDataTyCon (PromotedDataTyCon {}) = True
@@ -1327,7 +1302,6 @@ tyConKind (AlgTyCon   { tc_kind = k }) = k
 tyConKind (TupleTyCon { tc_kind = k }) = k
 tyConKind (SynTyCon   { tc_kind = k }) = k
 tyConKind (PrimTyCon  { tc_kind = k }) = k
-tyConKind (AnyTyCon   { tc_kind = k }) = k
 tyConKind (PromotedDataTyCon { tc_kind = k }) = k
 tyConKind tc = pprPanic "tyConKind" (ppr tc)	-- SuperKindTyCon and CoTyCon
 
