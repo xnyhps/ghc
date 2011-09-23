@@ -716,11 +716,11 @@ rnTyClDecl mb_cls (TyFamily { tcdLName = tycon, tcdTyVars = tyvars
     do { tycon' <- lookupLocatedTopBndrRn tycon
        ; kind' <- rnLHsMaybeKind fmly_doc kind
        ; let fv_kind = maybe emptyFVs extractHsTyNames kind'
-             fv_tyvars = extractHsTyVarBndrNames_s tyvars' emptyFVs
+             fvs = extractHsTyVarBndrNames_s tyvars' fv_kind
        ; return ( TyFamily { tcdLName = tycon', tcdTyVars = tyvars'
                            , tcdFlavour = flav, tcdKind = kind'
                            , tcdTcKind = kappa }
-                , fv_kind `plusFV` fv_tyvars)  }
+                , fvs) }
   where fmly_doc = TyFamilyCtx tycon
 
 -- "data", "newtype", "data instance, and "newtype instance" declarations
@@ -756,6 +756,7 @@ rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
                                   rnConDecls condecls
 		-- No need to check for duplicate constructor decls
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
+
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
 			   tcdTyPats = typats', tcdKindSig = sig',
@@ -781,9 +782,9 @@ rnTyClDecl mb_cls tydecl@(TySynonym { tcdTyVars = tyvars, tcdLName = name,
       name' <- lookupTcdName mb_cls tydecl
     ; (typats',fvs1) <- rnTyPats syn_doc name' typats
     ; (ty', fvs2)    <- rnHsTypeFVs syn_doc ty
-    ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars' 
-    			, tcdTyPats = typats', tcdSynRhs = ty'},
-    	      extractHsTyVarBndrNames_s tyvars' (fvs1 `plusFV` fvs2)) }
+    ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars'
+    			, tcdTyPats = typats', tcdSynRhs = ty'}
+             , extractHsTyVarBndrNames_s tyvars' (fvs1 `plusFV` fvs2)) }
   where
     syn_doc = TySynCtx name
 
@@ -918,6 +919,8 @@ depAnalTyClDecls ds_w_fvs
             | (d, fvs) <- ds_w_fvs ]
     get_assoc n = lookupNameEnv assoc_env n `orElse` n
     assoc_env = mkNameEnv assoc_env_list
+    -- We also need to consider data constructor names since they may
+    -- appear in types because of promotion.
     assoc_env_list = do
       (L _ d, _) <- ds_w_fvs
       case d of

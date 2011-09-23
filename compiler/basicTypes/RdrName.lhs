@@ -153,6 +153,7 @@ setRdrNameSpace (Exact n)    ns = ASSERT( isExternalName n )
 				       (setOccNameSpace ns (nameOccName n))
 
 -- demoteRdrName lowers the NameSpace of RdrName.
+-- see Note [Demotion] in OccName
 demoteRdrName :: RdrName -> Maybe RdrName
 demoteRdrName (Unqual occ) = fmap Unqual (demoteOccName occ)
 demoteRdrName (Qual m occ) = fmap (Qual m) (demoteOccName occ)

@@ -355,6 +355,7 @@ toHsType (IfaceForAllTy tv t)            = add_forall (toHsTvBndr tv) (toHsType 
 
 -- Only a limited form of kind will be encountered... hopefully
 toHsKind :: IfaceKind -> LHsKind RdrName
+-- IA0_NOTE: Shouldn't we add kind variables?
 toHsKind (IfaceFunTy ifK1 ifK2)  = noLoc $ HsFunTy (toHsKind ifK1) (toHsKind ifK2)
 toHsKind (IfaceTyConApp ifKc []) = noLoc $ HsTyVar (nameRdrName (tyConName (toKindTc ifKc)))
 toHsKind other                   = pprPanic "toHsKind" (ppr other)

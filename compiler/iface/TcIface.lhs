@@ -1345,11 +1345,13 @@ bindIfaceTyVar (occ,kind) thing_inside
 
 bindIfaceTyVars :: [IfaceTvBndr] -> ([TyVar] -> IfL a) -> IfL a
 bindIfaceTyVars bndrs thing_inside
-  = do	{ names <- newIfaceNames (map mkTyVarOccFS occs)
+  = do { names <- newIfaceNames (map mkTyVarOccFS occs)
         ; let (kis_kind, tys_kind) = span isSuperIfaceKind kinds
               (kis_name, tys_name) = splitAt (length kis_kind) names
-  	; kvs <- zipWithM mk_iface_tyvar kis_name kis_kind
-	; extendIfaceTyVarEnv kvs $ do
+          -- We need to bring the kind variables in scope since type
+          -- variables may mention them.
+        ; kvs <- zipWithM mk_iface_tyvar kis_name kis_kind
+        ; extendIfaceTyVarEnv kvs $ do
         { tvs <- zipWithM mk_iface_tyvar tys_name tys_kind
         ; extendIfaceTyVarEnv tvs (thing_inside (kvs ++ tvs)) } }
   where
@@ -1375,8 +1377,8 @@ bindIfaceTyVars_AT (b@(tv_occ,_) : bs) thing_inside
   = do { mb_tv <- lookupIfaceTyVar tv_occ
        ; let bind_b :: (TyVar -> IfL a) -> IfL a
              bind_b = case mb_tv of
-                  	Just b' -> \k -> k b'
-            	        Nothing -> bindIfaceTyVar b
+                        Just b' -> \k -> k b'
+                        Nothing -> bindIfaceTyVar b
        ; bind_b $ \b' ->
          bindIfaceTyVars_AT bs $ \bs' ->
          thing_inside (b':bs') }

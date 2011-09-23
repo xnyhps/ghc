@@ -95,7 +95,7 @@ data IfaceTyCon 	-- Encodes type consructors, kind constructors
   | IfaceUbxTupleKindTc | IfaceArgTypeKindTc | IfaceConstraintKindTc
 
   -- SuperKind constructor
-  | IfaceSuperKindTc
+  | IfaceSuperKindTc  -- IA0_NOTE: You might want to check if I didn't forget something.
 
   -- Coercion constructors
 data IfaceCoCon

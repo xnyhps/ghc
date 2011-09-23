@@ -1098,4 +1098,3 @@ Note [Kind coercions]
 Kind coercions are only of the form: Refl kind. They are only used to
 instantiate kind polymorphic type constructors in TyConAppCo. Remember
 that kind instantiation only happens with TyConApp, not AppTy.
-

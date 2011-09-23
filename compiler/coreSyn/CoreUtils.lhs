@@ -1006,7 +1006,7 @@ dataConInstPat fss uniqs con inst_tys
       -- Make the instantiating substitution
     subst = zipOpenTvSubst (univ_tvs ++ ex_tvs)
                            (map (Type.substTy ksubst) (inst_tys ++ map mkTyVarTy ex_bndrs))
-      where  -- we need to do kind substitution first
+      where  -- IA0_NOTE: we need to do kind substitution first
         ksubst = zipOpenTvSubst univ_kvs (take (length univ_kvs) inst_tys)
         (univ_kvs, _) = splitKiTyVars univ_tvs
 

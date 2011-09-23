@@ -7,7 +7,8 @@ import Outputable ( SDoc, OutputableBndr )
 import {-# SOURCE #-} HsPat  ( LPat )
 
 import Data.Data
-	
+
+-- IA0_NOTE: We need kind annotations because of kind polymorphism
 data HsExpr (i :: *)
 data HsSplice (i :: *)
 data MatchGroup (a :: *)

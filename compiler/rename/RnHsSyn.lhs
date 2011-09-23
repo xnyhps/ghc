@@ -51,6 +51,7 @@ extractFunDepNames :: FunDep Name -> NameSet
 extractFunDepNames (ns1, ns2) = mkNameSet ns1 `unionNameSets` mkNameSet ns2
 
 extractHsTyNames   :: LHsType Name -> NameSet
+-- Also extract names in kinds.
 extractHsTyNames ty
   = getl ty
   where
@@ -94,6 +95,8 @@ extractHsTyVarBndrNames (L _ (UserTyVar _ _)) = emptyNameSet
 extractHsTyVarBndrNames (L _ (KindedTyVar _ ki _)) = extractHsTyNames ki
 
 extractHsTyVarBndrNames_s :: [LHsTyVarBndr Name] -> NameSet -> NameSet
+-- Update the name set 'body' by adding the names in the binders
+-- kinds and handling scoping.
 extractHsTyVarBndrNames_s [] body = body
 extractHsTyVarBndrNames_s (b:bs) body =
   (extractHsTyVarBndrNames_s bs body `delFromNameSet` hsTyVarName (unLoc b))

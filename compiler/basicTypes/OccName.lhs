@@ -200,12 +200,31 @@ pprNameSpaceBrief TcClsName = ptext (sLit "tc")
 
 -- demoteNameSpace lowers the NameSpace if possible.  We can not know
 -- in advance, since a TvName can appear in an HsTyVar.
+-- see Note [Demotion]
 demoteNameSpace :: NameSpace -> Maybe NameSpace
 demoteNameSpace VarName = Nothing
 demoteNameSpace DataName = Nothing
 demoteNameSpace TvName = Nothing
 demoteNameSpace TcClsName = Just DataName
 \end{code}
+
+Note [Demotion]
+~~~~~~~~~~~~~~~
+
+When the user write:
+  data Nat = Zero | Succ Nat
+  foo :: f Zero -> Int
+
+'Zero' in the type signature of 'foo' is parsed as:
+  HsTyVar ("Zero", TcClsName)
+
+When the renamer hit this occurence of 'Zero' it's going to realise
+that it's not in scope. But because it is renaming a type, it knows
+that 'Zero' might be a promoted data constructor, so it will demote
+it's namespace to DataName and do a second lookup.
+
+The final result (after the renamer) will be:
+  HsTyVar ("Zero", DataName)
 
 
 %************************************************************************
@@ -319,6 +338,7 @@ mkClsOccFS :: FastString -> OccName
 mkClsOccFS = mkOccNameFS clsName
 
 -- demoteOccName lowers the Namespace of OccName.
+-- see Note [Demotion]
 demoteOccName :: OccName -> Maybe OccName
 demoteOccName (OccName space name) = do
   space' <- demoteNameSpace space

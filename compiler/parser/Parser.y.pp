@@ -1045,11 +1045,11 @@ atype :: { LHsType RdrName }
 	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
 					  mkUnqual varName (getTH_ID_SPLICE $1) }
                                                       -- see Note [Promotion] for the followings
-	| SIMPLEQUOTE qconid                          { LL $ HsTyVar $ unLoc $2 }
-	| SIMPLEQUOTE  '(' ')'                        { LL $ HsTyVar $ getRdrName unitDataCon }
-	| SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy [] ($3 : $5) }
- 	| SIMPLEQUOTE  '[' comma_types0 ']'           { LL $ HsExplicitListTy placeHolderKind $3 }
-	| '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy placeHolderKind ($2 : $4) }
+        | SIMPLEQUOTE qconid                          { LL $ HsTyVar $ unLoc $2 }
+        | SIMPLEQUOTE  '(' ')'                        { LL $ HsTyVar $ getRdrName unitDataCon }
+        | SIMPLEQUOTE  '(' ctype ',' comma_types1 ')' { LL $ HsExplicitTupleTy [] ($3 : $5) }
+        | SIMPLEQUOTE  '[' comma_types0 ']'           { LL $ HsExplicitListTy placeHolderKind $3 }
+        | '[' ctype ',' comma_types1 ']'              { LL $ HsExplicitListTy placeHolderKind ($2 : $4) }
 
 -- An inst_type is what occurs in the head of an instance decl
 --	e.g.  (Foo a, Gaz b) => Wibble a b
@@ -1097,37 +1097,41 @@ varids0	:: { Located [RdrName] }
 -----------------------------------------------------------------------------
 -- Kinds
 
-kind	:: { LHsKind RdrName }
-	: bkind			{ $1 }
-	| bkind '->' kind	{ LL $ HsFunTy $1 $3 }
+kind :: { LHsKind RdrName }
+        : bkind                  { $1 }
+        | bkind '->' kind        { LL $ HsFunTy $1 $3 }
 
-bkind   :: { LHsKind RdrName }
-        : akind                 { $1 }
-        | bkind akind           { LL $ HsAppTy $1 $2 }
+bkind :: { LHsKind RdrName }
+        : akind                  { $1 }
+        | bkind akind            { LL $ HsAppTy $1 $2 }
 
-akind	:: { LHsKind RdrName }
-	: '*'			{ L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
-	| '(' kind ')'		{ LL $ HsParTy $2 }
-        | pkind                 { $1 }
+akind :: { LHsKind RdrName }
+        : '*'                    { L1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
+        | '(' kind ')'           { LL $ HsParTy $2 }
+        | pkind                  { $1 }
 
-pkind   :: { LHsKind RdrName }  -- promoted type, see Note [Promotion]
+pkind :: { LHsKind RdrName }  -- promoted type, see Note [Promotion]
         : qtycon                          { L1 $ HsTyVar $ unLoc $1 }
         | '(' ')'                         { LL $ HsTyVar $ getRdrName unitTyCon }
-	| '(' kind ',' comma_kinds1 ')'   { LL $ HsTupleTy (HsBoxyTuple placeHolderKind) ($2 : $4) }
-	| '[' kind ']'                    { LL $ HsListTy $2 }
+        | '(' kind ',' comma_kinds1 ')'   { LL $ HsTupleTy (HsBoxyTuple placeHolderKind) ($2 : $4) }
+        | '[' kind ']'                    { LL $ HsListTy $2 }
 
-comma_kinds1	:: { [LHsKind RdrName] }
-	: kind				{ [$1] }
-	| kind  ',' comma_kinds1	{ $1 : $3 }
+comma_kinds1 :: { [LHsKind RdrName] }
+        : kind                          { [$1] }
+        | kind  ',' comma_kinds1        { $1 : $3 }
 
 {- Note [Promotion]
    ~~~~~~~~~~~~~~~~
 
 - Syntax of promoted qualified names
 We write 'Nat.Zero instead of Nat.'Zero when dealing with qualified
-names.  Moreover ticks are only allowed in types, not in kinds.
+names. Moreover ticks are only allowed in types, not in kinds, for a
+few reasons:
+  1. we don't need quotes since we cannot define names in kinds
+  2. if one day we merge types and kinds, tick would mean look in DataName
+  3. we don't have a kind namespace anyway
 
-- Syntax of kind polymorphism  (not yet implemented)
+- Syntax of explicit kind polymorphism  (IA0_TODO: not yet implemented)
 Kind abstraction is implicit. We write
 > data SList (s :: k -> *) (as :: [k]) where ...
 because it looks like what we do in terms
@@ -1138,8 +1142,8 @@ When the user write Zero instead of 'Zero in types, we parse it a
 HsTyVar ("Zero", TcClsName) instead of HsTyVar ("Zero", DataName). We
 deal with this in the renamer. If a HsTyVar ("Zero", TcClsName) is not
 bounded in the type level, then we look for it in the term level (we
-change its namespace to DataName). And both become a HsTyVar ("Zero",
-DataName) after the renamer.
+change its namespace to DataName, see Note [Demotion] in OccName). And
+both become a HsTyVar ("Zero", DataName) after the renamer.
 
 -}
 

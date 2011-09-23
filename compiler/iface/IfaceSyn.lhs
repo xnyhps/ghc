@@ -717,7 +717,8 @@ freeNamesIfDecl d@IfaceSyn{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfSynRhs (ifSynRhs d) &&&
   freeNamesIfTcFam (ifFamInst d) &&&
-  freeNamesIfKind (ifSynKind d)  -- because of promotion, we return names in the kind signature
+  freeNamesIfKind (ifSynKind d) -- IA0_NOTE: because of promotion, we
+                                -- return names in the kind signature
 freeNamesIfDecl d@IfaceClass{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfContext (ifCtxt d) &&&

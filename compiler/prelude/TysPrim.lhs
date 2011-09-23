@@ -224,6 +224,7 @@ funTyConName = mkPrimTyConName (fsLit "(->)") funTyConKey funTyCon
 
 funTyCon :: TyCon
 funTyCon = mkFunTyCon funTyConName (mkArrowKinds [liftedTypeKind, liftedTypeKind] liftedTypeKind)
+-- IA0_NOTE: One step to remove subkinding.
 -- (->) :: * -> * -> *
 -- but we should have (and want) the following typing rule for fully applied arrows
 --      Gamma |- tau   :: k1    k1 in {*, #}

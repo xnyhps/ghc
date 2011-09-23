@@ -203,7 +203,8 @@ tcSkolDFunType ty = tcInstType (\tvs -> return (tcSuperSkolTyVars tvs)) ty
 tcSuperSkolTyVars :: [TyVar] -> [TcTyVar]
 -- Make skolem constants, but do *not* give them new names, as above
 -- Moreover, make them "super skolems"; see comments with superSkolemTv
-tcSuperSkolTyVars tyvars
+-- see Note [Kind substitution when instantiating]
+tcSuperSkolTyVars tyvars  -- IA0_NOTE: should be ordered (kind vars first)
   = kvs' ++ tvs'
   where
     (kvs, tvs) = splitKiTyVars tyvars
@@ -230,6 +231,8 @@ tcInstSkolTyVar overlappable subst tyvar
     kind     = substTy subst (tyVarKind tyvar)
 
 tcInstSkolTyVars :: [TyVar] -> TcM [TcTyVar]
+-- Precondition: tyvars should be ordered (kind vars first)
+-- see Note [Kind substitution when instantiating]
 tcInstSkolTyVars tyvars
   = do { kvs' <- mapM (tcInstSkolTyVar False (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSkolTyVar False (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
@@ -237,6 +240,8 @@ tcInstSkolTyVars tyvars
   where (kvs, tvs) = splitKiTyVars tyvars
 
 tcInstSuperSkolTyVars :: [TyVar] -> TcM [TcTyVar]
+-- Precondition: tyvars should be ordered (kind vars first)
+-- see Note [Kind substitution when instantiating]
 tcInstSuperSkolTyVars tyvars
   = do { kvs' <- mapM (tcInstSkolTyVar True (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSkolTyVar True (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
@@ -251,10 +256,8 @@ tcInstSkolType ty = tcInstType tcInstSkolTyVars ty
 tcInstSigTyVars :: [TyVar] -> TcM [TcTyVar]
 -- Make meta SigTv type variables for patten-bound scoped type varaibles
 -- We use SigTvs for them, so that they can't unify with arbitrary types
--- We also have to substitute in the kind signatures of type variables
---     [(k1 :: BOX), (k2 :: BOX), (a :: k1 -> k2), (b :: k1)]
--- should become
---     [(?k1 :: BOX), (?k2 :: BOX), (?a :: ?k1 -> ?k2), (?b :: ?k1)]
+-- Precondition: tyvars should be ordered (kind vars first)
+-- see Note [Kind substitution when instantiating]
 tcInstSigTyVars tyvars
   = do { kvs' <- mapM (tcInstSigTyVar (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSigTyVar (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
@@ -271,6 +274,21 @@ tcInstSigTyVar subst tyvar
              kind = substTy subst (tyVarKind tyvar)
        ; return (mkTcTyVar name kind (MetaTv SigTv ref)) }
 \end{code}
+
+Note [Kind substitution when instantiating]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When we instantiate a bunch of kind and type variables, first we
+expect them to be sorted (kind variables first, then type variables).
+Then we have to instantiate the kind variables, build a substitution
+from old variables to the new variables, then instantiate the type
+variables substituting the original kind.
+
+Exemple: If we want to instantiate
+  [(k1 :: BOX), (k2 :: BOX), (a :: k1 -> k2), (b :: k1)]
+we want
+  [(?k1 :: BOX), (?k2 :: BOX), (?a :: ?k1 -> ?k2), (?b :: ?k1)]
+instead of the buggous
+  [(?k1 :: BOX), (?k2 :: BOX), (?a :: k1 -> k2), (?b :: k1)]
 
 
 %************************************************************************
@@ -1478,7 +1496,7 @@ checkValidInstHead clas tys
                   all tcInstHeadTyAppAllTyVars tys)
                  (instTypeErr pp_pred head_type_args_tyvars_msg)
        ; checkTc (xopt Opt_MultiParamTypeClasses dflags ||
-                  isSingleton (dropWhile isKind tys))  -- only count type arguments
+                  isSingleton (dropWhile isKind tys))  -- IA0_NOTE: only count type arguments
                  (instTypeErr pp_pred head_one_type_msg)
          -- May not contain type family applications
        ; mapM_ checkTyFamFreeness tys
@@ -1729,7 +1747,7 @@ sizeType (AppTy fun arg)   = sizeType fun + sizeType arg
 sizeType (ForAllTy _ ty)   = sizeType ty
 
 sizeTypes :: [Type] -> Int
--- Avoid kinds.
+-- IA0_NOTE: Avoid kinds.
 sizeTypes xs = sum (map sizeType tys)
   where tys = filter (not . isKind) xs
 

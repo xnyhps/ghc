@@ -436,18 +436,20 @@ lookupOccRn rdr_name = do
 
 -- lookupPromotedOccRn looks up an optionally promoted RdrName.
 lookupPromotedOccRn :: RdrName -> RnM Name
+-- see Note [Demotion] in OccName
 lookupPromotedOccRn rdr_name = do
-  opt_name <- lookupOccRn_maybe rdr_name  -- lookup the name
+  opt_name <- lookupOccRn_maybe rdr_name  -- 1. lookup the name
   case opt_name of
-    Just name -> return name  -- we found it
-    Nothing -> do {  -- we did not find it
-  case demoteRdrName rdr_name of  -- maybe it was implicitly promoted
-    Nothing -> err  -- it was not in a promoted namespace
-    Just demoted_rdr_name -> do {  -- let's try every thing again
-  opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;
+    Just name -> return name              -- 1.a. we found it!
+    Nothing -> do {                       -- 1.b. we did not find it -> 2
+  case demoteRdrName rdr_name of          -- 2. maybe it was implicitly promoted
+    Nothing -> err                        -- 2.a it was not in a promoted namespace
+    Just demoted_rdr_name -> do {         -- 2.b let's try every thing again -> 3
+  opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;  -- 3. lookup again
   case opt_demoted_name of
-    Just demoted_name -> return demoted_name  -- it was implicitly promoted
-    Nothing -> err } }  -- we use rdr_name and not promoted_rdr_name to have a correct error message
+    Just demoted_name -> return demoted_name  -- 3.a. it was implicitly promoted!
+    Nothing -> err } }                    -- 3.b. we use rdr_name and not promoted_rdr_name
+                                          -- to have a correct error message
   where err = unboundName WL_Any rdr_name
 
 -- lookupOccRn looks up an occurrence of a RdrName

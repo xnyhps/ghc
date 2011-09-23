@@ -92,7 +92,7 @@ import Data.Data
 
 \begin{code}
 type Id    = Var       -- A term-level identifier
-type TyVar = Var
+type TyVar = Var       -- see Note [Kind and type variables]
 
 -- See Note [Evidence: EvIds and CoVars]
 type EvId   = Id        -- Term-level evidence: DictId, IpId, or EqVar
@@ -103,7 +103,7 @@ type IpId   = EvId      -- A term-level implicit parameter
 type EqVar  = EvId      -- Boxed equality evidence
 
 type CoVar = Id		-- See Note [Evidence: EvIds and CoVars]
-type KindVar = Var
+type KindVar = Var      -- see Note [Kind and type variables]
 \end{code}
 
 Note [Evidence: EvIds and CoVars]
@@ -119,6 +119,16 @@ Note [Evidence: EvIds and CoVars]
 
 * Only CoVars can occur in Coercions (but NB the LCoercion hack; see
   Note [LCoercions] in Coercion).
+
+Note [Kind and type variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Before kind polymorphism, TyVar were used to mean type variables. Now
+they are use to mean kind or type variables. KindVar is used when we
+know for sure that it is a kind variable. We might want to go over the
+whole compiler code to use:
+- KiTyVar to mean kind or type variables
+- TyVar   to mean         type variables only
+- KindVar to mean kind         variables
 
 
 %************************************************************************
@@ -138,6 +148,7 @@ in its @VarDetails@.
 -- about the 'Var' and it's use sites.
 data Var
   = TyVar {  -- type and kind variables
+             -- see Note [Kind and type variables]
 	varName    :: !Name,
 	realUnique :: FastInt,		-- Key for fast comparison
 					-- Identical to the Unique in the name,
@@ -304,6 +315,8 @@ setTcTyVarDetails :: TyVar -> TcTyVarDetails -> TyVar
 setTcTyVarDetails tv details = tv { tc_tv_details = details }
 
 mkKindVar :: Name -> SuperKind -> KindVar
+-- mkKindVar take a SuperKind as argument because we don't have access
+-- to tySuperKind here.
 mkKindVar name kind = TyVar
   { varName    = name
   , realUnique = getKeyFastInt (nameUnique name)

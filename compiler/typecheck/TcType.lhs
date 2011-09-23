@@ -972,7 +972,7 @@ tcInstHeadTyAppAllTyVars ty
   = tcInstHeadTyAppAllTyVars ty'
   | otherwise
   = case ty of
-	TyConApp _ tys  -> ok (filter (not . isKind) tys)
+	TyConApp _ tys  -> ok (filter (not . isKind) tys)  -- IA0_NOTE: avoid kinds
 	FunTy arg res   -> ok [arg, res]
 	_               -> False
   where

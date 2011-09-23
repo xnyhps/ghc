@@ -977,7 +977,7 @@ abstractVars :: Level -> LevelEnv -> VarSet -> [Var]
 	-- whose level is greater than the destination level
 	-- These are the ones we are going to abstract out
 abstractVars dest_lvl (LE { le_lvl_env = lvl_env, le_env = id_env }) fvs
-  = map zap $ uniq $ sortQuantVars
+  = map zap $ uniq $ sortQuantVars  -- IA0_NOTE: centralizing sorting on variables
 	[var | fv <- varSetElems fvs
 	     , var <- absVarsOf id_env fv
 	     , abstract_me var ]

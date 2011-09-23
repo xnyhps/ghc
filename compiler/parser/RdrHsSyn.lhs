@@ -106,8 +106,8 @@ extract_lctxt ctxt acc = foldr extract_lty acc (unLoc ctxt)
 extract_ltys :: [LHsType RdrName] -> [Located RdrName] -> [Located RdrName]
 extract_ltys tys acc = foldr extract_lty acc tys
 
--- This function returns also kind variables since they are in the
--- same namespace as type variables.
+-- IA0_NOTE: Should this function also return kind variables?
+-- (explicit kind poly)
 extract_lty :: LHsType RdrName -> [Located RdrName] -> [Located RdrName]
 extract_lty (L loc ty) acc 
   = case ty of

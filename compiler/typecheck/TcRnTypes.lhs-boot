@@ -7,6 +7,7 @@ type TcM a = TcRn a
 type TcRn a = TcRnIf TcGblEnv TcLclEnv a
 type TcRnIf a b c = IOEnv (Env a b) c
 
+-- IA0_NOTE: Kind annotation to avoid kind generalization.
 data Env (a :: *) (b :: *)
 data TcGblEnv
 data TcLclEnv

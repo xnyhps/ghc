@@ -127,6 +127,8 @@ rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
          rnForAll doc Explicit forall_tyvars ctxt tau }
 
 rnHsTyKi isType _ (HsTyVar rdr_name) = do
+  -- We use lookupOccRn in kinds because all the names are in
+  -- TcClsName, and we don't want to look in DataName.
   name <- (if isType then lookupPromotedOccRn else lookupOccRn) rdr_name
   return (HsTyVar name)
 

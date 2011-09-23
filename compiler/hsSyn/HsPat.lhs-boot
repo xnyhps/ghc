@@ -6,6 +6,7 @@ import SrcLoc( Located )
 
 import Data.Data
 
+-- IA0_NOTE: We need kind annotation because of kind polymorphism.
 data Pat (i :: *)
 type LPat i = Located (Pat i)
 

@@ -364,7 +364,7 @@ Consider the following coercion axiom:
   ax_co [(k_ag :: BOX), (f_aa :: k_ag -> Constraint)] :: T k_ag f_aa ~ f_aa
 
 Consider the following instantiation:
-  ax_co <(* -> * :: BOX)> <Monad>
+  ax_co <* -> *> <Monad>
 
 We need to split the co_ax_tvs into kind and type variables in order
 to find out the coercion kind instantiations. Those can only be Refl
@@ -375,7 +375,7 @@ We use the number of kind variables to know how to split the coercions
 instantiations between kind coercions and type coercions. We lint the
 kind coercions and produce the following substitution which is to be
 applied in the type variables:
-  k_ag   |->   * -> *
+  k_ag   ~~>   * -> *
 
 
 %************************************************************************
@@ -441,6 +441,7 @@ checkTyKind :: OutTyVar -> OutType -> LintM ()
 -- Both args have had substitution applied
 checkTyKind tyvar arg_ty
   | isSuperKind tyvar_kind  -- kind forall
+  -- IA0_NOTE: I added this case to handle kind foralls
   = lintKind arg_ty
 	-- Arg type might be boxed for a function with an uncommitted
 	-- tyvar; notably this is used so that we can give
@@ -667,16 +668,13 @@ lintKind (FunTy k1 k2)
 
 lintKind kind@(TyConApp tc kis)
   | isPromotedTypeTyCon tc
-  , tyConArity tc == length kis
-  = mapM_ lintKind kis
+  = do { unless (tyConArity tc == length kis) (addErrL malformed_kind)
+       ; mapM_ lintKind kis }
 
-  | isSuperKind tc_kind  -- handles *, #, Constraint, etc.
-  , null kis
-  = return ()
-
-  | otherwise
-  = addErrL (hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind)))
+  | otherwise  -- handles *, #, Constraint, etc.
+  = unless (isSuperKind tc_kind && null kis) (addErrL malformed_kind)
   where
+    malformed_kind = hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind))
     tc_kind = tyConKind tc
 
 lintKind (TyVarTy kv) = checkTyCoVarInScope kv
@@ -685,19 +683,25 @@ lintKind kind
 
 -------------------
 lintTyBndrKind :: OutTyVar -> LintM ()
+-- Handles both type and kind foralls.
 lintTyBndrKind tv =
   let ki = tyVarKind tv in
   if isSuperKind ki
-  then return ()  -- kind forall
-  else lintKind ki
+  then return ()    -- kind forall
+  else lintKind ki  -- type forall
 
 -------------------
 lintKindCoercion :: Coercion -> LintM Kind
+-- Kind coercions are only reflexivity because they mean kind
+-- instantiation.
 lintKindCoercion (Refl k)
   = do { k' <- applySubstTy k
+               -- IA0_NOTE: I am not sure about the substitution
+               -- I mimicked what was done for Refl in lintCoercion
        ; lintKind k'
        ; return k' }
 lintKindCoercion _ = panic "lintKindCoercion"
+  -- we should never produce a non-refl kind coercion
 
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
@@ -706,14 +710,17 @@ lintCoercion (Refl ty)
        ; return (ty', ty') }
 
 lintCoercion co@(TyConAppCo tc cos)
-  = do { let ki | tc `hasKey` funTyConKey && length cos == 2
+  = do   -- We use the kind of the type constructor to know how many
+         -- kind coercions we have (one kind coercion for one kind
+         -- instantiation).
+       { let ki | tc `hasKey` funTyConKey && length cos == 2
                   = mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind
                   -- It's a fully applied function, so we must use the
                   -- most permissive type for the arrow constructor
                 | otherwise = tyConKind tc
              (kvs, _) = splitForAllTys ki
              (cokis, cotys) = splitAt (length kvs) cos
-             -- we need to verify that kind instantiations are Refl
+         -- kis are the kind instantiations of tc
        ; kis <- mapM lintKindCoercion cokis
        ; (ss,ts) <- mapAndUnzipM lintCoercion cotys
        ; check_co_app co ki (kis ++ ss)
@@ -727,6 +734,7 @@ lintCoercion co@(AppCo co1 co2)
 
 lintCoercion (ForAllCo v co)
   = do { let kind = tyVarKind v
+         -- lintKind when type forall, otherwise we are a kind forall
        ; unless (isSuperKind kind) (lintKind kind)
        ; (s,t) <- addInScopeVar v (lintCoercion co)
        ; return (ForAllTy v s, ForAllTy v t) }
@@ -741,15 +749,16 @@ lintCoercion (CoVarCo cv)
 
 lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
                                    , co_ax_lhs = lhs
-                                   , co_ax_rhs = rhs }) 
+                                   , co_ax_rhs = rhs })
                            cos)
-  = do { kis <- checkKiCoKinds kvs kcos
+  = do   -- see Note [Kind instantiation in coercions]
+       { kis <- checkKiCoKinds kvs kcos
        ; let tvs' = map (updateTyVarKind (Type.substTy subst)) tvs
              subst = zipOpenTvSubst kvs kis
        ; (tys1, tys2) <- liftM unzip (checkTyCoKinds tvs' tcos)
        ; return (substTyWith ktvs (kis ++ tys1) lhs,
                  substTyWith ktvs (kis ++ tys2) rhs) }
-  where  -- see Note [Kind instantiation in coercions]
+  where
     (kvs, tvs) = splitKiTyVars ktvs
     (kcos, tcos) = splitAt (length kvs) cos
 
@@ -859,7 +868,8 @@ check_co_app :: Coercion -> Kind -> [OutType] -> LintM ()
 check_co_app ty k tys = lint_kind_app (ptext (sLit "coercion") <+> quotes (ppr ty)) k tys >> return ()
 
 ----------------
-lint_kind_app :: SDoc -> Kind -> [Type] -> LintM Kind
+lint_kind_app :: SDoc -> Kind -> [OutType] -> LintM Kind
+-- Takes care of linting the OutTypes
 lint_kind_app doc kfn tys = go kfn tys
   where
     fail_msg = vcat [ hang (ptext (sLit "Kind application error in")) 2 doc
@@ -869,17 +879,21 @@ lint_kind_app doc kfn tys = go kfn tys
     go kfn [] = return kfn
     go kfn (ty:tys) =
       case splitKindFunTy_maybe kfn of
-        Nothing ->
+      { Nothing ->
           case splitForAllTy_maybe kfn of
-            Nothing -> failWithL fail_msg
-            Just (kv, body) -> do
-              unless (isSuperKind (tyVarKind kv)) (addErrL fail_msg)
-              lintKind ty
-              go (substKiWith [kv] [ty] body) tys
-        Just (kfa, kfb) -> do
-          k <- lintType ty
-          unless (k `isSubKind` kfa) (addErrL fail_msg)
-          go kfb tys
+          { Nothing -> failWithL fail_msg
+          ; Just (kv, body) -> do
+              -- Something of kind (forall kv. body) gets instantiated
+              -- with ty. 'kv' is a kind variable and 'ty' is a kind.
+            { unless (isSuperKind (tyVarKind kv)) (addErrL fail_msg)
+            ; lintKind ty
+            ; go (substKiWith [kv] [ty] body) tys } }
+      ; Just (kfa, kfb) -> do
+          -- Something of kind (kfa -> kfb) is applied to ty. 'ty' is
+          -- a type accepting kind 'kfa'.
+        { k <- lintType ty
+        ; unless (k `isSubKind` kfa) (addErrL fail_msg)
+        ; go kfb tys } }
 
 \end{code}
 
