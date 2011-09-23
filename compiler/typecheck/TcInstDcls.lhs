@@ -563,28 +563,30 @@ tcFamInstDecl1 fam_tc (decl@TySynonym {})
        }
 
   -- "newtype instance" and "data instance"
-tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
+tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
                                    , tcdCons = cons})
-  = kcFamTyPats fam_tc decl $ \_ k_tvs k_typats resKind ->
-                           --  ^- IA0_TODO like TcTyClsDecls
+  = kcFamTyPats fam_tc decl $ \k_kipats k_tvs k_typats resKind ->
     do { -- check that the family declaration is for the right kind
          checkTc (isFamilyTyCon fam_tc) (notFamily fam_tc)
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
        ; -- (1) kind check the data declaration as usual
-       ; k_decl <- kcDataDecl decl k_tvs
-       ; let k_ctxt = tcdCtxt k_decl
-             k_cons = tcdCons k_decl
+       ; _ <- kcDataDecl decl k_tvs
 
          -- result kind must be '*' (otherwise, we have too few patterns)
        ; checkTc (isLiftedTypeKind resKind) $ tooFewParmsErr (tyConArity fam_tc)
 
          -- (2) type check indexed data type declaration
+         -- We kind generalize the kind patterns since they contain
+         -- all the meta kind variables
+       ; (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
        ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
 
          -- kind check the type indexes and the context
        { t_typats     <- mapM tcHsKindedType k_typats
-       ; stupid_theta <- tcHsKindedContext k_ctxt
+       ; stupid_theta <- tcHsKindedContext =<< kcHsContext ctxt
+       ; let t_ktvs = t_kvs ++ t_tvs
+             t_ktpats = t_kipats ++ t_typats
 
          -- (3) Check that
          --     (a) left-hand side contains no type family applications
@@ -592,22 +594,22 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
          --         foralls earlier)
        ; mapM_ checkTyFamFreeness t_typats
 
-       ; dataDeclChecks (tcdName decl) new_or_data stupid_theta k_cons
+       ; dataDeclChecks (tcdName decl) new_or_data stupid_theta cons
 
          -- (4) construct representation tycon
-       ; rep_tc_name <- newFamInstTyConName (tcdLName decl) t_typats
+       ; rep_tc_name <- newFamInstTyConName (tcdLName decl) t_ktpats
        ; let ex_ok = True       -- Existentials ok for type families!
        ; fixM (\ rep_tycon -> do
-             { let orig_res_ty = mkTyConApp fam_tc t_typats
+             { let orig_res_ty = mkTyConApp fam_tc t_ktpats
              ; data_cons <- tcConDecls new_or_data ex_ok rep_tycon
-                                       (t_tvs, orig_res_ty) k_cons
+                                       (t_ktvs, orig_res_ty) cons
              ; tc_rhs <-
                  case new_or_data of
                    DataType -> return (mkDataTyConRhs data_cons)
                    NewType  -> ASSERT( not (null data_cons) )
                                mkNewTyConRhs rep_tc_name rep_tycon (head data_cons)
-             ; buildAlgTyCon rep_tc_name t_tvs stupid_theta tc_rhs Recursive
-                             h98_syntax NoParentTyCon (Just (fam_tc, t_typats))
+             ; buildAlgTyCon rep_tc_name t_ktvs stupid_theta tc_rhs Recursive
+                             h98_syntax NoParentTyCon (Just (fam_tc, t_ktpats))
                  -- We always assume that indexed types are recursive.  Why?
                  -- (1) Due to their open nature, we can never be sure that a
                  -- further instance might not introduce a new recursive

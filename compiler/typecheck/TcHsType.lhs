@@ -493,7 +493,7 @@ kc_hs_type (HsExplicitTupleTy _ tys) = do
   return ( HsExplicitTupleTy (map snd ty_k_s) (map fst ty_k_s)
          , mkTyConApp (tupleTyCon BoxedTuple (length tys)) (map snd ty_k_s))
 
-kc_hs_type (HsWrapTy {}) = panic "kc_hs_type"
+kc_hs_type (HsWrapTy {}) = panic "kc_hs_type HsWrapTy"  -- it means we kind checked something twice
 
 ---------------------------
 kcApps :: Outputable a

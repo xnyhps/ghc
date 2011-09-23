@@ -524,11 +524,14 @@ ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
 ppr_mono_ty _    (HsExplicitListTy _ tys) = quote $ brackets (interpp'SP tys)
 ppr_mono_ty _    (HsExplicitTupleTy _ tys) = quote $ parens (interpp'SP tys)
 
-ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps []) ty) = ppr_mono_ty ctxt_prec ty
-ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps (ki:kis)) ty)
-  = maybeParen ctxt_prec pREC_CON $
-    hsep [ ppr_mono_ty pREC_FUN (HsWrapTy (WpKiApps kis) ty)
-         , ptext (sLit "@") <> pprParendKind ki ]
+ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps kis) ty)
+  = go ctxt_prec kis ty
+  where
+    go ctxt_prec [] ty = ppr_mono_ty ctxt_prec ty
+    go ctxt_prec (ki:kis) ty
+      = maybeParen ctxt_prec pREC_CON $
+        hsep [ go pREC_FUN kis ty
+             , ptext (sLit "@") <> pprParendKind ki ]
 
 ppr_mono_ty ctxt_prec (HsEqTy ty1 ty2)
   = maybeParen ctxt_prec pREC_OP $
