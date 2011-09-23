@@ -571,7 +571,7 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
        ; -- (1) kind check the data declaration as usual
-       ; _ <- kcDataDecl decl k_tvs
+       ; kcDataDecl decl
 
          -- result kind must be '*' (otherwise, we have too few patterns)
        ; checkTc (isLiftedTypeKind resKind) $ tooFewParmsErr (tyConArity fam_tc)

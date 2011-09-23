@@ -225,13 +225,13 @@ kcTyClGroup decls
 	; initial_kinds <- concatMapM getInitialKind alg_at_decls
 	; tcExtendTcTyThingEnv initial_kinds $  do
 
-        { (_, tcl_env) <- kcSynDecls (calcSynCycles syn_decls)
+        { tcl_env <- kcSynDecls (calcSynCycles syn_decls)
 
           -- Now check for cyclic classes
         ; checkClassCycleErrs syn_decls alg_decls
 
         ; setLclEnv tcl_env $  do
-        { _ <- mapM (wrapLocM kcTyClDecl) alg_decls
+        { mapM_ (wrapLocM kcTyClDecl) alg_decls
 
 	     -- Kind checking done for this group
 	     -- See Note [Kind checking for type and class decls]
@@ -287,74 +287,59 @@ getInitialKind (L _ decl)
 
 
 ----------------
--- IA0_TODO: Only return the TcLclEnv
-kcSynDecls :: [SCC (LTyClDecl Name)] 
-	   -> TcM ([LTyClDecl Name], 	-- Kind-annotated decls
-		   TcLclEnv)	-- Kind bindings
-kcSynDecls []
-  = do { tcl_env <- getLclEnv; return ([], tcl_env) }
+kcSynDecls :: [SCC (LTyClDecl Name)] -> TcM (TcLclEnv)	-- Kind bindings
+kcSynDecls [] = getLclEnv
 kcSynDecls (group : groups)
-  = do	{ (decl,  nk)      <- kcSynDecl1 group
-	; (decls, tcl_env) <- tcExtendKindEnv [nk] (kcSynDecls groups)
-	; return (decl:decls, tcl_env) }
-			
+  = do	{ nk <- kcSynDecl1 group
+	; tcExtendKindEnv [nk] (kcSynDecls groups) }
+
 ----------------
-kcSynDecl1 :: SCC (LTyClDecl Name) 
-	   -> TcM (LTyClDecl Name, 	-- Kind-annotated decls
-		   (Name,TcKind))	-- Kind bindings
-kcSynDecl1 (AcyclicSCC (L loc decl))
-  = do { (kc_syn, nk) <- kcSynDecl decl
-       ; return (L loc kc_syn, nk) }
+kcSynDecl1 :: SCC (LTyClDecl Name)
+	   -> TcM (Name,TcKind) -- Kind bindings
+kcSynDecl1 (AcyclicSCC (L _ decl)) = kcSynDecl decl
 
 kcSynDecl1 (CyclicSCC decls)
   = do { recSynErr decls; failM }	-- Fail here to avoid error cascade
 					-- of out-of-scope tycons
 
-kcSynDecl :: TyClDecl Name -> TcM (TyClDecl Name, (Name, TcKind))
+kcSynDecl :: TyClDecl Name -> TcM (Name, TcKind)
 kcSynDecl decl
   = tcAddDeclCtxt decl $
     kcHsTyVars (tcdTyVars decl) $ \ k_tvs ->
     do { traceTc "kcd1" (ppr (unLoc (tcdLName decl)) <+> brackets (ppr (tcdTyVars decl))
 			<+> brackets (ppr k_tvs))
-       ; (k_rhs, rhs_kind) <- kcLHsType (tcdSynRhs decl)
+       ; (_, rhs_kind) <- kcLHsType (tcdSynRhs decl)
        ; traceTc "kcd2" (ppr (unLoc (tcdLName decl)))
        ; let tc_kind = foldr (mkArrowKind . hsTyVarKind . unLoc) rhs_kind k_tvs
-       ; return ( decl {tcdTyVars = k_tvs, tcdSynRhs = k_rhs}
-                , (unLoc (tcdLName decl), tc_kind) ) }
+       ; return (unLoc (tcdLName decl), tc_kind) }
 
 ------------------------------------------------------------------------
--- IA0_TODO: Return TcM ()
-kcTyClDecl :: TyClDecl Name -> TcM (TyClDecl Name)
+kcTyClDecl :: TyClDecl Name -> TcM ()
 	-- Not used for type synonyms (see kcSynDecl)
 
 kcTyClDecl decl@(TyData {})
   = ASSERT( not . isFamInstDecl $ decl )   -- must not be a family instance
-    kcTyClDeclBody decl	$
-      kcDataDecl decl
+    kcTyClDeclBody decl	$ \_ -> kcDataDecl decl
 
 kcTyClDecl decl@(TyFamily {})
   = kcFamilyDecl [] decl      -- the empty list signals a toplevel decl
 
 kcTyClDecl decl@(ClassDecl {tcdCtxt = ctxt, tcdSigs = sigs, tcdATs = ats})
   = kcTyClDeclBody decl	$ \ tvs' ->
-    do	{ ctxt' <- kcHsContext ctxt
-	; ats'  <- mapM (wrapLocM (kcFamilyDecl tvs')) ats
-	; sigs' <- mapM (wrapLocM kc_sig) sigs
-	; return (decl {tcdTyVars = tvs', tcdCtxt = ctxt', tcdSigs = sigs',
-		        tcdATs = ats'}) }
+    do	{ _ <- kcHsContext ctxt
+	; _  <- mapM (wrapLocM (kcFamilyDecl tvs')) ats
+	; mapM_ (wrapLocM kc_sig) sigs }
   where
-    kc_sig (TypeSig nm op_ty) = do { op_ty' <- kcHsLiftedSigType op_ty
-				   ; return (TypeSig nm op_ty') }
-    kc_sig (GenericSig nm op_ty) = do { op_ty' <- kcHsLiftedSigType op_ty
-				      ; return (GenericSig nm op_ty') }
-    kc_sig other_sig	      = return other_sig
+    kc_sig (TypeSig _ op_ty) = do { _ <- kcHsLiftedSigType op_ty
+				  ; return () }
+    kc_sig (GenericSig _ op_ty) = do { _ <- kcHsLiftedSigType op_ty
+				     ; return () }
+    kc_sig _ = return ()
 
-kcTyClDecl decl@(ForeignType {})
-  = return decl
+kcTyClDecl (ForeignType {}) = return ()
 
 kcTyClDecl (TySynonym {}) = panic "kcTyClDecl TySynonym"
 
--- IA0_TODO: I thing this function don't need to give the HsTyVarBndr to the thing_inside
 kcTyClDeclBody :: TyClDecl Name
 	       -> ([LHsTyVarBndr Name] -> TcM a)
 	       -> TcM a
@@ -382,13 +367,12 @@ kcTyClDeclBody decl thing_inside
 -- kind environment with the type variables of the left-hand side (these
 -- kinded type variables are also passed as the second parameter).
 --
-kcDataDecl :: TyClDecl Name -> [LHsTyVarBndr Name] -> TcM (TyClDecl Name)
-kcDataDecl decl@(TyData {tcdND = new_or_data, tcdCtxt = ctxt, tcdCons = cons})
-	   tvs
-  = do	{ ctxt' <- kcHsContext ctxt
-	; cons' <- mapM (wrapLocM (kcConDecl new_or_data)) cons
-	; return (decl {tcdTyVars = tvs, tcdCtxt = ctxt', tcdCons = cons'}) }
-kcDataDecl d _ = pprPanic "kcDataDecl" (ppr d)
+kcDataDecl :: TyClDecl Name -> TcM ()
+kcDataDecl (TyData {tcdND = new_or_data, tcdCtxt = ctxt, tcdCons = cons})
+  = do	{ _ <- kcHsContext ctxt
+	; _ <- mapM (wrapLocM (kcConDecl new_or_data)) cons
+	; return () }
+kcDataDecl d = pprPanic "kcDataDecl" (ppr d)
 
 kcConDecl :: NewOrData -> ConDecl Name -> TcM (ConDecl Name)
     -- doc comments are typechecked to Nothing here
@@ -428,15 +412,12 @@ kcConDecl new_or_data con_decl@(ConDecl { con_name = name, con_qvars = ex_tvs
 -- Kind check a family declaration or type family default declaration.
 --
 kcFamilyDecl :: [LHsTyVarBndr Name]  -- tyvars of enclosing class decl if any
-             -> TyClDecl Name -> TcM (TyClDecl Name)
+             -> TyClDecl Name -> TcM ()
 kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
   = kcTyClDeclBody decl $ \tvs' ->
     do { mapM_ unifyClassParmKinds tvs'
-       ; kind' <- scDsLHsMaybeKind kind
-       ; return (decl {tcdTyVars = tvs', 
-		       tcdTcKind = fromMaybe liftedTypeKind kind'})
-		       -- default result kind is '*'
-       }
+       ; _ <- scDsLHsMaybeKind kind
+       ; return () }
   where
     unifyClassParmKinds (L _ tv) 
       | (n,k) <- hsTyVarNameKind tv
@@ -446,8 +427,7 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
       | otherwise = return ()
     classTyKinds = [hsTyVarNameKind tv | L _ tv <- classTvs]
 
-kcFamilyDecl _ decl@(TySynonym {})
-  = return decl
+kcFamilyDecl _ (TySynonym {}) = return ()
    -- We don't have to do anything here for type family defaults:
    -- tcClassATs will use tcAssocDecl to check them
 kcFamilyDecl _ d = pprPanic "kcFamilyDecl" (ppr d)

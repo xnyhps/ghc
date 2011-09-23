@@ -225,7 +225,7 @@ mkTyFamily :: SrcSpan
 mkTyFamily loc flavour lhs ksig
   = do { (tc, tparams) <- checkTyClHdr lhs
        ; tyvars <- checkTyVars lhs tparams
-       ; return (L loc (TyFamily flavour tc tyvars ksig placeHolderKind)) }
+       ; return (L loc (TyFamily flavour tc tyvars ksig)) }
 
 mkTopSpliceDecl :: LHsExpr RdrName -> HsDecl RdrName
 -- If the user wrote

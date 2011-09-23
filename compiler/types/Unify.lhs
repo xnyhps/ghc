@@ -411,9 +411,6 @@ niSubstTvSet subst tvs
 %************************************************************************
 
 \begin{code}
--- IA0_TODO: BUG: all the following function (all this file actually)
--- needs to handle kind unification during type unification and kind
--- match during type match !!!
 unify :: TvSubstEnv	-- An existing substitution to extend
       -> Type -> Type 	-- Types to be unified, and witness of their equality
       -> UM TvSubstEnv		-- Just the extended substitution, 

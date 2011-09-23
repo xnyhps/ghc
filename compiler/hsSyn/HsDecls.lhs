@@ -55,7 +55,6 @@ module HsDecls (
 import {-# SOURCE #-}	HsExpr( LHsExpr, HsExpr, pprExpr )
 	-- Because Expr imports Decls via HsBracket
 
-import HsLit
 import HsBinds
 import HsPat
 import HsTypes
@@ -444,8 +443,7 @@ data TyClDecl name
     TyFamily {  tcdFlavour:: FamilyFlavour,	        -- type or data
 		tcdLName  :: Located name,	        -- type constructor
 		tcdTyVars :: [LHsTyVarBndr name],	-- type variables
-		tcdKind   :: Maybe (LHsKind name),      -- result kind
-		tcdTcKind :: PostTcKind  -- IA0_TODO: remove this
+		tcdKind   :: Maybe (LHsKind name)       -- result kind
     }
 
 

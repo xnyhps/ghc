@@ -710,16 +710,14 @@ rnTyClDecl _ (ForeignType {tcdLName = name, tcdExtName = ext_name})
 -- and "data family"), both top level and (for an associated type) 
 -- in a class decl
 rnTyClDecl mb_cls (TyFamily { tcdLName = tycon, tcdTyVars = tyvars
-                            , tcdFlavour = flav, tcdKind = kind
-                            , tcdTcKind = kappa })
+                            , tcdFlavour = flav, tcdKind = kind })
   = bindQTvs fmly_doc mb_cls tyvars $ \tyvars' ->
     do { tycon' <- lookupLocatedTopBndrRn tycon
        ; kind' <- rnLHsMaybeKind fmly_doc kind
        ; let fv_kind = maybe emptyFVs extractHsTyNames kind'
              fvs = extractHsTyVarBndrNames_s tyvars' fv_kind
        ; return ( TyFamily { tcdLName = tycon', tcdTyVars = tyvars'
-                           , tcdFlavour = flav, tcdKind = kind'
-                           , tcdTcKind = kappa }
+                           , tcdFlavour = flav, tcdKind = kind' }
                 , fvs) }
   where fmly_doc = TyFamilyCtx tycon
 
