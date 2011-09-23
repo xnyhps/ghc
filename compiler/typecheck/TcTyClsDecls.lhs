@@ -219,7 +219,7 @@ kcTyClGroup decls
               alg_at_decls           = flattenATs alg_decls
 
 	; mod <- getModule
-	; traceTc "tcTyAndCl" (ptext (sLit "module") <+> ppr mod $$ vcat (map ppr decls))
+	; traceTc "kcTyClGroup" (ptext (sLit "module") <+> ppr mod $$ vcat (map ppr decls))
 
           -- Kind checking; see Note [Kind checking for type and class decls]
 	; initial_kinds <- concatMapM getInitialKind alg_at_decls

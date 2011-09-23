@@ -135,7 +135,7 @@ hsSigFVs _                 = emptyFVs
 conDeclFVs :: LConDecl Name -> FreeVars
 conDeclFVs (L _ (ConDecl { con_qvars = tyvars, con_cxt = context,
                            con_details = details, con_res = res_ty}))
-  = delFVs (map hsLTyVarName tyvars) $
+  = extractHsTyVarBndrNames_s tyvars $
     extractHsCtxtTyNames context  `plusFV`
     conDetailsFVs details         `plusFV`
     conResTyFVs res_ty
