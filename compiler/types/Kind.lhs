@@ -192,15 +192,17 @@ isSubKind :: Kind -> Kind -> Bool
 isSubKind (FunTy a1 r1) (FunTy a2 r2)
   = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
 
-isSubKind (TyConApp kc1 k1s) (TyConApp kc2 k2s)
-  | isPromotedTypeTyCon kc1 =  -- handles promoted kinds (List *, Nat, etc.)
-    kc1 == kc2 && length k1s == length k2s && all (uncurry eqKind) (zip k1s k2s)
+isSubKind k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
+  | isPromotedTypeTyCon kc1 || isPromotedTypeTyCon kc2
+    -- handles promoted kinds (List *, Nat, etc.)
+    = eqKind k1 k2
 
-  | isSuperKindTyCon kc1 =  -- handles BOX
-    ASSERT2( isSuperKindTyCon kc2 && null k1s && null k2s, ppr kc1 <+> ppr kc2 )
-    True
+  | isSuperKindTyCon kc1 || isSuperKindTyCon kc2
+    -- handles BOX
+    = ASSERT2( isSuperKindTyCon kc2 && null k1s && null k2s, ppr kc1 <+> ppr kc2 )
+      True
 
-  | otherwise =  -- handles not promoted kinds (*, #, (#), etc.)
+  | otherwise =  -- handles usual kinds (*, #, (#), etc.)
     ASSERT( null k1s && null k2s )
     kc1 `isSubKindCon` kc2
 

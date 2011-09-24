@@ -501,8 +501,7 @@ canEq fl eqv ty1 ty2
   , Nothing <- tcView ty2  -- See Note [Naked given applications]
   , Just (s1,t1) <- tcSplitAppTy_maybe ty1
   , Just (s2,t2) <- tcSplitAppTy_maybe ty2
-    = ASSERT( not (isKind t1) )
-      ASSERT( not (isKind t2) )
+    = ASSERT( not (isKind t1) && not (isKind t2) )
       if isWanted fl 
       then do { eqv1 <- newEqVar s1 s2 
               ; eqv2 <- newEqVar t1 t2 
