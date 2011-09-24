@@ -231,10 +231,9 @@ defaultKind :: Kind -> Kind
 --	f :: forall (a::??). a -> Bool
 -- because that would allow a call like (f 3#) as well as (f True),
 --and the calling conventions differ.  This defaulting is done in TcMType.zonkTcTyVarBndr.
-defaultKind k 
+defaultKind k
   | isSubOpenTypeKind k = liftedTypeKind
-  | isSubArgTypeKind k  = liftedTypeKind
-  | otherwise        = k
+  | otherwise           = k
 
 splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
 splitKiTyVars = span (isSuperKind . tyVarKind)

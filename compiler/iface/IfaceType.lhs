@@ -14,7 +14,7 @@ module IfaceType (
 	ifaceTyConName,
 
 	-- Conversion from Type -> IfaceType
-        toIfaceType, toIfaceContext,
+        toIfaceType, toIfaceKind, toIfaceContext,
 	toIfaceBndr, toIfaceIdBndr, toIfaceTvBndrs, 
 	toIfaceTyCon, toIfaceTyCon_name,
 

@@ -494,6 +494,7 @@ pp_condecls tc (IfDataTyCon cs) = equals <+> sep (punctuate (ptext (sLit " |"))
                                                             (map (pprIfaceConDecl tc) cs))
 
 mkIfaceEqPred :: IfaceType -> IfaceType -> IfacePredType
+-- IA0_NOTE: This is wrong, but only used for pretty-printing.
 mkIfaceEqPred ty1 ty2 = IfaceTyConApp (IfaceTc eqTyConName) [ty1, ty2]
 
 pprIfaceConDecl :: OccName -> IfaceConDecl -> SDoc

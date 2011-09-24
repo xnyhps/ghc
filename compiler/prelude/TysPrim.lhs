@@ -15,6 +15,7 @@ module TysPrim(
 	alphaTy, betaTy, gammaTy, deltaTy,
 	openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar, openAlphaTyVars,
         argAlphaTy, argAlphaTyVar, argBetaTy, argBetaTyVar,
+        kKiVar,
 
         -- Kind constructors...
         tySuperKindTyCon, tySuperKind,
@@ -410,15 +411,13 @@ Note [The ~# TyCon)
 ~~~~~~~~~~~~~~~~~~~~
 There is a perfectly ordinary type constructor ~# that represents the type
 of coercions (which, remember, are values).  For example
-   Refl Int :: ~# Int Int
+   Refl Int :: ~# * Int Int
 
-Atcually it is not quite "perfectly ordinary" because it is kind-polymorphic:
-   Refl Maybe :: ~# Maybe Maybe
+It is a kind-polymorphic type constructor like Any:
+   Refl Maybe :: ~# (* -> *) Maybe Maybe
 
-So the true kind of ~# :: forall k. k -> k -> #.  But we don't have
-polymorphic kinds (yet). However, (~) really only appears saturated in
-which case there is no problem in finding the kind of (ty1 ~# ty2). So
-we check that in CoreLint (and, in an assertion, in Kind.typeKind).
+(~) only appears saturated. So we check that in CoreLint (and, in an
+assertion, in Kind.typeKind).
 
 Note [The State# TyCon]
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -440,7 +439,10 @@ statePrimTyCon	 = pcPrimTyCon statePrimTyConName 1 VoidRep
 
 eqPrimTyCon :: TyCon  -- The representation type for equality predicates
 		      -- See Note [The ~# TyCon]
-eqPrimTyCon  = pcPrimTyCon eqPrimTyConName 2 VoidRep
+eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind 3 VoidRep
+  where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
+        kv = kKiVar
+        k = mkTyVarTy kv
 \end{code}
 
 RealWorld is deeply magical.  It is *primitive*, but it is not

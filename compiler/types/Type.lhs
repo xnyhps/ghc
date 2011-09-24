@@ -138,7 +138,7 @@ module Type (
 -- We import the representation and primitive functions from TypeRep.
 -- Many things are reexported, but not the representation!
 
-import Kind    ( kindAppResult, isSuperKind, isSubOpenTypeKind, splitKiTyVars, partitionKiTyVars )
+import Kind
 import TypeRep
 
 -- friends:
@@ -150,7 +150,7 @@ import Class
 import TyCon
 import TysPrim
 import {-# SOURCE #-} TysWiredIn ( eqTyCon, mkBoxedTupleTy )
-import PrelNames	         ( eqTyConKey, eqPrimTyConKey )
+import PrelNames	         ( eqTyConKey )
 
 -- others
 import {-# SOURCE #-} IParam ( ipTyCon )
@@ -807,10 +807,16 @@ Make PredTypes
 \begin{code}
 -- | Creates a type equality predicate
 mkEqPred :: (Type, Type) -> PredType
-mkEqPred (ty1, ty2) = TyConApp eqTyCon [ty1, ty2]
+mkEqPred (ty1, ty2)
+  -- IA0_TODO: The caller should give the kind.
+  = TyConApp eqTyCon [k, ty1, ty2]
+  where k = defaultKind (typeKind ty1)
 
 mkPrimEqType :: (Type, Type) -> Type
-mkPrimEqType (ty1, ty2) = TyConApp eqPrimTyCon [ty1, ty2]
+mkPrimEqType (ty1, ty2)
+  -- IA0_TODO: The caller should give the kind.
+  = TyConApp eqPrimTyCon [k, ty1, ty2]
+  where k = defaultKind (typeKind ty1)
 \end{code}
 
 --------------------- Implicit parameters ---------------------------------
@@ -888,7 +894,7 @@ predTypePredTree ev_ty = case splitTyConApp_maybe ev_ty of
     Just (tc, tys) | Just clas <- tyConClass_maybe tc
                    -> ClassPred clas tys
     Just (tc, tys) | tc `hasKey` eqTyConKey
-                   , let [ty1, ty2] = tys
+                   , let [_, ty1, ty2] = tys
                    -> EqPred ty1 ty2
     Just (tc, tys) | Just ip <- tyConIP_maybe tc
                    , let [ty] = tys
@@ -916,7 +922,7 @@ getEqPredTys ty = case getEqPredTys_maybe ty of
 
 getEqPredTys_maybe :: PredType -> Maybe (Type, Type)
 getEqPredTys_maybe ty = case splitTyConApp_maybe ty of 
-        Just (tc, [ty1, ty2]) | tc `hasKey` eqTyConKey -> Just (ty1, ty2)
+        Just (tc, [_, ty1, ty2]) | tc `hasKey` eqTyConKey -> Just (ty1, ty2)
         _ -> Nothing
 
 getIPPredTy_maybe :: PredType -> Maybe (IPName Name, Type)
@@ -1529,14 +1535,11 @@ type SimpleKind = Kind
 
 \begin{code}
 typeKind :: Type -> Kind
-typeKind ty@(TyConApp tc tys)
+typeKind (TyConApp tc tys)
   | isPromotedTypeTyCon tc
   = ASSERT( tyConArity tc == length tys ) tySuperKind
   | otherwise
-  = ASSERT2( not (tc `hasKey` eqPrimTyConKey) || length tys == 2, ppr ty )
-             -- Assertion checks for unsaturated application of ~#
-             -- See Note [The ~# TyCon] in TysPrim
-    kindAppResult (tyConKind tc) tys
+  = kindAppResult (tyConKind tc) tys
 
 typeKind (AppTy fun arg)        = kindAppResult (typeKind fun) [arg]
 typeKind (ForAllTy _ ty)      = typeKind ty

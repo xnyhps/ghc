@@ -481,7 +481,7 @@ coVarKind cv = case coVarKind_maybe cv of
 
 coVarKind_maybe :: CoVar -> Maybe (Type,Type) 
 coVarKind_maybe cv = case splitTyConApp_maybe (varType cv) of
-  Just (tc, [ty1, ty2]) | tc `hasKey` eqPrimTyConKey -> Just (ty1, ty2)
+  Just (tc, [_, ty1, ty2]) | tc `hasKey` eqPrimTyConKey -> Just (ty1, ty2)
   _ -> Nothing
 
 -- | Makes a coercion type from two types: the types whose equality 

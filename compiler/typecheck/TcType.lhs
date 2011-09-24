@@ -1007,7 +1007,7 @@ shallowPredTypePredTree ev_ty
       () | Just clas <- tyConClass_maybe tc
          -> ClassPred clas tys
       () | tc `hasKey` eqTyConKey
-         , let [ty1, ty2] = tys
+         , let [_, ty1, ty2] = tys
          -> EqPred ty1 ty2
       () | Just ip <- tyConIP_maybe tc
          , let [ty] = tys

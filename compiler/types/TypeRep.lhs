@@ -631,7 +631,7 @@ pprTcApp p pp tc tys
   = tupleParens (tupleTyConSort tc) (sep (punctuate comma (map (pp TopPrec) tys)))
   | tc `hasKey` eqTyConKey -- We need to special case the type equality TyCon because
                            -- its not a SymOcc so won't get printed infix
-  , [ty1,ty2] <- tys
+  , [_, ty1,ty2] <- tys
   = pprInfixApp p pp (getName tc) ty1 ty2
   | otherwise
   = pprTypeNameApp p pp (getName tc) tys
