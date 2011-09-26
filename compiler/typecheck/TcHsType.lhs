@@ -727,20 +727,43 @@ ds_app ty tys = do
                           return (mkAppTys fun_ty arg_tys)
 
 ds_var_app :: Name -> [Type] -> TcM Type
-ds_var_app name arg_tys = do
-    thing <- lookup name
-    case thing of
-	ATyVar _ ty         -> return (mkAppTys ty arg_tys)
-	AGlobal (ATyCon tc) -> return (mkTyConApp tc arg_tys)
-	AGlobal (ADataCon dc) -> return (mkTyConApp (buildPromotedDataTyCon dc) arg_tys)
-	_                   -> wrongThingErr "type" thing name
-    where
-      lookup name | isTvNameSpace ns = tcLookup name
-                  | isTcClsNameSpace ns = AGlobal <$> tcLookupGlobal name
-                  | isDataConNameSpace ns = AGlobal <$> tcLookupGlobal name
-                  | otherwise = panic "ds_var_app weird name space"
-        where ns = rdrNameSpace (nameRdrName name)
+-- See Note [Looking up naames during when typechecking types]
+ds_var_app name arg_tys 
+  | isTvNameSpace (rdrNameSpace (nameRdrName name))
+  = do { thing <- tcLookup name
+       ; case thing of
+           ATyVar _ ty -> return (mkAppTys ty arg_tys)
+	   _           -> wrongThingErr "type" thing name }
+
+  | otherwise
+  = do { thing <- tcLookupGlobal name
+       ; case thing of
+           ATyCon tc   -> return (mkTyConApp tc arg_tys)
+           ADataCon dc -> return (mkTyConApp (buildPromotedDataTyCon dc) arg_tys) 
+	   _           -> wrongThingErr "type" (AGlobal thing) name }
 \end{code}
+
+Note [Looking up naames during when typechecking types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There is a delicat point here.  Consider typechecking a data type decl
+   data T = MkT T Int
+First we kind-check the decl, to determine the final kind of T, * in
+this case.  Then we enter the knot-tied bit in tcTyClGroup that build
+the TyCon for T.  Doing so involves typechecking MkT's arguments. While
+doing so we extend
+  *Global* env with T -> ATyCon (the (not yet built) TyCon for T)
+  *Local*  env with T -> AThing (kind of T)
+
+Then:
+
+  * During kc_hs_type we look in the *local* env, to get the known
+    kind for T.  
+
+  * But in ds_type (and ds_var_app in particular) we look
+    in the *global* env to get the TyCon. But we must be careful 
+    not to force the TyCon or we'll get a loop.
+
+This is a bit delicate, but OK once you understand the plan.
 
 \begin{code}
 addKcTypeCtxt :: LHsType Name -> TcM a -> TcM a
