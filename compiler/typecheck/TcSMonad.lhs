@@ -26,7 +26,7 @@ module TcSMonad (
     getWantedLoc,
 
     TcS, runTcS, failTcS, panicTcS, traceTcS, -- Basic functionality 
-    traceFireTcS, bumpStepCountTcS, doWithInertsTcS,
+    traceFireTcS, bumpStepCountTcS, doWithInert,
 {-     tryTcS, nestImplicTcS, recoverTcS, DV: Will figure out later -}
     wrapErrTcS, wrapWarnTcS,
 
@@ -676,10 +676,15 @@ traceFireTcS depth doc
                 <> brackets (int depth) <+> doc
        ; TcM.dumpTcRn msg }
 
-doWithInertsTcS :: InertSet -> TcS a -> TcS a 
--- Just use this inert set to do stuff
-doWithInertsTcS inert action
-  = updInertSetTcS_ (\_ -> inert) >> action
+doWithInert :: InertSet -> TcS a -> TcS a 
+-- Just use this inert set to do stuff but pop back to the original inert in the end
+doWithInert inert action
+  = do { is_orig <- getInertTcS 
+       ; updInertSetTcS_ (\_ -> inert) 
+       ; res <- action
+       ; updInertSetTcS_ (\_ -> is_orig) 
+       ; return res } 
+
 
 runTcS :: SimplContext
        -> Untouchables 	       -- Untouchables

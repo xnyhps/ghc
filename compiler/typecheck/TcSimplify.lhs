@@ -743,12 +743,17 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
                  vcat [ text "n =" <+> ppr n
                       , text "implics =" <+> ppr implics ]
            
-           ; (insolubles, unsolved_cans) <- extractUnsolvedTcS
-                     -- unsolved_cans contains either Wanted or Derived!
-                     -- NB: the TcS inerts are thinner now! 
+                 -- Get the inerts and extract the unsolved 
+                 -- NB: unsolved_cans contains either Wanted or Derived
+           ; inerts <- getInertTcS 
+           ; let (thinner_inerts, insolubles, unsolved_cans) = extractUnsolved inerts 
 
+
+                 -- Solve nested implications using the thinner given-only inerts
+                 -- We pass on the unsolved (unsolved_cans) simply as an argument.
            ; (implic_eqs, unsolved_implics) 
-                  <- solveNestedImplications unsolved_cans implics
+                  <- doWithInert thinner_inerts $ 
+                     solveNestedImplications unsolved_cans implics
 
                 -- Apply defaulting rules if and only if there
 		-- no floated equalities.  If there are, they may
@@ -762,15 +767,31 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
                       , text "unsolved_flats   =" <+> ppr unsolved_cans
                       , text "unsolved_implics =" <+> ppr unsolved_implics ]
 
-           ; already_there <- solveInteractThese improve_eqs -- DV: How to do this correctly?
-           ; if already_there then 
-                 return (WC { wc_insol = insolubles
-                            , wc_flat  = unsolved_cans
-                            , wc_impl  = unsolved_implics }) 
-             else 
+             -- Try to solve the improvement equalities
+             -- Use the thinner inerts (which contain no unsolved). If you find some unsolved
+             -- after interacting the floated equalities or the defaulting equalities then 
+             -- just stop because you are making no progress. Otherwise go on! 
+
+           ; should_go_on <- do { solveInteractWanted improve_eqs
+                                ; -- Now the inerts may contain more unsolved
+                                ; (_, insols,unsols) <- getInertTcS >> extractUnsolved
+                                  -- A crude test: if we have produced more unsolved stop
+                                  -- but if the number of unsolved is down we keep iterating
+                                ; return (lengthBag unsols < lengthBag unsolved_cans) }
+
+           ; if should_go_on then 
                  simpl_loop (n+1) unsolved_implics
+             else  -- Return the constraints prior to defaulting/floating
+                 return $ WC { wc_insol   = insolubles
+                             , wc_flat    = unsolved_cans
+                             , wc_implics = unsolved_implics }
            }
-                               {-
+
+
+       {- DV: This used to be the old code but I detest the fact that we use a flag from
+              the inner guts of the simplifier (improve_eqs_already_in_inert). So I want
+              to avoid this somehow in the code above. 
+
            ; (improve_eqs_already_in_inert, inert_with_improvement)
                <- solveInteract inert improve_eqs 
 
