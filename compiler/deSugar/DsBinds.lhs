@@ -256,7 +256,9 @@ dsLCoercion co k
 ---------------------------------------
 dsEvTerm :: EvTerm -> CoreExpr
 dsEvTerm (EvId v)                = Var v
-dsEvTerm (EvCast v co)           = dsLCoercion co $ Cast (Var v)
+dsEvTerm (EvCast v co)           = dsLCoercion co $ Cast (varToCoreExpr v)
+                                                     -- NB: Not just (Var v) since it may be
+                                                     -- a coercion variable that gets cast! 
 dsEvTerm (EvDFunApp df tys vars) = Var df `mkTyApps` tys `mkVarApps` vars
 dsEvTerm (EvCoercionBox co)      = dsLCoercion co mkEqBox
 dsEvTerm (EvTupleSel v n)

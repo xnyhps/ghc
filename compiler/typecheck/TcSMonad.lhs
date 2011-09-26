@@ -2,18 +2,17 @@
 -- Type definitions for the constraint solver
 module TcSMonad ( 
 
-       -- Canonical constraints
-    CanonicalCts, emptyCCan, andCCan, andCCans, 
-    singleCCan, extendCCans, isEmptyCCan, isCTyEqCan, 
-    isCDictCan_Maybe, isCIPCan_Maybe, isCFunEqCan_Maybe,
-    isCIrredEvCan, isCFrozenErr,
+       -- Canonical constraints, definition is now in TcRnTypes
 
-    WorkList, unionWorkList, unionWorkLists, isEmptyWorkList, emptyWorkList,
-    workListFromEq, workListFromNonEq,
-    workListFromEqs, workListFromNonEqs, foldrWorkListM,
+    WorkList(..), isEmptyWorkList, emptyWorkList,
+    workListFromEq, workListFromNonEq, workListFromCt, 
+    extendWorkListEq, extendWorkListNonEq, extendWorkListCt, appendWorkListCt,
+                    
 
-    CanonicalCt(..), Xi, tyVarsOfCanonical, tyVarsOfCanonicals, tyVarsOfCDicts, 
-    deCanonicalise, mkFrozenError,
+    getTcSWorkList, updWorkListTcS, 
+
+    Ct(..), Xi, tyVarsOfCt, tyVarsOfCts, tyVarsOfCDicts, 
+    emitFrozenError,
 
     isWanted, isGivenOrSolved, isDerived,
     isGivenOrSolvedCt, isGivenCt_maybe, 
@@ -27,8 +26,10 @@ module TcSMonad (
     getWantedLoc,
 
     TcS, runTcS, failTcS, panicTcS, traceTcS, -- Basic functionality 
-    traceFireTcS, bumpStepCountTcS,
-    tryTcS, nestImplicTcS, recoverTcS, wrapErrTcS, wrapWarnTcS,
+    traceFireTcS, bumpStepCountTcS, doWithInertsTcS,
+{-     tryTcS, nestImplicTcS, recoverTcS, DV: Will figure out later -}
+    wrapErrTcS, wrapWarnTcS,
+
     SimplContext(..), isInteractive, simplEqsOnly, performDefaulting,
 
        -- Creation of evidence variables
@@ -44,13 +45,20 @@ module TcSMonad (
 
     setWantedTyBind,
 
-    lookupFlatCacheMap, updateFlatCacheMap,
-
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsBag, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
+
+        -- Inerts 
+    InertSet(..), 
+    getInertEqs, getRelevantInertFunEq, rewriteFromInertEqs, 
+    tyVarsOfInert, emptyInert, getTcSInerts, updInertSet, extractUnsolved,
+    extractUnsolvedTcS,
+    updInertSetTcS, updInertSetTcS_, partitionCCanMap, partitionEqMap,
+    getRelevantCts,
+    CCanMap (..),
 
 
     instDFunTypes,                              -- Instantiation
@@ -68,7 +76,7 @@ module TcSMonad (
     matchClass, matchFam, MatchInstResult (..), 
     checkWellStagedDFun, 
     warnTcS,
-    pprEq                                   -- Smaller utils, re-exported from TcM 
+    pprEq                                    -- Smaller utils, re-exported from TcM
                                              -- TODO (DV): these are only really used in the 
                                              -- instance matcher in TcSimplify. I am wondering
                                              -- if the whole instance matcher simply belongs
@@ -113,7 +121,9 @@ import Id
 import TcRnTypes
 import Data.IORef
 
-import qualified Data.Map as Map
+import Unique 
+import UniqFM
+import Maybes ( orElse )
 
 #ifdef DEBUG
 import StaticFlags( opt_PprStyle_Debug )
@@ -121,222 +131,347 @@ import Control.Monad( when )
 #endif
 \end{code}
 
-
-%************************************************************************
-%*									*
-%*                       Canonical constraints                          *
-%*                                                                      *
-%*   These are the constraints the low-level simplifier works with      *
-%*									*
-%************************************************************************
-
 \begin{code}
--- Types without any type functions inside.  However, note that xi
--- types CAN contain unexpanded type synonyms; however, the
--- (transitive) expansions of those type synonyms will not contain any
--- type functions.
-type Xi = Type       -- In many comments, "xi" ranges over Xi
-
-type CanonicalCts = Bag CanonicalCt
- 
-data CanonicalCt
-  -- Atomic canonical constraints 
-  = CDictCan {  -- e.g.  Num xi
-      cc_id     :: EvVar,
-      cc_flavor :: CtFlavor, 
-      cc_class  :: Class, 
-      cc_tyargs :: [Xi]
-    }
-
-  | CIPCan {	-- ?x::tau
-      -- See note [Canonical implicit parameter constraints].
-      cc_id     :: EvVar,
-      cc_flavor :: CtFlavor,
-      cc_ip_nm  :: IPName Name,
-      cc_ip_ty  :: TcTauType
-    }
-
-  | CIrredEvCan {
-      cc_id     :: EvVar,
-      cc_flavor :: CtFlavor,
-      cc_ty     :: Xi
-    }
-
-  | CTyEqCan {  -- tv ~ xi	(recall xi means function free)
-       -- Invariant: 
-       --   * tv not in tvs(xi)   (occurs check)
-       --   * typeKind xi `compatKind` typeKind tv
-       --       See Note [Spontaneous solving and kind compatibility]
-       --   * We prefer unification variables on the left *JUST* for efficiency
-      cc_id     :: EvVar, 
-      cc_flavor :: CtFlavor, 
-      cc_tyvar  :: TcTyVar, 
-      cc_rhs    :: Xi
-    }
-
-  | CFunEqCan {  -- F xis ~ xi  
-                 -- Invariant: * isSynFamilyTyCon cc_fun 
-                 --            * typeKind (F xis) `compatKind` typeKind xi
-      cc_id     :: EvVar,
-      cc_flavor :: CtFlavor, 
-      cc_fun    :: TyCon,	-- A type function
-      cc_tyargs :: [Xi],	-- Either under-saturated or exactly saturated
-      cc_rhs    :: Xi      	--    *never* over-saturated (because if so
-      		      		--    we should have decomposed)
-                   
-    }
-
-  | CFrozenErr {      -- A "frozen error" does not interact with anything
-                      -- See Note [Frozen Errors]
-      cc_id     :: EvVar,
-      cc_flavor :: CtFlavor
-    }
-
-mkFrozenError :: CtFlavor -> EvVar -> CanonicalCt
-mkFrozenError fl ev = CFrozenErr { cc_id = ev, cc_flavor = fl }
-
 compatKind :: Kind -> Kind -> Bool
 compatKind k1 k2 = k1 `isSubKind` k2 || k2 `isSubKind` k1 
 
-deCanonicalise :: CanonicalCt -> FlavoredEvVar
-deCanonicalise ct = mkEvVarX (cc_id ct) (cc_flavor ct)
-
-tyVarsOfCanonical :: CanonicalCt -> TcTyVarSet
-tyVarsOfCanonical (CTyEqCan { cc_tyvar = tv, cc_rhs = xi })    = extendVarSet (tyVarsOfType xi) tv
-tyVarsOfCanonical (CFunEqCan { cc_tyargs = tys, cc_rhs = xi }) = tyVarsOfTypes (xi:tys)
-tyVarsOfCanonical (CDictCan { cc_tyargs = tys }) 	       = tyVarsOfTypes tys
-tyVarsOfCanonical (CIPCan { cc_ip_ty = ty })                   = tyVarsOfType ty
-tyVarsOfCanonical (CIrredEvCan { cc_ty = ty })                 = tyVarsOfType ty
-tyVarsOfCanonical (CFrozenErr { cc_id = ev })                  = tyVarsOfEvVar ev
-
-tyVarsOfCDict :: CanonicalCt -> TcTyVarSet 
-tyVarsOfCDict (CDictCan { cc_tyargs = tys }) = tyVarsOfTypes tys
-tyVarsOfCDict _ct                            = emptyVarSet 
-
-tyVarsOfCDicts :: CanonicalCts -> TcTyVarSet 
-tyVarsOfCDicts = foldrBag (unionVarSet . tyVarsOfCDict) emptyVarSet
-
-tyVarsOfCanonicals :: CanonicalCts -> TcTyVarSet
-tyVarsOfCanonicals = foldrBag (unionVarSet . tyVarsOfCanonical) emptyVarSet
-
-instance Outputable CanonicalCt where
-  ppr (CDictCan d fl cls tys)     
-      = ppr fl <+> ppr d  <+> dcolon <+> pprClassPred cls tys
-  ppr (CIPCan ip fl ip_nm ty)     
-      = ppr fl <+> ppr ip <+> dcolon <+> parens (ppr ip_nm <> dcolon <> ppr ty)
-  ppr (CIrredEvCan v fl ty)
-      = ppr fl <+> ppr v <+> dcolon <+> ppr ty
-  ppr (CTyEqCan co fl tv ty)      
-      = ppr fl <+> ppr co <+> dcolon <+> pprEqPred (Pair (mkTyVarTy tv) ty)
-  ppr (CFunEqCan co fl tc tys ty) 
-      = ppr fl <+> ppr co <+> dcolon <+> pprEqPred (Pair (mkTyConApp tc tys) ty)
-  ppr (CFrozenErr co fl)
-      = ppr fl <+> pprEvVarWithType co
 \end{code}
 
-Note [Canonical implicit parameter constraints]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The type in a canonical implicit parameter constraint doesn't need to
-be a xi (type-function-free type) since we can defer the flattening
-until checking this type for equality with another type.  If we
-encounter two IP constraints with the same name, they MUST have the
-same type, and at that point we can generate a flattened equality
-constraint between the types.  (On the other hand, the types in two
-class constraints for the same class MAY be equal, so they need to be
-flattened in the first place to facilitate comparing them.)
+%************************************************************************
+%*									*
+%*                            Worklists                                *
+%*  Canonical and non-canonical constraints that the simplifier has to  *
+%*  work on. Including their simplification depths.                     *
+%*                                                                      *
+%*									*
+%************************************************************************
+
+Note [WorkList]
+~~~~~~~~~~~~~~~
+
+A WorkList contains canonical and non-canonical items (of all flavors). 
+Notice that each Ct now has a simplification depth. We may 
+consider using this depth for prioritization as well in the future. 
+
+As a simple form of priority queue, our worklist separates out
+equalities (wl_eqs) from the rest of the canonical constraints, 
+so that it's easier to deal with them first, but the separation 
+is not strictly necessary. Notice that non-canonical constraints 
+are also parts of the worklist. 
+
+Note [NonCanonical Semantics]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note that canonical constraints involve a CNonCanonical constructor. In the worklist
+we use this constructor for constraints that have not yet been canonicalized such as 
+   [Int] ~ [a] 
+In other words, all constraints start life as NonCanonicals. 
+
+On the other hand, in the Inert Set (see below) the presence of a NonCanonical somewhere
+means that we have a ``frozen error''. 
+
+NonCanonical constraints never interact directly with other constraints -- but they can
+be rewritten by equalities (for instance if a non canonical exists in the inert, we'd 
+better rewrite it as much as possible before reporting it as an error to the user)
 
 \begin{code}
-singleCCan :: CanonicalCt -> CanonicalCts 
-singleCCan = unitBag 
 
-andCCan :: CanonicalCts -> CanonicalCts -> CanonicalCts 
-andCCan = unionBags
+-- See Note [WorkList]
+data WorkList = WorkList { wl_eqs  :: [Ct], wl_rest :: [Ct] }
 
-extendCCans :: CanonicalCts -> CanonicalCt -> CanonicalCts 
-extendCCans = snocBag 
+extendWorkListEq :: Ct -> WorkList -> WorkList
+-- Extension by equality
+extendWorkListEq ct wl = wl { wl_eqs = ct : wl_eqs wl }
 
-andCCans :: [CanonicalCts] -> CanonicalCts 
-andCCans = unionManyBags
+extendWorkListNonEq :: Ct -> WorkList -> WorkList
+-- Extension by non equality
+extendWorkListNonEq ct wl = wl { wl_rest = ct : wl_rest wl }
 
-emptyCCan :: CanonicalCts 
-emptyCCan = emptyBag
+extendWorkListCt :: Ct -> WorkList -> WorkList
+-- Agnostic
+extendWorkListCt ct wl
+ | isCoVar (cc_id ct) = extendWorkListEq ct wl
+ | otherwise = extendWorkListNonEq ct wl
 
-isEmptyCCan :: CanonicalCts -> Bool
-isEmptyCCan = isEmptyBag
-
-isCTyEqCan :: CanonicalCt -> Bool 
-isCTyEqCan (CTyEqCan {})  = True 
-isCTyEqCan (CFunEqCan {}) = False
-isCTyEqCan _              = False 
-
-isCDictCan_Maybe :: CanonicalCt -> Maybe Class
-isCDictCan_Maybe (CDictCan {cc_class = cls })  = Just cls
-isCDictCan_Maybe _              = Nothing
-
-isCIPCan_Maybe :: CanonicalCt -> Maybe (IPName Name)
-isCIPCan_Maybe  (CIPCan {cc_ip_nm = nm }) = Just nm
-isCIPCan_Maybe _                = Nothing
-
-isCIrredEvCan :: CanonicalCt -> Bool
-isCIrredEvCan (CIrredEvCan {}) = True
-isCIrredEvCan _                = False
-
-isCFunEqCan_Maybe :: CanonicalCt -> Maybe TyCon
-isCFunEqCan_Maybe (CFunEqCan { cc_fun = tc }) = Just tc
-isCFunEqCan_Maybe _ = Nothing
-
-isCFrozenErr :: CanonicalCt -> Bool
-isCFrozenErr (CFrozenErr {}) = True
-isCFrozenErr _               = False
-
-
--- A mixture of Given, Wanted, and Derived constraints. 
--- We split between equalities and the rest to process equalities first. 
-data WorkList = WorkList { weqs  :: CanonicalCts 
-                                 -- NB: weqs includes equalities /and/ family equalities
-                         , wrest :: CanonicalCts }
-
-unionWorkList :: WorkList -> WorkList -> WorkList
-unionWorkList wl1 wl2
-  = WorkList { weqs = weqs wl1 `andCCan` weqs wl2
-             , wrest = wrest wl1 `andCCan` wrest wl2 }
-
-unionWorkLists :: [WorkList] -> WorkList 
-unionWorkLists = foldr unionWorkList emptyWorkList
+appendWorkListCt :: [Ct] -> WorkList -> WorkList
+appendWorkListCt cts wl = foldr extendWorkListCt wl cts
 
 isEmptyWorkList :: WorkList -> Bool
-isEmptyWorkList wl = isEmptyCCan (weqs wl) && isEmptyCCan (wrest wl)
+isEmptyWorkList wl = null (wl_eqs wl) &&  null (wl_rest wl)
 
 emptyWorkList :: WorkList
-emptyWorkList
-  = WorkList { weqs = emptyBag, wrest = emptyBag }
+emptyWorkList = WorkList { wl_eqs  = [], wl_rest = [] }
 
-workListFromEq :: CanonicalCt -> WorkList
-workListFromEq = workListFromEqs . singleCCan
+workListFromEq :: Ct -> WorkList
+workListFromEq ct = WorkList { wl_eqs = [ct], wl_rest = [] }
 
-workListFromNonEq :: CanonicalCt -> WorkList
-workListFromNonEq = workListFromNonEqs . singleCCan 
+workListFromNonEq :: Ct -> WorkList
+workListFromNonEq ct = WorkList { wl_eqs = [], wl_rest = [ct] }
 
-workListFromNonEqs :: CanonicalCts -> WorkList
-workListFromNonEqs cts
-  = WorkList { weqs = emptyCCan, wrest = cts }
+workListFromCt :: Ct -> WorkList
+-- Agnostic 
+workListFromCt ct | isCoVar (cc_id ct) = workListFromEq ct 
+                  | otherwise          = workListFromNonEq ct
 
-workListFromEqs :: CanonicalCts -> WorkList
-workListFromEqs cts
-  = WorkList { weqs = cts, wrest = emptyCCan }
-
-foldrWorkListM :: (Monad m) => (CanonicalCt -> r -> m r) 
-                           -> r -> WorkList -> m r
--- Prioritizes equalities
-foldrWorkListM on_ct r (WorkList {weqs = eqs, wrest = rest })
-  = do { r1 <- foldrBagM on_ct r eqs
-       ; foldrBagM on_ct r1 rest }
-
+-- Pretty printing 
 instance Outputable WorkList where 
-  ppr wl = vcat [ text "WorkList (Equalities) = " <+> ppr (weqs wl)
-                , text "WorkList (Other)      = " <+> ppr (wrest wl) ]
+  ppr wl = vcat [ text "WorkList (eqs)   = " <+> ppr (wl_eqs wl)
+                , text "WorkList (rest)  = " <+> ppr (wl_rest wl)
+                ]
 
 \end{code}
+
+%************************************************************************
+%*									*
+%*                            Inert sets                                *
+%*                                                                      *
+%*									*
+%************************************************************************
+
+
+Note [InertSet invariants]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+An InertSet is a bag of canonical constraints, with the following invariants:
+
+  1 No two constraints react with each other. 
+    
+    A tricky case is when there exists a given (solved) dictionary 
+    constraint and a wanted identical constraint in the inert set, but do 
+    not react because reaction would create loopy dictionary evidence for 
+    the wanted. See note [Recursive dictionaries]
+
+  2 Given equalities form an idempotent substitution [none of the
+    given LHS's occur in any of the given RHS's or reactant parts]
+
+  3 Wanted equalities also form an idempotent substitution
+
+  4 The entire set of equalities is acyclic.
+
+  5 Wanted dictionaries are inert with the top-level axiom set 
+
+  6 Equalities of the form tv1 ~ tv2 always have a touchable variable
+    on the left (if possible).
+
+  7 No wanted constraints tv1 ~ tv2 with tv1 touchable. Such constraints
+    will be marked as solved right before being pushed into the inert set. 
+    See note [Touchables and givens].
+
+  8 No Given constraint mentions a touchable unification variable, but 
+    Given/Solved may do so. 
+
+  9 Given constraints will also have their superclasses in the inert set, 
+    but Given/Solved will not. 
+ 
+Note that 6 and 7 are /not/ enforced by canonicalization but rather by 
+insertion in the inert list, ie by TcInteract. 
+
+During the process of solving, the inert set will contain some
+previously given constraints, some wanted constraints, and some given
+constraints which have arisen from solving wanted constraints. For
+now we do not distinguish between given and solved constraints.
+
+Note that we must switch wanted inert items to given when going under an
+implication constraint (when in top-level inference mode).
+
+\begin{code}
+
+data CCanMap a = CCanMap { cts_given   :: UniqFM Cts
+                                          -- Invariant: all Given
+                         , cts_derived :: UniqFM Cts 
+                                          -- Invariant: all Derived
+                         , cts_wanted  :: UniqFM Cts } 
+                                          -- Invariant: all Wanted
+
+cCanMapToBag :: CCanMap a -> Cts 
+cCanMapToBag cmap = foldUFM unionBags rest_wder (cts_given cmap)
+  where rest_wder = foldUFM unionBags rest_der  (cts_wanted cmap) 
+        rest_der  = foldUFM unionBags emptyCts  (cts_derived cmap)
+
+emptyCCanMap :: CCanMap a 
+emptyCCanMap = CCanMap { cts_given = emptyUFM, cts_derived = emptyUFM, cts_wanted = emptyUFM } 
+
+updCCanMap:: Uniquable a => (a,Ct) -> CCanMap a -> CCanMap a 
+updCCanMap (a,ct) cmap 
+  = case cc_flavor ct of 
+      Wanted {}  -> cmap { cts_wanted  = insert_into (cts_wanted cmap)  } 
+      Given {}   -> cmap { cts_given   = insert_into (cts_given cmap)   }
+      Derived {} -> cmap { cts_derived = insert_into (cts_derived cmap) }
+  where 
+    insert_into m = addToUFM_C unionBags m a (singleCt ct)
+
+getRelevantCts :: Uniquable a => a -> CCanMap a -> (Cts, CCanMap a) 
+-- Gets the relevant constraints and returns the rest of the CCanMap
+getRelevantCts a cmap 
+    = let relevant = lookup (cts_wanted cmap) `unionBags`
+                     lookup (cts_given cmap)  `unionBags`
+                     lookup (cts_derived cmap) 
+          residual_map = cmap { cts_wanted  = delFromUFM (cts_wanted cmap) a
+                              , cts_given   = delFromUFM (cts_given cmap) a
+                              , cts_derived = delFromUFM (cts_derived cmap) a }
+      in (relevant, residual_map) 
+  where
+    lookup map = lookupUFM map a `orElse` emptyCts
+
+partitionCCanMap :: (Ct -> Bool) -> CCanMap a -> (Cts,CCanMap a) 
+-- All constraints that /match/ the predicate go in the bag, the rest remain in the map
+partitionCCanMap pred cmap
+  = let (ws_map,ws) = foldUFM_Directly aux (emptyUFM,emptyCts) (cts_wanted cmap) 
+        (ds_map,ds) = foldUFM_Directly aux (emptyUFM,emptyCts) (cts_derived cmap)
+        (gs_map,gs) = foldUFM_Directly aux (emptyUFM,emptyCts) (cts_given cmap) 
+    in (ws `andCts` ds `andCts` gs, cmap { cts_wanted  = ws_map
+                                         , cts_given   = gs_map
+                                         , cts_derived = ds_map }) 
+  where aux k this_cts (mp,acc_cts) = (new_mp, new_acc_cts)
+                                    where new_mp      = addToUFM mp k cts_keep
+                                          new_acc_cts = acc_cts `andCts` cts_out
+                                          (cts_out, cts_keep) = partitionBag pred this_cts
+
+partitionEqMap :: (Ct -> Bool) -> TyVarEnv (Ct,Coercion) -> (Cts, TyVarEnv (Ct,Coercion))
+partitionEqMap pred isubst 
+  = let eqs_out = foldVarEnv extend_if_pred emptyCts isubst
+        eqs_in  = filterVarEnv_Directly (\_ (ct,_) -> not (pred ct)) isubst
+    in (eqs_out, eqs_in)
+  where extend_if_pred (ct,_) cts = if pred ct then extendCts cts ct else cts 
+
+
+extractUnsolvedCMap :: CCanMap a -> (Cts, CCanMap a)
+-- Gets the wanted or derived constraints and returns a residual
+-- CCanMap with only givens.
+extractUnsolvedCMap cmap =
+  let wntd = foldUFM unionBags emptyCts (cts_wanted cmap)
+      derd = foldUFM unionBags emptyCts (cts_derived cmap)
+  in (wntd `unionBags` derd, 
+      cmap { cts_wanted = emptyUFM, cts_derived = emptyUFM })
+
+-- See Note [InertSet invariants]
+data InertSet 
+  = IS { inert_eqs     :: TyVarEnv (Ct,Coercion) 
+         -- Must all be CTyEqCans! If an entry exists of the form: 
+         --   a |-> ct,co
+         -- Then ct = CTyEqCan { cc_tyvar = a, cc_rhs = xi } 
+         -- And  co : a ~ xi
+       , inert_eq_tvs  :: InScopeSet -- Invariant: superset of inert_eqs tvs
+
+       , inert_dicts        :: CCanMap Class -- Dictionaries only, index is the class
+          -- DV: Maybe later we want to reconsider using TypeMaps (coreSyn.TrieMap)
+
+       , inert_ips          :: CCanMap (IPName Name)      -- Implicit parameters 
+       , inert_funeqs       :: CCanMap TyCon              -- Type family equalities only, index is the type family
+          -- DV: This is more ready to be used with TypeMaps (coreSyn.TrieMap)
+
+               -- This representation allows us to quickly get to the relevant 
+               -- inert constraints when interacting a work item with the inert set.
+
+       , inert_irreds       :: Cts  -- Irreducible predicates
+       , inert_frozen       :: Cts  -- All non-canonicals are kept here (as frozen errors) 
+       }
+
+tyVarsOfInert :: InertSet -> TcTyVarSet 
+tyVarsOfInert (IS { inert_eqs    = _eqsubst
+                  , inert_eq_tvs = inscope
+                     -- inert_eq_tvs are always a superset of the tvs of inert_eqs 
+                  , inert_dicts  = dictmap
+                  , inert_ips    = ipmap
+                  , inert_frozen = frozen
+                  , inert_irreds = irreds
+                  , inert_funeqs = funeqmap 
+                  }) = tyVarsOfCts cts `unionVarSet` getInScopeVars inscope
+  where
+    cts = frozen `andCts` irreds `andCts`
+          cCanMapToBag dictmap `andCts` cCanMapToBag ipmap `andCts` cCanMapToBag funeqmap
+
+instance Outputable InertSet where
+  ppr is = vcat [ vcat (map ppr (varEnvElts (inert_eqs is)))
+                , vcat (map ppr (Bag.bagToList $ inert_irreds is)) 
+                , vcat (map ppr (Bag.bagToList $ cCanMapToBag (inert_dicts is)))
+                , vcat (map ppr (Bag.bagToList $ cCanMapToBag (inert_ips is))) 
+                , vcat (map ppr (Bag.bagToList $ cCanMapToBag (inert_funeqs is)))
+                , text "Frozen errors =" <+> -- Clearly print frozen errors
+                    vcat (map ppr (Bag.bagToList $ inert_frozen is))
+                , text "Warning: Not displaying cached (solved) non-canonicals."
+                ]
+                       
+emptyInert :: InertSet
+emptyInert = IS { inert_eqs     = emptyVarEnv
+                , inert_eq_tvs  = emptyInScopeSet
+                , inert_frozen  = emptyCts
+                , inert_irreds  = emptyCts
+                , inert_dicts   = emptyCCanMap
+                , inert_ips     = emptyCCanMap
+                , inert_funeqs  = emptyCCanMap }
+
+type AtomicInert = Ct 
+
+updInertSet :: InertSet -> AtomicInert -> InertSet 
+-- Add a new inert element to the inert set. 
+updInertSet is item 
+  | isCTyEqCan item                     
+  = let upd_err a b = pprPanic "updInertSet" $ 
+                      vcat [text "Multiple inert equalities:", ppr a, ppr b]
+        eqs'     = extendVarEnv_C upd_err (inert_eqs is)
+                                          (cc_tyvar item)
+                                          (item, mkEqVarLCo (cc_id item))
+        inscope' = extendInScopeSetSet (inert_eq_tvs is) (tyVarsOfCt item)
+    in is { inert_eqs = eqs', inert_eq_tvs = inscope' }
+
+  | Just cls <- isCDictCan_Maybe item   -- Dictionary 
+  = is { inert_dicts = updCCanMap (cls,item) (inert_dicts is) } 
+  | Just x  <- isCIPCan_Maybe item      -- IP 
+  = is { inert_ips   = updCCanMap (x,item) (inert_ips is) }  
+  | isCIrredEvCan item                     -- Presently-irreducible evidence
+  = is { inert_irreds = inert_irreds is `Bag.snocBag` item }
+
+  | Just tc <- isCFunEqCan_Maybe item   -- Function equality 
+  = is { inert_funeqs = updCCanMap (tc,item) (inert_funeqs is) }
+  | otherwise 
+  = is { inert_frozen = inert_frozen is `Bag.snocBag` item }
+
+extractUnsolvedTcS :: TcS (InertSet,Cts,Cts) 
+-- Extracts frozen errors and remaining unsolved and sets the 
+-- inert set to be the remaining! 
+extractUnsolvedTcS = 
+  do { is <- getInertTcS 
+     ; let (is',insol,unsol) <- extractUnsolved is
+     ; updInertSetTcS_ (\_ -> is') 
+     ; return (insol,unsol) }
+
+extractUnsolved :: InertSet -> (InertSet, Cts, Cts)
+-- Postcondition
+-- -------------
+-- When: 
+--   (is_solved, frozen, cts) <- extractUnsolved inert
+-- Then: 
+-- -----------------------------------------------------------------------------
+--  cts       |  The unsolved (Derived or Wanted only) residual 
+--            |  canonical constraints, that is, no CNonCanonicals.
+-- -----------|-----------------------------------------------------------------
+--  frozen    | The CNonCanonicals of the original inert (frozen errors), 
+--            | of all flavors
+-- -----------|-----------------------------------------------------------------
+--  is_solved | Whatever remains from the inert after removing the previous two. 
+-- -----------------------------------------------------------------------------
+extractUnsolved is@(IS {inert_eqs = eqs, inert_irreds = irreds}) 
+  = let is_solved  = is { inert_eqs    = solved_eqs
+                        , inert_eq_tvs = inert_eq_tvs is
+                        , inert_dicts  = solved_dicts
+                        , inert_ips    = solved_ips
+                        , inert_irreds = solved_irreds
+                        , inert_frozen = emptyCts
+                        , inert_funeqs = solved_funeqs }
+    in (is_solved, inert_frozen is, unsolved)
+
+  where solved_eqs = filterVarEnv_Directly (\_ (ct,_) -> isGivenOrSolvedCt ct) eqs
+        unsolved_eqs = foldVarEnv (\(ct,_co) cts -> cts `extendCts` ct) emptyCts $
+                       eqs `minusVarEnv` solved_eqs
+
+        (unsolved_irreds, solved_irreds) = Bag.partitionBag (not.isGivenOrSolvedCt) irreds
+        (unsolved_ips, solved_ips)       = extractUnsolvedCMap (inert_ips is) 
+        (unsolved_dicts, solved_dicts)   = extractUnsolvedCMap (inert_dicts is) 
+        (unsolved_funeqs, solved_funeqs) = extractUnsolvedCMap (inert_funeqs is) 
+
+        unsolved = unsolved_eqs `unionBags` unsolved_irreds `unionBags`
+                   unsolved_ips `unionBags` unsolved_dicts `unionBags` unsolved_funeqs
+\end{code}
+
 
 
 
@@ -348,22 +483,22 @@ instance Outputable WorkList where
 %************************************************************************
 
 \begin{code}
-getWantedLoc :: CanonicalCt -> WantedLoc
+getWantedLoc :: Ct -> WantedLoc
 getWantedLoc ct 
   = ASSERT (isWanted (cc_flavor ct))
     case cc_flavor ct of 
       Wanted wl -> wl 
       _         -> pprPanic "Can't get WantedLoc of non-wanted constraint!" empty
 
-isWantedCt :: CanonicalCt -> Bool
+isWantedCt :: Ct -> Bool
 isWantedCt ct = isWanted (cc_flavor ct)
-isDerivedCt :: CanonicalCt -> Bool
+isDerivedCt :: Ct -> Bool
 isDerivedCt ct = isDerived (cc_flavor ct)
 
-isGivenCt_maybe :: CanonicalCt -> Maybe GivenKind
+isGivenCt_maybe :: Ct -> Maybe GivenKind
 isGivenCt_maybe ct = isGiven_maybe (cc_flavor ct)
 
-isGivenOrSolvedCt :: CanonicalCt -> Bool
+isGivenOrSolvedCt :: Ct -> Bool
 isGivenOrSolvedCt ct = isGivenOrSolved (cc_flavor ct)
 
 
@@ -449,29 +584,9 @@ data TcSEnv
       tcs_ic_depth   :: Int,       -- Implication nesting depth
       tcs_count      :: IORef Int, -- Global step count
 
-      tcs_flat_map   :: IORef FlatCache
+      tcs_inerts   :: IORef InertSet, -- Current inert set
+      tcs_worklist :: IORef WorkList  -- Current worklist
     }
-
-data FlatCache 
-  = FlatCache { givenFlatCache  :: Map.Map FunEqHead (TcType,EqVar,CtFlavor)
-                -- Invariant: all CtFlavors here satisfy isGiven
-              , wantedFlatCache :: Map.Map FunEqHead (TcType,EqVar,CtFlavor) }
-                -- Invariant: all CtFlavors here satisfy isWanted
-
-emptyFlatCache :: FlatCache
-emptyFlatCache 
- = FlatCache { givenFlatCache  = Map.empty, wantedFlatCache = Map.empty }
-
-newtype FunEqHead = FunEqHead (TyCon,[Xi])
-
-instance Eq FunEqHead where
-  FunEqHead (tc1,xis1) == FunEqHead (tc2,xis2) = tc1 == tc2 && eqTypes xis1 xis2
-
-instance Ord FunEqHead where
-  FunEqHead (tc1,xis1) `compare` FunEqHead (tc2,xis2) 
-    = case compare tc1 tc2 of 
-        EQ    -> cmpTypes xis1 xis2
-        other -> other
 
 type TcsUntouchables = (Untouchables,TcTyVarSet)
 -- Like the TcM Untouchables, 
@@ -550,7 +665,7 @@ bumpStepCountTcS = TcS $ \env -> do { let ref = tcs_count env
                                     ; n <- TcM.readTcRef ref
                                     ; TcM.writeTcRef ref (n+1) }
 
-traceFireTcS :: Int -> SDoc -> TcS ()
+traceFireTcS :: SubGoalDepth -> SDoc -> TcS ()
 -- Dump a rule-firing trace
 traceFireTcS depth doc 
   = TcS $ \env -> 
@@ -561,23 +676,33 @@ traceFireTcS depth doc
                 <> brackets (int depth) <+> doc
        ; TcM.dumpTcRn msg }
 
+doWithInertsTcS :: InertSet -> TcS a -> TcS a 
+-- Just use this inert set to do stuff
+doWithInertsTcS inert action
+  = updInertSetTcS_ (\_ -> inert) >> action
+
 runTcS :: SimplContext
        -> Untouchables 	       -- Untouchables
+       -> InertSet             -- Initial inert set
+       -> WorkList             -- Initial work list
        -> TcS a		       -- What to run
        -> TcM (a, Bag EvBind)
-runTcS context untouch tcs 
+runTcS context untouch is wl tcs 
   = do { ty_binds_var <- TcM.newTcRef emptyVarEnv
        ; ev_binds_var@(EvBindsVar evb_ref _) <- TcM.newTcEvBinds
        ; step_count <- TcM.newTcRef 0
-       ; flat_cache_var <- TcM.newTcRef emptyFlatCache
+
+       ; inert_var <- TcM.newTcRef is 
+       ; wl_var <- TcM.newTcRef wl
+
        ; let env = TcSEnv { tcs_ev_binds = ev_binds_var
                           , tcs_ty_binds = ty_binds_var
                           , tcs_context  = context
                           , tcs_untch    = (untouch, emptyVarSet) -- No Tcs untouchables yet
 			  , tcs_count    = step_count
 			  , tcs_ic_depth = 0
-                          , tcs_flat_map = flat_cache_var
-                          }
+                          , tcs_inerts   = inert_var
+                          , tcs_worklist = wl_var }
 
 	     -- Run the computation
        ; res <- unTcS tcs env
@@ -596,6 +721,9 @@ runTcS context untouch tcs
        ; return (res, evBindMapBinds ev_binds) }
   where
     do_unification (tv,ty) = TcM.writeMetaTyVar tv ty
+
+{- DV: The rest of the interface to the monad I will have to determine precisely
+   when I refactor TcSimplify. Leaving commented out for now! 
 
 nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a
 nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside)
@@ -651,9 +779,51 @@ tryTcS tcs
                                      , tcs_ty_binds = ty_binds_var
                                      , tcs_flat_map = flat_cache_var }
                    ; unTcS tcs env1 })
+-}
 
--- Update TcEvBinds 
+-- Getters and setters of TcEnv fields
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+-- Getter of inerts and worklist
+getTcSInertsRef :: TcS (IORef InertSet)
+getTcSInertsRef = TcS (return . tcs_inerts)
+
+getTcSWorkListRef :: TcS (IORef WorkList) 
+getTcSWorkListRef = TcS (return . tcs_worklist) 
+
+getTcSInerts :: TcS InertSet 
+getTcSInerts = getTcSInertsRef >>= wrapTcS . (TcM.readTcRef) 
+
+getTcSWorkList :: TcS WorkList
+getTcSWorkList = getTcSWorkListRef >>= wrapTcS . (TcM.readTcRef) 
+
+updWorkListTcS :: (WorkList -> WorkList) -> TcS () 
+updWorkListTcS f 
+  = do { wl_var <- getTcSWorkListRef 
+       ; wl_curr <- wrapTcS (TcM.readTcRef wl_var)
+       ; wrapTcS (TcM.writeTcRef wl_var (f wl_curr)) }
+
+updInertSetTcS :: (InertSet -> (InertSet,a)) -> TcS a 
+updInertSetTcS f 
+  = do { is_var <- getTcSInertsRef
+       ; is_curr <- wrapTcS (TcM.readTcRef is_var)
+       ; let (is_new,ret) = f is_curr
+       ; wrapTcS (TcM.writeTcRef is_var is_new) 
+       ; return ret } 
+
+updInertSetTcS_ :: (InertSet -> InertSet) -> TcS () 
+updInertSetTcS_ f = updInertSetTcS (\x -> (f x,())) 
+
+emitFrozenError :: CtFlavor -> EvVar -> SubGoalDepth -> TcS ()
+-- Emits a non-canonical constraint that will stand for a frozen error in the inerts. 
+emitFrozenError fl ev depth 
+  = do { inert_ref <- getTcSInertsRef 
+       ; inerts <- wrapTcS (TcM.readTcRef inert_ref)
+       ; let ct = CNonCanonical { cc_id = ev
+                                , cc_flavor = fl
+                                , cc_depth = depth } 
+             inerts_new = inerts { inert_frozen = extendCts (inert_frozen inerts) ct } 
+       ; wrapTcS (TcM.writeTcRef inert_ref inerts_new) }
 
 getDynFlags :: TcS DynFlags
 getDynFlags = wrapTcS TcM.getDOpts
@@ -672,44 +842,6 @@ getTcSTyBinds = TcS (return . tcs_ty_binds)
 
 getTcSTyBindsMap :: TcS (TyVarEnv (TcTyVar, TcType))
 getTcSTyBindsMap = getTcSTyBinds >>= wrapTcS . (TcM.readTcRef) 
-
-getFlatCacheMapVar :: TcS (IORef FlatCache)
-getFlatCacheMapVar
-  = TcS (return . tcs_flat_map)
-
-lookupFlatCacheMap :: TyCon -> [Xi] -> CtFlavor 
-                   -> TcS (Maybe (TcType,EqVar,CtFlavor))
--- For givens, we lookup in given flat cache
-lookupFlatCacheMap tc xis (Given {})
-  = do { cache_ref <- getFlatCacheMapVar
-       ; cache_map <- wrapTcS $ TcM.readTcRef cache_ref
-       ; return $ Map.lookup (FunEqHead (tc,xis)) (givenFlatCache cache_map) }
--- For wanteds, we first lookup in givenFlatCache.
--- If we get nothing back then we lookup in wantedFlatCache.
-lookupFlatCacheMap tc xis (Wanted {})
-  = do { cache_ref <- getFlatCacheMapVar
-       ; cache_map <- wrapTcS $ TcM.readTcRef cache_ref
-       ; case Map.lookup (FunEqHead (tc,xis)) (givenFlatCache cache_map) of
-           Nothing -> return $ Map.lookup (FunEqHead (tc,xis)) (wantedFlatCache cache_map)
-           other   -> return other }
-lookupFlatCacheMap _tc _xis (Derived {}) = return Nothing
-
-updateFlatCacheMap :: TyCon -> [Xi]
-                   -> TcType -> CtFlavor -> EqVar -> TcS ()
-updateFlatCacheMap _tc _xis _tv (Derived {}) _eqv
-  = return () -- Not caching deriveds
-updateFlatCacheMap tc xis ty fl eqv
-  = do { cache_ref <- getFlatCacheMapVar
-       ; cache_map <- wrapTcS $ TcM.readTcRef cache_ref
-       ; let new_cache_map
-              | isGivenOrSolved fl
-              = cache_map { givenFlatCache = Map.insert (FunEqHead (tc,xis)) (ty,eqv,fl) $
-                                             givenFlatCache cache_map }
-              | isWanted fl
-              = cache_map { wantedFlatCache = Map.insert (FunEqHead (tc,xis)) (ty,eqv,fl) $
-                                              wantedFlatCache cache_map }
-              | otherwise = pprPanic "updateFlatCacheMap, met Derived!" $ empty
-       ; wrapTcS $ TcM.writeTcRef cache_ref new_cache_map }
 
 
 getTcEvBindsBag :: TcS EvBindMap
@@ -959,3 +1091,98 @@ matchClass clas tys
 matchFam :: TyCon -> [Type] -> TcS (Maybe (TyCon, [Type]))
 matchFam tycon args = wrapTcS $ TcM.tcLookupFamInst tycon args
 \end{code}
+
+
+-- Rewriting with respect to the inert equalities 
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+\begin{code}
+
+getInertEqs :: TcS (TyVarEnv (Ct,Coercion), InScopeSet)
+getInertEqs = do { inert <- getTcSInerts
+                 ; return (inert_eqs inert, inert_eq_tvs inert) }
+
+getRelevantInertFunEq :: TyCon -> [Xi] -> CtFlavor -> TcS (Maybe (Xi,Coercion)) 
+-- Returns a coercion between (tc xi_args ~  xi) if such an inert item exists
+getRelevantInertFunEq tc xi_args fl 
+  = do { inert <- getTcSInerts
+       ; let (fun_eq_relevants,_) = getRelevantCts tc (inert_funeqs inert)
+       ; let acceptables = filterBag fun_match fun_eq_relevants
+       ; case bagToList acceptables of 
+           []     -> return Nothing
+           (cc:_) -> return $ Just (cc_rhs cc, mkEqVarLCo (cc_id cc)) }
+  where fun_match (CFunEqCan { cc_flavor = ifl, cc_tyargs = ixis }) 
+            = eqTypes xi_args ixis && ifl `canRewrite` fl
+        fun_match _ = False -- Should be an assertion failure, really
+
+
+rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)  
+                    -- Precondition: Ct are CTyEqCans only!
+                    -> CtFlavor 
+                    -> EvVar 
+                    -> TcS EvVar
+rewriteFromInertEqs (subst,inscope) fl v 
+  = do { let co = liftInertEqsPred subst inscope fl (evVarPred v) 
+       ; if isReflCo co then return v 
+         else do { v' <- newEvVar (pSnd (coercionKind co)) 
+                 ; case fl of 
+                     Wanted {}  -> setEvBind v (EvCast v' (mkSymCo co)) 
+                     Given {}   -> setEvBind v' (EvCast v co) 
+                     Derived {} -> return ()
+                 ; return v' } }
+
+-- See Note [LiftInertEqs] 
+liftInertEqsPred :: TyVarEnv (Ct,Coercion) 
+                 -> InScopeSet 
+                 -> CtFlavor 
+                 -> PredType -> Coercion 
+liftInertEqsPred subst inscope fl pty
+  = ty_cts_subst subst inscope fl pty
+
+ty_cts_subst :: TyVarEnv (Ct,Coercion)
+             -> InScopeSet -> CtFlavor -> Type -> Coercion 
+ty_cts_subst subst inscope fl ty 
+  = go ty 
+  where go (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)
+        go (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2) 
+        go (TyConApp tc tys) = mkTyConAppCo tc (map go tys) 
+        go (ForAllTy v ty)   = mkForAllCo v' $! (ty_cts_subst subst' inscope' fl ty)
+                               where (subst',inscope',v') = upd_tyvar_bndr subst inscope v
+        go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2) 
+
+        tyvar_cts_subst tv  
+          | Just (ct,co) <- lookupVarEnv subst tv, cc_flavor ct `canRewrite` fl  
+          = Just co -- Warn: use cached, not cc_id directly, because of alpha-renamings!
+          | otherwise = Nothing 
+
+        upd_tyvar_bndr subst inscope v 
+          = (new_subst, (inscope `extendInScopeSet` new_v), new_v)
+          where new_subst 
+                    | no_change = delVarEnv subst v
+                        -- Otherwise we have to extend the environment with /something/. 
+                        -- But we do not want to monadically create a new EvVar. So, we
+                        -- create an 'unused_ct' but we cache reflexivity as the 
+                        -- associated coercion. 
+                    | otherwise = extendVarEnv subst v (unused_ct, Refl (TyVarTy new_v))
+
+                no_change = new_v == v 
+                new_v     = uniqAway inscope v 
+
+                unused_ct = CTyEqCan { cc_id     = unused_evvar
+                                     , cc_flavor = fl -- canRewrite is reflexive.
+                                     , cc_tyvar  = v 
+                                     , cc_rhs    = mkTyVarTy new_v 
+                                     , cc_depth  = unused_depth }
+                unused_depth = panic "ty_cts_subst: This depth should not be accessed!"
+                unused_evvar = panic "ty_cts_subst: This var is just an alpha-renaming!"
+\end{code}
+
+Note [LiftInertEqsPred]
+~~~~~~~~~~~~~~~~~~~~~~~ 
+The function liftInertEqPred behaves almost like liftCoSubst (in
+Coercion), but accepts a map TyVarEnv (Ct,Coercion) instead of a
+LiftCoSubst. This data structure is more convenient to use since we
+must apply the inert substitution /only/ if the inert equality 
+`canRewrite` the work item. There's admittedly some duplication of 
+functionality but it would be more tedious to cache and maintain 
+different flavors of LiftCoSubst structures in the inerts. 
+

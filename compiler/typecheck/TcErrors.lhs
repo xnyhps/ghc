@@ -1,7 +1,9 @@
 \begin{code}
 module TcErrors( 
        reportUnsolved,
+{- TODO: must fix
        warnDefaulting,
+-}
        unifyCtxt,
 
        flattenForAllErrorTcS,
@@ -107,7 +109,7 @@ reportTidyWanteds ctxt (WC { wc_flat = flats, wc_insol = insols, wc_impl = impli
                        -- because they are unconditionally wrong
                        -- Moreover, if any of the insolubles are givens, stop right there
                        -- ignoring nested errors, because the code is inaccessible
-  = do { let (given, other) = partitionBag (isGivenOrSolved . evVarX) insols
+  = do { let (given, other) = partitionBag (isGivenOrSolved . cc_flavor) insols
              insol_implics  = filterBag ic_insol implics
        ; if isEmptyBag given
          then do { mapBagM_ (reportInsoluble ctxt) other
@@ -116,7 +118,10 @@ reportTidyWanteds ctxt (WC { wc_flat = flats, wc_insol = insols, wc_impl = impli
 
   | otherwise          -- No insoluble ones
   = ASSERT( isEmptyBag insols )
-    do { let (ambigs, non_ambigs) = partition     is_ambiguous (bagToList flats)
+    do { let flat_evs = bagToList $ mapBag to_wev flats
+             to_wev ct | Wanted wl <- cc_flavor ct = mkEvVarX (cc_id ct) wl
+                       | otherwise = panic "reportTidyWanteds: unsolved is not wanted!"
+             (ambigs, non_ambigs) = partition     is_ambiguous flat_evs
        	     (tv_eqs, others)     = partitionWith is_tv_eq     non_ambigs
 
        ; groupErrs (reportEqErrs ctxt) tv_eqs
@@ -146,16 +151,19 @@ reportTidyWanteds ctxt (WC { wc_flat = flats, wc_insol = insols, wc_impl = impli
 		  where   
                      pred = evVarOfPred d
 
-reportInsoluble :: ReportErrCtxt -> FlavoredEvVar -> TcM ()
-reportInsoluble ctxt (EvVarX ev flav)
-  | Just (ty1, ty2) <- getEqPredTys_maybe (evVarPred ev)
+reportInsoluble :: ReportErrCtxt -> Ct -> TcM ()
+-- Precondition: insolubles are always NonCanonicals! 
+reportInsoluble ctxt ct
+  | ev <- cc_id ct
+  , flav <- cc_flavor ct 
+  , Just (ty1, ty2) <- getEqPredTys_maybe (evVarPred ev)
   = setCtFlavorLoc flav $
     do { let ctxt2 = ctxt { cec_extra = cec_extra ctxt $$ inaccessible_msg }
        ; reportEqErr ctxt2 ty1 ty2 }
   | otherwise
-  = pprPanic "reportInsoluble" (pprEvVarWithType ev)
+  = pprPanic "reportInsoluble" (pprEvVarWithType (cc_id ct))
   where
-    inaccessible_msg | Given loc GivenOrig <- flav
+    inaccessible_msg | Given loc GivenOrig <- (cc_flavor ct)
                        -- If a GivenSolved then we should not report inaccessible code
                      = hang (ptext (sLit "Inaccessible code in"))
                           2 (ppr (ctLocOrigin loc))
@@ -835,6 +843,7 @@ find_thing tidy_env ignore_it (ATyVar tv ty)
 
 find_thing _ _ thing = pprPanic "find_thing" (ppr thing)
 
+{- TODO: Refactor without FlavoredEvVar nonsense! 
 warnDefaulting :: [FlavoredEvVar] -> Type -> TcM ()
 warnDefaulting wanteds default_ty
   = do { warn_default <- woptM Opt_WarnTypeDefaults
@@ -851,6 +860,7 @@ warnDefaulting wanteds default_ty
   where
     get_wev (EvVarX ev (Wanted loc)) = EvVarX ev loc    -- Yuk
     get_wev ev = pprPanic "warnDefaulting" (ppr ev)
+-}
 \end{code}
 
 Note [Runtime skolems]
@@ -867,7 +877,7 @@ are created by in RtClosureInspect.zonkRTTIType.
 %************************************************************************
 
 \begin{code}
-solverDepthErrorTcS :: Int -> [CanonicalCt] -> TcS a
+solverDepthErrorTcS :: Int -> [Ct] -> TcS a
 solverDepthErrorTcS depth stack
   | null stack	    -- Shouldn't happen unless you say -fcontext-stack=0
   = wrapErrTcS $ failWith msg
@@ -884,8 +894,8 @@ solverDepthErrorTcS depth stack
     msg = vcat [ ptext (sLit "Context reduction stack overflow; size =") <+> int depth
                , ptext (sLit "Use -fcontext-stack=N to increase stack size to N") ]
 
-flattenForAllErrorTcS :: CtFlavor -> TcType -> Bag CanonicalCt -> TcS a
-flattenForAllErrorTcS fl ty _bad_eqs
+flattenForAllErrorTcS :: CtFlavor -> TcType -> TcS a
+flattenForAllErrorTcS fl ty
   = wrapErrTcS        $ 
     setCtFlavorLoc fl $ 
     do { env0 <- tcInitTidyEnv

@@ -55,7 +55,8 @@ module TcMType (
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
   zonkTcKindToKind, zonkTcKind, 
-  zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
+  zonkCt,
+  zonkImplication, zonkEvVar, zonkWantedEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
   tcGetGlobalTyVars, 
@@ -579,18 +580,23 @@ zonkEvVar :: EvVar -> TcM EvVar
 zonkEvVar var = do { ty' <- zonkTcType (varType var)
                    ; return (setVarType var ty') }
 
-zonkFlavoredEvVar :: FlavoredEvVar -> TcM FlavoredEvVar
-zonkFlavoredEvVar (EvVarX ev fl)
-  = do { ev' <- zonkEvVar ev
-       ; fl' <- zonkFlavor fl
-       ; return (EvVarX ev' fl') }
 
 zonkWC :: WantedConstraints -> TcM WantedConstraints
 zonkWC (WC { wc_flat = flat, wc_impl = implic, wc_insol = insol })
-  = do { flat'   <- zonkWantedEvVars flat
+  = do { flat'   <- mapBagM zonkCt flat 
        ; implic' <- mapBagM zonkImplication implic
-       ; insol'  <- mapBagM zonkFlavoredEvVar insol
+       ; insol'  <- mapBagM zonkCt insol
        ; return (WC { wc_flat = flat', wc_impl = implic', wc_insol = insol' }) }
+
+zonkCt :: Ct -> TcM Ct 
+-- Zonking a Ct conservatively gives back a CNonCanonical
+zonkCt ct 
+  = do { v'  <- zonkEvVar (cc_id ct)
+       ; fl' <- zonkFlavor (cc_flavor ct)
+       ; return $ 
+         CNonCanonical { cc_id = v'
+                       , cc_flavor = fl'
+                       , cc_depth = cc_depth ct } }
 
 zonkWantedEvVars :: Bag WantedEvVar -> TcM (Bag WantedEvVar)
 zonkWantedEvVars = mapBagM zonkWantedEvVar
