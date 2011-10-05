@@ -647,6 +647,7 @@ trySpontaneousEqTwoWay eqv gw tv1 tv2
     k1 = tyVarKind tv1
     k2 = tyVarKind tv2
     nicer_to_update_tv2 = isSigTyVar tv1 || isSystemName (Var.varName tv2)
+{-
 -- Previous code below (before kind polymorphism and unification):
   -- | k1 `isSubKind` k2
   -- , nicer_to_update_tv2 = solveWithIdentity eqv gw tv2 (mkTyVarTy tv1)
@@ -660,6 +661,7 @@ trySpontaneousEqTwoWay eqv gw tv1 tv2
   --   k1 = tyVarKind tv1
   --   k2 = tyVarKind tv2
   --   nicer_to_update_tv2 = isSigTyVar tv1 || isSystemName (Var.varName tv2)
+-}
 \end{code}
 
 Note [Kind errors] 
