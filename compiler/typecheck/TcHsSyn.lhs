@@ -182,8 +182,11 @@ It's all pretty boring stuff, because HsSyn is such a large type, and
 the environment manipulation is tiresome.
 
 \begin{code}
-data ZonkEnv = ZonkEnv	(TcType -> TcM Type) 	-- How to zonk a type
-			(VarEnv Var)		-- What variables are in scope
+data ZonkEnv 
+  = ZonkEnv 
+      (VarEnv Var -> TcType -> TcM Type) 	-- How to zonk a type
+    			        -- Note [Zonking the LHS of a RULE]
+      (VarEnv Var)		-- What variables are in scope
 	-- Maps an Id or EvVar to its zonked version; both have the same Name
 	-- Note that all evidence (coercion variables as well as dictionaries)
 	-- 	are kept in the ZonkEnv
@@ -689,7 +692,8 @@ zonkCoFn env (WpEvLam ev)   = do { (env', ev') <- zonkEvBndrX env ev
 zonkCoFn env (WpEvApp arg)  = do { arg' <- zonkEvTerm env arg 
                                  ; return (env, WpEvApp arg') }
 zonkCoFn env (WpTyLam tv)   = ASSERT( isImmutableTyVar tv )
-                              return (env, WpTyLam tv) 
+                              do { (env', tv') <- zonkTyBndrX env tv
+				 ; return (env', WpTyLam tv') }
 zonkCoFn env (WpTyApp ty)   = do { ty' <- zonkTcTypeToType env ty
 				 ; return (env, WpTyApp ty') }
 zonkCoFn env (WpLet bs)     = do { (env1, bs') <- zonkTcEvBinds env bs
@@ -981,24 +985,7 @@ zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
 
        ; unbound_tv_set <- newMutVar emptyVarSet
        ; let env_lhs = setZonkType env_rhs (zonkTypeCollecting unbound_tv_set)
-	-- We need to gather the type variables mentioned on the LHS so we can 
-	-- quantify over them.  Example:
-	--   data T a = C
-	-- 
-	--   foo :: T a -> Int
-	--   foo C = 1
-	--
-	--   {-# RULES "myrule"  foo C = 1 #-}
-	-- 
-	-- After type checking the LHS becomes (foo a (C a))
-	-- and we do not want to zap the unbound tyvar 'a' to (), because
-	-- that limits the applicability of the rule.  Instead, we
-	-- want to quantify over it!  
-	--
-	-- It's easiest to find the free tyvars here. Attempts to do so earlier
-	-- are tiresome, because (a) the data type is big and (b) finding the 
-	-- free type vars of an expression is necessarily monadic operation.
-	--	(consider /\a -> f @ b, where b is side-effected to a)
+       	     -- See Note [Zonking the LHS of a RULE]
 
        ; new_lhs <- zonkLExpr env_lhs lhs
        ; new_rhs <- zonkLExpr env_rhs rhs
@@ -1096,6 +1083,31 @@ zonkEvBind env (EvBind var term)
 %*									*
 %************************************************************************
 
+Note [Zonking the LHS of a RULE]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We need to gather the type variables mentioned on the LHS so we can 
+quantify over them.  Example:
+  data T a = C
+
+  foo :: T a -> Int
+  foo C = 1
+
+  {-# RULES "myrule"  foo C = 1 #-}
+
+After type checking the LHS becomes (foo a (C a))
+and we do not want to zap the unbound tyvar 'a' to (), because
+that limits the applicability of the rule.  Instead, we
+want to quantify over it!  
+
+It's easiest to get zonkTypeCollecting to gather the free tyvars
+here. Attempts to do so earlier are tiresome, because (a) the data
+type is big and (b) finding the free type vars of an expression is
+necessarily monadic operation. (consider /\a -> f @ b, where b is
+side-effected to a)
+
+And that in turn is why ZonkEnv carries the function to use for
+type variables!
+
 \begin{code}
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToType (ZonkEnv zonk_ty _) ty = zonk_ty ty
@@ -1126,7 +1138,8 @@ zonkTypeZapping ty
 	-- mutable tyvar to a fresh immutable one.  So the mutable store
 	-- plays the role of an environment.  If we come across a mutable
 	-- type variable that isn't so bound, it must be completely free.
-    zonk_unbound_tyvar tv = do { let ty = anyTypeOfKind (tyVarKind tv)
+    zonk_unbound_tyvar tv = do { kind <- zonkKind (tyVarKind tv)
+                               ; let ty = anyTypeOfKind kind
 			       ; writeMetaTyVar tv ty
 			       ; return ty }
 

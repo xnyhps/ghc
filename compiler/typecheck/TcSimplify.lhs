@@ -220,7 +220,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
   | isEmptyWC wanteds
   = do { gbl_tvs     <- tcGetGlobalTyVars            -- Already zonked
        ; zonked_taus <- zonkTcTypes (map snd name_taus)
-       ; let tvs_to_quantify = get_tau_tvs zonked_taus `minusVarSet` gbl_tvs
+       ; let tvs_to_quantify = tyVarsOfTypes zonked_taus `minusVarSet` gbl_tvs
        ; qtvs <- zonkQuantifiedTyVars (varSetElemsKvsFirst tvs_to_quantify)
        ; return (qtvs, [], False, emptyTcEvBinds) }
 
@@ -243,7 +243,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
 	     -- Then split the constraints on the baisis of those tyvars
 	     -- to avoid unnecessarily simplifying a class constraint
 	     -- See Note [Avoid unecessary constraint simplification]
-       ; let zonked_tau_tvs = get_tau_tvs zonked_taus
+       ; let zonked_tau_tvs = tyVarsOfTypes zonked_taus
              proto_qtvs = growWanteds gbl_tvs zonked_wanteds $
                           zonked_tau_tvs `minusVarSet` gbl_tvs
              (perhaps_bound, surely_free)
@@ -334,13 +334,6 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
 
        ; return ( qtvs_to_return, minimal_bound_ev_vars
                 , mr_bites,  TcEvBinds ev_binds_var) } }
-  where
-    get_tau_tvs = tyVarsOfTypes	-- I think this stuff is out of date
-{-
-    get_tau_tvs | isTopLevel top_lvl = tyVarsOfTypes
-                | otherwise          = exactTyVarsOfTypes
-     -- See Note [Silly type synonym] in TcType
--}
 \end{code}
 
 

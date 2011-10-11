@@ -863,8 +863,8 @@ uUnfilledVars :: [EqOrigin]
 --           Neither is filled in yet
 
 uUnfilledVars origin swapped tv1 details1 tv2 details2
-  = do { k1_sub_k2 <- k1 `isSubKindTcM` k2
-       ; k2_sub_k1 <- k2 `isSubKindTcM` k1
+  = do { unifyKind k1 k2
+       ; 
        ; case (details1, details2) of
            { (MetaTv i1 ref1, MetaTv i2 ref2)
                  | k1_sub_k2 -> if k2_sub_k1 && nicer_to_update_tv1 i1 i2
@@ -897,7 +897,7 @@ checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
 -- We are about to update the TauTv tv with ty.
 -- Check (a) that tv doesn't occur in ty (occurs check)
 --	 (b) that kind(ty) is a sub-kind of kind(tv)
---       (c) that ty does not contain any type families, see Note [Type family sharing]
+-       (c) that ty does not contain any type families, see Note [Type family sharing]
 -- 
 -- We have two possible outcomes:
 -- (1) Return the type to update the type variable with, 

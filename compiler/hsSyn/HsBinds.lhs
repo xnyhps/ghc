@@ -450,9 +450,9 @@ data HsWrapper
   | WpEvLam EvVar 		-- \d. []	the 'd' is an evidence variable
   | WpEvApp EvTerm		-- [] d		the 'd' is evidence for a constraint
 
-	-- Type abstraction and application
-  | WpTyLam TyVar 		-- \a. []	the 'a' is a type variable (not coercion var)
-  | WpTyApp Type		-- [] t		the 't' is a type (not coercion)
+	-- Kind and Type abstraction and application
+  | WpTyLam TyVar 	-- \a. []	the 'a' is a type/kdin variable (not coercion var)
+  | WpTyApp KindOrType	-- [] t		the 't' is a type (not coercion)
 
 
   | WpLet TcEvBinds      	-- Non-empty (or possibly non-empty) evidence bindings,

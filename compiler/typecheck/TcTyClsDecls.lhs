@@ -261,8 +261,8 @@ kcTyClGroup decls
            ; let kc_kind = case thing of
                                AThing k -> k
                                _ -> pprPanic "kcTyClGroup" (ppr thing)
-           ; (kvs, body) <- kindGeneralizeKind kc_kind
-           ; return (name, mkForAllTys kvs body) }
+           ; (kvs, kc_kind') <- kindGeneralizeKind kc_kind
+           ; return (name, mkForAllTys kvs kc_kind') }
 
 getInitialKinds :: LTyClDecl Name -> TcM [(Name, TcTyThing)]
 -- Allocate a fresh kind variable for each TyCon and Class

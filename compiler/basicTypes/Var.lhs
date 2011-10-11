@@ -92,7 +92,10 @@ import Data.Data
 
 \begin{code}
 type Id    = Var       -- A term-level identifier
-type TyVar = Var       -- see Note [Kind and type variables]
+
+type TyVar   = Var     -- Type *or* kind variable
+type KindVar = Var     -- Definitely a kind variable
+     	       	       -- See Note [Kind and type variables]
 
 -- See Note [Evidence: EvIds and CoVars]
 type EvId   = Id        -- Term-level evidence: DictId, IpId, or EqVar
@@ -103,7 +106,6 @@ type IpId   = EvId      -- A term-level implicit parameter
 type EqVar  = EvId      -- Boxed equality evidence
 
 type CoVar = Id		-- See Note [Evidence: EvIds and CoVars]
-type KindVar = Var      -- see Note [Kind and type variables]
 \end{code}
 
 Note [Evidence: EvIds and CoVars]
@@ -123,12 +125,12 @@ Note [Evidence: EvIds and CoVars]
 Note [Kind and type variables]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Before kind polymorphism, TyVar were used to mean type variables. Now
-they are use to mean kind or type variables. KindVar is used when we
-know for sure that it is a kind variable. We might want to go over the
-whole compiler code to use:
-- KiTyVar to mean kind or type variables
-- TyVar   to mean         type variables only
-- KindVar to mean kind         variables
+they are use to mean kind *or* type variables. KindVar is used when we
+know for sure that it is a kind variable. In future, we might want to
+go over the whole compiler code to use:
+   - KiTyVar to mean kind or type variables
+   - TyVar   to mean         type variables only
+   - KindVar to mean kind         variables
 
 
 %************************************************************************

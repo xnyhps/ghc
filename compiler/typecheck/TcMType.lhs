@@ -787,6 +787,7 @@ zonkType zonk_tc_tyvar ty
                              return (ForAllTy tyvar' ty')
 
 mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
+	      -> (TcTyVar -> Type)	-- What to do for an immutable var
  	      -> TcTyVar -> TcM TcType
 mkZonkTcTyVar unbound_var_fn tyvar 
   = ASSERT( isTcTyVar tyvar )

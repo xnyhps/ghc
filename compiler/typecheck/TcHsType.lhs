@@ -863,7 +863,10 @@ tcTyVarBndrsKindGen bndrs thing_inside = do
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 kindGeneralizeKinds kinds = do
   kinds' <- mapM zonkTcKind kinds
-  flexis <- freeFlexisOfTypes kinds'
+
+xxxx no monad for this!
+  flexis <- freeFlexisOfTypes kinds'		
+
   traceTc "generalizeKind 1" (ppr flexis <+> ppr kinds')
   let (_, occs) = mapAccumL tidy_one emptyTidyOccEnv flexis
       tidy_one env flexi = tidyOccName env (getOccName (tyVarName flexi))
@@ -900,6 +903,7 @@ freeFlexisOfType ty = do
 
 freeFlexisOfTypes :: [Type] -> TcM [Var]
 freeFlexisOfTypes tys = do
+xxxxx
   fss <- mapM freeFlexisOfType tys
   return $ varSetElems $ unionVarSets $ map mkVarSet fss
 
