@@ -451,7 +451,7 @@ data HsWrapper
   | WpEvApp EvTerm		-- [] d		the 'd' is evidence for a constraint
 
 	-- Kind and Type abstraction and application
-  | WpTyLam TyVar 	-- \a. []	the 'a' is a type/kdin variable (not coercion var)
+  | WpTyLam TyVar 	-- \a. []	the 'a' is a type/kind variable (not coercion var)
   | WpTyApp KindOrType	-- [] t		the 't' is a type (not coercion)
 
 

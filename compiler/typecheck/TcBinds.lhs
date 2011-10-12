@@ -859,8 +859,8 @@ tcRhs :: TcMonoBind -> TcM (HsBind TcId)
 -- When we are doing pattern bindings, or multiple function bindings at a time
 -- we *don't* bring any scoped type variables into scope
 -- Wny not?  They are not completely rigid.
--- That's why we have the special case for a single FunBind in tcMonoBindst
-cRhs (TcFunBind (_,_,mono_id) loc inf matches)
+-- That's why we have the special case for a single FunBind in tcMonoBinds
+tcRhs (TcFunBind (_,_,mono_id) loc inf matches)
   = do  { traceTc "tcRhs: fun bind" (ppr mono_id $$ ppr (idType mono_id))
         ; (co_fn, matches') <- tcMatchesFun (idName mono_id) inf 
                                             matches (idType mono_id)

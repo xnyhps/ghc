@@ -789,16 +789,18 @@ zonkType zonk_tc_tyvar ty
 mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
 	      -> (TcTyVar -> Type)	-- What to do for an immutable var
  	      -> TcTyVar -> TcM TcType
-mkZonkTcTyVar unbound_var_fn tyvar 
+mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn tyvar 
   = ASSERT( isTcTyVar tyvar )
     case tcTyVarDetails tyvar of
-      SkolemTv {}    -> return (TyVarTy tyvar)
-      RuntimeUnk {}  -> return (TyVarTy tyvar)
-      FlatSkol ty    -> zonkType (mkZonkTcTyVar unbound_var_fn) ty
+      SkolemTv {}    -> return (unbound_ivar_fn tyvar) -- JPM
+      --SkolemTv {}    -> return (TyVarTy tyvar)
+      RuntimeUnk {}  -> return (unbound_ivar_fn tyvar)
+      --RuntimeUnk {}  -> return (TyVarTy tyvar)
+      FlatSkol ty    -> zonkType (mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn) ty
       MetaTv _ ref   -> do { cts <- readMutVar ref
 			   ; case cts of    
-			       Flexi       -> unbound_var_fn tyvar  
-			       Indirect ty -> zonkType (mkZonkTcTyVar unbound_var_fn) ty }
+			       Flexi       -> unbound_mvar_fn tyvar  
+			       Indirect ty -> zonkType (mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn) ty }
 \end{code}
 
 
@@ -838,7 +840,7 @@ zonkTcKindToKind :: TcKind -> TcM Kind
 -- When zonking a TcKind to a kind, we need to instantiate kind variables,
 -- Haskell specifies that * is to be used, so we follow that.
 zonkTcKindToKind k 
-  = zonkType (mkZonkTcTyVar (\ _ -> return liftedTypeKind)) k
+  = zonkType (mkZonkTcTyVar (\ _ -> return liftedTypeKind) TyVarTy) k -- JPM
 \end{code}
 			
 %************************************************************************

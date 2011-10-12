@@ -20,7 +20,7 @@ module Type (
 	-- $type_classification
 	
         -- $representation_types
-        TyThing(..), Type, PredType, ThetaType,
+        TyThing(..), Type, KindOrType, PredType, ThetaType,
         Var, TyVar, isTyVar, 
 
         -- ** Constructing and deconstructing types

@@ -63,8 +63,7 @@ import UniqSupply
 import Outputable
 import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
-import Control.Monad ( unless, filterM )
-import Data.List ( mapAccumL )
+import Control.Monad ( unless )
 \end{code}
 
 
@@ -860,33 +859,17 @@ tcTyVarBndrsKindGen bndrs thing_inside = do
         ktvs = kvs ++ tyvars
     tcExtendTyVarEnv ktvs (thing_inside ktvs)
 
+-- JPM: document
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 kindGeneralizeKinds kinds = do
-  kinds' <- mapM zonkTcKind kinds
-
-xxxx no monad for this!
-  flexis <- freeFlexisOfTypes kinds'		
-
-  traceTc "generalizeKind 1" (ppr flexis <+> ppr kinds')
-  let (_, occs) = mapAccumL tidy_one emptyTidyOccEnv flexis
-      tidy_one env flexi = tidyOccName env (getOccName (tyVarName flexi))
-  kvs <- flip mapM (zip occs flexis) $ \(occ, flexi) -> do
-         -- This is our own custom version of zonkQuantifiedTyVar
-         -- because all meta kind variables are named 'k' and
-         -- zonkQuantifiedTyVar gives exactly that name which resulted
-         -- into polymorphic kinds looking like:
-         -- forall k k. k -> k
-         span <- getSrcSpanM
-         uniq <- newUnique
-         let name = mkInternalName uniq occ span
-             kv = mkTcTyVar name (tyVarKind flexi) vanillaSkolemTv
-         writeMetaKindVar flexi (mkTyVarTy kv)
-         return kv
-  let flexiToKind kv = case lookup kv (zip flexis kvs) of
-                         Nothing -> return (mkTyVarTy kv)
-                         Just kv -> return (mkTyVarTy kv)
-  bodys <- mapM (zonkKind (mkZonkTcTyVar flexiToKind)) kinds'
-  traceTc "generalizeKind 2" (ppr kvs <+> ppr bodys)
+  gbl_tvs <- tcGetGlobalTyVars -- Already zonked
+  zonked_kinds <- mapM zonkTcKind kinds
+  let tvs_to_quantify = tyVarsOfTypes zonked_kinds `minusVarSet` gbl_tvs
+      kvs_to_quantify = fst (splitKiTyVars (varSetElems tvs_to_quantify))
+  kvs <- zonkQuantifiedTyVars kvs_to_quantify
+  let bodys = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
+  traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
+                            <+> ppr kvs   <+> ppr bodys)
   return (kvs, bodys)
 
 kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
@@ -894,18 +877,6 @@ kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
 kindGeneralizeKind kind = do
   (kvs, [kind']) <- kindGeneralizeKinds [kind]
   return (kvs, kind')
-
-freeFlexisOfType :: Type -> TcM [Var]
-freeFlexisOfType ty = do
-  fs <- filterM isFlexiMetaTyVar $ varSetElems $ tyVarsOfType ty
-  -- IA0_TODO: remove in scope variables, are there any?
-  return fs
-
-freeFlexisOfTypes :: [Type] -> TcM [Var]
-freeFlexisOfTypes tys = do
-xxxxx
-  fss <- mapM freeFlexisOfType tys
-  return $ varSetElems $ unionVarSets $ map mkVarSet fss
 
 -----------------------------------
 tcDataKindSig :: Kind -> TcM [TyVar]

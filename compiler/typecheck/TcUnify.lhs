@@ -47,7 +47,6 @@ import TysWiredIn
 import Var
 import VarSet
 import VarEnv
-import Name
 import ErrUtils
 import BasicTypes
 import Maybes ( allMaybes )  
@@ -863,17 +862,30 @@ uUnfilledVars :: [EqOrigin]
 --           Neither is filled in yet
 
 uUnfilledVars origin swapped tv1 details1 tv2 details2
-  = do { unifyKind k1 k2
-       ; 
+  = do { 
+         {-
+         k1_sub_k2 <- k1 `isSubKindTcM` k2
+       ; k2_sub_k1 <- k2 `isSubKindTcM` k1
+         -}
+         -- JPM: We prob don't need to zonk, unification should do that already
+         traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
+                                  <+> text "with"            <+> ppr k2)
+       ; unifyKind ctxt k1 k2
        ; case (details1, details2) of
-           { (MetaTv i1 ref1, MetaTv i2 ref2)
+           { (MetaTv _i1 ref1, MetaTv _i2 ref2)
+{-
                  | k1_sub_k2 -> if k2_sub_k1 && nicer_to_update_tv1 i1 i2
                                 then updateMeta tv1 ref1 ty2
                                 else updateMeta tv2 ref2 ty1
                  | k2_sub_k1 -> updateMeta tv1 ref1 ty2
-
-           ; (_, MetaTv _ ref2) | k1_sub_k2 -> updateMeta tv2 ref2 ty1
-           ; (MetaTv _ ref1, _) | k2_sub_k1 -> updateMeta tv1 ref1 ty2
+-}
+                 | isOpenTypeKind k1   -> updateMeta tv1 ref1 ty2
+                 | isArgTypeKind k1    -> updateMeta tv1 ref1 ty2
+                 | isOpenTypeKind k2   -> updateMeta tv2 ref2 ty1
+                 | isArgTypeKind k2    -> updateMeta tv2 ref2 ty1
+                 | otherwise           -> updateMeta tv2 ref2 ty1
+           ; (_, MetaTv _ ref2) {- | k1_sub_k2 -} -> updateMeta tv2 ref2 ty1
+           ; (MetaTv _ ref1, _) {- | k2_sub_k1 -} -> updateMeta tv1 ref1 ty2
 
            ; (_, _) -> unSwap swapped (uType_defer origin) ty1 ty2 } }
              	        -- Defer for skolems of all sorts
@@ -882,7 +894,7 @@ uUnfilledVars origin swapped tv1 details1 tv2 details2
     k2 	      = tyVarKind tv2
     ty1       = mkTyVarTy tv1
     ty2       = mkTyVarTy tv2
-
+{-
     nicer_to_update_tv1 _     SigTv = True
     nicer_to_update_tv1 SigTv _     = False
     nicer_to_update_tv1 _         _         = isSystemName (Var.varName tv1)
@@ -890,14 +902,18 @@ uUnfilledVars origin swapped tv1 details1 tv2 details2
         -- variables in preference to ones gotten (say) by
         -- instantiating a polymorphic function with a user-written
         -- type sig
+-}
+    ctxt = vcat [ ptext (sLit "JPM Kind incompatibility when matching types:")
+                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
+                               , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
 
 ----------------
 checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
 --    (checkTauTvUpdate tv ty)
 -- We are about to update the TauTv tv with ty.
 -- Check (a) that tv doesn't occur in ty (occurs check)
---	 (b) that kind(ty) is a sub-kind of kind(tv)
--       (c) that ty does not contain any type families, see Note [Type family sharing]
+--       (b) that kind(ty) is a sub-kind of kind(tv)
+--       (c) that ty does not contain any type families, see Note [Type family sharing]
 -- 
 -- We have two possible outcomes:
 -- (1) Return the type to update the type variable with, 
@@ -1204,6 +1220,8 @@ unifyKind' ctxt k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
   if kc1 == kc2
   then unifyKinds k1s k2s
   else unifyKindMisMatch ctxt k1 sk k2
+  -- JPM
+  -- | otherwise = pprTrace "unifyKind return" (ppr (k1,k2)) $ return ()
   where
     unifyKinds [] [] = return ()
     unifyKinds (k1:k1s) (k2:k2s) = do
