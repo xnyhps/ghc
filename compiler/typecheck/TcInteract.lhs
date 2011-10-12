@@ -1,8 +1,8 @@
 \begin{code}
 module TcInteract ( 
-     solveInteract, 
-     tyVarsOfInert, 
-     InertSet, emptyInert, updInertSet, extractUnsolved
+     solveInteractWanted, -- Solves [WantedEvVar]
+     solveInteractGiven,  -- Solves [EvVar],GivenLoc
+     solveInteractCts,    -- Solves [Cts]
   ) where  
 
 #include "HsVersions.h"
@@ -73,15 +73,24 @@ If in Step 1 no such element exists, we have exceeded our context-stack
 depth and will simply fail.
 \begin{code}
 
+solveInteractCts :: [Ct] -> TcS () 
+solveInteractCts cts 
+  = updWorkListTcS (appendWorkListCt cts) >> solveInteract
+
+
+solveInteractGiven :: GivenLoc -> [EvVar] -> TcS () 
+solveInteractGiven gloc evs
+  = solveInteractCts (map mk_noncan evs)
+  where mk_noncan ev = CNonCanonical { cc_id = ev
+                                     , cc_flavor = Given gloc GivenOrig 
+                                     , cc_depth = 0 }
 
 solveInteractWanted :: [WantedEvVar] -> TcS ()
 -- Solve these wanteds along with current inerts and wanteds!
 solveInteractWanted wevs
-  = updWorkListTcS (appendWorkListCt cts) >> solveInteract
-  where cts = map mk_noncan wevs
-        mk_noncan (EvVarX v w)
-            = CNonCanonical { cc_id = v, cc_flavor = Wanted w
-                            , cc_depth = 0 }
+  = solveInteractCts (map mk_noncan wevs) 
+  where mk_noncan (EvVarX v w) 
+          = CNonCanonical { cc_id = v, cc_flavor = Wanted w, cc_depth = 0 }
 
 
 -- The main solver loop implements Note [Basic Simplifier Plan]

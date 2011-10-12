@@ -42,9 +42,6 @@ module TcRnTypes(
 
         EvVarX(..), mkEvVarX, evVarOf, evVarX, evVarOfPred,
         WantedEvVar,
-{-
-        keepWanted,
--}
 
         Implication(..),
         CtLoc(..), ctLocSpan, ctLocOrigin, setCtLocOrigin,
@@ -931,7 +928,7 @@ emptyWC :: WantedConstraints
 emptyWC = WC { wc_flat = emptyBag, wc_impl = emptyBag, wc_insol = emptyBag }
 
 mkFlatWC :: [Ct] -> WantedConstraints
-mkFlatWC wevs 
+mkFlatWC cts 
   = WC { wc_flat = listToBag cts, wc_impl = emptyBag, wc_insol = emptyBag }
 
 isEmptyWC :: WantedConstraints -> Bool
@@ -1119,16 +1116,6 @@ evVarX (EvVarX _ a) = a
 evVarOfPred :: EvVarX a -> PredType
 evVarOfPred wev = evVarPred (evVarOf wev)
 
-{-
-keepWanted :: Bag FlavoredEvVar -> Bag WantedEvVar
-keepWanted flevs
-  = foldrBag keep_wanted emptyBag flevs
-    -- Important: use fold*r*Bag to preserve the order of the evidence variables.
-  where
-    keep_wanted :: FlavoredEvVar -> Bag WantedEvVar -> Bag WantedEvVar
-    keep_wanted (EvVarX ev (Wanted wloc)) r = consBag (EvVarX ev wloc) r
-    keep_wanted _                         r = r
--}
 \end{code}
 
 

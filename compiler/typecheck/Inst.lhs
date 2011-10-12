@@ -25,10 +25,10 @@ module Inst (
        tyVarsOfCt, tyVarsOfCts, tyVarsOfCDict, tyVarsOfCDicts,
 
        tidyWantedEvVar, tidyWantedEvVars, tidyWC,
-       tidyEvVar, tidyImplication,
+       tidyEvVar, tidyImplication, tidyCt,
 
        substWantedEvVar, substWantedEvVars,
-       substEvVar, substImplication
+       substEvVar, substImplication, substCt
     ) where
 
 #include "HsVersions.h"

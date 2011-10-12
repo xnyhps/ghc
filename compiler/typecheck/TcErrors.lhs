@@ -1,9 +1,7 @@
 \begin{code}
 module TcErrors( 
        reportUnsolved,
-{- TODO: must fix
        warnDefaulting,
--}
        unifyCtxt,
 
        flattenForAllErrorTcS,
@@ -843,24 +841,26 @@ find_thing tidy_env ignore_it (ATyVar tv ty)
 
 find_thing _ _ thing = pprPanic "find_thing" (ppr thing)
 
-{- TODO: Refactor without FlavoredEvVar nonsense! 
-warnDefaulting :: [FlavoredEvVar] -> Type -> TcM ()
+warnDefaulting :: [Ct] -> Type -> TcM ()
 warnDefaulting wanteds default_ty
   = do { warn_default <- woptM Opt_WarnTypeDefaults
        ; env0 <- tcInitTidyEnv
        ; let wanted_bag = listToBag wanteds
              tidy_env = tidyFreeTyVars env0 $
-                        tyVarsOfEvVarXs wanted_bag
-             tidy_wanteds = mapBag (tidyFlavoredEvVar tidy_env) wanted_bag
-             (loc, ppr_wanteds) = pprWithArising (map get_wev (bagToList tidy_wanteds))
+                        tyVarsOfCts wanted_bag
+             tidy_wanteds = mapBag (tidyCt tidy_env) wanted_bag
+             (loc, ppr_wanteds) = pprWithArising (map mk_wev (bagToList tidy_wanteds))
              warn_msg  = hang (ptext (sLit "Defaulting the following constraint(s) to type")
                                 <+> quotes (ppr default_ty))
                             2 ppr_wanteds
        ; setCtLoc loc $ warnTc warn_default warn_msg }
-  where
-    get_wev (EvVarX ev (Wanted loc)) = EvVarX ev loc    -- Yuk
-    get_wev ev = pprPanic "warnDefaulting" (ppr ev)
--}
+  where mk_wev :: Ct -> WantedEvVar 
+        mk_wev ct 
+           | ev <- cc_id ct 
+           , Wanted wloc <- cc_flavor ct
+           = EvVarX ev wloc -- must return a WantedEvVar 
+        mk_wev _ct = panic "warnDefaulting: encountered non-wanted for defaulting"
+
 \end{code}
 
 Note [Runtime skolems]

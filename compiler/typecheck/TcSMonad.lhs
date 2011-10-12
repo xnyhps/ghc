@@ -27,7 +27,7 @@ module TcSMonad (
 
     TcS, runTcS, failTcS, panicTcS, traceTcS, -- Basic functionality 
     traceFireTcS, bumpStepCountTcS, doWithInert,
-{-     tryTcS, nestImplicTcS, recoverTcS, DV: Will figure out later -}
+    tryTcS, nestImplicTcS, recoverTcS,
     wrapErrTcS, wrapWarnTcS,
 
     SimplContext(..), isInteractive, simplEqsOnly, performDefaulting,
@@ -425,12 +425,12 @@ updInertSet is item
   | otherwise 
   = is { inert_frozen = inert_frozen is `Bag.snocBag` item }
 
-extractUnsolvedTcS :: TcS (InertSet,Cts,Cts) 
+extractUnsolvedTcS :: TcS (Cts,Cts) 
 -- Extracts frozen errors and remaining unsolved and sets the 
 -- inert set to be the remaining! 
 extractUnsolvedTcS = 
-  do { is <- getInertTcS 
-     ; let (is',insol,unsol) <- extractUnsolved is
+  do { is <- getTcSInerts
+     ; let (is', insol, unsol) = extractUnsolved is
      ; updInertSetTcS_ (\_ -> is') 
      ; return (insol,unsol) }
 
@@ -676,16 +676,6 @@ traceFireTcS depth doc
                 <> brackets (int depth) <+> doc
        ; TcM.dumpTcRn msg }
 
-doWithInert :: InertSet -> TcS a -> TcS a 
--- Just use this inert set to do stuff but pop back to the original inert in the end
-doWithInert inert action
-  = do { is_orig <- getInertTcS 
-       ; updInertSetTcS_ (\_ -> inert) 
-       ; res <- action
-       ; updInertSetTcS_ (\_ -> is_orig) 
-       ; return res } 
-
-
 runTcS :: SimplContext
        -> Untouchables 	       -- Untouchables
        -> InertSet             -- Initial inert set
@@ -727,40 +717,43 @@ runTcS context untouch is wl tcs
   where
     do_unification (tv,ty) = TcM.writeMetaTyVar tv ty
 
-{- DV: The rest of the interface to the monad I will have to determine precisely
-   when I refactor TcSimplify. Leaving commented out for now! 
 
-nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a
-nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside)
-  = TcS $ \ TcSEnv { tcs_ty_binds = ty_binds 
-    	    	   , tcs_untch = (_outer_range, outer_tcs)
-		   , tcs_count = count
-		   , tcs_ic_depth = idepth
-                   , tcs_context = ctxt 
-                   , tcs_flat_map = orig_flat_cache_var
-                   } ->
+doWithInert :: InertSet -> TcS a -> TcS a 
+doWithInert inert (TcS action)
+  = TcS $ \env -> do { new_inert_var <- TcM.newTcRef inert
+                     ; action (env { tcs_inerts = new_inert_var }) }
+
+nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a 
+nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside) 
+  = TcS $ \ TcSEnv { tcs_ty_binds = ty_binds
+                   , tcs_untch = (_outer_range, outer_tcs)
+                   , tcs_count = count
+                   , tcs_ic_depth = idepth
+                   , tcs_context = ctxt
+                   , tcs_inerts = inert_var
+                   , tcs_worklist = wl_var } -> 
     do { let inner_untch = (inner_range, outer_tcs `unionVarSet` inner_tcs)
        		   -- The inner_range should be narrower than the outer one
 		   -- (thus increasing the set of untouchables) but 
 		   -- the inner Tcs-untouchables must be unioned with the
 		   -- outer ones!
 
-       ; orig_flat_cache <- TcM.readTcRef orig_flat_cache_var
-       ; flat_cache_var  <- TcM.newTcRef orig_flat_cache
-       -- One could be more conservative as well: 
-       -- ; flat_cache_var  <- TcM.newTcRef emptyFlatCache 
-
-                            -- Consider copying the results the tcs_flat_map of the 
-                            -- incomping constraint, but we must make sure that we
-                            -- have pushed everything in, which seems somewhat fragile
+         -- Inherit the inerts from the outer scope
+       ; orig_inerts <- TcM.readTcRef inert_var
+       ; new_inert_var <- TcM.newTcRef orig_inerts
+                             
        ; let nest_env = TcSEnv { tcs_ev_binds = ref
                                , tcs_ty_binds = ty_binds
                                , tcs_untch    = inner_untch
                                , tcs_count    = count
                                , tcs_ic_depth = idepth+1
                                , tcs_context  = ctxtUnderImplic ctxt 
-                               , tcs_flat_map = flat_cache_var }
-       ; thing_inside nest_env }
+                               , tcs_inerts   = new_inert_var
+                               , tcs_worklist = wl_var 
+                               -- NB: worklist is going to be empty anyway, 
+                               -- so reuse the same ref cell
+                               }
+       ; thing_inside nest_env } 
 
 recoverTcS :: TcS a -> TcS a -> TcS a
 recoverTcS (TcS recovery_code) (TcS thing_inside)
@@ -774,17 +767,24 @@ ctxtUnderImplic (SimplRuleLhs n) = SimplCheck (ptext (sLit "lhs of rule")
 ctxtUnderImplic ctxt              = ctxt
 
 tryTcS :: TcS a -> TcS a
--- Like runTcS, but from within the TcS monad
--- Ignore all the evidence generated, and do not affect caller's evidence!
+-- Like runTcS, but from within the TcS monad and inheriting the worklist and inert
+-- However, ignore all the evidence generated, and do not affect caller's evidence!
 tryTcS tcs
-  = TcS (\env -> do { ty_binds_var <- TcM.newTcRef emptyVarEnv
-                    ; ev_binds_var <- TcM.newTcEvBinds
-                    ; flat_cache_var <- TcM.newTcRef emptyFlatCache
-                    ; let env1 = env { tcs_ev_binds = ev_binds_var
-                                     , tcs_ty_binds = ty_binds_var
-                                     , tcs_flat_map = flat_cache_var }
-                   ; unTcS tcs env1 })
--}
+  = TcS (\env -> 
+             do { wl_orig <- TcM.readTcRef (tcs_worklist env)
+                ; is_orig <- TcM.readTcRef (tcs_inerts env) 
+
+                ; wl_var <- TcM.newTcRef wl_orig
+                ; is_var <- TcM.newTcRef is_orig
+
+                ; ty_binds_var <- TcM.newTcRef emptyVarEnv
+                ; ev_binds_var <- TcM.newTcEvBinds
+
+                ; let env1 = env { tcs_ev_binds = ev_binds_var
+                                 , tcs_ty_binds = ty_binds_var
+                                 , tcs_inerts   = is_var
+                                 , tcs_worklist = wl_var } 
+                ; unTcS tcs env1 })
 
 -- Getters and setters of TcEnv fields
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

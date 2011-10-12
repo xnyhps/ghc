@@ -55,7 +55,7 @@ module TcMType (
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
   zonkTcKindToKind, zonkTcKind, 
-  zonkCt,
+  zonkCt, zonkCts,
   zonkImplication, zonkEvVar, zonkWantedEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
@@ -597,6 +597,8 @@ zonkCt ct
          CNonCanonical { cc_id = v'
                        , cc_flavor = fl'
                        , cc_depth = cc_depth ct } }
+zonkCts :: Cts -> TcM Cts
+zonkCts = mapBagM zonkCt
 
 zonkWantedEvVars :: Bag WantedEvVar -> TcM (Bag WantedEvVar)
 zonkWantedEvVars = mapBagM zonkWantedEvVar
