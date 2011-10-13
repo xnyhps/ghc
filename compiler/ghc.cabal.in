@@ -146,6 +146,7 @@ Library
         vectorise
 
     Exposed-Modules:
+        Avail
         BasicTypes
         DataCon
         Demand
@@ -393,6 +394,7 @@ Library
         TcExpr
         TcForeign
         TcGenDeriv
+        TcGenGenerics
         TcHsSyn
         TcHsType
         TcInstDcls
@@ -417,7 +419,6 @@ Library
         Coercion
         FamInstEnv
         FunDeps
-        Generics
         InstEnv
         TyCon
         Kind

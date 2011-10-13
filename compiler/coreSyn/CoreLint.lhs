@@ -34,6 +34,7 @@ import Kind
 import Type
 import TypeRep
 import TyCon
+import TcType
 import BasicTypes
 import StaticFlags
 import ListSetOps
@@ -98,7 +99,7 @@ find an occurence of an Id, we fetch it from the in-scope set.
 
 
 \begin{code}
-lintCoreBindings :: [CoreBind] -> (Bag Message, Bag Message)
+lintCoreBindings :: CoreProgram -> (Bag Message, Bag Message)
 --   Returns (warnings, errors)
 lintCoreBindings binds
   = initL $ 
@@ -511,10 +512,13 @@ lintCoreAlt _ alt_ty (DEFAULT, args, rhs) =
   do { checkL (null args) (mkDefaultArgsMsg args)
      ; checkAltExpr rhs alt_ty }
 
-lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs) = 
-  do { checkL (null args) (mkDefaultArgsMsg args)
-     ; checkTys lit_ty scrut_ty (mkBadPatMsg lit_ty scrut_ty)	
-     ; checkAltExpr rhs alt_ty } 
+lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
+  | isIntegerTy scrut_ty
+    = failWithL integerScrutinisedMsg
+  | otherwise
+    = do { checkL (null args) (mkDefaultArgsMsg args)
+         ; checkTys lit_ty scrut_ty (mkBadPatMsg lit_ty scrut_ty)
+         ; checkAltExpr rhs alt_ty }
   where
     lit_ty = literalType lit
 
@@ -625,7 +629,7 @@ lintInCo co
 lintKind :: Kind -> LintM ()
 -- Check well-formedness of kinds: *, *->*, etc
 lintKind (TyConApp tc []) 
-  | getUnique tc `elem` kindKeys
+  | tyConKind tc `eqKind` tySuperKind
   = return ()
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
@@ -1069,6 +1073,10 @@ mkBadPatMsg con_result_ty scrut_ty
 	text "Pattern result type:" <+> ppr con_result_ty,
 	text "Scrutinee type:" <+> ppr scrut_ty
     ]
+
+integerScrutinisedMsg :: Message
+integerScrutinisedMsg
+  = text "In a case alternative, scrutinee type is Integer"
 
 mkBadAltMsg :: Type -> CoreAlt -> Message
 mkBadAltMsg scrut_ty alt

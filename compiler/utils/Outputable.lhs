@@ -70,13 +70,14 @@ module Outputable (
     ) where
 
 import {-# SOURCE #-} 	Module( Module, ModuleName, moduleName )
-import {-# SOURCE #-} 	OccName( OccName )
+import {-# SOURCE #-}   Name( Name, nameModule )
 
 import StaticFlags
 import FastString 
 import FastTypes
 import Platform
 import qualified Pretty
+import Util		( snocView )
 import Pretty		( Doc, Mode(..) )
 import Panic
 
@@ -145,7 +146,7 @@ data Depth = AllTheWay
 -- as @Exception.catch@, this fuction will return @Just "Exception"@.
 -- Note that the return value is a ModuleName, not a Module, because
 -- in source code, names are qualified by ModuleNames.
-type QueryQualifyName = Module -> OccName -> QualifyName
+type QueryQualifyName = Name -> QualifyName
 
 -- See Note [Printing original names] in HscTypes
 data QualifyName                        -- given P:M.T
@@ -166,10 +167,10 @@ type QueryQualifyModule = Module -> Bool
 type PrintUnqualified = (QueryQualifyName, QueryQualifyModule)
 
 alwaysQualifyNames :: QueryQualifyName
-alwaysQualifyNames m _ = NameQual (moduleName m)
+alwaysQualifyNames n = NameQual (moduleName (nameModule n))
 
 neverQualifyNames :: QueryQualifyName
-neverQualifyNames _ _ = NameUnqual
+neverQualifyNames _ = NameUnqual
 
 alwaysQualifyModules :: QueryQualifyModule
 alwaysQualifyModules _ = True
@@ -278,8 +279,8 @@ getPprStyle df = SDoc $ \ctx -> runSDoc (df (sdocStyle ctx)) ctx
 
 \begin{code}
 qualName :: PprStyle -> QueryQualifyName
-qualName (PprUser (qual_name,_) _) m  n = qual_name m n
-qualName _other		           m _n = NameQual (moduleName m)
+qualName (PprUser (qual_name,_) _)  n = qual_name n
+qualName _other                     n = NameQual (moduleName (nameModule n))
 
 qualModule :: PprStyle -> QueryQualifyModule
 qualModule (PprUser (_,qual_mod) _)  m = qual_mod m
@@ -451,14 +452,14 @@ cparen :: Bool -> SDoc -> SDoc
 
 cparen b d     = SDoc $ Pretty.cparen b . runSDoc d
 
--- quotes encloses something in single quotes...
+-- 'quotes' encloses something in single quotes...
 -- but it omits them if the thing ends in a single quote
 -- so that we don't get `foo''.  Instead we just have foo'.
 quotes d = SDoc $ \sty -> 
            let pp_d = runSDoc d sty in
-           case show pp_d of
-             ('\'' : _) -> pp_d
-             _other     -> Pretty.quotes pp_d
+           case snocView (show pp_d) of
+             Just (_, '\'') -> pp_d
+             _other         -> Pretty.quotes pp_d
 
 semi, comma, colon, equals, space, dcolon, arrow, underscore, dot :: SDoc
 darrow, lparen, rparen, lbrack, rbrack, lbrace, rbrace, blankLine :: SDoc
@@ -621,6 +622,8 @@ instance Outputable Bool where
 
 instance Outputable Int where
    ppr n = int n
+instance PlatformOutputable Int where
+   pprPlatform _ = ppr
 
 instance Outputable Word16 where
    ppr n = integer $ fromIntegral n
@@ -650,6 +653,9 @@ instance (PlatformOutputable a, PlatformOutputable b) => PlatformOutputable (a, 
 instance Outputable a => Outputable (Maybe a) where
   ppr Nothing = ptext (sLit "Nothing")
   ppr (Just x) = ptext (sLit "Just") <+> ppr x
+instance PlatformOutputable a => PlatformOutputable (Maybe a) where
+  pprPlatform _        Nothing  = ptext (sLit "Nothing")
+  pprPlatform platform (Just x) = ptext (sLit "Just") <+> pprPlatform platform x
 
 instance (Outputable a, Outputable b) => Outputable (Either a b) where
   ppr (Left x)  = ptext (sLit "Left")  <+> ppr x
@@ -914,7 +920,7 @@ pprPanic :: String -> SDoc -> a
 pprPanic    = pprAndThen panic
 
 pprSorry :: String -> SDoc -> a
--- ^ Throw an exceptio saying "this isn't finished yet"
+-- ^ Throw an exception saying "this isn't finished yet"
 pprSorry    = pprAndThen sorry
 
 

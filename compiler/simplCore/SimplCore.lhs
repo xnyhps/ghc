@@ -18,7 +18,7 @@ import Rules		( RuleBase, emptyRuleBase, mkRuleBase, unionRuleBase,
 import PprCore		( pprCoreBindings, pprCoreExpr )
 import OccurAnal	( occurAnalysePgm, occurAnalyseExpr )
 import IdInfo
-import CoreUtils	( coreBindsSize )
+import CoreUtils	( coreBindsSize, exprSize )
 import Simplify		( simplTopBinds, simplExpr )
 import SimplUtils	( simplEnvForGHCi, activeRule )
 import SimplEnv
@@ -409,7 +409,7 @@ doCorePass pass = pprPanic "doCorePass" (ppr pass)
 %************************************************************************
 
 \begin{code}
-printCore :: a -> [CoreBind] -> IO ()
+printCore :: a -> CoreProgram -> IO ()
 printCore _ binds = Err.dumpIfSet True "Print Core" (pprCoreBindings binds)
 
 ruleCheckPass :: CompilerPhase -> String -> ModGuts -> CoreM ModGuts
@@ -421,36 +421,36 @@ ruleCheckPass current_phase pat guts = do
     return guts
 
 
-doPassDUM :: (DynFlags -> UniqSupply -> [CoreBind] -> IO [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPassDUM :: (DynFlags -> UniqSupply -> CoreProgram -> IO CoreProgram) -> ModGuts -> CoreM ModGuts
 doPassDUM do_pass = doPassM $ \binds -> do
     dflags <- getDynFlags
     us     <- getUniqueSupplyM
     liftIO $ do_pass dflags us binds
 
-doPassDM :: (DynFlags -> [CoreBind] -> IO [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPassDM :: (DynFlags -> CoreProgram -> IO CoreProgram) -> ModGuts -> CoreM ModGuts
 doPassDM do_pass = doPassDUM (\dflags -> const (do_pass dflags))
 
-doPassD :: (DynFlags -> [CoreBind] -> [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPassD :: (DynFlags -> CoreProgram -> CoreProgram) -> ModGuts -> CoreM ModGuts
 doPassD do_pass = doPassDM (\dflags -> return . do_pass dflags)
 
-doPassDU :: (DynFlags -> UniqSupply -> [CoreBind] -> [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPassDU :: (DynFlags -> UniqSupply -> CoreProgram -> CoreProgram) -> ModGuts -> CoreM ModGuts
 doPassDU do_pass = doPassDUM (\dflags us -> return . do_pass dflags us)
 
-doPassU :: (UniqSupply -> [CoreBind] -> [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPassU :: (UniqSupply -> CoreProgram -> CoreProgram) -> ModGuts -> CoreM ModGuts
 doPassU do_pass = doPassDU (const do_pass)
 
 -- Most passes return no stats and don't change rules: these combinators
 -- let us lift them to the full blown ModGuts+CoreM world
-doPassM :: Monad m => ([CoreBind] -> m [CoreBind]) -> ModGuts -> m ModGuts
+doPassM :: Monad m => (CoreProgram -> m CoreProgram) -> ModGuts -> m ModGuts
 doPassM bind_f guts = do
     binds' <- bind_f (mg_binds guts)
     return (guts { mg_binds = binds' })
 
-doPass :: ([CoreBind] -> [CoreBind]) -> ModGuts -> CoreM ModGuts
+doPass :: (CoreProgram -> CoreProgram) -> ModGuts -> CoreM ModGuts
 doPass bind_f guts = return $ guts { mg_binds = bind_f (mg_binds guts) }
 
 -- Observer passes just peek; don't modify the bindings at all
-observe :: (DynFlags -> [CoreBind] -> IO a) -> ModGuts -> CoreM ModGuts
+observe :: (DynFlags -> CoreProgram -> IO a) -> ModGuts -> CoreM ModGuts
 observe do_pass = doPassM $ \binds -> do
     dflags <- getDynFlags
     _ <- liftIO $ do_pass dflags binds
@@ -478,7 +478,8 @@ simplifyExpr dflags expr
 
 	; us <-  mkSplitUniqSupply 's'
 
-	; let (expr', _counts) = initSmpl dflags emptyRuleBase emptyFamInstEnvs us $
+	; let sz = exprSize expr
+              (expr', _counts) = initSmpl dflags emptyRuleBase emptyFamInstEnvs us sz $
 				 simplExprGently (simplEnvForGHCi dflags) expr
 
 	; Err.dumpIfSet_dyn dflags Opt_D_dump_simpl "Simplified expression"
@@ -558,7 +559,7 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
     do_iteration :: UniqSupply
                  -> Int		 -- Counts iterations
 		 -> [SimplCount] -- Counts from earlier iterations, reversed
-		 -> [CoreBind]	 -- Bindings in
+		 -> CoreProgram	 -- Bindings in
 		 -> [CoreRule]	 -- and orphan rules
 		 -> IO (String, Int, SimplCount, ModGuts)
 
@@ -581,7 +582,8 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
 
       -- Try and force thunks off the binds; significantly reduces
       -- space usage, especially with -O.  JRS, 000620.
-      | let sz = coreBindsSize binds in sz == sz
+      | let sz = coreBindsSize binds 
+      , sz == sz     -- Force it
       = do {
                 -- Occurrence analysis
            let {   -- During the 'InitialPhase' (i.e., before vectorisation), we need to make sure
@@ -620,7 +622,7 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
 		-- 	case t of {(_,counts1) -> if counts1=0 then ... }
 		-- So the conditional didn't force counts1, because the
 		-- selection got duplicated.  Sigh!
-	   case initSmpl dflags rule_base2 fam_envs us1 simpl_binds of {
+	   case initSmpl dflags rule_base2 fam_envs us1 sz simpl_binds of {
 	  	(env1, counts1) -> do {
 
 	   let	{ binds1 = getFloats env1
@@ -662,7 +664,7 @@ simplifyPgmIO _ _ _ _ _ = panic "simplifyPgmIO"
 
 -------------------
 end_iteration :: DynFlags -> CoreToDo -> Int 
-             -> SimplCount -> [CoreBind] -> [CoreRule] -> IO ()
+             -> SimplCount -> CoreProgram -> [CoreRule] -> IO ()
 end_iteration dflags pass iteration_no counts binds rules
   = do { dumpPassResult dflags mb_flag hdr pp_counts binds rules
        ; lintPassResult dflags pass binds }
@@ -805,7 +807,7 @@ unfolding for something.
 \begin{code}
 type IndEnv = IdEnv Id		-- Maps local_id -> exported_id
 
-shortOutIndirections :: [CoreBind] -> [CoreBind]
+shortOutIndirections :: CoreProgram -> CoreProgram
 shortOutIndirections binds
   | isEmptyVarEnv ind_env = binds
   | no_need_to_flatten	  = binds'			-- See Note [Rules and indirect-zapping]

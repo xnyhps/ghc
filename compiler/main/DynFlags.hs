@@ -426,6 +426,7 @@ data ExtensionFlag
    | Opt_DatatypeContexts
    | Opt_NondecreasingIndentation
    | Opt_RelaxedLayout
+   | Opt_TraditionalRecordSyntax
    deriving (Eq, Show)
 
 -- | Contains not only a collection of 'DynFlag's but also a plethora of
@@ -444,6 +445,7 @@ data DynFlags = DynFlags {
   ruleCheck             :: Maybe String,
   strictnessBefore      :: [Int],       -- ^ Additional demand analysis
 
+  simplTickFactor       :: Int,		-- ^ Multiplier for simplifier ticks
   specConstrThreshold   :: Maybe Int,   -- ^ Threshold for SpecConstr
   specConstrCount       :: Maybe Int,   -- ^ Max number of specialisations for any one function
   liberateCaseThreshold :: Maybe Int,   -- ^ Threshold for LiberateCase
@@ -800,6 +802,7 @@ defaultDynFlags mySettings =
         maxSimplIterations      = 4,
         shouldDumpSimplPhase    = Nothing,
         ruleCheck               = Nothing,
+        simplTickFactor         = 100,  
         specConstrThreshold     = Just 2000,
         specConstrCount         = Just 3,
         liberateCaseThreshold   = Just 2000,
@@ -926,6 +929,7 @@ languageExtensions (Just Haskell98)
        Opt_MonomorphismRestriction,
        Opt_NPlusKPatterns,
        Opt_DatatypeContexts,
+       Opt_TraditionalRecordSyntax,
        Opt_NondecreasingIndentation
            -- strictly speaking non-standard, but we always had this
            -- on implicitly before the option was added in 7.1, and
@@ -938,6 +942,7 @@ languageExtensions (Just Haskell2010)
     = [Opt_ImplicitPrelude,
        Opt_MonomorphismRestriction,
        Opt_DatatypeContexts,
+       Opt_TraditionalRecordSyntax,
        Opt_EmptyDataDecls,
        Opt_ForeignFunctionInterface,
        Opt_PatternGuards,
@@ -1545,6 +1550,7 @@ dynamic_flags = [
 
   , flagA "fsimplifier-phases"          (intSuffix (\n d -> d{ simplPhases = n }))
   , flagA "fmax-simplifier-iterations"  (intSuffix (\n d -> d{ maxSimplIterations = n }))
+  , flagA "fsimpl-tick-factor"          (intSuffix (\n d -> d{ simplTickFactor = n }))
   , flagA "fspec-constr-threshold"      (intSuffix (\n d -> d{ specConstrThreshold = Just n }))
   , flagA "fno-spec-constr-threshold"   (noArg (\d -> d{ specConstrThreshold = Nothing }))
   , flagA "fspec-constr-count"          (intSuffix (\n d -> d{ specConstrCount = Just n }))
@@ -1872,6 +1878,7 @@ xFlags = [
     \ turn_on -> when turn_on $ deprecate "It was widely considered a misfeature, and has been removed from the Haskell language." ),
   ( "NondecreasingIndentation",         AlwaysAllowed, Opt_NondecreasingIndentation, nop ),
   ( "RelaxedLayout",                    AlwaysAllowed, Opt_RelaxedLayout, nop ),
+  ( "TraditionalRecordSyntax",          AlwaysAllowed, Opt_TraditionalRecordSyntax, nop ),
   ( "MonoLocalBinds",                   AlwaysAllowed, Opt_MonoLocalBinds, nop ),
   ( "RelaxedPolyRec",                   AlwaysAllowed, Opt_RelaxedPolyRec, 
     \ turn_on -> if not turn_on 

@@ -22,21 +22,19 @@ module PrelInfo (
 
 #include "HsVersions.h"
 
-import PrelNames        ( basicKnownKeyNames,
-                          hasKey, charDataConKey, intDataConKey,
-                          numericClassKeys, standardClassKeys )
+import PrelNames
 import PrelRules
-import PrimOp		( PrimOp, allThePrimOps, primOpTag, maxPrimOpTag )
-import DataCon		( DataCon )
-import Id		( Id, idName )
-import MkId		-- All of it, for re-export
-import TysPrim		( primTyCons )
-import TysWiredIn	( wiredInTyCons )
-import HscTypes 	( TyThing(..), implicitTyThings, AvailInfo(..), IfaceExport )
-import Class	 	( Class, classKey )
-import Type		( funTyCon )
-import TyCon		( tyConName )
-import Util		( isIn )
+import Avail
+import PrimOp
+import DataCon
+import Id
+import MkId
+import TysPrim
+import TysWiredIn
+import HscTypes
+import Class
+import TyCon
+import Util
 
 import Data.Array
 \end{code}
@@ -70,7 +68,7 @@ Notes about wired in things
 wiredInThings :: [TyThing]
 -- This list is used only to initialise HscMain.knownKeyNames
 -- to ensure that when you say "Prelude.map" in your source code, you
--- get a Name with the correct known key
+-- get a Name with the correct known key (See Note [Known-key names])
 wiredInThings		
   = concat
     [		-- Wired in TyCons and their implicit Ids

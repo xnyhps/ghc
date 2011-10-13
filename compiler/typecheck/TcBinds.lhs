@@ -691,15 +691,15 @@ tcVect (HsNoVect name)
     do { var <- wrapLocM tcLookupId name
        ; return $ HsNoVect var
        }
-tcVect (HsVectTypeIn lname@(L _ name) ty)
+tcVect (HsVectTypeIn isScalar lname@(L _ name) rhs_name)
   = addErrCtxt (vectCtxt lname) $
     do { tycon <- tcLookupTyCon name
-       ; checkTc (tyConArity tycon == 0) scalarTyConMustBeNullary
+       ; checkTc (not isScalar || tyConArity tycon == 0) scalarTyConMustBeNullary
 
-       ; ty' <- fmapMaybeM dsHsType ty
-       ; return $ HsVectTypeOut tycon ty'
+       ; rhs_tycon <- fmapMaybeM (tcLookupTyCon . unLoc) rhs_name
+       ; return $ HsVectTypeOut isScalar tycon rhs_tycon
        }
-tcVect (HsVectTypeOut _ _)
+tcVect (HsVectTypeOut _ _ _)
   = panic "TcBinds.tcVect: Unexpected 'HsVectTypeOut'"
 
 vectCtxt :: Located Name -> SDoc
@@ -1226,9 +1226,7 @@ decideGeneralisationPlan
    -> [LHsBind Name] -> TcSigFun -> GeneralisationPlan
 decideGeneralisationPlan dflags type_env bndr_names lbinds sig_fn
   | bang_pat_binds                         = NoGen
-  | Just sig <- one_funbind_with_sig binds = if null (sig_tvs sig) && null (sig_theta sig)
-                                             then NoGen	      -- Optimise common case
-                                             else CheckGen sig
+  | Just sig <- one_funbind_with_sig binds = CheckGen sig
   | mono_local_binds      	           = NoGen
   | otherwise                              = InferGen mono_restriction closed_flag
 

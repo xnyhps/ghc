@@ -36,7 +36,7 @@ module MkId (
 
 import Rules
 import TysPrim
-import TysWiredIn	( unitTy )
+import TysWiredIn
 import PrelRules
 import Type
 import Coercion

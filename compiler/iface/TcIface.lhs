@@ -39,9 +39,11 @@ import Class
 import IParam
 import TyCon
 import DataCon
+import PrelNames
 import TysWiredIn
 import TysPrim          ( anyTyConOfKind )
 import BasicTypes       ( Arity, strongLoopBreaker )
+import Literal
 import qualified Var
 import VarEnv
 import VarSet
@@ -892,11 +894,9 @@ tcIfaceExpr (IfaceTick modName tickNo)
 tcIfaceExpr (IfaceExt gbl)
   = Var <$> tcIfaceExtId gbl
 
-tcIfaceExpr (IfaceTupId boxity arity)
-  = return $ Var (dataConWorkId (tupleCon boxity arity))
-
 tcIfaceExpr (IfaceLit lit)
-  = return (Lit lit)
+  = do lit' <- tcIfaceLit lit
+       return (Lit lit')
 
 tcIfaceExpr (IfaceFCall cc ty) = do
     ty' <- tcIfaceType ty
@@ -971,6 +971,16 @@ tcIfaceExpr (IfaceNote note expr) = do
         IfaceCoreNote n   -> return (Note (CoreNote n) expr')
 
 -------------------------
+tcIfaceLit :: Literal -> IfL Literal
+-- Integer literals deserialise to (LitInteeger i <error thunk>) 
+-- so tcIfaceLit just fills in the mkInteger Id 
+-- See Note [Integer literals] in Literal
+tcIfaceLit (LitInteger i _)
+  = do mkIntegerId <- tcIfaceExtId mkIntegerName
+       return (mkLitInteger i mkIntegerId)
+tcIfaceLit lit = return lit
+
+-------------------------
 tcIfaceAlt :: CoreExpr -> (TyCon, [Type])
            -> (IfaceConAlt, [FastString], IfaceExpr)
            -> IfL (AltCon, [TyVar], CoreExpr)
@@ -981,8 +991,9 @@ tcIfaceAlt _ _ (IfaceDefault, names, rhs)
   
 tcIfaceAlt _ _ (IfaceLitAlt lit, names, rhs)
   = ASSERT( null names ) do
+    lit' <- tcIfaceLit lit
     rhs' <- tcIfaceExpr rhs
-    return (LitAlt lit, [], rhs')
+    return (LitAlt lit', [], rhs')
 
 -- A case alternative is made quite a bit more complicated
 -- by the fact that we omit type annotations because we can
@@ -992,11 +1003,6 @@ tcIfaceAlt scrut (tycon, inst_tys) (IfaceDataAlt data_occ, arg_strs, rhs)
 	; when (debugIsOn && not (con `elem` tyConDataCons tycon))
 	       (failIfM (ppr scrut $$ ppr con $$ ppr tycon $$ ppr (tyConDataCons tycon)))
 	; tcIfaceDataAlt con inst_tys arg_strs rhs }
-
-tcIfaceAlt _ (tycon, inst_tys) (IfaceTupleAlt _boxity, arg_occs, rhs)
-  = ASSERT2( isTupleTyCon tycon && tupleTyConSort tycon == _boxity, ppr tycon )
-    do	{ let [data_con] = tyConDataCons tycon
-	; tcIfaceDataAlt data_con inst_tys arg_occs rhs }
 
 tcIfaceDataAlt :: DataCon -> [Type] -> [FastString] -> IfaceExpr
                -> IfL (AltCon, [TyVar], CoreExpr)
@@ -1014,7 +1020,7 @@ tcIfaceDataAlt con inst_tys arg_strs rhs
 
 
 \begin{code}
-tcExtCoreBindings :: [IfaceBinding] -> IfL [CoreBind]	-- Used for external core
+tcExtCoreBindings :: [IfaceBinding] -> IfL CoreProgram	-- Used for external core
 tcExtCoreBindings []     = return []
 tcExtCoreBindings (b:bs) = do_one b (tcExtCoreBindings bs)
 
@@ -1240,14 +1246,6 @@ tcIfaceGlobal name
 -- emasculated form (e.g. lacking data constructors).
 
 tcIfaceTyCon :: IfaceTyCon -> IfL TyCon
-tcIfaceTyCon IfaceIntTc       	= tcWiredInTyCon intTyCon
-tcIfaceTyCon IfaceBoolTc      	= tcWiredInTyCon boolTyCon
-tcIfaceTyCon IfaceCharTc      	= tcWiredInTyCon charTyCon
-tcIfaceTyCon IfaceListTc      	= tcWiredInTyCon listTyCon
-tcIfaceTyCon IfacePArrTc      	= tcWiredInTyCon parrTyCon
-tcIfaceTyCon (IfaceTupTc bx ar) = tcWiredInTyCon (tupleTyCon bx ar)
-tcIfaceTyCon (IfaceIPTc n)      = do { n' <- newIPName n
-                                     ; tcWiredInTyCon (ipTyCon n') }
 tcIfaceTyCon (IfaceAnyTc kind)  = do { tc_kind <- tcIfaceType kind
                                      ; tcWiredInTyCon (anyTyConOfKind tc_kind) }
 tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name 
@@ -1258,13 +1256,6 @@ tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name
                    IfaceTc _ -> tc
                    _         -> pprTrace "check_tc" (ppr tc) tc
      | otherwise = tc
--- we should be okay just returning Kind constructors without extra loading
-tcIfaceTyCon IfaceLiftedTypeKindTc   = return liftedTypeKindTyCon
-tcIfaceTyCon IfaceOpenTypeKindTc     = return openTypeKindTyCon
-tcIfaceTyCon IfaceUnliftedTypeKindTc = return unliftedTypeKindTyCon
-tcIfaceTyCon IfaceArgTypeKindTc      = return argTypeKindTyCon
-tcIfaceTyCon IfaceUbxTupleKindTc     = return ubxTupleKindTyCon
-tcIfaceTyCon IfaceConstraintKindTc   = return constraintKindTyCon
 
 -- Even though we are in an interface file, we want to make
 -- sure the instances and RULES of this tycon are loaded 

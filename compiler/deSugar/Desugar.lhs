@@ -16,6 +16,7 @@ import TcRnTypes
 import MkIface
 import Id
 import Name
+import Avail
 import CoreSyn
 import CoreSubst
 import PprCore
@@ -56,29 +57,32 @@ deSugar :: HscEnv -> ModLocation -> TcGblEnv -> IO (Messages, Maybe ModGuts)
 deSugar hsc_env 
         mod_loc
         tcg_env@(TcGblEnv { tcg_mod          = mod,
-			    tcg_src	     = hsc_src,
-		    	    tcg_type_env     = type_env,
-		    	    tcg_imports      = imports,
-		    	    tcg_exports      = exports,
-			    tcg_keep	     = keep_var,
+                            tcg_src          = hsc_src,
+                            tcg_type_env     = type_env,
+                            tcg_imports      = imports,
+                            tcg_exports      = exports,
+                            tcg_keep	     = keep_var,
                             tcg_th_splice_used = tc_splice_used,
                             tcg_rdr_env      = rdr_env,
-		    	    tcg_fix_env      = fix_env,
-		    	    tcg_inst_env     = inst_env,
-		    	    tcg_fam_inst_env = fam_inst_env,
-	    	    	    tcg_warns        = warns,
-	    	    	    tcg_anns         = anns,
-			    tcg_binds        = binds,
-		    	    tcg_imp_specs    = imp_specs,
+                            tcg_fix_env      = fix_env,
+                            tcg_inst_env     = inst_env,
+                            tcg_fam_inst_env = fam_inst_env,
+                            tcg_warns        = warns,
+                            tcg_anns         = anns,
+                            tcg_binds        = binds,
+                            tcg_imp_specs    = imp_specs,
                             tcg_ev_binds     = ev_binds,
                             tcg_fords        = fords,
                             tcg_rules        = rules,
                             tcg_vects        = vects,
+                            tcg_tcs          = tcs,
+                            tcg_clss         = clss,
                             tcg_insts        = insts,
                             tcg_fam_insts    = fam_insts,
                             tcg_hpc          = other_hpc_info })
 
-  = do	{ let dflags = hsc_dflags hsc_env
+  = do { let dflags = hsc_dflags hsc_env
+             platform = targetPlatform dflags
         ; showPass dflags "Desugar"
 
 	-- Desugar the program
@@ -96,8 +100,7 @@ deSugar hsc_env
 			 <- if (opt_Hpc
 				  || target == HscInterpreted)
 			       && (not (isHsBoot hsc_src))
-                              then addCoverageTicksToBinds dflags mod mod_loc
-                                                           (typeEnvTyCons type_env) binds 
+                              then addCoverageTicksToBinds dflags mod mod_loc tcs binds 
                               else return (binds, hpcInfo, emptyModBreaks)
                      initDs hsc_env mod rdr_env type_env $ do
                        do { ds_ev_binds <- dsEvBinds ev_binds
@@ -107,7 +110,7 @@ deSugar hsc_env
                           ; ds_rules <- mapMaybeM dsRule rules
                           ; ds_vects <- mapM dsVect vects
                           ; let hpc_init
-                                  | opt_Hpc   = hpcInitCode mod ds_hpc_info
+                                  | opt_Hpc   = hpcInitCode platform mod ds_hpc_info
                                   | otherwise = empty
                           ; return ( ds_ev_binds
                                    , foreign_prs `appOL` core_prs `appOL` spec_prs
@@ -151,26 +154,27 @@ deSugar hsc_env
         ; used_th <- readIORef tc_splice_used
 
         ; let mod_guts = ModGuts {
-		mg_module    	= mod,
-		mg_boot	     	= isHsBoot hsc_src,
-		mg_exports   	= exports,
-		mg_deps	     	= deps,
-		mg_used_names   = used_names,
+                mg_module       = mod,
+                mg_boot	        = isHsBoot hsc_src,
+                mg_exports      = exports,
+                mg_deps	        = deps,
+                mg_used_names   = used_names,
                 mg_used_th      = used_th,
                 mg_dir_imps     = imp_mods imports,
-	        mg_rdr_env   	= rdr_env,
-		mg_fix_env   	= fix_env,
-		mg_warns   	= warns,
-		mg_anns      	= anns,
-		mg_types     	= type_env,
-		mg_insts     	= insts,
-		mg_fam_insts 	= fam_insts,
-		mg_inst_env     = inst_env,
-		mg_fam_inst_env = fam_inst_env,
-	        mg_rules     	= ds_rules_for_imps,
-		mg_binds     	= ds_binds,
-		mg_foreign   	= ds_fords,
-		mg_hpc_info  	= ds_hpc_info,
+                mg_rdr_env      = rdr_env,
+                mg_fix_env      = fix_env,
+                mg_warns        = warns,
+                mg_anns         = anns,
+                mg_tcs          = tcs,
+                mg_clss         = clss,
+                mg_insts        = insts,
+                mg_fam_insts    = fam_insts,
+                mg_inst_env     = inst_env,
+                mg_fam_inst_env = fam_inst_env,
+                mg_rules        = ds_rules_for_imps,
+                mg_binds        = ds_binds,
+                mg_foreign      = ds_fords,
+                mg_hpc_info     = ds_hpc_info,
                 mg_modBreaks    = modBreaks,
                 mg_vect_decls   = ds_vects,
                 mg_vect_info    = noVectInfo,
@@ -404,8 +408,8 @@ dsVect (L loc (HsVect (L _ v) rhs))
        }
 dsVect (L _loc (HsNoVect (L _ v)))
   = return $ NoVect v
-dsVect (L _loc (HsVectTypeOut tycon ty))
-  = return $ VectType tycon ty
-dsVect vd@(L _ (HsVectTypeIn _ _ty))
+dsVect (L _loc (HsVectTypeOut isScalar tycon rhs_tycon))
+  = return $ VectType isScalar tycon rhs_tycon
+dsVect vd@(L _ (HsVectTypeIn _ _ _))
   = pprPanic "Desugar.dsVect: unexpected 'HsVectTypeIn'" (ppr vd)
 \end{code}

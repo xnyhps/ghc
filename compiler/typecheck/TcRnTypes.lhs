@@ -81,6 +81,7 @@ import RdrName
 import Name
 import NameEnv
 import NameSet
+import Avail
 import Var
 import VarEnv
 import Module
@@ -274,6 +275,8 @@ data TcGblEnv
         tcg_imp_specs :: [LTcSpecPrag],     -- ...SPECIALISE prags for imported Ids
 	tcg_warns     :: Warnings,	    -- ...Warnings and deprecations
 	tcg_anns      :: [Annotation],      -- ...Annotations
+        tcg_tcs       :: [TyCon],           -- ...TyCons
+        tcg_clss      :: [Class],           -- ...Classes
 	tcg_insts     :: [Instance],	    -- ...Instances
         tcg_fam_insts :: [FamInst],         -- ...Family instances
         tcg_rules     :: [LRuleDecl Id],    -- ...Rules
@@ -541,6 +544,7 @@ instance Outputable TcTyThing where	-- Debugging only
    ppr elt@(ATcId {})   = text "Identifier" <> 
 			  brackets (ppr (tct_id elt) <> dcolon 
                                  <> ppr (varType (tct_id elt)) <> comma
+				 <+> ppr (tct_closed elt) <> comma
 				 <+> ppr (tct_level elt))
    ppr (ATyVar tv _)    = text "Type variable" <+> quotes (ppr tv)
    ppr (AThing k)       = text "AThing" <+> ppr k

@@ -51,6 +51,9 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo                                                               >> $@
 	@echo '#include "ghc_boot_platform.h"'                              >> $@
 	@echo                                                               >> $@
+	@echo 'data IntegerLibrary = IntegerGMP | IntegerSimple'            >> $@
+	@echo '    deriving Eq'                                             >> $@
+	@echo                                                               >> $@
 	@echo 'cBuildPlatformString :: String'                              >> $@
 	@echo 'cBuildPlatformString = BuildPlatform_NAME'                   >> $@
 	@echo 'cHostPlatformString :: String'                               >> $@
@@ -76,6 +79,14 @@ compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo 'cLdLinkerOpts         = words "$(CONF_LD_LINKER_OPTS_STAGE$*)"'  >> $@
 	@echo 'cIntegerLibrary       :: String'                             >> $@
 	@echo 'cIntegerLibrary       = "$(INTEGER_LIBRARY)"'                >> $@
+	@echo 'cIntegerLibraryType   :: IntegerLibrary'                     >> $@
+ifeq "$(INTEGER_LIBRARY)" "integer-gmp"
+	@echo 'cIntegerLibraryType   = IntegerGMP'                          >> $@
+else ifeq "$(INTEGER_LIBRARY)" "integer-simple"
+	@echo 'cIntegerLibraryType   = IntegerSimple'                       >> $@
+else ifneq "$(CLEANING)" "YES"
+$(error Unknown integer library)
+endif
 	@echo 'cSupportsSplitObjs    :: String'                             >> $@
 	@echo 'cSupportsSplitObjs    = "$(SupportsSplitObjs)"'              >> $@
 	@echo 'cGhcWithInterpreter   :: String'                             >> $@
@@ -253,6 +264,8 @@ PRIMOP_BITS = compiler/primop-data-decl.hs-incl        \
 
 compiler_CPP_OPTS += -I$(GHC_INCLUDE_DIR)
 compiler_CPP_OPTS += ${GhcCppOpts}
+
+compiler/stage2/build/LibFFI.hs : libffi/dist-install/build/ffi.h
 
 $(PRIMOPS_TXT) compiler/parser/Parser.y: %: %.pp compiler/stage1/$(PLATFORM_H)
 	$(CPP) $(RAWCPP_FLAGS) -P $(compiler_CPP_OPTS) -x c $< | grep -v '^#pragma GCC' > $@

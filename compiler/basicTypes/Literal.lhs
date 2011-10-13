@@ -17,6 +17,7 @@ module Literal
         , mkMachInt64, mkMachWord64
         , mkMachFloat, mkMachDouble
         , mkMachChar, mkMachString
+        , mkLitInteger
 
         -- ** Operations on Literals
         , literalType
@@ -38,10 +39,14 @@ module Literal
         , nullAddrLit, float2DoubleLit, double2FloatLit
         ) where
 
+#include "HsVersions.h"
+
 import TysPrim
 import PrelNames
 import Type
+import TypeRep
 import TyCon
+import Var
 import Outputable
 import FastTypes
 import FastString
@@ -106,8 +111,32 @@ data Literal
                                 --    the label expects. Only applicable with
                                 --    @stdcall@ labels. @Just x@ => @\<x\>@ will
                                 --    be appended to label name when emitting assembly.
+
+  | LitInteger Integer Id	--  ^ Integer literals
+    	       	       		-- See Note [Integer literals]
   deriving (Data, Typeable)
 \end{code}
+
+Note [Integer literals]
+~~~~~~~~~~~~~~~~~~~~~~~
+An Integer literal is represented using, well, an Integer, to make it
+easier to write RULEs for them. 
+
+ * The Id is for mkInteger, which we use when finally creating the core.
+
+ * They only get converted into real Core,
+      mkInteger [c1, c2, .., cn]
+   during the CorePrep phase.
+
+ * When we initally build an Integer literal, notably when
+   deserialising it from an interface file (see the Binary instance
+   below), we don't have convenient access to the mkInteger Id.  So we
+   just use an error thunk, and fill in the real Id when we do tcIfaceLit
+   in TcIface.
+
+ * When looking for CAF-hood (in TidyPgm), we must take account of the
+   CAF-hood of the mk_integer field in LitInteger; see TidyPgm.cafRefsL
+
 
 Binary instance
 
@@ -127,6 +156,7 @@ instance Binary Literal where
              put_ bh aj
              put_ bh mb
              put_ bh fod
+    put_ bh (LitInteger i _) = do putByte bh 10; put_ bh i
     get bh = do
             h <- getByte bh
             case h of
@@ -156,11 +186,15 @@ instance Binary Literal where
               8 -> do
                     ai <- get bh
                     return (MachDouble ai)
-              _ -> do
+              9 -> do
                     aj <- get bh
                     mb <- get bh
                     fod <- get bh
                     return (MachLabel aj mb fod)
+              _ -> do
+                    i <- get bh
+                    return $ mkLitInteger i (panic "Evaluated the place holder for mkInteger")
+		    	   -- See Note [Integer literals] in Literal
 \end{code}
 
 \begin{code}
@@ -188,16 +222,12 @@ instance Ord Literal where
 \begin{code}
 -- | Creates a 'Literal' of type @Int#@
 mkMachInt :: Integer -> Literal
-mkMachInt  x   = -- ASSERT2( inIntRange x,  integer x )
-                 -- Not true: you can write out of range Int# literals
-                 -- For example, one can write (intToWord# 0xffff0000) to
-                 -- get a particular Word bit-pattern, and there's no other
-                 -- convenient way to write such literals, which is why we allow it.
+mkMachInt  x   = ASSERT2( inIntRange x,  integer x )
                  MachInt x
 
 -- | Creates a 'Literal' of type @Word#@
 mkMachWord :: Integer -> Literal
-mkMachWord x   = -- ASSERT2( inWordRange x, integer x )
+mkMachWord x   = ASSERT2( inWordRange x, integer x )
                  MachWord x
 
 -- | Creates a 'Literal' of type @Int64#@
@@ -224,6 +254,9 @@ mkMachChar = MachChar
 -- e.g. some of the \"error\" functions in GHC.Err such as @GHC.Err.runtimeError@
 mkMachString :: String -> Literal
 mkMachString s = MachStr (mkFastString s) -- stored UTF-8 encoded
+
+mkLitInteger :: Integer -> Id -> Literal
+mkLitInteger = LitInteger
 
 inIntRange, inWordRange :: Integer -> Bool
 inIntRange  x = x >= tARGET_MIN_INT && x <= tARGET_MAX_INT
@@ -308,15 +341,17 @@ nullAddrLit = MachNullAddr
 -- False principally of strings
 litIsTrivial :: Literal -> Bool
 --      c.f. CoreUtils.exprIsTrivial
-litIsTrivial (MachStr _) = False
-litIsTrivial _           = True
+litIsTrivial (MachStr _)      = False
+litIsTrivial (LitInteger {})  = False
+litIsTrivial _                = True
 
 -- | True if code space does not go bad if we duplicate this literal
 -- Currently we treat it just like 'litIsTrivial'
 litIsDupable :: Literal -> Bool
 --      c.f. CoreUtils.exprIsDupable
-litIsDupable (MachStr _) = False
-litIsDupable _           = True
+litIsDupable (MachStr _)      = False
+litIsDupable (LitInteger i _) = inIntRange i
+litIsDupable _                = True
 
 litFitsInChar :: Literal -> Bool
 litFitsInChar (MachInt i)
@@ -340,6 +375,12 @@ literalType (MachWord64  _) = word64PrimTy
 literalType (MachFloat _)   = floatPrimTy
 literalType (MachDouble _)  = doublePrimTy
 literalType (MachLabel _ _ _) = addrPrimTy
+literalType (LitInteger _ mkIntegerId)
+      -- We really mean idType, rather than varType, but importing Id
+      -- causes a module import loop
+    = case varType mkIntegerId of
+      FunTy _ (FunTy _ integerTy) -> integerTy
+      _ -> panic "literalType: mkIntegerId has the wrong type"
 
 absentLiteralOf :: TyCon -> Maybe Literal
 -- Return a literal of the appropriate primtive
@@ -372,6 +413,7 @@ cmpLit (MachWord64    a)   (MachWord64     b)   = a `compare` b
 cmpLit (MachFloat     a)   (MachFloat      b)   = a `compare` b
 cmpLit (MachDouble    a)   (MachDouble     b)   = a `compare` b
 cmpLit (MachLabel     a _ _) (MachLabel      b _ _) = a `compare` b
+cmpLit (LitInteger    a _) (LitInteger     b _) = a `compare` b
 cmpLit lit1                lit2                 | litTag lit1 <# litTag lit2 = LT
                                                 | otherwise                  = GT
 
@@ -386,6 +428,7 @@ litTag (MachWord64    _)   = _ILIT(7)
 litTag (MachFloat     _)   = _ILIT(8)
 litTag (MachDouble    _)   = _ILIT(9)
 litTag (MachLabel _ _ _)   = _ILIT(10)
+litTag (LitInteger  {})    = _ILIT(11)
 \end{code}
 
         Printing
@@ -408,6 +451,7 @@ pprLit (MachLabel l mb fod) = ptext (sLit "__label") <+> b <+> ppr fod
     where b = case mb of
               Nothing -> pprHsString l
               Just x  -> doubleQuotes (text (unpackFS l ++ '@':show x))
+pprLit (LitInteger i _) = ptext (sLit "__integer") <+> integer i
 
 pprIntVal :: Integer -> SDoc
 -- ^ Print negative integers with parens to be sure it's unambiguous
@@ -437,6 +481,7 @@ hashLiteral (MachWord64 i)      = hashInteger i
 hashLiteral (MachFloat r)       = hashRational r
 hashLiteral (MachDouble r)      = hashRational r
 hashLiteral (MachLabel s _ _)     = hashFS s
+hashLiteral (LitInteger i _)    = hashInteger i
 
 hashRational :: Rational -> Int
 hashRational r = hashInteger (numerator r)

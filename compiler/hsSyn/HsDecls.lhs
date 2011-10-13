@@ -35,6 +35,7 @@ module HsDecls (
   SpliceDecl(..),
   -- ** Foreign function interface declarations
   ForeignDecl(..), LForeignDecl, ForeignImport(..), ForeignExport(..),
+  noForeignImportCoercionYet, noForeignExportCoercionYet,
   CImportSpec(..),
   -- ** Data-constructor declarations
   ConDecl(..), LConDecl, ResType(..), 
@@ -64,6 +65,7 @@ import NameSet
 import Name
 import {- Kind parts of -} Type
 import BasicTypes
+import Coercion
 import ForeignCall
 
 -- others:
@@ -532,9 +534,14 @@ tcdTyPats = Just tys
    This is a data/type family instance declaration
    tcdTyVars are fv(tys)
 
-   Eg   instance C (a,b) where
-          type F a x y = x->y
-   After the renamer, the tcdTyVars of the F decl are {x,y}
+   Eg   class C a b where
+          type F a x :: *
+        instance D p s => C (p,q) [r] where
+          type F (p,q) x = p -> x
+   The tcdTyVars of the F instance decl are {p,q,x},
+   i.e. not including s, nor r 
+        (and indeed neither s nor should be mentioned
+         on the RHS of the F instance decl; Trac #5515)
 
 ------------------------------
 Simple classifiers
@@ -906,9 +913,31 @@ instance (OutputableBndr name)
 type LForeignDecl name = Located (ForeignDecl name)
 
 data ForeignDecl name
-  = ForeignImport (Located name) (LHsType name) ForeignImport  -- defines name
-  | ForeignExport (Located name) (LHsType name) ForeignExport  -- uses name
+  = ForeignImport (Located name) -- defines this name
+                  (LHsType name) -- sig_ty
+                  Coercion       -- rep_ty ~ sig_ty
+                  ForeignImport
+  | ForeignExport (Located name) -- uses this name
+                  (LHsType name) -- sig_ty
+                  Coercion       -- sig_ty ~ rep_ty
+                  ForeignExport
   deriving (Data, Typeable)
+{-
+    In both ForeignImport and ForeignExport:
+        sig_ty is the type given in the Haskell code
+        rep_ty is the representation for this type, i.e. with newtypes
+               coerced away and type functions evaluated.
+    Thus if the declaration is valid, then rep_ty will only use types
+    such as Int and IO that we know how to make foreign calls with.
+-}
+
+noForeignImportCoercionYet :: Coercion
+noForeignImportCoercionYet
+    = panic "ForeignImport coercion evaluated before typechecking"
+
+noForeignExportCoercionYet :: Coercion
+noForeignExportCoercionYet
+    = panic "ForeignExport coercion evaluated before typechecking"
 
 -- Specification Of an imported external entity in dependence on the calling
 -- convention 
@@ -951,10 +980,10 @@ data ForeignExport = CExport  CExportSpec    -- contains the calling convention
 --
 
 instance OutputableBndr name => Outputable (ForeignDecl name) where
-  ppr (ForeignImport n ty fimport) =
+  ppr (ForeignImport n ty _ fimport) =
     hang (ptext (sLit "foreign import") <+> ppr fimport <+> ppr n)
        2 (dcolon <+> ppr ty)
-  ppr (ForeignExport n ty fexport) =
+  ppr (ForeignExport n ty _ fexport) =
     hang (ptext (sLit "foreign export") <+> ppr fexport <+> ppr n)
        2 (dcolon <+> ppr ty)
 
@@ -1047,18 +1076,20 @@ data VectDecl name
   | HsNoVect
       (Located name)
   | HsVectTypeIn                -- pre type-checking
+      Bool                      -- 'TRUE' => SCALAR declaration
       (Located name)
-      (Maybe (LHsType name))    -- 'Nothing' => SCALAR declaration
+      (Maybe (Located name))    -- 'Nothing' => no right-hand side
   | HsVectTypeOut               -- post type-checking
+      Bool                      -- 'TRUE' => SCALAR declaration
       TyCon
-      (Maybe Type)              -- 'Nothing' => SCALAR declaration
+      (Maybe TyCon)             -- 'Nothing' => no right-hand side
   deriving (Data, Typeable)
 
 lvectDeclName :: NamedThing name => LVectDecl name -> Name
-lvectDeclName (L _ (HsVect        (L _ name) _)) = getName name
-lvectDeclName (L _ (HsNoVect      (L _ name)))   = getName name
-lvectDeclName (L _ (HsVectTypeIn  (L _ name) _)) = getName name
-lvectDeclName (L _ (HsVectTypeOut tycon _))      = getName tycon
+lvectDeclName (L _ (HsVect        (L _ name) _))   = getName name
+lvectDeclName (L _ (HsNoVect      (L _ name)))     = getName name
+lvectDeclName (L _ (HsVectTypeIn  _ (L _ name) _)) = getName name
+lvectDeclName (L _ (HsVectTypeOut _ tycon _))      = getName tycon
 
 instance OutputableBndr name => Outputable (VectDecl name) where
   ppr (HsVect v Nothing)
@@ -1069,18 +1100,22 @@ instance OutputableBndr name => Outputable (VectDecl name) where
              pprExpr (unLoc rhs) <+> text "#-}" ]
   ppr (HsNoVect v)
     = sep [text "{-# NOVECTORISE" <+> ppr v <+> text "#-}" ]
-  ppr (HsVectTypeIn t Nothing)
+  ppr (HsVectTypeIn False t Nothing)
+    = sep [text "{-# VECTORISE type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeIn False t (Just t'))
+    = sep [text "{-# VECTORISE type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeIn True t Nothing)
     = sep [text "{-# VECTORISE SCALAR type" <+> ppr t <+> text "#-}" ]
-  ppr (HsVectTypeIn t (Just ty))
-    = sep [text "{-# VECTORISE type" <+> ppr t,
-           nest 4 $ 
-             ppr (unLoc ty) <+> text "#-}" ]
-  ppr (HsVectTypeOut t Nothing)
+  ppr (HsVectTypeIn True t (Just t'))
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeOut False t Nothing)
+    = sep [text "{-# VECTORISE type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeOut False t (Just t'))
+    = sep [text "{-# VECTORISE type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeOut True t Nothing)
     = sep [text "{-# VECTORISE SCALAR type" <+> ppr t <+> text "#-}" ]
-  ppr (HsVectTypeOut t (Just ty))
-    = sep [text "{-# VECTORISE type" <+> ppr t,
-           nest 4 $ 
-             ppr ty <+> text "#-}" ]
+  ppr (HsVectTypeOut True t (Just t'))
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t, text "=", ppr t', text "#-}" ]
 \end{code}
 
 %************************************************************************

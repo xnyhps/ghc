@@ -30,6 +30,7 @@ import DataCon     ( dataConTag, dataConTyCon, dataConWorkId, fIRST_TAG )
 import CoreUtils   ( cheapEqExpr, exprIsHNF )
 import CoreUnfold  ( exprIsConApp_maybe )
 import Type
+import TypeRep
 import OccName     ( occNameFS )
 import PrelNames
 import Maybes      ( orElse )
@@ -605,62 +606,63 @@ are explicit.)
 builtinRules :: [CoreRule]
 -- Rules for non-primops that can't be expressed using a RULE pragma
 builtinRules
-  = [ BuiltinRule { ru_name = fsLit "AppendLitString", ru_fn = unpackCStringFoldrName,
-                    ru_nargs = 4, ru_try = match_append_lit },
-      BuiltinRule { ru_name = fsLit "EqString", ru_fn = eqStringName,
-                    ru_nargs = 2, ru_try = match_eq_string },
-      BuiltinRule { ru_name = fsLit "Inline", ru_fn = inlineIdName,
-                    ru_nargs = 2, ru_try = match_inline },
-      -- TODO: All the below rules need to handle target platform
-      -- having a different wordsize than the host platform
-      rule_Integer_convert    "integerToWord" integerToWordName mkWordLitWord,
-      rule_Integer_convert    "integerToInt"  integerToIntName  mkIntLitInt,
-      rule_Integer_binop      "plusInteger"   plusIntegerName   (+),
-      rule_Integer_binop      "timesInteger"  timesIntegerName  (*),
-      rule_Integer_binop      "minusInteger"  minusIntegerName  (-),
-      rule_Integer_unop       "negateInteger" negateIntegerName negate,
-      rule_Integer_binop_Bool "eqInteger"     eqIntegerName     (==),
-      rule_Integer_binop_Bool "neqInteger"    neqIntegerName    (/=),
-      rule_Integer_unop       "absInteger"    absIntegerName    abs,
-      rule_Integer_unop       "signumInteger" signumIntegerName signum,
-      rule_Integer_binop_Bool "leInteger"     leIntegerName     (<=),
-      rule_Integer_binop_Bool "gtInteger"     gtIntegerName     (>),
-      rule_Integer_binop_Bool "ltInteger"     ltIntegerName     (<),
-      rule_Integer_binop_Bool "geInteger"     geIntegerName     (>=),
-      rule_Integer_binop_Ordering "compareInteger" compareIntegerName compare,
-      -- TODO: divMod/quoteRem/quot/rem rules. Due to the 0 check we
-      -- need rules for the generic functions, rather than the
-      -- Integer-specific functions
-      rule_Integer_binop      "gcdInteger"    gcdIntegerName    gcd,
-      rule_Integer_binop      "lcmInteger"    lcmIntegerName    lcm,
-      rule_Integer_binop      "andInteger"    andIntegerName    (.&.),
-      rule_Integer_binop      "orInteger"     orIntegerName     (.|.),
-      rule_Integer_binop      "xorInteger"    xorIntegerName    xor,
-      rule_Integer_unop       "complementInteger" complementIntegerName complement,
-      -- TODO: Likewise, these rules currently don't do anything, due to
-      -- the sign test in shift's definition
-      rule_Integer_Int_binop  "shiftLInteger" shiftLIntegerName shiftL,
-      rule_Integer_Int_binop  "shiftRInteger" shiftRIntegerName shiftR
-    ]
-    where rule_Integer_convert str name convert
+  = [BuiltinRule { ru_name = fsLit "AppendLitString",
+                   ru_fn = unpackCStringFoldrName,
+                   ru_nargs = 4, ru_try = match_append_lit },
+     BuiltinRule { ru_name = fsLit "EqString", ru_fn = eqStringName,
+                   ru_nargs = 2, ru_try = match_eq_string },
+     BuiltinRule { ru_name = fsLit "Inline", ru_fn = inlineIdName,
+                   ru_nargs = 2, ru_try = match_inline }]
+ ++ builtinIntegerRules
+
+builtinIntegerRules :: [CoreRule]
+builtinIntegerRules =
+ [rule_convert        "integerToWord"     integerToWordName     mkWordLitWord,
+  rule_convert        "integerToInt"      integerToIntName      mkIntLitInt,
+  rule_binop          "plusInteger"       plusIntegerName       (+),
+  rule_binop          "timesInteger"      timesIntegerName      (*),
+  rule_binop          "minusInteger"      minusIntegerName      (-),
+  rule_unop           "negateInteger"     negateIntegerName     negate,
+  rule_binop_Bool     "eqInteger"         eqIntegerName         (==),
+  rule_binop_Bool     "neqInteger"        neqIntegerName        (/=),
+  rule_unop           "absInteger"        absIntegerName        abs,
+  rule_unop           "signumInteger"     signumIntegerName     signum,
+  rule_binop_Bool     "leInteger"         leIntegerName         (<=),
+  rule_binop_Bool     "gtInteger"         gtIntegerName         (>),
+  rule_binop_Bool     "ltInteger"         ltIntegerName         (<),
+  rule_binop_Bool     "geInteger"         geIntegerName         (>=),
+  rule_binop_Ordering "compareInteger"    compareIntegerName    compare,
+  rule_divop          "quotRemInteger"    quotRemIntegerName    quotRem,
+  rule_divop          "divModInteger"     divModIntegerName     divMod,
+  rule_binop          "gcdInteger"        gcdIntegerName        gcd,
+  rule_binop          "lcmInteger"        lcmIntegerName        lcm,
+  rule_binop          "andInteger"        andIntegerName        (.&.),
+  rule_binop          "orInteger"         orIntegerName         (.|.),
+  rule_binop          "xorInteger"        xorIntegerName        xor,
+  rule_unop           "complementInteger" complementIntegerName complement,
+  rule_Int_binop      "shiftLInteger"     shiftLIntegerName     shiftL,
+  rule_Int_binop      "shiftRInteger"     shiftRIntegerName     shiftR]
+    where rule_convert str name convert
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 1,
                            ru_try = match_Integer_convert convert }
-          rule_Integer_unop str name op
+          rule_unop str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 1,
                            ru_try = match_Integer_unop op }
-          rule_Integer_binop str name op
+          rule_binop str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_binop op }
-          rule_Integer_Int_binop str name op
+          rule_divop str name op
+           = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
+                           ru_try = match_Integer_divop op }
+          rule_Int_binop str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_Int_binop op }
-          rule_Integer_binop_Bool str name op
+          rule_binop_Bool str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_binop_Bool op }
-          rule_Integer_binop_Ordering str name op
+          rule_binop_Ordering str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_binop_Ordering op }
-
 
 ---------------------------------------------------
 -- The rule is this:
@@ -729,75 +731,68 @@ match_Integer_convert :: Num a
                       -> IdUnfoldingFun
                       -> [Expr CoreBndr]
                       -> Maybe (Expr CoreBndr)
-match_Integer_convert convert _ [x]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   idName fx == smallIntegerName
-    = Just (convert (fromIntegral ix))
+match_Integer_convert convert _ [Lit (LitInteger x _)]
+    = Just (convert (fromIntegral x))
 match_Integer_convert _ _ _ = Nothing
 
 match_Integer_unop :: (Integer -> Integer)
                    -> IdUnfoldingFun
                    -> [Expr CoreBndr]
                    -> Maybe (Expr CoreBndr)
-match_Integer_unop unop _ [x]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   idName fx == smallIntegerName,
-   let iz = unop ix,
-   iz >= fromIntegral (minBound :: Int),
-   iz <= fromIntegral (maxBound :: Int)
-    = Just (Var fx `App` Lit (MachInt iz))
+match_Integer_unop unop _ [Lit (LitInteger x i)]
+    = Just (Lit (LitInteger (unop x) i))
 match_Integer_unop _ _ _ = Nothing
 
 match_Integer_binop :: (Integer -> Integer -> Integer)
                     -> IdUnfoldingFun
                     -> [Expr CoreBndr]
                     -> Maybe (Expr CoreBndr)
-match_Integer_binop binop _ [x, y]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   (Var fy, [Lit (MachInt iy)]) <- collectArgs y,
-   idName fx == smallIntegerName,
-   idName fy == smallIntegerName,
-   let iz = ix `binop` iy,
-   iz >= fromIntegral (minBound :: Int),
-   iz <= fromIntegral (maxBound :: Int)
-    = Just (Var fx `App` Lit (MachInt iz))
+match_Integer_binop binop _ [Lit (LitInteger x i), Lit (LitInteger y _)]
+    = Just (Lit (LitInteger (x `binop` y) i))
 match_Integer_binop _ _ _ = Nothing
+
+-- This helper is used for the quotRem and divMod functions
+match_Integer_divop :: (Integer -> Integer -> (Integer, Integer))
+                    -> IdUnfoldingFun
+                    -> [Expr CoreBndr]
+                    -> Maybe (Expr CoreBndr)
+match_Integer_divop divop _ [Lit (LitInteger x i), Lit (LitInteger y _)]
+ | y /= 0
+    = case x `divop` y of
+      (r, s) ->
+          case idType i of
+          FunTy _ (FunTy _ integerTy) ->
+              Just $ mkConApp (tupleCon UnboxedTuple 2)
+                              [Type integerTy,
+                               Type integerTy,
+                               Lit (LitInteger r i),
+                               Lit (LitInteger s i)]
+          _ -> panic "match_Integer_divop: mkIntegerId has the wrong type"
+
+match_Integer_divop _ _ _ = Nothing
 
 match_Integer_Int_binop :: (Integer -> Int -> Integer)
                         -> IdUnfoldingFun
                         -> [Expr CoreBndr]
                         -> Maybe (Expr CoreBndr)
-match_Integer_Int_binop binop _ [x, Lit (MachInt iy)]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   idName fx == smallIntegerName,
-   let iz = ix `binop` fromIntegral iy,
-   iz >= fromIntegral (minBound :: Int),
-   iz <= fromIntegral (maxBound :: Int)
-    = Just (Var fx `App` Lit (MachInt iz))
+match_Integer_Int_binop binop _ [Lit (LitInteger x i), Lit (MachInt y)]
+    = Just (Lit (LitInteger (x `binop` fromIntegral y) i))
 match_Integer_Int_binop _ _ _ = Nothing
 
 match_Integer_binop_Bool :: (Integer -> Integer -> Bool)
                          -> IdUnfoldingFun
                          -> [Expr CoreBndr]
                          -> Maybe (Expr CoreBndr)
-match_Integer_binop_Bool binop _ [x, y]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   (Var fy, [Lit (MachInt iy)]) <- collectArgs y,
-   idName fx == smallIntegerName,
-   idName fy == smallIntegerName
-    = Just (if ix `binop` iy then trueVal else falseVal)
+match_Integer_binop_Bool binop _ [Lit (LitInteger x _), Lit (LitInteger y _)]
+    = Just (if x `binop` y then trueVal else falseVal)
 match_Integer_binop_Bool _ _ _ = Nothing
 
 match_Integer_binop_Ordering :: (Integer -> Integer -> Ordering)
                              -> IdUnfoldingFun
                              -> [Expr CoreBndr]
                              -> Maybe (Expr CoreBndr)
-match_Integer_binop_Ordering binop _ [x, y]
- | (Var fx, [Lit (MachInt ix)]) <- collectArgs x,
-   (Var fy, [Lit (MachInt iy)]) <- collectArgs y,
-   idName fx == smallIntegerName,
-   idName fy == smallIntegerName
-    = Just $ case ix `binop` iy of
+match_Integer_binop_Ordering binop _ [Lit (LitInteger x _), Lit (LitInteger y _)]
+    = Just $ case x `binop` y of
              LT -> ltVal
              EQ -> eqVal
              GT -> gtVal

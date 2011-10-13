@@ -24,6 +24,9 @@ module TysWiredIn (
 	charTyCon, charDataCon, charTyCon_RDR,
 	charTy, stringTy, charTyConName,
 
+        -- integer-gmp only:
+        integerGmpSDataCon,
+
 	-- * Double
 	doubleTyCon, doubleDataCon, doubleTy, doubleTyConName, 
 	
@@ -88,6 +91,7 @@ import Unique           ( incrUnique, mkTupleTyConUnique,
 import Data.Array
 import FastString
 import Outputable
+import Config
 
 alpha_tyvar :: [TyVar]
 alpha_tyvar = [alphaTyVar]
@@ -116,10 +120,9 @@ names in PrelNames, so they use wTcQual, wDataQual, etc
 -- Because of their infinite nature, this list excludes tuples, Any and implicit
 -- parameter TyCons. Instead, we have a hack in lookupOrigNameCache to deal with
 -- these names.
+--
+-- See also Note [Known-key names]
 wiredInTyCons :: [TyCon]
--- It does not need to include kind constructors, because
--- all that wiredInThings does is to initialise the Name table,
--- and kind constructors don't appear in source code.
 
 wiredInTyCons = [ unitTyCon	-- Not treated like other tuples, because
 				-- it's defined in GHC.Base, and there's only
@@ -136,6 +139,9 @@ wiredInTyCons = [ unitTyCon	-- Not treated like other tuples, because
 	      , parrTyCon
               , eqTyCon
     	      ]
+           ++ (case cIntegerLibraryType of
+               IntegerGMP -> [integerTyCon]
+               _ -> [])
 \end{code}
 
 \begin{code}
@@ -176,6 +182,15 @@ floatTyConName	   = mkWiredInTyConName   UserSyntax gHC_TYPES (fsLit "Float") fl
 floatDataConName   = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "F#") floatDataConKey floatDataCon
 doubleTyConName    = mkWiredInTyConName   UserSyntax gHC_TYPES (fsLit "Double") doubleTyConKey doubleTyCon
 doubleDataConName  = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "D#") doubleDataConKey doubleDataCon
+
+-- For integer-gmp only:
+integerRealTyConName :: Name
+integerRealTyConName    = case cIntegerLibraryType of
+                          IntegerGMP -> mkWiredInTyConName   UserSyntax gHC_INTEGER_TYPE (fsLit "Integer") integerTyConKey integerTyCon
+                          _ ->          panic "integerRealTyConName evaluated, but not integer-gmp"
+integerGmpSDataConName, integerGmpJDataConName :: Name
+integerGmpSDataConName = mkWiredInDataConName UserSyntax gHC_INTEGER_TYPE (fsLit "S#") integerGmpSDataConKey integerGmpSDataCon
+integerGmpJDataConName = mkWiredInDataConName UserSyntax gHC_INTEGER_TYPE (fsLit "J#") integerGmpJDataConKey integerGmpJDataCon
 
 parrTyConName, parrDataConName :: Name
 parrTyConName   = mkWiredInTyConName   BuiltInSyntax 
@@ -421,6 +436,28 @@ charDataCon = pcDataCon charDataConName [] [charPrimTy] charTyCon
 
 stringTy :: Type
 stringTy = mkListTy charTy -- convenience only
+\end{code}
+
+\begin{code}
+integerTyCon :: TyCon
+integerTyCon = case cIntegerLibraryType of
+               IntegerGMP ->
+                   pcNonRecDataTyCon integerRealTyConName []
+                                     [integerGmpSDataCon, integerGmpJDataCon]
+               _ ->
+                   panic "Evaluated integerTyCon, but not using IntegerGMP"
+
+integerGmpSDataCon :: DataCon
+integerGmpSDataCon = pcDataCon integerGmpSDataConName []
+                               [intPrimTy]
+                               integerTyCon
+
+-- integerGmpJDataCon isn't exported, but we need to define it to fill
+-- out integerTyCon
+integerGmpJDataCon :: DataCon
+integerGmpJDataCon = pcDataCon integerGmpJDataConName []
+                               [intPrimTy, byteArrayPrimTy]
+                               integerTyCon
 \end{code}
 
 \begin{code}

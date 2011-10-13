@@ -13,8 +13,8 @@ module IfaceEnv (
 	ifaceExportNames,
 
 	-- Name-cache stuff
-	allocateGlobalBinder, initNameCache, updNameCache,
-        getNameCache, mkNameCacheUpdater, NameCacheUpdater
+	allocateGlobalBinder, allocateIPName, initNameCache, updNameCache,
+        getNameCache, mkNameCacheUpdater, NameCacheUpdater(..)
    ) where
 
 #include "HsVersions.h"
@@ -27,6 +27,7 @@ import Type
 import DataCon
 import Var
 import Name
+import Avail
 import PrelNames
 import Module
 import UniqFM
@@ -71,39 +72,49 @@ allocateGlobalBinder
   -> (NameCache, Name)
 allocateGlobalBinder name_supply mod occ loc
   = case lookupOrigNameCache (nsNames name_supply) mod occ of
-	-- A hit in the cache!  We are at the binding site of the name.
-	-- This is the moment when we know the SrcLoc
-	-- of the Name, so we set this field in the Name we return.
-	--
-	-- Then (bogus) multiple bindings of the same Name
-	-- get different SrcLocs can can be reported as such.
-	--
-	-- Possible other reason: it might be in the cache because we
-	-- 	encountered an occurrence before the binding site for an
-	--	implicitly-imported Name.  Perhaps the current SrcLoc is
-	--	better... but not really: it'll still just say 'imported'
-	--
-	-- IMPORTANT: Don't mess with wired-in names.  
-	-- 	      Their wired-in-ness is in their NameSort
-	--	      and their Module is correct.
+        -- A hit in the cache!  We are at the binding site of the name.
+        -- This is the moment when we know the SrcLoc
+        -- of the Name, so we set this field in the Name we return.
+        --
+        -- Then (bogus) multiple bindings of the same Name
+        -- get different SrcLocs can can be reported as such.
+        --
+        -- Possible other reason: it might be in the cache because we
+        -- 	encountered an occurrence before the binding site for an
+        --	implicitly-imported Name.  Perhaps the current SrcLoc is
+        --	better... but not really: it'll still just say 'imported'
+        --
+        -- IMPORTANT: Don't mess with wired-in names.
+        -- 	      Their wired-in-ness is in their NameSort
+        --	      and their Module is correct.
 
-	Just name | isWiredInName name -> (name_supply, name)
-		  | otherwise -> (new_name_supply, name')
-		  where
-		    uniq      = nameUnique name
-		    name'     = mkExternalName uniq mod occ loc
-		    new_cache = extendNameCache (nsNames name_supply) mod occ name'
-		    new_name_supply = name_supply {nsNames = new_cache}		     
+        Just name | isWiredInName name -> (name_supply, name)
+                  | mod /= iNTERACTIVE -> (new_name_supply, name')
+                     -- Note [interactive name cache]
+                  where
+                    uniq            = nameUnique name
+                    name'           = mkExternalName uniq mod occ loc
+                    new_cache       = extendNameCache (nsNames name_supply) mod occ name'
+                    new_name_supply = name_supply {nsNames = new_cache}
 
-	-- Miss in the cache!
-	-- Build a completely new Name, and put it in the cache
-	Nothing -> (new_name_supply, name)
-		where
-		  (uniq, us')     = takeUniqFromSupply (nsUniqs name_supply)
-		  name            = mkExternalName uniq mod occ loc
-		  new_cache       = extendNameCache (nsNames name_supply) mod occ name
-		  new_name_supply = name_supply {nsUniqs = us', nsNames = new_cache}
+        -- Miss in the cache!
+        -- Build a completely new Name, and put it in the cache
+        _ -> (new_name_supply, name)
+                  where
+                    (uniq, us')     = takeUniqFromSupply (nsUniqs name_supply)
+                    name            = mkExternalName uniq mod occ loc
+                    new_cache       = extendNameCache (nsNames name_supply) mod occ name
+                    new_name_supply = name_supply {nsUniqs = us', nsNames = new_cache}
 
+{- Note [interactive name cache]
+
+In GHCi we always create Names with the same Module, ":Interactive".
+However, we want to be able to shadow older declarations with newer
+ones, and we don't want the Name cache giving us back the same Unique
+for the new Name as for the old, hence this special case.
+
+See also Note [Outputable Orig RdrName] in HscTypes.
+-}
 
 newImplicitBinder :: Name			-- Base name
 	          -> (OccName -> OccName) 	-- Occurrence name modifier
@@ -149,19 +160,20 @@ lookupOrig mod occ
                   in (name_cache{ nsUniqs = us, nsNames = new_cache }, name)
     }}}
 
+allocateIPName :: NameCache -> FastString -> (NameCache, IPName Name)
+allocateIPName name_cache ip = case Map.lookup ip ipcache of
+    Just name_ip -> (name_cache, name_ip)
+    Nothing      -> (new_ns, name_ip)
+       where
+         (us_here, us') = splitUniqSupply (nsUniqs name_cache)
+         tycon_u:datacon_u:dc_wrk_u:co_ax_u:_ = uniqsFromSupply us_here
+         name_ip     = mkIPName ip tycon_u datacon_u dc_wrk_u co_ax_u
+         new_ipcache = Map.insert ip name_ip ipcache
+         new_ns      = name_cache {nsUniqs = us', nsIPs = new_ipcache}
+  where ipcache = nsIPs name_cache
+
 newIPName :: FastString -> TcRnIf m n (IPName Name)
-newIPName ip =
-  updNameCache $ \name_cache ->
-    let ipcache = nsIPs name_cache
-    in case Map.lookup ip ipcache of
-         Just name_ip -> (name_cache, name_ip)
-         Nothing      -> (new_ns, name_ip)
-            where
-              (us_here, us') = splitUniqSupply (nsUniqs name_cache)
-              tycon_u:datacon_u:dc_wrk_u:co_ax_u:_ = uniqsFromSupply us_here
-              name_ip     = mkIPName ip tycon_u datacon_u dc_wrk_u co_ax_u
-              new_ipcache = Map.insert ip name_ip ipcache
-              new_ns      = name_cache {nsUniqs = us', nsIPs = new_ipcache}
+newIPName ip = updNameCache $ flip allocateIPName ip
 \end{code}
 
 %************************************************************************
@@ -214,16 +226,16 @@ updNameCache upd_fn = do
 -- | A function that atomically updates the name cache given a modifier
 -- function.  The second result of the modifier function will be the result
 -- of the IO action.
-type NameCacheUpdater c = (NameCache -> (NameCache, c)) -> IO c
+data NameCacheUpdater = NCU { updateNameCache :: forall c. (NameCache -> (NameCache, c)) -> IO c }
 
 -- | Return a function to atomically update the name cache.
-mkNameCacheUpdater :: TcRnIf a b (NameCacheUpdater c)
+mkNameCacheUpdater :: TcRnIf a b NameCacheUpdater
 mkNameCacheUpdater = do
   nc_var <- hsc_NC `fmap` getTopEnv
   let update_nc f = do r <- atomicModifyIORef nc_var f
                        _ <- evaluate =<< readIORef nc_var
                        return r
-  return update_nc
+  return (NCU update_nc)
 \end{code}
 
 

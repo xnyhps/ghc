@@ -25,7 +25,6 @@ import FamInst
 import FamInstEnv
 import TcDeriv
 import TcEnv
-import RnSource   ( addTcgDUs )
 import TcHsType
 import TcUnify
 import MkCore     ( nO_METHOD_BINDING_ERROR_ID )
@@ -361,7 +360,7 @@ tcInstDecls1    -- Deal with both source-code and imported instance decls
                                 -- contains all dfuns for this module
            HsValBinds Name)     -- Supporting bindings for derived instances
 
-tcInstDecls1 tycl_decls inst_decls deriv_decls
+tcInstDecls1 tycl_decls inst_decls deriv_decls 
   = checkNoErrs $
     do {        -- Stop if addInstInfos etc discovers any errors
                 -- (they recover, so that we get more than one error each
@@ -380,7 +379,8 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
 
                 -- (2) Add the tycons of indexed types and their implicit
                 --     tythings to the global environment
-       ; tcExtendGlobalEnv (map ATyCon at_idx_tycons ++ implicit_things) $ do {
+       ; tcExtendGlobalEnvImplicit
+             (map ATyCon at_idx_tycons ++ implicit_things) $ do {
 
 
                 -- Next, construct the instance environment so far, consisting
@@ -398,29 +398,22 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
          failIfErrsM    -- If the addInsts stuff gave any errors, don't
                         -- try the deriving stuff, because that may give
                         -- more errors still
-       ; (deriv_inst_info, deriv_binds, deriv_dus, deriv_tys, deriv_ty_insts)
-              <- tcDeriving tycl_decls inst_decls deriv_decls
 
-       -- Extend the global environment also with the generated datatypes for
-       -- the generic representation
-       ; let all_tycons = map ATyCon (deriv_tys ++ deriv_ty_insts)
-       ; gbl_env <- tcExtendGlobalEnv all_tycons $
-                    tcExtendGlobalEnv (concatMap implicitTyThings all_tycons) $
-                    addFamInsts deriv_ty_insts $
-                    addInsts deriv_inst_info getGblEnv
+       ; (gbl_env, deriv_inst_info, deriv_binds)
+              <- tcDeriving tycl_decls inst_decls deriv_decls
 
        -- Check that if the module is compiled with -XSafe, there are no
        -- hand written instances of Typeable as then unsafe casts could be
-       -- performed. Derivied instances are OK.
+       -- performed. Derived instances are OK.
        ; dflags <- getDOpts
        ; when (safeLanguageOn dflags) $
              mapM_ (\x -> when (is_cls (iSpec x) `elem` typeableClassNames)
                                (addErrAt (getSrcSpan $ iSpec x) typInstErr))
                    local_info
 
-       ; return ( addTcgDUs gbl_env deriv_dus,
-                  deriv_inst_info ++ local_info,
-                  aux_binds `plusHsValBinds` deriv_binds)
+       ; return ( gbl_env
+                , (bagToList deriv_inst_info) ++ local_info
+                , aux_binds `plusHsValBinds` deriv_binds)
     }}}
   where
     typInstErr = ptext $ sLit $ "Can't create hand written instances of Typeable in Safe"
@@ -547,8 +540,13 @@ tcFamInstDecl1 :: TyCon -> TyClDecl Name -> TcM TyCon
 
   -- "type instance"
 tcFamInstDecl1 fam_tc (decl@TySynonym {})
-  = do { -- (1) do the work of verifying the synonym
-       ; (t_tvs, t_typats, t_rhs) <- tcSynFamInstDecl fam_tc decl
+  = kcFamTyPats decl $ \k_tvs k_typats resKind ->
+    do { -- kind check the right-hand side of the type equation
+       ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
+                  -- ToDo: the ExpKind could be better
+
+         -- (1) do the work of verifying the synonym
+       ; (t_tvs, t_typats, t_rhs) <- tcSynFamInstDecl fam_tc (decl { tcdTyVars = k_tvs, tcdTyPats = Just k_typats, tcdSynRhs = k_rhs })
 
          -- (2) check the well-formedness of the instance
        ; checkValidFamInst t_typats t_rhs
@@ -564,7 +562,7 @@ tcFamInstDecl1 fam_tc (decl@TySynonym {})
   -- "newtype instance" and "data instance"
 tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
                                    , tcdCons = cons})
-  = kcFamTyPats fam_tc decl $ \k_tvs k_typats resKind ->
+  = kcFamTyPats decl $ \k_tvs k_typats resKind ->
     do { -- check that the family declaration is for the right kind
          checkTc (isFamilyTyCon fam_tc) (notFamily fam_tc)
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)
@@ -575,7 +573,8 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data
              k_cons = tcdCons k_decl
 
          -- result kind must be '*' (otherwise, we have too few patterns)
-       ; checkTc (isLiftedTypeKind resKind) $ tooFewParmsErr (tyConArity fam_tc)
+       ; resKind' <- zonkTcKindToKind resKind -- Remember: kcFamTyPats supplies unzonked kind!
+       ; checkTc (isLiftedTypeKind resKind') $ tooFewParmsErr (tyConArity fam_tc)
 
          -- (2) type check indexed data type declaration
        ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars

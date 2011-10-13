@@ -41,10 +41,10 @@ module HscTypes (
         prepareAnnotations,
 
         -- * Interactive context
-	InteractiveContext(..), emptyInteractiveContext, 
-        InteractiveImport(..),
-	icPrintUnqual, extendInteractiveContext,
-        substInteractiveContext,
+        InteractiveContext(..), emptyInteractiveContext, 
+        icPrintUnqual, icInScopeTTs, icPlusGblRdrEnv,
+        extendInteractiveContext, substInteractiveContext,
+        InteractiveImport(..), 
         mkPrintUnqualified, pprModulePrefix,
 
 	-- * Interfaces
@@ -55,15 +55,17 @@ module HscTypes (
 	FixityEnv, FixItem(..), lookupFixity, emptyFixityEnv,
 
         -- * TyThings and type environments
-	TyThing(..),
+        TyThing(..),  tyThingAvailInfo,
 	tyThingTyCon, tyThingDataCon,
-        tyThingId, tyThingCoAxiom, tyThingParent_maybe,
-	implicitTyThings, implicitTyConThings, implicitClassThings, isImplicitTyThing,
+        tyThingId, tyThingCoAxiom, tyThingParent_maybe, tyThingsTyVars,
+        implicitTyThings, implicitTyConThings, implicitClassThings,
+        isImplicitTyThing,
 	
 	TypeEnv, lookupType, lookupTypeHscEnv, mkTypeEnv, emptyTypeEnv,
+        typeEnvFromEntities, mkTypeEnvWithImplicits,
 	extendTypeEnv, extendTypeEnvList, extendTypeEnvWithIds, lookupTypeEnv,
 	typeEnvElts, typeEnvTyCons, typeEnvIds,
-	typeEnvDataCons, typeEnvCoAxioms,
+        typeEnvDataCons, typeEnvCoAxioms, typeEnvClasses,
 
         -- * MonadThings
         MonadThings(..),
@@ -72,9 +74,7 @@ module HscTypes (
 	WhetherHasOrphans, IsBootInterface, Usage(..), 
 	Dependencies(..), noDependencies,
 	NameCache(..), OrigNameCache, OrigIParamCache,
-	Avails, availsToNameSet, availsToNameEnv, availName, availNames,
-	AvailInfo(..),
-	IfaceExport, stableAvailCmp, 
+        IfaceExport,
 
 	-- * Warnings
 	Warnings(..), WarningTxt(..), plusWarns,
@@ -114,13 +114,14 @@ import {-# SOURCE #-}  InteractiveEval ( Resume )
 import HsSyn
 import RdrName
 import Name
+import Avail
 import NameEnv
 import NameSet  
 import Module
 import InstEnv          ( InstEnv, Instance )
-import FamInstEnv       ( FamInstEnv, FamInst )
+import FamInstEnv
 import Rules            ( RuleBase )
-import CoreSyn          ( CoreBind )
+import CoreSyn          ( CoreProgram )
 import VarEnv
 import VarSet
 import Var
@@ -129,23 +130,24 @@ import IdInfo		( IdDetails(..) )
 import Type             
 
 import Annotations
-import Class		( Class, classAllSelIds, classATs, classTyCon )
+import Class
 import TyCon
-import DataCon		( DataCon, dataConImplicitIds, dataConWrapId, dataConTyCon )
+import DataCon
 import PrelNames	( gHC_PRIM )
 import Packages hiding ( Version(..) )
 import DynFlags
-import DriverPhases	( HscSource(..), isHsBoot, hscSourceString, Phase )
-import BasicTypes	( IPName, defaultFixity, WarningTxt(..) )
+import DriverPhases
+import BasicTypes
 import OptimizationFuel	( OptFuelState )
 import IfaceSyn
 import CoreSyn		( CoreRule, CoreVect )
-import Maybes		( orElse, expectJust, catMaybes )
+import Maybes
 import Outputable
 import BreakArray
 import SrcLoc
-import UniqFM		( lookupUFM, eltsUFM, emptyUFM )
-import UniqSupply	( UniqSupply )
+import Unique
+import UniqFM
+import UniqSupply
 import FastString
 import StringBuffer	( StringBuffer )
 import Fingerprint
@@ -159,7 +161,6 @@ import System.Time	( ClockTime )
 import Data.IORef
 import Data.Array       ( Array, array )
 import Data.Map         ( Map )
-import Data.List
 import Data.Word
 import Control.Monad    ( mplus, guard, liftM, when )
 import Exception
@@ -693,6 +694,9 @@ data ModIface
                 -- See Note [RnNames . Trust Own Package]
      }
 
+-- | The original names declared of a certain module that are exported
+type IfaceExport = AvailInfo
+
 -- | The 'ModDetails' is essentially a cache for information in the 'ModIface'
 -- for home modules only. Information relating to packages will be loaded into
 -- global environments in 'ExternalPackageState'.
@@ -747,12 +751,13 @@ data ModGuts
 	-- These fields all describe the things **declared in this module**
 	mg_fix_env   :: !FixityEnv,	 -- ^ Fixities declared in this module
 	                                 -- TODO: I'm unconvinced this is actually used anywhere
-	mg_types     :: !TypeEnv,        -- ^ Types declared in this module
+        mg_tcs       :: ![TyCon],        -- ^ TyCons declared in this module
+        mg_clss      :: ![Class],        -- ^ Classes declared in this module
 	mg_insts     :: ![Instance],	 -- ^ Class instances declared in this module
 	mg_fam_insts :: ![FamInst],	 -- ^ Family instances declared in this module
         mg_rules     :: ![CoreRule],	 -- ^ Before the core pipeline starts, contains 
 		     			 -- See Note [Overall plumbing for rules] in Rules.lhs
-	mg_binds     :: ![CoreBind],	 -- ^ Bindings for this module
+	mg_binds     :: !CoreProgram,	 -- ^ Bindings for this module
 	mg_foreign   :: !ForeignStubs,   -- ^ Foreign exports declared in this module
 	mg_warns     :: !Warnings,	 -- ^ Warnings declared in the module
         mg_anns      :: [Annotation],    -- ^ Annotations declared in this module
@@ -808,7 +813,7 @@ data CgGuts
 		-- tables. Includes newtypes, just for the benefit of
 		-- External Core
 
-	cg_binds    :: [CoreBind],
+	cg_binds    :: CoreProgram,
 		-- ^ The tidied main bindings, including
 		-- previously-implicit bindings for record and class
 		-- selectors, and data construtor wrappers.  But *not*
@@ -895,70 +900,130 @@ data InteractiveContext
              -- ^ The GHCi context is extended with these imports
 
          ic_rn_gbl_env :: GlobalRdrEnv,
-             -- ^ The contexts' cached 'GlobalRdrEnv', built by
-             -- 'InteractiveEval.setContext'
+             -- ^ The cached 'GlobalRdrEnv', built by
+             -- 'InteractiveEval.setContext' and updated regularly
 
-         ic_tmp_ids :: [Id],
-             -- ^ Names bound during interaction with the user.  Later
-             -- Ids shadow earlier ones with the same OccName
-             -- Expressions are typed with these Ids in the envt For
-             -- runtime-debugging, these Ids may have free TcTyVars of
-             -- RuntimUnkSkol flavour, but no free TyVars (because the
-             -- typechecker doesn't expect that)
+         ic_tythings :: [TyThing],
+             -- ^ TyThings defined by the user, in reverse order of
+             -- definition.
+
+         ic_sys_vars  :: [Id],
+             -- ^ Variables defined automatically by the system (e.g.
+             -- record field selectors).  See Notes [ic_sys_vars]
+
+         ic_instances :: ([Instance], [FamInst]),
+             -- ^ All instances and family instances created during
+             -- this session.  These are grabbed en masse after each
+             -- update to be sure that proper overlapping is retained.
+             -- That is, rather than re-check the overlapping each
+             -- time we update the context, we just take the results
+             -- from the instance code that already does that.
 
 #ifdef GHCI
-         ic_resume :: [Resume],
+          ic_resume :: [Resume],
              -- ^ The stack of breakpoint contexts
 #endif
 
-         ic_cwd :: Maybe FilePath
+          ic_cwd :: Maybe FilePath
              -- virtual CWD of the program
     }
 
-data InteractiveImport 
-  = IIDecl (ImportDecl RdrName)	-- Bring the exports of a particular module
-    	   	       		-- (filtered by an import decl) into scope
+{-
+Note [ic_sys_vars]
 
-  | IIModule Module	-- Bring into scope the entire top-level envt of
-    	     		-- of this module, including the things imported
-			-- into it.
- 
+This list constains any Ids that arise from TyCons, Classes or
+instances defined interactively, but that are not given by
+'implicitTyThings'.  This includes record selectors, default methods,
+and dfuns.
+
+We *could* get rid of this list and generate these Ids from
+ic_tythings:
+
+   - dfuns come from Instances
+   - record selectors from TyCons
+   - default methods from Classes
+
+For record selectors the TyCon gives the Name, but in order to make an
+Id we would have to construct the type ourselves.  Similarly for
+default methods.  So for now we collect the Ids after tidying (see
+hscDeclsWithLocation) and save them in ic_sys_vars.
+-}
+
+-- | Constructs an empty InteractiveContext.
 emptyInteractiveContext :: InteractiveContext
-emptyInteractiveContext
-  = InteractiveContext { ic_imports = [],
-			 ic_rn_gbl_env = emptyGlobalRdrEnv,
-			 ic_tmp_ids = []
+emptyInteractiveContext = InteractiveContext {
+    ic_imports      = [],
+    ic_rn_gbl_env   = emptyGlobalRdrEnv,
+    ic_tythings     = [],
+    ic_sys_vars     = [],
+    ic_instances    = ([],[]),
 #ifdef GHCI
-                         , ic_resume = []
+    ic_resume       = [],
 #endif
-                         , ic_cwd = Nothing
-                       }
+    ic_cwd          = Nothing }
 
+-- | This function returns the list of visible TyThings (useful for
+-- e.g. showBindings)
+icInScopeTTs :: InteractiveContext -> [TyThing]
+icInScopeTTs = ic_tythings
+
+-- | Get the PrintUnqualified function based on the flags and this InteractiveContext
 icPrintUnqual :: DynFlags -> InteractiveContext -> PrintUnqualified
-icPrintUnqual dflags ictxt = mkPrintUnqualified dflags (ic_rn_gbl_env ictxt)
+icPrintUnqual dflags InteractiveContext{ ic_rn_gbl_env = grenv } = 
+    mkPrintUnqualified dflags grenv
 
-
+-- | This function is called with new TyThings recently defined to update the 
+-- InteractiveContext to include them.  Ids are easily removed when shadowed,
+-- but Classes and TyCons are not.  Some work could be done to determine 
+-- whether they are entirely shadowed, but as you could still have references 
+-- to them (e.g. instances for classes or values of the type for TyCons), it's
+-- not clear whether removing them is even the appropriate behavior.
 extendInteractiveContext
         :: InteractiveContext
-        -> [Id]
+        -> [TyThing]
         -> InteractiveContext
-extendInteractiveContext ictxt ids
-  = ictxt { ic_tmp_ids =  snub ((ic_tmp_ids ictxt \\ ids) ++ ids)
-                          -- NB. must be this way around, because we want
-                          -- new ids to shadow existing bindings.
+extendInteractiveContext ictxt new_tythings
+  = ictxt { ic_tythings = new_tythings ++ old_tythings
+          , ic_rn_gbl_env = new_tythings `icPlusGblRdrEnv` ic_rn_gbl_env ictxt
           }
-    where snub = map head . group . sort
+  where
+    old_tythings = filter (not . shadowed) (ic_tythings ictxt)
+
+    shadowed (AnId id) = ((`elem` new_names) . nameOccName . idName) id
+    shadowed _ = False
+
+    new_names = [ nameOccName (getName id) | AnId id <- new_tythings ]
+
+    -- XXX should not add Ids to the gbl env here
+
+-- | Add TyThings to the GlobalRdrEnv, earlier ones in the list
+-- shadowing later ones, and shadowing existing entries in the
+-- GlobalRdrEnv.
+icPlusGblRdrEnv :: [TyThing] -> GlobalRdrEnv -> GlobalRdrEnv
+icPlusGblRdrEnv tythings env = extendOccEnvList env list
+  where new_gres = gresFromAvails LocalDef (map tyThingAvailInfo tythings)
+        list = [ (nameOccName (gre_name gre), [gre]) | gre <- new_gres ]
 
 substInteractiveContext :: InteractiveContext -> TvSubst -> InteractiveContext
 substInteractiveContext ictxt subst | isEmptyTvSubst subst = ictxt
-substInteractiveContext ictxt@InteractiveContext{ic_tmp_ids=ids} subst 
-  = ictxt { ic_tmp_ids = map subst_ty ids }
+substInteractiveContext ictxt@InteractiveContext{ ic_tythings = tts } subst 
+  = ictxt { ic_tythings = map subst_ty tts }
   where
-   subst_ty id = id `setIdType` substTy subst (idType id)
+   subst_ty (AnId id) = AnId $ id `setIdType` substTy subst (idType id)
+   subst_ty tt = tt
+
+data InteractiveImport
+  = IIDecl (ImportDecl RdrName)	-- Bring the exports of a particular module
+                                -- (filtered by an import decl) into scope
+
+  | IIModule Module	-- Bring into scope the entire top-level envt of
+                    -- of this module, including the things imported
+                    -- into it.
 
 instance Outputable InteractiveImport where
   ppr (IIModule m) = char '*' <> ppr m
   ppr (IIDecl d)   = ppr d
+
 \end{code}
 
 %************************************************************************
@@ -1003,7 +1068,7 @@ the (ppr mod) of case (3), in Name.pprModulePrefix
 mkPrintUnqualified :: DynFlags -> GlobalRdrEnv -> PrintUnqualified
 mkPrintUnqualified dflags env = (qual_name, qual_mod)
   where
-  qual_name mod occ	-- The (mod,occ) pair is the original name of the thing
+  qual_name name
         | [gre] <- unqual_gres, right_name gre = NameUnqual
 		-- If there's a unique entity that's in scope unqualified with 'occ'
 		-- AND that entity is the right one, then we can use the unqualified name
@@ -1017,7 +1082,15 @@ mkPrintUnqualified dflags env = (qual_name, qual_mod)
 
 	| otherwise = panic "mkPrintUnqualified"
       where
-	right_name gre = nameModule_maybe (gre_name gre) == Just mod
+        mod = nameModule name
+        occ = nameOccName name
+
+        is_rdr_orig = nameUnique name == mkUniqueGrimily 0
+         -- Note [Outputable Orig RdrName]
+
+        right_name gre
+          | is_rdr_orig = nameModule_maybe (gre_name gre) == Just mod
+          | otherwise   = gre_name gre == name
 
         unqual_gres = lookupGRE_RdrName (mkRdrUnqual occ) env
         qual_gres   = filter right_name (lookupGlobalRdrEnv env occ)
@@ -1041,6 +1114,25 @@ mkPrintUnqualified dflags env = (qual_name, qual_mod)
 
      | otherwise = True
      where lookup = lookupModuleInAllPackages dflags (moduleName mod)
+
+-- Note [Outputable Orig RdrName]
+--
+-- This is a Grotesque Hack.  The Outputable instance for RdrEnv wants
+-- to print Orig names, which are just pairs of (Module,OccName).  But
+-- we want to use full Names here, because in GHCi we might have Ids
+-- that have the same (Module,OccName) pair but a different Unique
+-- (this happens when you shadow a TyCon or Class in GHCi).
+--
+-- So in Outputable RdrName we just use a dummy Unique (0), and check
+-- for it here.
+--
+-- Arguably GHCi is invalidating the assumption that (Module,OccName)
+-- uniquely identifies an entity.  But we do want to be able to shadow
+-- old declarations with new ones in GHCi, and it would be hard to
+-- delete all references to the old declaration when that happened.
+-- See also Note [interactive name cache] in IfaceEnv for somewhere
+-- else that this broken assumption bites.
+--
 \end{code}
 
 
@@ -1090,6 +1182,8 @@ implicitTyConThings tc
       -- for each data constructor in order,
       --   the contructor, worker, and (possibly) wrapper
     concatMap (extras_plus . ADataCon) (tyConDataCons tc)
+      -- NB. record selectors are *not* implicit, they have fully-fledged
+      -- bindings that pass through the compilation pipeline as normal.
   where
     class_stuff = case tyConClass_maybe tc of
         Nothing -> []
@@ -1121,26 +1215,49 @@ isImplicitTyThing (AnId id)     = isImplicitId id
 isImplicitTyThing (ATyCon tc)   = isImplicitTyCon tc
 isImplicitTyThing (ACoAxiom {}) = True
 
-extendTypeEnvWithIds :: TypeEnv -> [Id] -> TypeEnv
-extendTypeEnvWithIds env ids
-  = extendNameEnvList env [(getName id, AnId id) | id <- ids]
-
 tyThingParent_maybe :: TyThing -> Maybe TyThing
 -- (tyThingParent_maybe x) returns (Just p)
 -- when pprTyThingInContext sould print a declaration for p
 -- (albeit with some "..." in it) when asked to show x
 -- It returns the *immediate* parent.  So a datacon returns its tycon
--- but the tycon could be the assocated type of a class, so it in turn
+-- but the tycon could be the associated type of a class, so it in turn
 -- might have a parent.
 tyThingParent_maybe (ADataCon dc) = Just (ATyCon (dataConTyCon dc))
 tyThingParent_maybe (ATyCon tc)   = case tyConAssoc_maybe tc of
                                       Just cls -> Just (ATyCon (classTyCon cls))
                                       Nothing  -> Nothing
 tyThingParent_maybe (AnId id)     = case idDetails id of
-      				      	 RecSelId { sel_tycon = tc } -> Just (ATyCon tc)
+                                         RecSelId { sel_tycon = tc } -> Just (ATyCon tc)
       				      	 ClassOpId cls               -> Just (ATyCon (classTyCon cls))
                                       	 _other                      -> Nothing
 tyThingParent_maybe _other = Nothing
+
+tyThingsTyVars :: [TyThing] -> TyVarSet
+tyThingsTyVars tts =
+    unionVarSets $ map ttToVarSet tts
+    where
+        ttToVarSet (AnId id)     = tyVarsOfType $ idType id
+        ttToVarSet (ADataCon dc) = tyVarsOfType $ dataConRepType dc
+        ttToVarSet (ATyCon tc)
+          = case tyConClass_maybe tc of
+              Just cls -> (mkVarSet . fst . classTvsFds) cls
+              Nothing  -> tyVarsOfType $ tyConKind tc
+        ttToVarSet _             = emptyVarSet
+
+-- | The Names that a TyThing should bring into scope.  Used to build
+-- the GlobalRdrEnv for the InteractiveContext.
+tyThingAvailInfo :: TyThing -> AvailInfo
+tyThingAvailInfo (ATyCon t)
+   = case tyConClass_maybe t of
+        Just c  -> AvailTC n (n : map getName (classMethods c)
+                  ++ map getName (classATs c))
+             where n = getName c
+        Nothing -> AvailTC n (n : map getName dcs ++
+                                   concatMap dataConFieldLabels dcs)
+             where n = getName t
+                   dcs = tyConDataCons t
+tyThingAvailInfo t
+   = Avail (getName t)
 \end{code}
 
 %************************************************************************
@@ -1160,6 +1277,7 @@ typeEnvTyCons   :: TypeEnv -> [TyCon]
 typeEnvCoAxioms :: TypeEnv -> [CoAxiom]
 typeEnvIds      :: TypeEnv -> [Id]
 typeEnvDataCons :: TypeEnv -> [DataCon]
+typeEnvClasses  :: TypeEnv -> [Class]
 lookupTypeEnv   :: TypeEnv -> Name -> Maybe TyThing
 
 emptyTypeEnv 	    = emptyNameEnv
@@ -1168,10 +1286,27 @@ typeEnvTyCons   env = [tc | ATyCon tc   <- typeEnvElts env]
 typeEnvCoAxioms env = [ax | ACoAxiom ax <- typeEnvElts env] 
 typeEnvIds      env = [id | AnId id     <- typeEnvElts env] 
 typeEnvDataCons env = [dc | ADataCon dc <- typeEnvElts env] 
+typeEnvClasses  env = [cl | tc <- typeEnvTyCons env,
+                            Just cl <- [tyConClass_maybe tc]]
 
 mkTypeEnv :: [TyThing] -> TypeEnv
 mkTypeEnv things = extendTypeEnvList emptyTypeEnv things
 		
+mkTypeEnvWithImplicits :: [TyThing] -> TypeEnv
+mkTypeEnvWithImplicits things = 
+  mkTypeEnv things
+    `plusNameEnv`
+  mkTypeEnv (concatMap implicitTyThings things)
+
+typeEnvFromEntities :: [Id] -> [TyCon] -> [Class] -> [FamInst] -> TypeEnv
+typeEnvFromEntities ids tcs clss faminsts =
+  mkTypeEnv (   map AnId ids
+             ++ map ATyCon all_tcs
+             ++ concatMap implicitTyConThings all_tcs
+            )
+ where
+  all_tcs = tcs ++ map classTyCon clss ++ map famInstTyCon faminsts
+
 lookupTypeEnv = lookupNameEnv
 
 -- Extend the type environment
@@ -1180,6 +1315,11 @@ extendTypeEnv env thing = extendNameEnv env (getName thing) thing
 
 extendTypeEnvList :: TypeEnv -> [TyThing] -> TypeEnv
 extendTypeEnvList env things = foldl extendTypeEnv env things
+
+extendTypeEnvWithIds :: TypeEnv -> [Id] -> TypeEnv
+extendTypeEnvWithIds env ids
+  = extendNameEnvList env [(getName id, AnId id) | id <- ids]
+
 \end{code}
 
 \begin{code}
@@ -1334,63 +1474,6 @@ plusWarns NoWarnings d = d
 plusWarns _ (WarnAll t) = WarnAll t
 plusWarns (WarnAll t) _ = WarnAll t
 plusWarns (WarnSome v1) (WarnSome v2) = WarnSome (v1 ++ v2)
-\end{code}
-\begin{code}
--- | A collection of 'AvailInfo' - several things that are \"available\"
-type Avails	  = [AvailInfo]
-
--- | Records what things are "available", i.e. in scope
-data AvailInfo = Avail Name	 -- ^ An ordinary identifier in scope
-	       | AvailTC Name
-			 [Name]  -- ^ A type or class in scope. Parameters:
-			         --
-				 --  1) The name of the type or class
-				 --  2) The available pieces of type or class.
-				 -- 
-				 -- The AvailTC Invariant:
-				 --   * If the type or class is itself
-				 --     to be in scope, it must be *first* in this list.
-				 --     Thus, typically: @AvailTC Eq [Eq, ==, \/=]@
-		deriving( Eq )
-			-- Equality used when deciding if the interface has changed
-
--- | The original names declared of a certain module that are exported
-type IfaceExport = AvailInfo
-
-availsToNameSet :: [AvailInfo] -> NameSet
-availsToNameSet avails = foldr add emptyNameSet avails
-      where add avail set = addListToNameSet set (availNames avail)
-
-availsToNameEnv :: [AvailInfo] -> NameEnv AvailInfo
-availsToNameEnv avails = foldr add emptyNameEnv avails
-     where add avail env = extendNameEnvList env
-                                (zip (availNames avail) (repeat avail))
-
--- | Just the main name made available, i.e. not the available pieces
--- of type or class brought into scope by the 'GenAvailInfo'
-availName :: AvailInfo -> Name
-availName (Avail n)     = n
-availName (AvailTC n _) = n
-
--- | All names made available by the availability information
-availNames :: AvailInfo -> [Name]
-availNames (Avail n)      = [n]
-availNames (AvailTC _ ns) = ns
-
-instance Outputable AvailInfo where
-   ppr = pprAvail
-
-pprAvail :: AvailInfo -> SDoc
-pprAvail (Avail n)      = ppr n
-pprAvail (AvailTC n ns) = ppr n <> braces (hsep (punctuate comma (map ppr ns)))
-
-stableAvailCmp :: AvailInfo -> AvailInfo -> Ordering
--- Compare lexicographically
-stableAvailCmp (Avail n1)     (Avail n2)     = n1 `stableNameCmp` n2
-stableAvailCmp (Avail {})     (AvailTC {})   = LT
-stableAvailCmp (AvailTC n ns) (AvailTC m ms) = (n `stableNameCmp` m) `thenCmp`
-                                               (cmpList stableNameCmp ns ms)
-stableAvailCmp (AvailTC {})   (Avail {})     = GT
 \end{code}
 
 \begin{code}

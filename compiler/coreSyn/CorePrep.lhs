@@ -5,21 +5,23 @@
 Core pass to saturate constructors and PrimOps
 
 \begin{code}
+{-# LANGUAGE BangPatterns #-}
 module CorePrep (
       corePrepPgm, corePrepExpr
   ) where
 
 #include "HsVersions.h"
 
-import PrelNames	( lazyIdKey, hasKey )
+import PrelNames
 import CoreUtils
 import CoreArity
 import CoreFVs
 import CoreMonad	( endPass, CoreToDo(..) )
 import CoreSyn
 import CoreSubst
-import OccurAnal        ( occurAnalyseExpr )
+import MkCore
 import Type
+import Literal
 import Coercion
 import TyCon
 import Demand
@@ -28,6 +30,7 @@ import VarSet
 import VarEnv
 import Id
 import IdInfo
+import TysWiredIn
 import DataCon
 import PrimOp
 import BasicTypes
@@ -41,6 +44,8 @@ import Pair
 import Outputable
 import MonadUtils
 import FastString
+import Config
+import Data.Bits
 import Data.List	( mapAccumL )
 import Control.Monad
 \end{code}
@@ -83,7 +88,6 @@ The goal of this pass is to prepare for code generation.
     and doing so would be tiresome because then we'd need
     to substitute in types and coercions.
 
-
 7.  Give each dynamic CCall occurrence a fresh unique; this is
     rather like the cloning step above.
 
@@ -94,6 +98,12 @@ The goal of this pass is to prepare for code generation.
     aren't inlined by some caller.
 	
 9.  Replace (lazy e) by e.  See Note [lazyId magic] in MkId.lhs
+
+10. Convert (LitInteger i mkInteger) into the core representation
+    for the Integer i. Normally this uses the mkInteger Id, but if
+    we are using the integer-gmp implementation then there is a
+    special case where we use the S# constructor for Integers that
+    are in the range of Int.
 
 This is all done modulo type applications and abstractions, so that
 when type erasure is done for conversion to STG, we don't end up with
@@ -139,7 +149,7 @@ type CpeRhs  = CoreExpr	   -- Non-terminal 'rhs'
 %************************************************************************
 
 \begin{code}
-corePrepPgm :: DynFlags -> [CoreBind] -> [TyCon] -> IO [CoreBind]
+corePrepPgm :: DynFlags -> CoreProgram -> [TyCon] -> IO CoreProgram
 corePrepPgm dflags binds data_tycons = do
     showPass dflags "CorePrep"
     us <- mkSplitUniqSupply 's'
@@ -278,23 +288,29 @@ After specialisation and SpecConstr, we would get something like this:
       g$Bool_True_Just = ...
       g$Unit_Unit_Just = ...
 
-Note that the g$Bool and g$Unit functions are actually dead code: they are only kept
-alive by the occurrence analyser because they are referred to by the rules of g,
-which is being kept alive by the fact that it is used (unspecialised) in the returned pair.
+Note that the g$Bool and g$Unit functions are actually dead code: they
+are only kept alive by the occurrence analyser because they are
+referred to by the rules of g, which is being kept alive by the fact
+that it is used (unspecialised) in the returned pair.
 
-However, at the CorePrep stage there is no way that the rules for g will ever fire,
-and it really seems like a shame to produce an output program that goes to the trouble
-of allocating a closure for the unreachable g$Bool and g$Unit functions.
+However, at the CorePrep stage there is no way that the rules for g
+will ever fire, and it really seems like a shame to produce an output
+program that goes to the trouble of allocating a closure for the
+unreachable g$Bool and g$Unit functions.
 
 The way we fix this is to:
  * In cloneBndr, drop all unfoldings/rules
- * In deFloatTop, run the occurrence analyser on each top-level RHS to drop
-   the dead local bindings
+ * In deFloatTop, run a simple dead code analyser on each top-level RHS to drop
+   the dead local bindings. (we used to run the occurrence analyser to do
+   this job, but the occurrence analyser sometimes introduces new let
+   bindings for case binders, which lead to the bug in #5433, hence we
+   now have a special-purpose dead code analyser).
 
-The reason we don't just OccAnal the whole output of CorePrep is that the tidier
-ensures that all top-level binders are GlobalIds, so they don't show up in the free
-variables any longer. So if you run the occurrence analyser on the output of CoreTidy
-(or later) you e.g. turn this program:
+The reason we don't just OccAnal the whole output of CorePrep is that
+the tidier ensures that all top-level binders are GlobalIds, so they
+don't show up in the free variables any longer. So if you run the
+occurrence analyser on the output of CoreTidy (or later) you e.g. turn
+this program:
 
   Rec {
   f = ... f ...
@@ -444,10 +460,12 @@ cpeRhsE :: CorePrepEnv -> CoreExpr -> UniqSM (Floats, CpeRhs)
 -- For example
 --	f (g x)	  ===>   ([v = g x], f v)
 
-cpeRhsE _env expr@(Type {})     = return (emptyFloats, expr)
-cpeRhsE _env expr@(Coercion {}) = return (emptyFloats, expr)
-cpeRhsE _env expr@(Lit {})      = return (emptyFloats, expr)
-cpeRhsE env expr@(Var {})       = cpeApp env expr
+cpeRhsE _env expr@(Type {})      = return (emptyFloats, expr)
+cpeRhsE _env expr@(Coercion {})  = return (emptyFloats, expr)
+cpeRhsE env (Lit (LitInteger i mk_integer))
+    = cpeRhsE env (cvtLitInteger i mk_integer)
+cpeRhsE _env expr@(Lit {})       = return (emptyFloats, expr)
+cpeRhsE env expr@(Var {})        = cpeApp env expr
 
 cpeRhsE env (Var f `App` _ `App` arg)
   | f `hasKey` lazyIdKey  	  -- Replace (lazy a) by a
@@ -494,6 +512,29 @@ cpeRhsE env (Case scrut bndr ty alts)
        = do { (env2, bs') <- cpCloneBndrs env bs
             ; rhs' <- cpeBodyNF env2 rhs
             ; return (con, bs', rhs') }
+
+cvtLitInteger :: Integer -> Id -> CoreExpr
+-- Here we convert a literal Integer to the low-level
+-- represenation. Exactly how we do this depends on the
+-- library that implements Integer.  If it's GMP we 
+-- use the S# data constructor for small literals.  
+-- See Note [Integer literals] in Literal
+cvtLitInteger i mk_integer
+  | cIntegerLibraryType == IntegerGMP
+  , inIntRange i       -- Special case for small integers in GMP
+    = mkConApp integerGmpSDataCon [Lit (mkMachInt i)]
+
+  | otherwise
+    = mkApps (Var mk_integer) [isNonNegative, ints]
+  where isNonNegative = if i < 0 then mkConApp falseDataCon []
+                                 else mkConApp trueDataCon  []
+        ints = mkListExpr intTy (f (abs i))
+        f 0 = []
+        f x = let low  = x .&. mask
+                  high = x `shiftR` bits
+              in mkConApp intDataCon [Lit (mkMachInt low)] : f high
+        bits = 31
+        mask = 2 ^ bits - 1
 
 -- ---------------------------------------------------------------------------
 --		CpeBody: produces a result satisfying CpeBody
@@ -971,8 +1012,60 @@ deFloatTop (Floats _ floats)
     get b            _  = pprPanic "corePrepPgm" (ppr b)
     
     -- See Note [Dead code in CorePrep]
-    occurAnalyseRHSs (NonRec x e) = NonRec x (occurAnalyseExpr e)
-    occurAnalyseRHSs (Rec xes)    = Rec [(x, occurAnalyseExpr e) | (x, e) <- xes]
+    occurAnalyseRHSs (NonRec x e) = NonRec x (fst (dropDeadCode e))
+    occurAnalyseRHSs (Rec xes)    = Rec [ (x, fst (dropDeadCode e))
+                                        | (x, e) <- xes]
+
+---------------------------------------------------------------------------
+-- Simple dead-code analyser, see Note [Dead code in CorePrep]
+
+dropDeadCode :: CoreExpr -> (CoreExpr, VarSet)
+dropDeadCode (Var v)
+  = (Var v, if isLocalId v then unitVarSet v else emptyVarSet)
+dropDeadCode (App fun arg)
+  = (App fun' arg', fun_fvs `unionVarSet` arg_fvs)
+  where !(fun', fun_fvs) = dropDeadCode fun
+        !(arg', arg_fvs) = dropDeadCode arg
+dropDeadCode (Lam v e)
+  = (Lam v e', delVarSet fvs v)
+  where !(e', fvs) = dropDeadCode e
+dropDeadCode (Let (NonRec v rhs) body)
+  | v `elemVarSet` body_fvs
+  = (Let (NonRec v rhs') body', rhs_fvs `unionVarSet` (body_fvs `delVarSet` v))
+  | otherwise
+  = (body', body_fvs) -- drop the dead let bind!
+  where !(body', body_fvs) = dropDeadCode body
+        !(rhs',  rhs_fvs)  = dropDeadCode rhs
+dropDeadCode (Let (Rec prs) body)
+  | any (`elemVarSet` all_fvs) bndrs
+    -- approximation: strictly speaking we should do SCC analysis here,
+    -- but for simplicity we just look to see whether any of the binders
+    -- is used and drop the entire group if all are unused.
+  = (Let (Rec (zip bndrs rhss')) body', all_fvs `delVarSetList` bndrs)
+  | otherwise
+  = (body', body_fvs) -- drop the dead let bind!
+  where !(body', body_fvs) = dropDeadCode body
+        !(bndrs, rhss)     = unzip prs
+        !(rhss', rhs_fvss) = unzip (map dropDeadCode rhss)
+        all_fvs            = unionVarSets (body_fvs : rhs_fvss)
+
+dropDeadCode (Case scrut bndr t alts)
+  = (Case scrut' bndr t alts', scrut_fvs `unionVarSet` alts_fvs)
+  where !(scrut', scrut_fvs) = dropDeadCode scrut
+        !(alts',  alts_fvs)  = dropDeadCodeAlts alts
+dropDeadCode (Cast e c)
+  = (Cast e' c, fvs)
+  where !(e', fvs) = dropDeadCode e
+dropDeadCode (Note n e)
+  = (Note n e', fvs)
+  where !(e', fvs) = dropDeadCode e
+dropDeadCode e = (e, emptyVarSet)  -- Lit, Type, Coercion
+
+dropDeadCodeAlts :: [CoreAlt] -> ([CoreAlt], VarSet)
+dropDeadCodeAlts alts = (alts', unionVarSets fvss)
+  where !(alts', fvss) = unzip (map do_alt alts)
+        do_alt (c, vs, e) = ((c,vs,e'), fvs `delVarSetList` vs)
+          where !(e', fvs) = dropDeadCode e
 
 -------------------------------------------
 canFloatFromNoCaf ::  Floats -> CpeRhs -> Maybe (Floats, CpeRhs)
