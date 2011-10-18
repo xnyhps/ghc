@@ -190,6 +190,10 @@ data ZonkEnv = ZonkEnv	(TcType -> TcM Type) 	-- How to zonk a type
 	-- Only *type* abstraction is done by side effect
 	-- Is only consulted lazily; hence knot-tying
 
+instance Outputable ZonkEnv where 
+  ppr (ZonkEnv _ty_env var_env) = vcat (map ppr (varEnvElts var_env))
+
+
 emptyZonkEnv :: ZonkEnv
 emptyZonkEnv = ZonkEnv zonkTypeZapping emptyVarEnv
 
@@ -1067,6 +1071,8 @@ zonkTcEvBinds env (EvBinds bs)    = do { (env', bs') <- zonkEvBinds env bs
 
 zonkEvBindsVar :: ZonkEnv -> EvBindsVar -> TcM (ZonkEnv, Bag EvBind)
 zonkEvBindsVar env (EvBindsVar ref _) = do { bs <- readMutVar ref
+                                           ; traceTc "zonkEvBindsVar" $ 
+                                             text "bs = " <+> vcat (map ppr (varEnvElts bs))
                                            ; zonkEvBinds env (evBindMapBinds bs) }
 
 zonkEvBinds :: ZonkEnv -> Bag EvBind -> TcM (ZonkEnv, Bag EvBind)

@@ -767,15 +767,16 @@ ctxtUnderImplic (SimplRuleLhs n) = SimplCheck (ptext (sLit "lhs of rule")
 ctxtUnderImplic ctxt              = ctxt
 
 tryTcS :: TcS a -> TcS a
--- Like runTcS, but from within the TcS monad and inheriting the worklist and inert
--- However, ignore all the evidence generated, and do not affect caller's evidence!
+-- Like runTcS, but from within the TcS monad 
+-- Completely afresh inerts and worklist, be careful! 
+-- Moreover, we will simply throw away all the evidence generated. 
 tryTcS tcs
   = TcS (\env -> 
              do { wl_orig <- TcM.readTcRef (tcs_worklist env)
                 ; is_orig <- TcM.readTcRef (tcs_inerts env) 
 
-                ; wl_var <- TcM.newTcRef wl_orig
-                ; is_var <- TcM.newTcRef is_orig
+                ; wl_var <- TcM.newTcRef emptyWorkList
+                ; is_var <- TcM.newTcRef emptyInert
 
                 ; ty_binds_var <- TcM.newTcRef emptyVarEnv
                 ; ev_binds_var <- TcM.newTcEvBinds
@@ -806,7 +807,10 @@ updWorkListTcS :: (WorkList -> WorkList) -> TcS ()
 updWorkListTcS f 
   = do { wl_var <- getTcSWorkListRef 
        ; wl_curr <- wrapTcS (TcM.readTcRef wl_var)
-       ; wrapTcS (TcM.writeTcRef wl_var (f wl_curr)) }
+       ; let new_work = f wl_curr 
+       ; traceTcS "updWorkListTcS" $ 
+                  text "WorkList set to:" <+> ppr new_work 
+       ; wrapTcS (TcM.writeTcRef wl_var new_work) }
 
 updInertSetTcS :: (InertSet -> (InertSet,a)) -> TcS a 
 updInertSetTcS f 
@@ -1127,8 +1131,10 @@ rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -> TcS EvVar
 rewriteFromInertEqs (subst,inscope) fl v 
   = do { let co = liftInertEqsPred subst inscope fl (evVarPred v) 
+       ; traceTcS "rewriteFromInertEqs" $ text "lifted coercion is: " <+> ppr co
+       ; traceTcS "rewriteFromInertEqs" $ text "its coercion kind is:" <+> ppr (pSnd (liftedCoercionKind co))
        ; if isReflCo co then return v 
-         else do { v' <- newEvVar (pSnd (coercionKind co)) 
+         else do { v' <- newEvVar (pSnd (liftedCoercionKind co)) 
                  ; case fl of 
                      Wanted {}  -> setEvBind v (EvCast v' (mkSymCo co)) 
                      Given {}   -> setEvBind v' (EvCast v co) 
@@ -1139,20 +1145,27 @@ rewriteFromInertEqs (subst,inscope) fl v
 liftInertEqsPred :: TyVarEnv (Ct,Coercion) 
                  -> InScopeSet 
                  -> CtFlavor 
-                 -> PredType -> Coercion 
+                 -> PredType -> Coercion
 liftInertEqsPred subst inscope fl pty
   = ty_cts_subst subst inscope fl pty
 
 ty_cts_subst :: TyVarEnv (Ct,Coercion)
-             -> InScopeSet -> CtFlavor -> Type -> Coercion 
+             -> InScopeSet -> CtFlavor -> Type -> Coercion
+-- The reason I am returning the Type and not just the Coercions is that I want to 
+-- avoid calling coercionKind on the returned coercion from rewriteFromInertEqs because 
+-- coercionKind is not expecting any lifted coercions variables. A bit annoying but OK. 
 ty_cts_subst subst inscope fl ty 
   = go ty 
   where go (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)
         go (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2) 
-        go (TyConApp tc tys) = mkTyConAppCo tc (map go tys) 
-        go (ForAllTy v ty)   = mkForAllCo v' $! (ty_cts_subst subst' inscope' fl ty)
-                               where (subst',inscope',v') = upd_tyvar_bndr subst inscope v
-        go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2) 
+        go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)  
+
+        go (ForAllTy v ty)   = let co = ty_cts_subst subst' inscope' fl ty 
+                               in (mkForAllCo v' $! co)
+                             where (subst',inscope',v') = upd_tyvar_bndr subst inscope v
+
+        go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2)
+
 
         tyvar_cts_subst tv  
           | Just (ct,co) <- lookupVarEnv subst tv, cc_flavor ct `canRewrite` fl  

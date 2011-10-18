@@ -172,8 +172,11 @@ runSolverPipeline pipeline workItem
         run_pipeline _ Stop = return Stop 
         run_pipeline ((stg_name,stg):stgs) (ContinueWith ct)
           = do { traceTcS "runSolverPipeline" $ 
-                 text "Stage name = " <+> text stg_name
-               ; stg ct >>= run_pipeline stgs }
+                 text "Stage name = " <+> text stg_name <+> text "{"
+               ; res <- stg ct 
+               ; traceTcS "runSolverPipeline" $  text "End stage."
+               ; run_pipeline stgs res 
+               }
 \end{code}
 
 Example 1:
@@ -446,12 +449,24 @@ solveWithIdentity d eqv wd tv xi
 
 interactWithInertEqsStage  :: WorkItem -> TcS StopOrContinue
 interactWithInertEqsStage  wi 
-  = do { wi' <- apply_inert_subst wi 
-       ; if isCNonCanonical wi' then stopAndEmitWork wi' else rewrite_inerts_or_continue wi' }
+  = do { traceTcS "interactWithInertEqsStage, applying equalities {" $ 
+         text "workitem = " <+> ppr wi
+       ; wi' <- apply_inert_subst wi 
+       ; traceTcS "}" $ 
+         text "rewritten workitem = " <+> ppr wi'
+       ; if isCNonCanonical wi' 
+         then do { traceTcS "checkpoint #10" empty 
+                 ; stopAndEmitWork wi' }
+         else do { traceTcS "checkpoint #11" empty 
+                 ; rewrite_inerts_or_continue wi' }
+       }
   where apply_inert_subst wi 
             -- Applies the inert substitutions to the work item 
           = do { ieqs  <- getInertEqs
+               ; traceTcS "interactWithInertEqsSage, before rewriting {" empty 
                ; evvar <- rewriteFromInertEqs ieqs (cc_flavor wi) (cc_id wi)
+               ; traceTcS "interactWithInertEqsSage, finished rewriting }" $ 
+                 text "new evidence variable = " <+> ppr evvar
                ; return (figure_out_canonicity wi evvar) }
 
         rewrite_inerts_or_continue ct
@@ -460,7 +475,9 @@ interactWithInertEqsStage  wi
             , tv <- cc_tyvar ct
             , fl <- cc_flavor ct 
             = do { inerts <- getTcSInerts
+                 ; traceTcS "checpoint #1" empty 
                  ; (kicked_out_cts, remaining_inerts) <- kick_out_rewritable inerts ct tv fl
+                 ; traceTcS "checpoint #2" empty 
                    -- Emit the kicked out constraints
                  ; updWorkListTcS (appendWorkListCt (bagToList kicked_out_cts))
                    -- /Set/ the inert set to contain the new guy, and stop
@@ -509,8 +526,10 @@ interactWithInertEqsStage  wi
                                    (tv `elemVarSet` tyVarsOfCt ct)
 
                    rewrite_frozen ct 
-                     = do { v' <- rewriteFromInertEqs
+                     = do { traceTcS "checpoint #3" empty 
+                          ; v' <- rewriteFromInertEqs
                                        (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
+                          ; traceTcS "checpoint #4" empty 
                           ; return ct { cc_id = v'} } 
                    work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
 
@@ -665,6 +684,9 @@ doInteractWithInert
              inert_pred_loc     = (pty1, pprFlavorArising fl1)
              work_item_pred_loc = (pty2, pprFlavorArising fl2)
 
+       ; traceTcS "doInteractWithInert" (vcat [ text "inertItem = " <+> ppr inertItem
+                                              , text "workItem  = " <+> ppr workItem ])
+
        ; any_fundeps 
            <- if isGivenOrSolved fl1 && isGivenOrSolved fl2 then return Nothing
               -- NB: We don't create fds for given (and even solved), have not seen a useful
@@ -711,10 +733,12 @@ doInteractWithInert
                               ; irKeepGoing "Cls/Cls (new fundeps)" }
  
 		        | otherwise
-                        -> do { setEvBind d2 (EvCast d1 dict_co)
-                              -- Rewriting is happening, so we have to create wanted fds
-                              ; emitFDWorkAsWanted fd_work (cc_depth workItem) 
-                              ; irWorkItemConsumed "Cls/Cls fundep (solved)" }
+                        -> -- You may think that we should just consume the work item but 
+                           -- the problem is that the FD's may not be solvable (e.g if they mention skolems)
+                           -- so we simply do the safe thing: emit deriveds and keep going ... 
+                           do { emitFDWorkAsDerived fd_work (cc_depth workItem) 
+                              ; irKeepGoing "Cls/Cls (new fundeps)"
+                              }
        }
   where get_workitem_wloc (Wanted wl)  = wl 
         get_workitem_wloc (Derived wl) = wl 
@@ -1222,7 +1246,7 @@ tryTopReact :: WorkItem -> TcS StopOrContinue
 tryTopReact wi 
  = do { inerts <- getTcSInerts
       ; ctxt   <- getTcSContext
-      ; if simplEqsOnly ctxt then return Stop
+      ; if simplEqsOnly ctxt then return (ContinueWith wi) -- or Stop?
         else 
             do { tir <- doTopReact inerts wi
                ; case tir of 

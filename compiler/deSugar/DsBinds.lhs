@@ -190,10 +190,14 @@ dsHsBind auto_scc (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
 --------------------------------------
 dsTcEvBinds :: TcEvBinds -> DsM [CoreBind]
 dsTcEvBinds (TcEvBinds {}) = panic "dsEvBinds"	-- Zonker has got rid of this
-dsTcEvBinds (EvBinds bs)   = dsEvBinds bs
+dsTcEvBinds (EvBinds bs)   = -- pprTrace "EvBinds bs = "  (ppr bs) $ 
+                             dsEvBinds bs
 
 dsEvBinds :: Bag EvBind -> DsM [CoreBind]
-dsEvBinds bs = return (map dsEvGroup sccs)
+dsEvBinds bs = do { let core_binds = map dsEvGroup sccs 
+--                   ; pprTrace "dsEvBinds, result = " (vcat (map ppr core_binds)) $ 
+                  ; return core_binds }
+--                   ; return (map dsEvGroup sccs)
   where
     sccs :: [SCC EvBind]
     sccs = stronglyConnCompFromEdgedVertices edges
@@ -255,8 +259,15 @@ dsLCoercion co k
 
 ---------------------------------------
 dsEvTerm :: EvTerm -> CoreExpr
-dsEvTerm (EvId v)                = Var v
-dsEvTerm (EvCast v co)           = dsLCoercion co $ Cast (varToCoreExpr v)
+dsEvTerm (EvId v) = Var v
+-- Decompose, if coercion: 
+dsEvTerm (EvCast v co)          
+  | isLCoVar v -- If it's a lifted coercion then treat it specially
+  = dsEvTerm (EvCoercionBox lco)
+  where lco = mkSymCo (mkNthCo 0 co) `mkTransCo` (mkEqVarLCo v) `mkTransCo` (mkNthCo 1 co) 
+-- Otherwise 
+dsEvTerm (EvCast v co) 
+  = dsLCoercion co $ Cast (varToCoreExpr v)
                                                      -- NB: Not just (Var v) since it may be
                                                      -- a coercion variable that gets cast! 
 dsEvTerm (EvDFunApp df tys vars) = Var df `mkTyApps` tys `mkVarApps` vars
@@ -749,6 +760,7 @@ dsHsWrapper :: HsWrapper -> DsM (CoreExpr -> CoreExpr)
 dsHsWrapper WpHole 	      = return (\e -> e)
 dsHsWrapper (WpTyApp ty)      = return (\e -> App e (Type ty))
 dsHsWrapper (WpLet ev_binds)  = do { ds_ev_binds <- dsTcEvBinds ev_binds
+--                                   ; pprTrace "Desugared core bindings = " (vcat (map ppr ds_ev_binds)) $ 
                                    ; return (mkCoreLets ds_ev_binds) }
 dsHsWrapper (WpCompose c1 c2) = do { k1 <- dsHsWrapper c1 
                                    ; k2 <- dsHsWrapper c2

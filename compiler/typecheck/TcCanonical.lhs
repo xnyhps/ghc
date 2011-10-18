@@ -164,12 +164,13 @@ canClass d fl v
        ; let (ClassPred cls xis) = predTypePredTree xi
 
        ; v_new <- 
-           if isReflCo co || isGivenOrSolved fl then return v'
+           if isReflCo co then return v'
+           else if isGivenOrSolved fl then return (setVarType v' xi) -- flattening
            else do { v_new <- newEvVar xi
                    ; when (isWanted fl) $ 
                           setEvBind v' (EvCast v_new co)
-                   ; when (isGivenOrSolved fl) $ 
-                          setEvBind v_new (EvCast v' (mkSymCo co))
+--                   ; when (isGivenOrSolved fl) $ -- Is this going to happen? 
+--                          setEvBind v_new (EvCast v' (mkSymCo co))
                    ; return v_new }
 
           -- Add superclasses of this one here, See Note [Adding superclasses]. 
@@ -901,8 +902,10 @@ canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1
                                               -- co2  :: xi2 ~ s2
        ; let no_flattening_happened = all isReflCo (co2:cos1)
 
-       ; eqv_new <- if no_flattening_happened  || isGivenOrSolved fl 
-                    then return eqv
+       ; eqv_new <- if no_flattening_happened  then return eqv else 
+                    if isGivenOrSolved fl
+                    then return $ 
+                         setVarType eqv (mkEqPred (unClassify (FunCls fn xis1),xi2))
                     else if isWanted fl then 
                           do { eqv' <- newEqVar (unClassify (FunCls fn xis1)) xi2
 
@@ -952,8 +955,10 @@ canEqLeafTyVarLeft d fl eqv tv s2       -- cv : tv ~ s2
            Nothing   -> canEqFailure d fl eqv ;
            Just xi2' ->
     do { let no_flattening_happened = isReflCo co
-       ; eqv_new <- if no_flattening_happened  || isGivenOrSolved fl 
-                    then return eqv
+       ; eqv_new <- if no_flattening_happened  then return eqv 
+                    else if isGivenOrSolved fl then 
+                             return $ 
+                             setVarType eqv (mkEqPred (mkTyVarTy tv,xi2'))
                     else if isWanted fl then 
                           do { eqv' <- newEqVar (mkTyVarTy tv) xi2'  -- cv' : tv ~ xi2
                              ; setEqBind eqv $ mkTransCo (mkEqVarLCo eqv') co

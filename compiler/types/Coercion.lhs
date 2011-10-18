@@ -26,7 +26,7 @@ module Coercion (
         isSubKindCon,
 
         coVarKind, coVarKind_maybe,
-        coercionType, coercionKind, coercionKinds, isReflCo,
+        coercionType, coercionKind, coercionKinds, isReflCo, liftedCoercionKind,
         mkCoercionType,
 
 	-- ** Constructing coercions
@@ -46,7 +46,7 @@ module Coercion (
         splitForAllCo_maybe,
 
 	-- ** Coercion variables
-	mkCoVar, isCoVar, isCoVarType, coVarName, setCoVarName, setCoVarUnique,
+	mkCoVar, isCoVar, isCoVarType, isLCoVar, coVarName, setCoVarName, setCoVarUnique,
 
         -- ** Free variables
         tyCoVarsOfCo, tyCoVarsOfCos, coVarsOfCo, coercionSize,
@@ -96,7 +96,7 @@ import BasicTypes
 import Outputable
 import Unique
 import Pair
-import PrelNames	( funTyConKey, eqPrimTyConKey )
+import PrelNames	( funTyConKey, eqPrimTyConKey, eqTyConKey )
 import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import Control.Arrow (second)
@@ -292,6 +292,14 @@ setCoVarName   = setVarName
 
 isCoVar :: Var -> Bool
 isCoVar v = isCoVarType (varType v)
+
+isLCoVar :: Var -> Bool 
+-- Is lifted coercion variable (only!)
+isLCoVar v 
+  | Just tc <- tyConAppTyCon_maybe (varType v) 
+  , tc `hasKey` eqTyConKey
+  = True
+  | otherwise = False 
 
 isCoVarType :: Type -> Bool
 isCoVarType ty 	    -- Tests for t1 ~# t2, the unboxed equality
@@ -1054,22 +1062,37 @@ coercionType co = case coercionKind co of
 -- > c :: (t1 ~ t2)
 --
 -- i.e. the kind of @c@ relates @t1@ and @t2@, then @coercionKind c = Pair t1 t2@.
-coercionKind :: Coercion -> Pair Type
-coercionKind (Refl ty)            = Pair ty ty
-coercionKind (TyConAppCo tc cos)  = mkTyConApp tc <$> (sequenceA $ map coercionKind cos)
-coercionKind (AppCo co1 co2)      = mkAppTy <$> coercionKind co1 <*> coercionKind co2
-coercionKind (ForAllCo tv co)     = mkForAllTy tv <$> coercionKind co
-coercionKind (CoVarCo cv)         = ASSERT( isCoVar cv ) toPair $ coVarKind cv
-coercionKind (AxiomInstCo ax cos) = let Pair tys1 tys2 = coercionKinds cos
-                                    in  Pair (substTyWith (co_ax_tvs ax) tys1 (co_ax_lhs ax)) 
-                                             (substTyWith (co_ax_tvs ax) tys2 (co_ax_rhs ax))
-coercionKind (UnsafeCo ty1 ty2)   = Pair ty1 ty2
-coercionKind (SymCo co)           = swap $ coercionKind co
-coercionKind (TransCo co1 co2)    = Pair (pFst $ coercionKind co1) (pSnd $ coercionKind co2)
-coercionKind (NthCo d co)         = getNth d <$> coercionKind co
-coercionKind co@(InstCo aco ty)    | Just ks <- splitForAllTy_maybe `traverse` coercionKind aco
-                                  = (\(tv, body) -> substTyWith [tv] [ty] body) <$> ks
-				  | otherwise = pprPanic "coercionKind" (ppr co)
+
+liftedCoercionKind :: LCoercion -> Pair Type
+liftedCoercionKind = coercion_kind lifted_coVarKind 
+  where lifted_coVarKind cv 
+            | Just (tc, [ty1,ty2]) <- splitTyConApp_maybe (varType cv)
+            , (tc `hasKey` eqPrimTyConKey || tc `hasKey` eqTyConKey)  
+            = (ty1,ty2)
+            | otherwise = panic "liftedCoercionKind, non coercion variable"
+
+coercionKind :: Coercion -> Pair Type 
+coercionKind = coercion_kind coVarKind
+                                
+coercion_kind :: (CoVar -> (Type,Type)) -> Coercion -> Pair Type
+-- Works for Coercions and LCoercions but you have to pass in what to do 
+-- at the (unlifted or lifted) coercion variable. 
+coercion_kind f co = go co 
+  where go (Refl ty)            = Pair ty ty
+        go (TyConAppCo tc cos)  = mkTyConApp tc <$> (sequenceA $ map go cos)
+        go (AppCo co1 co2)      = mkAppTy <$> go co1 <*> go co2
+        go (ForAllCo tv co)     = mkForAllTy tv <$> go co
+        go (CoVarCo cv)         = toPair $ f cv
+        go (AxiomInstCo ax cos) = let Pair tys1 tys2 = (sequenceA $ map go cos) 
+                                  in  Pair (substTyWith (co_ax_tvs ax) tys1 (co_ax_lhs ax)) 
+                                           (substTyWith (co_ax_tvs ax) tys2 (co_ax_rhs ax))
+        go (UnsafeCo ty1 ty2)   = Pair ty1 ty2
+        go (SymCo co)           = swap $ go co
+        go (TransCo co1 co2)    = Pair (pFst $ go co1) (pSnd $ go co2)
+        go (NthCo d co)         = getNth d <$> go co
+        go co@(InstCo aco ty)    | Just ks <- splitForAllTy_maybe `traverse` go aco
+                                          = (\(tv, body) -> substTyWith [tv] [ty] body) <$> ks
+        				  | otherwise = pprPanic "coercionKind" (ppr co)
 
 -- | Apply 'coercionKind' to multiple 'Coercion's
 coercionKinds :: [Coercion] -> Pair [Type]

@@ -843,8 +843,11 @@ solveImplication tcs_untouchables
                           imp { ic_wanted = res_wanted
                               , ic_insol  = insolubleWC res_wanted }
 
+       ; evbinds <- getTcEvBindsBag 
+
        ; traceTcS "solveImplication end }" $ vcat
              [ text "res_flat_free =" <+> ppr res_flat_free
+             , text "implication evbinds = " <+> vcat (map ppr (varEnvElts evbinds))
              , text "res_implic =" <+> ppr res_implic ]
 
        ; return (res_flat_free, res_implic) }
