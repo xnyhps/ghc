@@ -846,20 +846,9 @@ data Ct
 
 
 instance Outputable Ct where
--- DV: Ignore printing of depths for now, maybe add later
---     Or print them under extra ppr debug flag. 
-  ppr (CDictCan d fl cls tys _d)     
-      = ppr fl <+> ppr d  <+> dcolon <+> pprClassPred cls tys
-  ppr (CIPCan ip fl ip_nm ty _d)     
-      = ppr fl <+> ppr ip <+> dcolon <+> parens (ppr ip_nm <> dcolon <> ppr ty)
-  ppr (CIrredEvCan v fl ty _d)
-      = ppr fl <+> ppr v <+> dcolon <+> ppr ty
-  ppr (CTyEqCan co fl tv ty _d)      
-      = ppr fl <+> ppr co <+> dcolon <+> pprEqPred (Pair (mkTyVarTy tv) ty)
-  ppr (CFunEqCan co fl tc tys ty _d) 
-      = ppr fl <+> ppr co <+> dcolon <+> pprEqPred (Pair (mkTyConApp tc tys) ty)
-  ppr (CNonCanonical co fl _d)
-      = ppr fl <+> pprEvVarWithType co
+  ppr ct = ppr (cc_flavor ct) <> braces (ppr (cc_depth ct))
+           <+> ppr ev_var <+> dcolon <+> ppr (varType ev_var) 
+         where ev_var = cc_id ct
 \end{code}
 
 \begin{code}
