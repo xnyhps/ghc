@@ -8,13 +8,14 @@ module Kind (
         Kind, typeKind,
 
 	-- Kinds
-	liftedTypeKind, unliftedTypeKind, openTypeKind,
+	anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind,
         argTypeKind, ubxTupleKind, constraintKind,
         mkArrowKind, mkArrowKinds,
 
         -- Kind constructors...
-        liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
-        argTypeKindTyCon, ubxTupleKindTyCon, constraintKindTyCon,
+        anyKindTyCon, liftedTypeKindTyCon, openTypeKindTyCon,
+        unliftedTypeKindTyCon, argTypeKindTyCon, ubxTupleKindTyCon,
+        constraintKindTyCon,
 
         -- Super Kinds
 	tySuperKind, tySuperKindTyCon, 
@@ -30,12 +31,13 @@ module Kind (
         isUbxTupleKind, isArgTypeKind, isConstraintKind, isKind,
         isSuperKind, noHashInKind,
         isLiftedTypeKindCon, isConstraintKindCon,
+        isAnyKind, isAnyKindCon,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
         isSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Functions on variables
-        splitKiTyVars, partitionKiTyVars,
+        isKiVar, splitKiTyVars, partitionKiTyVars,
 
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
@@ -125,9 +127,14 @@ synTyConResKind :: TyCon -> Kind
 synTyConResKind tycon = kindAppResult (tyConKind tycon) (map mkTyVarTy (tyConTyVars tycon))
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
-isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind, isConstraintKind :: Kind -> Bool
+isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind, isConstraintKind, isAnyKind :: Kind -> Bool
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
-        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon, isConstraintKindCon :: TyCon -> Bool
+        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon, isConstraintKindCon, isAnyKindCon :: TyCon -> Bool
+
+isAnyKindCon tc     = tyConUnique tc == anyKindTyConKey
+
+isAnyKind (TyConApp tc _) = isAnyKindCon tc
+isAnyKind _               = False
 
 isOpenTypeKindCon tc    = tyConUnique tc == openTypeKindTyConKey
 
@@ -202,9 +209,10 @@ isSubKind k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
     = ASSERT2( isSuperKindTyCon kc2 && null k1s && null k2s, ppr kc1 <+> ppr kc2 )
       True
 
-  | otherwise =  -- handles usual kinds (*, #, (#), etc.)
-    ASSERT( null k1s && null k2s )
-    kc1 `isSubKindCon` kc2
+  | otherwise = -- handles usual kinds (*, #, (#), etc.)
+                ASSERT( null k1s && null k2s )
+                kc1 `isSubKindCon` kc2
+
 
 isSubKind k1 k2 = eqKind k1 k2
 
@@ -240,6 +248,10 @@ splitKiTyVars = span (isSuperKind . tyVarKind)
 
 partitionKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
 partitionKiTyVars = partition (isSuperKind . tyVarKind)
+
+-- Checks if this "type or kind" variable is a kind variable
+isKiVar :: TyVar -> Bool
+isKiVar v = isSuperKind (varType v)
 
 
 -- About promoting a type to a kind

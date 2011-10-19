@@ -1222,11 +1222,13 @@ eitherTyConKey                          = mkPreludeTyConUnique 84
 
 -- Super Kinds constructors
 tySuperKindTyConKey :: Unique
-tySuperKindTyConKey                    = mkPreludeTyConUnique 85
+tySuperKindTyConKey                     = mkPreludeTyConUnique 85
 
 -- Kind constructors
-liftedTypeKindTyConKey, openTypeKindTyConKey, unliftedTypeKindTyConKey,
-    ubxTupleKindTyConKey, argTypeKindTyConKey, constraintKindTyConKey :: Unique
+liftedTypeKindTyConKey, anyKindTyConKey, openTypeKindTyConKey,
+  unliftedTypeKindTyConKey, ubxTupleKindTyConKey, argTypeKindTyConKey,
+  constraintKindTyConKey :: Unique
+anyKindTyConKey                         = mkPreludeTyConUnique 86
 liftedTypeKindTyConKey                  = mkPreludeTyConUnique 87
 openTypeKindTyConKey                    = mkPreludeTyConUnique 88
 unliftedTypeKindTyConKey                = mkPreludeTyConUnique 89
@@ -1595,7 +1597,8 @@ mzipIdKey       = mkPreludeMiscIdUnique 197
 
 \begin{code}
 kindKeys :: [Unique]
-kindKeys = [ liftedTypeKindTyConKey
+kindKeys = [ anyKindTyConKey
+           , liftedTypeKindTyConKey
            , openTypeKindTyConKey
            , unliftedTypeKindTyConKey
            , ubxTupleKindTyConKey

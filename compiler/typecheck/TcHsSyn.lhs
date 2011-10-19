@@ -38,6 +38,7 @@ import TcMType
 import Coercion
 import TysPrim
 import TysWiredIn
+import Type
 import TypeRep
 import DataCon
 import Name
@@ -998,16 +999,21 @@ zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
 
        ; unbound_tv_set <- newMutVar emptyVarSet
        ; let env_lhs = setZonkType env_rhs (\_ -> zonkTypeCollecting unbound_tv_set)
-       	     -- See Note [Zonking the LHS of a RULE]
+        -- See Note [Zonking the LHS of a RULE]
 
        ; new_lhs <- zonkLExpr env_lhs lhs
        ; new_rhs <- zonkLExpr env_rhs rhs
 
        ; unbound_tvs <- readMutVar unbound_tv_set
+       -- We want to make sure that all kind variables are zonked
+       ; zonked_unbound_tvs <- zonkTcTyVarsAndFV unbound_tvs
        ; let final_bndrs :: [RuleBndr Var]
-	     final_bndrs = map (RuleBndr . noLoc) (varSetElems unbound_tvs) ++ new_bndrs
+             final_bndrs = map (RuleBndr . noLoc)
+                            (varSetElemsKvsFirst zonked_unbound_tvs)
+                           ++ new_bndrs
 
-       ; return (HsRule name act final_bndrs new_lhs fv_lhs new_rhs fv_rhs) }
+       ; pprTrace "zonkRule" (ppr (unbound_tvs, zonked_unbound_tvs)) 
+       $ return (HsRule name act final_bndrs new_lhs fv_lhs new_rhs fv_rhs) }
   where
    zonk_bndr env (RuleBndr (L loc v)) 
       = do { (env', v') <- zonk_it env v; return (env', RuleBndr (L loc v')) }
@@ -1121,6 +1127,28 @@ side-effected to a)
 And that in turn is why ZonkEnv carries the function to use for
 type variables!
 
+Note [Zonking mutable unbound type or kind variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In zonkTypeZapping, we zonk mutable but unbound type or kind variables to an
+arbitrary type. We know if they are unbound even though we don't carry an
+environment, because at the binding site for a variable we bind the mutable
+var to a fresh immutable one.  So the mutable store plays the role of an
+environment.  If we come across a mutable variable that isn't so bound, it
+must be completely free. We zonk the expected kind to make sure we don't get
+some unbound meta variable as the kind.
+
+Note that since we have kind polymorphism, zonk_unbound_tyvar will handle both
+type and kind variables. Consider the following datatype:
+
+  data Phantom a = Phantom Int
+
+The type of Phantom is (forall (k : BOX). forall (a : k). Int). Both `a` and
+`k` are unbound variables. We want to zonk this to
+(forall (k : AnyK). forall (a : Any AnyK). Int). For that we have to check if
+we have a type or a kind variable; for kind variables we just return AnyK (and
+not the ill-kinded Any BOX).
+
 \begin{code}
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToType (ZonkEnv zonk_ty env) ty = zonk_ty env ty
@@ -1131,40 +1159,32 @@ zonkTcTypeToTypes env tys = mapM (zonkTcTypeToType env) tys
 zonkTypeCollecting :: TcRef TyVarSet -> TcType -> TcM Type
 -- This variant collects unbound type variables in a mutable variable
 zonkTypeCollecting unbound_tv_set
-  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar TyVarTy) -- JPM TyVarTy
+  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM mkTyVarTy
   where
     zonk_unbound_tyvar tv 
         = do { tv' <- zonkQuantifiedTyVar tv
-	     ; tv_set <- readMutVar unbound_tv_set
-	     ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
-	     ; return (mkTyVarTy tv') }
+             ; tv_set <- pprTrace "zonkTypeCollecting" (ppr (tv,tv')) $ readMutVar unbound_tv_set
+             ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
+             ; return (mkTyVarTy tv') }
 
 zonkTypeZapping :: VarEnv Var -> TcType -> TcM Type
 -- This variant is used for everything except the LHS of rules
 -- It zaps unbound type variables to (), or some other arbitrary type
-zonkTypeZapping _env ty 
-  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar zonk_bound_tyvar) ty -- JPM zonk_bound_tyvar
+zonkTypeZapping env ty 
+  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) ty -- JPM zonk_bound_tyvar
   where
-        -- Zonk a mutable but unbound type variable to an arbitrary type
-        -- We know it's unbound even though we don't carry an environment,
-        -- because at the binding site for a type variable we bind the
-        -- mutable tyvar to a fresh immutable one.  So the mutable store
-        -- plays the role of an environment.  If we come across a mutable
-        -- type variable that isn't so bound, it must be completely free.
-        -- We zonk the expected kind to make sure we don't get some unbound
-        -- meta variable as the kind.
-    zonk_unbound_tyvar tv = do { -- JPM: Should we use zonkKind here?
-                                 kind <- zonkTcKind (tyVarKind tv)
-                               ; let ty = anyTypeOfKind kind
-                               ; writeMetaTyVar tv ty
+    -- See Note [Zonking mutable unbound type or kind variables]
+    zonk_unbound_tyvar tv = do { kind <- zonkTcKindToKind anyKind (tyVarKind tv)
+                               ; let ty = if isSuperKind kind
+                                          -- ty is actually a kind, zonk to AnyK
+                                          then anyKind
+                                          else anyTypeOfKind kind
+                               ; {- pprTrace "zonkTypeZapping" (ppr (tv, tyVarKind tv, kind, ty)) $ -} writeMetaTyVar tv ty
                                ; return ty }
-    zonk_bound_tyvar tv = -- JPM: pprTrace "zonk_bound_tyvar enter" (ppr tv) $ 
-                          TyVarTy tv
-{-
+    zonk_bound_tyvar tv = pprTrace "zonk_bound_tyvar enter" (ppr tv) $ 
                           case lookupVarEnv env tv of
                             Nothing  -> pprTrace "zonk_bound_tyvar Nothing" empty $ TyVarTy tv
                             Just tv' -> pprTrace "zonk_bound_tyvar Just" empty $ TyVarTy tv'
--}
 
 zonkTcLCoToLCo :: ZonkEnv -> LCoercion -> TcM LCoercion
 zonkTcLCoToLCo env co

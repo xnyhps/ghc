@@ -438,8 +438,9 @@ kcFamilyDecl classTvs decl@(TyFamily {tcdKind = kind})
     unifyClassParmKinds (L _ tv) 
       | (n,k) <- hsTyVarNameKind tv
       , Just classParmKind <- lookup n classTyKinds 
-      = let ctxt = ptext (sLit "When kind checking family declaration") <+> ppr (tcdLName decl) in
-        unifyKind ctxt k classParmKind
+      = let ctxt = ptext (    sLit "When kind checking family declaration")
+                          <+> ppr (tcdLName decl)
+        in unifyKind ctxt k classParmKind >> return ()
       | otherwise = return ()
     classTyKinds = [hsTyVarNameKind tv | L _ tv <- classTvs]
 
@@ -695,6 +696,7 @@ kcFamTyPats :: TyCon
             -> ([TcKind]     -> [LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
              -- ^^ meta kv  -- ^^kinded tvs    ^^kinded ty pats  ^^res kind
             -> TcM a
+-- JPM decl should be split into its two components
 kcFamTyPats fam_tc decl thing_inside
   = kcHsTyVars (tcdTyVars decl) $ \tvs ->
     do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
@@ -707,7 +709,7 @@ kcFamTyPats fam_tc decl thing_inside
 
          -- We may not have more parameters than the kind indicates
        ; checkTc (length kinds >= length hs_typats) $
-                 tooManyParmsErr (tcdLName decl)
+                 tooManyParmsErr (tcdLName decl) -- JPM use name of fam_tc
 
          -- Type functions can have a higher-kinded result
        ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind

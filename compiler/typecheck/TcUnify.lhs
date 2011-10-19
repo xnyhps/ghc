@@ -38,10 +38,10 @@ import TcIface
 import TcRnMonad
 import TcType
 import Type
-import Kind ( isSubOpenTypeKindCon )
 import Coercion
+import Name ( isSystemName )
 import Inst
-import Kind     ( isConstraintKind, isConstraintKindCon )
+import Kind
 import TyCon
 import TysWiredIn
 import Var
@@ -49,7 +49,7 @@ import VarSet
 import VarEnv
 import ErrUtils
 import BasicTypes
-import Maybes ( allMaybes )  
+import Maybes ( allMaybes )
 import Util
 import Outputable
 import FastString
@@ -862,50 +862,43 @@ uUnfilledVars :: [EqOrigin]
 --           Neither is filled in yet
 
 uUnfilledVars origin swapped tv1 details1 tv2 details2
-  = do { 
-         {-
-         k1_sub_k2 <- k1 `isSubKindTcM` k2
-       ; k2_sub_k1 <- k2 `isSubKindTcM` k1
-         -}
-         -- JPM: We prob don't need to zonk, unification should do that already
-         traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
-                                  <+> text "with"            <+> ppr k2)
-       ; unifyKind ctxt k1 k2
+  = do { traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1'
+                                  <+> text "with"            <+> ppr k2')
+         -- JPM: Do we need to zonk, or does unifyKind do that already?
+       ; k1 <- zonkTcKind k1'
+       ; k2 <- zonkTcKind k2'
+       ; sk <- unifyKind ctxt k1 k2
+       ; traceTc "uUnfilledVars" (ppr k1 <+> text (show sk) <+> ppr k2)
+       ; let k1_sub_k2 = sk == LT || sk == EQ
+       ; let k2_sub_k1 = sk == GT || sk == EQ
        ; case (details1, details2) of
-           { (MetaTv _i1 ref1, MetaTv _i2 ref2)
-{-
+           { (MetaTv i1 ref1, MetaTv i2 ref2)
                  | k1_sub_k2 -> if k2_sub_k1 && nicer_to_update_tv1 i1 i2
                                 then updateMeta tv1 ref1 ty2
                                 else updateMeta tv2 ref2 ty1
                  | k2_sub_k1 -> updateMeta tv1 ref1 ty2
--}
-                 | isOpenTypeKind k1   -> updateMeta tv1 ref1 ty2
-                 | isArgTypeKind k1    -> updateMeta tv1 ref1 ty2
-                 | isOpenTypeKind k2   -> updateMeta tv2 ref2 ty1
-                 | isArgTypeKind k2    -> updateMeta tv2 ref2 ty1
-                 | otherwise           -> updateMeta tv2 ref2 ty1
-           ; (_, MetaTv _ ref2) {- | k1_sub_k2 -} -> updateMeta tv2 ref2 ty1
-           ; (MetaTv _ ref1, _) {- | k2_sub_k1 -} -> updateMeta tv1 ref1 ty2
+           ; (_, MetaTv _ ref2) | k1_sub_k2 -> updateMeta tv2 ref2 ty1
+           ; (MetaTv _ ref1, _) | k2_sub_k1 -> updateMeta tv1 ref1 ty2
 
            ; (_, _) -> unSwap swapped (uType_defer origin) ty1 ty2 } }
              	        -- Defer for skolems of all sorts
   where
-    k1 	      = tyVarKind tv1
-    k2 	      = tyVarKind tv2
+    k1'       = tyVarKind tv1
+    k2'       = tyVarKind tv2
     ty1       = mkTyVarTy tv1
     ty2       = mkTyVarTy tv2
-{-
+
     nicer_to_update_tv1 _     SigTv = True
     nicer_to_update_tv1 SigTv _     = False
-    nicer_to_update_tv1 _         _         = isSystemName (Var.varName tv1)
+    nicer_to_update_tv1 _         _ = isSystemName (Var.varName tv1)
         -- Try not to update SigTvs; and try to update sys-y type
         -- variables in preference to ones gotten (say) by
         -- instantiating a polymorphic function with a user-written
         -- type sig
--}
-    ctxt = vcat [ ptext (sLit "JPM Kind incompatibility when matching types:")
-                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
-                               , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
+
+    ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
+                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1'
+                               , ppr ty2 <+> dcolon <+> ppr k2' ]) ]
 
 ----------------
 checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
@@ -1166,41 +1159,43 @@ matchExpectedFunKind (TyVarTy kvar) = do
 matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind))
 matchExpectedFunKind _                         = return Nothing
 
------------------
-data SubKinding
-  = SKLe  -- k1 <= k2  -- swapped == True
-  | SKEq  -- k1 == k2  -- new
-  | SKGe  -- k1 >= k2  -- swapped == False
-
-instance Outputable SubKinding where
-  ppr SKLe = text "<="
-  ppr SKEq = text "=="
-  ppr SKGe = text ">="
+-----------------  
+type SubKinding = Ordering
 
 invSubKinding :: SubKinding -> SubKinding
-invSubKinding SKLe = SKGe
-invSubKinding SKEq = SKEq
-invSubKinding SKGe = SKLe
+invSubKinding LT = GT
+invSubKinding EQ = EQ
+invSubKinding GT = LT
 
 unifyKind :: SDoc                   -- Error message
-          -> TcKind                 -- Expected
-          -> TcKind                 -- Actual
-          -> TcM ()
-unifyKind ctxt k1 k2 = unifyKind' ctxt k1 SKGe k2
+          -> TcKind
+          -> TcKind
+          -> TcM SubKinding         -- Returns the relation between the kinds
+unifyKind ctxt k1 k2
+{-
+-- Handles AnyKind
+  | isAnyKind k1 = return GT
+  | isAnyKind k2 = return LT
+-}
+-- At the top-level, allow e.g. * <= ?
+  |  isSubOpenTypeKind k1 && isSubOpenTypeKind k2
+  && not (isConstraintKind k1) && not (isConstraintKind k2) 
+  = let k1LEk2 = isSubKind k1 k2
+        k2LEk1 = isSubKind k2 k1
+    in case (k1LEk2, k2LEk1) of
+         (True,  True)  -> return EQ
+         (True,  False) -> return LT
+         (False, True)  -> return GT
+         (False, False) -> panic "unifyKind"
 
-unifyKindEq :: SDoc                   -- Error message
-            -> TcKind -> TcKind -> TcM ()
--- Kinds must be exactly equal, no subkinding.
-unifyKindEq ctxt k1 k2 = unifyKind' ctxt k1 SKEq k2
+-- After the top-level, require equality
+  | otherwise
+  = unifyKindEq ctxt k1 k2 >> return EQ
 
-isSubKindCon' :: TyCon -> SubKinding -> TyCon -> Bool
-isSubKindCon' k1 SKLe k2 = isSubKindCon k1 k2
-isSubKindCon' k1 SKEq k2 = k1 == k2
-isSubKindCon' k1 SKGe k2 = isSubKindCon k2 k1
-
-unifyKind' :: SDoc -> TcKind -> SubKinding -> TcKind -> TcM ()
-unifyKind' _ (TyConApp kc1 []) sk (TyConApp kc2 [])
-  | isSubKindCon' kc1 sk kc2
+unifyKindEq :: SDoc -> TcKind -> TcKind -> TcM ()
+unifyKindEq _ (TyConApp kc1 []) (TyConApp kc2 [])
+  -- JPM: I don't understand what's going on here
+  | isSubKindCon kc1 kc2
   , not (isConstraintKindCon kc2) || isConstraintKindCon kc1 = return ()
    -- For the purposes of the front end ONLY, only allow
    -- the Constraint kind to unify with itself.
@@ -1208,54 +1203,52 @@ unifyKind' _ (TyConApp kc1 []) sk (TyConApp kc2 [])
    -- This prevents the user from writing constraints types
    -- on the left or right of an arrow.
 
-unifyKind' ctxt (FunTy a1 r1) sk (FunTy a2 r2)
-  = do { unifyKind' ctxt a2 sk a1; unifyKind' ctxt r1 sk r2 }
-                -- Notice the flip in the argument,
-                -- so that the sub-kinding works right
-unifyKind' ctxt (TyVarTy kv1) sk k2 = uKVar ctxt kv1 sk k2
-unifyKind' ctxt k1 sk (TyVarTy kv2) = uKVar ctxt kv2 (invSubKinding sk) k1
-unifyKind' ctxt k1@(TyConApp kc1 k1s) sk k2@(TyConApp kc2 k2s)
+unifyKindEq ctxt (FunTy a1 r1) (FunTy a2 r2)
+  = do { unifyKindEq ctxt a1 a2; unifyKindEq ctxt r1 r2 }
+  
+unifyKindEq ctxt (TyVarTy kv1) k2 = uKVar False ctxt kv1 k2
+unifyKindEq ctxt k1 (TyVarTy kv2) = uKVar True  ctxt kv2 k1
+unifyKindEq ctxt k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
   | not (isSubOpenTypeKindCon kc1) && not (isSubOpenTypeKindCon kc2)
   =  -- IA0_TODO: update with PromotedTypeTyCon
   if kc1 == kc2
-  then unifyKinds k1s k2s
-  else unifyKindMisMatch ctxt k1 sk k2
-  -- JPM
-  -- | otherwise = pprTrace "unifyKind return" (ppr (k1,k2)) $ return ()
-  where
-    unifyKinds [] [] = return ()
-    unifyKinds (k1:k1s) (k2:k2s) = do
-      unifyKind' ctxt k1  SKEq k2
-      unifyKinds     k1s      k2s
-    unifyKinds _ _ = panic "unifyKinds"
-      -- this cannot happen since the kind constructors are the same
-      -- and the kind are sort checked and thus fully applied
-unifyKind' ctxt k1 sk k2 = unifyKindMisMatch ctxt k1 sk k2
+  then ASSERT (length k1s == length k2s)
+       -- Should succeed since the kind constructors are the same, and the
+       -- kinds are sort-checked, thus fully applied
+       zipWithM_ (unifyKindEq ctxt) k1s k2s
+  else unifyKindMisMatch ctxt k1 k2
+
+unifyKindEq ctxt k1 k2 = unifyKindMisMatch ctxt k1 k2
 
 ----------------
-uKVar :: SDoc -> MetaKindVar -> SubKinding -> TcKind -> TcM ()
-uKVar ctxt kv1 sk k2
+-- For better error messages, we record whether we've flipped the kinds
+-- during the process.
+uKVar :: Bool -> SDoc -> MetaKindVar -> TcKind -> TcM ()
+uKVar isFlipped ctxt kv1 k2
   | isMetaTyVar kv1
   = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar ctxt kv1 sk k2
-            Indirect k1 -> unifyKind' ctxt k1 sk k2 }
-  | TyVarTy kv2 <- k2, isMetaTyVar kv2 = uKVar ctxt kv2 (invSubKinding sk) (TyVarTy kv1)
+            Flexi -> uUnboundKVar LT ctxt kv1 k2
+            Indirect k1 -> unifyKindEq ctxt k1 k2 }
+  | TyVarTy kv2 <- k2, isMetaTyVar kv2
+  = uKVar (not isFlipped) ctxt kv2 (TyVarTy kv1)
   | TyVarTy kv2 <- k2, kv1 == kv2 = return ()
-  | otherwise = unifyKindMisMatch ctxt (TyVarTy kv1) sk k2
+  | otherwise = if isFlipped 
+                then unifyKindMisMatch ctxt k2 (TyVarTy kv1)
+                else unifyKindMisMatch ctxt (TyVarTy kv1) k2
 
 ----------------
-uUnboundKVar :: SDoc -> MetaKindVar -> SubKinding -> TcKind -> TcM ()
-uUnboundKVar ctxt kv1 sk k2@(TyVarTy kv2)
+uUnboundKVar :: SubKinding -> SDoc -> MetaKindVar -> TcKind -> TcM ()
+uUnboundKVar sk ctxt kv1 k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
   | isMetaTyVar kv2   -- Distinct kind variables
   = do  { mb_k2 <- readMetaKindVar kv2
         ; case mb_k2 of
-            Indirect k2 -> uUnboundKVar ctxt kv1 sk k2
+            Indirect k2 -> uUnboundKVar sk ctxt kv1 k2
             Flexi -> writeMetaKindVar kv1 k2 }
   | otherwise = writeMetaKindVar kv1 k2
 
-uUnboundKVar ctxt kv1 sk non_var_k2
+uUnboundKVar sk ctxt kv1 non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
         ; kindOccurCheck ctxt kv1 k2'
         ; k2'' <- kindSimpleKind sk k2'
@@ -1283,7 +1276,7 @@ kindSimpleKind orig_sk orig_kind
     go sk (FunTy k1 k2) = do { k1' <- go (invSubKinding sk) k1
                              ; k2' <- go sk k2
                              ; return (mkArrowKind k1' k2') }
-    go SKLe k
+    go LT k
      | isOpenTypeKind k = return liftedTypeKind
      | isArgTypeKind k  = return liftedTypeKind
     go _ k
@@ -1293,15 +1286,14 @@ kindSimpleKind orig_sk orig_kind
     go _ k@(TyVarTy _) = return k -- KindVars are always simple
     go _ k@(TyConApp tc _) | not (isSubOpenTypeKindCon tc) = return k  -- Promoted type constructors too
     go _ _ = failWithTc (ptext (sLit "Unexpected kind unification failure:")
-                                  <+> ppr orig_sk <+> ppr orig_kind)
+                                  <+> text (show orig_sk) <+> ppr orig_kind)
         -- I think this can't actually happen
 
 -- T v = MkT v           v must be a type
 -- T v w = MkT (v -> w)  v must not be an umboxed tuple
 
-unifyKindMisMatch :: SDoc -> TcKind -> SubKinding -> TcKind -> TcM ()
-unifyKindMisMatch ctxt ki1 SKLe ki2 = unifyKindMisMatch ctxt ki2 SKGe ki1
-unifyKindMisMatch ctxt ki1 _ ki2 = do
+unifyKindMisMatch :: SDoc -> TcKind -> TcKind -> TcM ()
+unifyKindMisMatch ctxt ki1 ki2 = do
     ki1' <- zonkTcKind ki1
     ki2' <- zonkTcKind ki2
     let msg = hang (ptext (sLit "Couldn't match kind"))

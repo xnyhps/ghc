@@ -622,6 +622,7 @@ deriveTyData (L loc deriv_pred, L _ decl@(TyData { tcdLName = L _ tycon_name,
     get_lhs Nothing     = do { tc <- tcLookupTyCon tycon_name
 			     ; let tvs = tyConTyVars tc
 			     ; return (tvs, tc, mkTyVarTys tvs) }
+    -- JPM: to fix
     get_lhs (Just pats) = do { let hs_app = nlHsTyConApp tycon_name pats
 			     ; (tvs, tc_app) <- tcHsQuantifiedType tv_names hs_app
 			     ; let (tc, tc_args) = tcSplitTyConApp tc_app

@@ -411,7 +411,7 @@ tcInstTyVars :: [TyVar] -> TcM ([TcTyVar], [TcType], TvSubst)
 -- Instantiate with META type variables
 tcInstTyVars tyvars
   = do	{ tc_kvs <- mapM (tcInstTyVar (mkTopTvSubst [])) kvs
-        ; tc_tvs <- mapM (tcInstTyVar (zipTopTvSubst kvs (map mkTyVarTy tc_kvs))) tvs
+        ; tc_tvs <- mapM (tcInstTyVar (zipTopTvSubst kvs (mkTyVarTys tc_kvs))) tvs
 	; let tc_vs = tc_kvs ++ tc_tvs
               kts = mkTyVarTys tc_vs
 	; return (tc_vs, kts, zipTopTvSubst (kvs ++ tvs) kts) }
@@ -577,10 +577,11 @@ zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 --
 -- We leave skolem TyVars alone; they are immutable.
 zonkQuantifiedTyVar tv
-  = ASSERT2( isTcTyVar tv, ppr tv ) 
+  = pprTrace "zonkQuantifiedTyVar" (ppr tv) $
+    ASSERT2( isTcTyVar tv, ppr tv ) 
     case tcTyVarDetails tv of
       SkolemTv {} -> WARN( True, ppr tv )  -- Dec10: Can this really happen?
-                     do { kind <- zonkTcType (tyVarKind tv)
+                     do { kind <- zonkTcKind (tyVarKind tv)
                         ; return $ setTyVarKind tv kind }
 	-- It might be a skolem type variable, 
 	-- for example from a user type signature
@@ -609,13 +610,14 @@ skolemiseUnboundMetaTyVar tv details
     do  { span <- getSrcSpanM    -- Get the location from "here"
                                  -- ie where we are generalising
         ; uniq <- newUnique      -- Remove it from TcMetaTyVar unique land
-	; let final_kind = defaultKind (tyVarKind tv)
+        ; let final_kind = defaultKind (tyVarKind tv)
               final_name = mkInternalName uniq (getOccName tv) span
               final_tv   = mkTcTyVar final_name final_kind details
-	; (if isSuperKind final_kind
+        ; (if isSuperKind final_kind
            then writeMetaKindVar
            else writeMetaTyVar) tv (mkTyVarTy final_tv)
-	; return final_tv }
+        ; pprTrace "skolemiseUnboundMetaTyVar" (ppr (tyVarKind tv, final_kind))
+        $ return final_tv }
 \end{code}
 
 \begin{code}
@@ -792,10 +794,8 @@ mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
 mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn tyvar 
   = ASSERT( isTcTyVar tyvar )
     case tcTyVarDetails tyvar of
-      SkolemTv {}    -> return (unbound_ivar_fn tyvar) -- JPM
-      --SkolemTv {}    -> return (TyVarTy tyvar)
+      SkolemTv {}    -> return (unbound_ivar_fn tyvar)
       RuntimeUnk {}  -> return (unbound_ivar_fn tyvar)
-      --RuntimeUnk {}  -> return (TyVarTy tyvar)
       FlatSkol ty    -> zonkType (mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn) ty
       MetaTv _ ref   -> do { cts <- readMutVar ref
 			   ; case cts of    
@@ -836,11 +836,12 @@ zonkTcKind :: TcKind -> TcM TcKind
 zonkTcKind k = zonkTcType k
 
 -------------
-zonkTcKindToKind :: TcKind -> TcM Kind
+zonkTcKindToKind :: Kind -> TcKind -> TcM Kind
 -- When zonking a TcKind to a kind, we need to instantiate kind variables,
 -- Haskell specifies that * is to be used, so we follow that.
-zonkTcKindToKind k 
-  = zonkType (mkZonkTcTyVar (\ _ -> return liftedTypeKind) TyVarTy) k -- JPM
+-- JPM: update documentation
+zonkTcKindToKind default_kind k 
+  = zonkType (mkZonkTcTyVar (\ _ -> return default_kind) mkTyVarTy) k
 \end{code}
 			
 %************************************************************************
@@ -936,8 +937,9 @@ checkValidType ctxt ty = do
     check_type rank ubx_tup ty
 
 	-- Check that the thing has kind Type, and is lifted if necessary
-	-- Do this second, becuase we can't usefully take the kind of an 
+	-- Do this second, because we can't usefully take the kind of an 
 	-- ill-formed type such as (a~Int)
+    -- checkTc True (kindErr actual_kind)
     checkTc kind_ok (kindErr actual_kind)
 
     traceTc "checkValidType done" (ppr ty)

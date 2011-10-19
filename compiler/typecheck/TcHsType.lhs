@@ -181,9 +181,7 @@ tcHsInstHead :: LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
 tcHsInstHead (L loc hs_ty)
   = setSrcSpan loc   $	-- No need for an "In the type..." context
                         -- because that comes from the caller
-    kc_ds_inst_head hs_ty
-  where
-    kc_ds_inst_head ty = case splitHsClassTy_maybe cls_ty of
+    case splitHsClassTy_maybe cls_ty of
         Just _ -> do -- Kind-checking first
         { (tvs, ctxt, cls_ty) <- kcHsTyVars tv_names $ \ tv_names' -> do
             { ctxt' <- mapM kcHsLPredType ctxt
@@ -192,7 +190,7 @@ tcHsInstHead (L loc hs_ty)
                -- head we only allow something of kind Constraint.
             ; return (tv_names', ctxt', cls_ty') }
           -- Now desugar the kind-checked type
-        ; tcTyVarBndrs tvs  $ \ tvs' -> do
+        ; tcTyVarBndrsKindGen tvs  $ \ tvs' -> do
             cls_ty' <- ds_type cls_ty
             let Just (tc, tys) = splitTyConApp_maybe cls_ty'
             ctxt' <- dsHsTypes ctxt
@@ -201,7 +199,7 @@ tcHsInstHead (L loc hs_ty)
                       Nothing -> failWithTc (ppr tc <+> ptext (sLit "is not a class"))
             return (tvs', ctxt', clas, tys) }
         _ -> failWithTc (ptext (sLit "Malformed instance type"))
-      where (tv_names, ctxt, cls_ty) = splitHsForAllTy ty
+      where (tv_names, ctxt, cls_ty) = splitHsForAllTy hs_ty
 
 tcHsQuantifiedType :: [LHsTyVarBndr Name] -> LHsType Name -> TcM ([TyVar], Type)
 -- Behave very like type-checking (HsForAllTy sig_tvs hs_ty),
@@ -230,7 +228,7 @@ tc_hs_deriv tv_names ty
   = kcHsTyVars tv_names                 $ \ tv_names' ->
     do  { cls_kind <- kcClass cls_name
         ; (tys, _res_kind) <- kcApps cls_name cls_kind hs_tys
-        ; tcTyVarBndrs tv_names'        $ \ tyvars ->
+        ; tcTyVarBndrsKindGen tv_names'        $ \ tyvars ->
     do  { arg_tys <- dsHsTypes tys
         ; cls <- tcLookupClass cls_name
         ; return (tyvars, cls, arg_tys) }}
@@ -638,7 +636,7 @@ ds_type (HsTupleTy hs_con tys) = do
     con <- case hs_con of
         HsUnboxedTuple -> return UnboxedTuple
         HsBoxyTuple kind -> do
-          kind' <- zonkTcKindToKind kind
+          kind' <- zonkTcKindToKind liftedTypeKind kind -- JPM: add note
           case () of
             _ | kind' `eqKind` constraintKind -> return ConstraintTuple
             _ | kind' `eqKind` liftedTypeKind -> return BoxedTuple
@@ -670,7 +668,7 @@ ds_type (HsEqTy ty1 ty2) = do
     return (mkEqPred (tau_ty1, tau_ty2))
 
 ds_type (HsForAllTy _ tv_names ctxt ty)
-  = tcTyVarBndrs tv_names               $ \ tyvars -> do
+  = tcTyVarBndrsKindGen tv_names $ \ tyvars -> do
     theta <- mapM dsHsType (unLoc ctxt)
     tau <- dsHsType ty
     return (mkSigmaTy tyvars theta tau)
@@ -679,15 +677,16 @@ ds_type (HsDocTy ty _)  -- Remove the doc comment
   = dsHsType ty
 
 ds_type (HsSpliceTy _ _ kind) 
-  = do { kind' <- zonkTcKindToKind kind
+  = do { kind' <- zonkTcKind kind
        ; newFlexiTyVarTy kind' }
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
 ds_type (HsExplicitListTy kind tys) = do
-  kind' <- zonkTcKindToKind kind
+  kind' <- zonkTcKind kind
   go kind' tys
+  -- JPM: fold . map
   where
     go k [] = return $ mkTyConApp (buildPromotedDataTyCon nilDataCon) [k]
     go k (ty:tys) = do
@@ -697,13 +696,13 @@ ds_type (HsExplicitListTy kind tys) = do
 
 ds_type (HsExplicitTupleTy kis tys) = do
   MASSERT( length kis == length tys )
-  kis' <- mapM zonkTcKindToKind kis
+  kis' <- mapM zonkTcKind kis
   tys' <- mapM dsHsType tys
-  return $ mkTyConApp (buildPromotedDataTyCon (tupleCon BoxedTuple (length kis))) (kis' ++ tys')
+  return $ mkTyConApp (buildPromotedDataTyCon (tupleCon BoxedTuple (length kis'))) (kis' ++ tys')
 
 ds_type (HsWrapTy (WpKiApps kappas) ty) = do
   tau <- ds_type ty
-  kappas' <- mapM zonkTcKindToKind kappas
+  kappas' <- mapM zonkTcKind kappas
   return (mkAppTys tau kappas')
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
@@ -824,9 +823,19 @@ tcTyVarBndrs bndrs thing_inside = do
     tcExtendTyVarEnv tyvars (thing_inside tyvars)
   where
     zonk (name, kind)
-      = do { kind' <- zonkTcKindToKind kind
-           ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
-	   ; return (mkTyVar name kind') }
+      = do { -- kind' <- zonkTcKindToKind anyKind kind -- JPM
+             checkTc (noHashInKind kind) (ptext (sLit "Kind signature contains # or (#)"))
+           ; return (mkTyVar name kind) }
+
+tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
+-- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
+-- calls thing_inside with [(k :: BOX), (f :: k -> *), (a :: k)]
+tcTyVarBndrsKindGen bndrs thing_inside = do
+    (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
+    let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
+        ktvs = kvs ++ tyvars
+    traceTc "tcTyVarBndrsKindGen" (ppr (bndrs, kvs, tyvars))
+    tcExtendTyVarEnv ktvs (thing_inside ktvs)
 
 tcTyClTyVars :: Name -> [LHsTyVarBndr Name]	-- LHS of the type or class decl
              -> ([TyVar] -> Kind -> TcM a) -> TcM a
@@ -850,14 +859,6 @@ tcTyClTyVars tycon tyvars thing_inside
        ; res' <- zonkTcKind res
        ; tcExtendTyVarEnv all_vs' (thing_inside all_vs' res') }
 
-tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
--- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
--- calls thing_inside with [(k :: BOX), (f :: k -> *), (a :: k)]
-tcTyVarBndrsKindGen bndrs thing_inside = do
-    (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
-    let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
-        ktvs = kvs ++ tyvars
-    tcExtendTyVarEnv ktvs (thing_inside ktvs)
 
 -- JPM: document
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
@@ -866,7 +867,9 @@ kindGeneralizeKinds kinds = do
   zonked_kinds <- mapM zonkTcKind kinds
   let tvs_to_quantify = tyVarsOfTypes zonked_kinds `minusVarSet` gbl_tvs
       kvs_to_quantify = fst (splitKiTyVars (varSetElems tvs_to_quantify))
-  kvs <- zonkQuantifiedTyVars kvs_to_quantify
+  -- JPM: improve this ASSERT
+  kvs <- ASSERT ( varSetElems tvs_to_quantify == kvs_to_quantify )
+         zonkQuantifiedTyVars kvs_to_quantify
   let bodys = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
   traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
                             <+> ppr kvs   <+> ppr bodys)

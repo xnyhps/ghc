@@ -18,17 +18,17 @@ module TysPrim(
         kKiVar,
 
         -- Kind constructors...
-        tySuperKindTyCon, tySuperKind,
+        tySuperKindTyCon, tySuperKind, anyKindTyCon,
         liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
         argTypeKindTyCon, ubxTupleKindTyCon, constraintKindTyCon,
 
-        tySuperKindTyConName, liftedTypeKindTyConName,
+        tySuperKindTyConName, anyKindTyConName, liftedTypeKindTyConName,
         openTypeKindTyConName, unliftedTypeKindTyConName,
         ubxTupleKindTyConName, argTypeKindTyConName,
         constraintKindTyConName,
 
         -- Kinds
-	liftedTypeKind, unliftedTypeKind, openTypeKind,
+	anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind,
         argTypeKind, ubxTupleKind, constraintKind,
         mkArrowKind, mkArrowKinds,
 
@@ -262,18 +262,19 @@ funTyCon = mkFunTyCon funTyConName (mkArrowKinds [liftedTypeKind, liftedTypeKind
 
 \begin{code}
 -- | See "Type#kind_subtyping" for details of the distinction between the 'Kind' 'TyCon's
-tySuperKindTyCon, liftedTypeKindTyCon,
+tySuperKindTyCon, anyKindTyCon, liftedTypeKindTyCon,
       openTypeKindTyCon, unliftedTypeKindTyCon,
       ubxTupleKindTyCon, argTypeKindTyCon,
       constraintKindTyCon
    :: TyCon
-tySuperKindTyConName, liftedTypeKindTyConName,
+tySuperKindTyConName, anyKindTyConName, liftedTypeKindTyConName,
       openTypeKindTyConName, unliftedTypeKindTyConName,
       ubxTupleKindTyConName, argTypeKindTyConName,
       constraintKindTyConName
    :: Name
 
 tySuperKindTyCon      = mkSuperKindTyCon tySuperKindTyConName
+anyKindTyCon          = mkKindTyCon anyKindTyConName          tySuperKind
 liftedTypeKindTyCon   = mkKindTyCon liftedTypeKindTyConName   tySuperKind
 openTypeKindTyCon     = mkKindTyCon openTypeKindTyConName     tySuperKind
 unliftedTypeKindTyCon = mkKindTyCon unliftedTypeKindTyConName tySuperKind
@@ -285,6 +286,7 @@ constraintKindTyCon   = mkKindTyCon constraintKindTyConName   tySuperKind
 -- ... and now their names
 
 tySuperKindTyConName      = mkPrimTyConName (fsLit "BOX") tySuperKindTyConKey tySuperKindTyCon
+anyKindTyConName      = mkPrimTyConName (fsLit "AnyK") anyKindTyConKey anyKindTyCon
 liftedTypeKindTyConName   = mkPrimTyConName (fsLit "*") liftedTypeKindTyConKey liftedTypeKindTyCon
 openTypeKindTyConName     = mkPrimTyConName (fsLit "?") openTypeKindTyConKey openTypeKindTyCon
 unliftedTypeKindTyConName = mkPrimTyConName (fsLit "#") unliftedTypeKindTyConKey unliftedTypeKindTyCon
@@ -307,13 +309,14 @@ kindTyConType :: TyCon -> Type
 kindTyConType kind = TyConApp kind []
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
-liftedTypeKind, unliftedTypeKind, openTypeKind, argTypeKind, ubxTupleKind, constraintKind :: Kind
+anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, argTypeKind, ubxTupleKind, constraintKind :: Kind
 
+anyKind      = kindTyConType anyKindTyCon
 liftedTypeKind   = kindTyConType liftedTypeKindTyCon
 unliftedTypeKind = kindTyConType unliftedTypeKindTyCon
 openTypeKind     = kindTyConType openTypeKindTyCon
 argTypeKind      = kindTyConType argTypeKindTyCon
-ubxTupleKind	 = kindTyConType ubxTupleKindTyCon
+ubxTupleKind     = kindTyConType ubxTupleKindTyCon
 constraintKind   = kindTyConType constraintKindTyCon
 
 -- | Given two kinds @k1@ and @k2@, creates the 'Kind' @k1 -> k2@

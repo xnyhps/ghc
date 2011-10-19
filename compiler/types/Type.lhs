@@ -76,13 +76,14 @@ module Type (
         typeKind,
         
         -- ** Common Kinds and SuperKinds
-        liftedTypeKind, unliftedTypeKind, openTypeKind,
+        anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind,
         argTypeKind, ubxTupleKind, constraintKind,
         tySuperKind, 
 
         -- ** Common Kind type constructors
         liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
         argTypeKindTyCon, ubxTupleKindTyCon, constraintKindTyCon,
+        anyKindTyCon,
 
 	-- * Type free variables
 	tyVarsOfType, tyVarsOfTypes,
@@ -1541,7 +1542,7 @@ typeKind (TyConApp tc tys)
   | otherwise
   = kindAppResult (tyConKind tc) tys
 
-typeKind (AppTy fun arg)        = kindAppResult (typeKind fun) [arg]
+typeKind (AppTy fun arg)      = kindAppResult (typeKind fun) [arg]
 typeKind (ForAllTy _ ty)      = typeKind ty
 typeKind (TyVarTy tyvar)      = tyVarKind tyvar
 typeKind (FunTy _arg res)
@@ -1551,7 +1552,7 @@ typeKind (FunTy _arg res)
     --   (a) types (of kind openTypeKind or its sub-kinds)
     --   (b) kinds (of super-kind TY) (e.g. * -> (* -> *))
     | isSuperKind k         = k
-    | otherwise               = ASSERT( isSubOpenTypeKind k) liftedTypeKind 
+    | otherwise             = ASSERT( isSubOpenTypeKind k ) liftedTypeKind
     where
       k = typeKind res
 
