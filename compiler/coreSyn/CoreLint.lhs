@@ -641,6 +641,28 @@ lintTyBndrKind :: OutTyVar -> LintM ()
 lintTyBndrKind tv = lintKind (tyVarKind tv)
 
 -------------------
+lint_prim_eq_co :: TyCon -> Coercion -> [Coercion] -> LintM (OutType,OutType)
+lint_prim_eq_co tc co arg_cos = case arg_cos of 
+  [co1,co2] -> do { (t1,s1) <- lintCoercion co1
+                  ; (t2,s2) <- lintCoercion co2
+                  ; checkL (typeKind t1 `eqKind` typeKind t2) $ 
+                    ptext (sLit "Mismatched arg kinds in coercion application:") <+> ppr co
+                  ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
+  _ -> failWithL (ptext (sLit "Unsaturated or oversaturated ~# coercion") <+> ppr co)
+
+lint_eq_co :: TyCon -> Coercion -> [Coercion] -> LintM (OutType,OutType) 
+lint_eq_co tc co arg_cos = case arg_cos of 
+  [co1,co2] -> do { (t1,s1) <- lintCoercion co1
+                  ; (t2,s2) <- lintCoercion co2
+                  ; checkL (typeKind t1 `eqKind` typeKind t2) $
+                    ptext (sLit "Mismatched arg kinds in coercion application:") <+> ppr co
+                  ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
+  [co1] -> do { (t1,s1) <- lintCoercion co1
+                ; return (mkTyConApp tc [t1], mkTyConApp tc [s1]) }
+  [] -> return (mkTyConApp tc [], mkTyConApp tc [])
+  _ -> failWithL (ptext (sLit "Oversaturated ~ coercion") <+> ppr co) 
+
+
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
 lintCoercion (Refl ty)
@@ -648,6 +670,12 @@ lintCoercion (Refl ty)
        ; return (ty', ty') }
 
 lintCoercion co@(TyConAppCo tc cos)
+  | tc `hasKey` eqPrimTyConKey      -- Just as in lintType, treat applications of (~) and (~#)
+  = lint_prim_eq_co tc co cos       -- specially to allow for polymorphism. This hack will 
+                                    -- hopefully go away when we merge in kind polymorphism.
+  | tc `hasKey` eqTyConKey
+  = lint_eq_co tc co cos
+  | otherwise
   = do { (ss,ts) <- mapAndUnzipM lintCoercion cos
        ; check_co_app co (tyConKind tc) ss
        ; return (mkTyConApp tc ss, mkTyConApp tc ts) }
