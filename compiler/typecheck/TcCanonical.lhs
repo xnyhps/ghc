@@ -859,6 +859,15 @@ canEqLeaf :: SubGoalDepth -- Depth
   -- Preconditions: 
   --    * one of the two arguments is not OtherCls
   --    * the two types are not equal (looking through synonyms)
+
+canEqLeaf d _untch fl eqv cls1 cls2
+-- First have a case for reflexivity since the guard in the top of canEq 
+-- is not enough as the leaf equality may now be rewritten from some inerts.
+  | ty1 <- unClassify cls1 
+  , ty2 <- unClassify cls2 
+  , eqType ty1 ty2 
+  = when (isWanted fl) (setEqBind eqv (mkReflCo ty1))
+
 canEqLeaf d _untch fl eqv cls1 cls2 
   | cls1 `re_orient` cls2
   = do { eqv' <- if isWanted fl 

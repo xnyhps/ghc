@@ -260,17 +260,42 @@ spontaneousSolveStage workItem
   = do { mSolve <- trySpontaneousSolve workItem
        ; spont_solve mSolve } 
   where spont_solve SPCantSolve = continueWith workItem 
-        spont_solve (SPSolved workItem') 
-          | isGivenOrSolvedCt workItem -- Original was given, keep going with new item
-          = do { bumpStepCountTcS 
-               ; traceFireTcS (cc_depth workItem) 
-                              (ptext (sLit "Spontaneous (g)") <+> ppr workItem)
-               ; continueWith workItem' }
-          | otherwise                 -- Original was W/D, throw new item back in worklist
-          = do { bumpStepCountTcS 
-               ; traceFireTcS (cc_depth workItem) 
-                              (ptext (sLit "Spontaneous (w/d)") <+> ppr workItem)
-               ; stopAndEmitWork workItem' }
+        spont_solve (SPSolved workItem')
+          = do { bumpStepCountTcS
+               ; traceFireTcS (cc_depth workItem) $
+                 ptext (sLit "Spontaneous") 
+                           <+> parens (ppr (cc_flavor workItem)) <+> ppr workItem
+               ; if isGivenOrSolvedCt workItem then 
+                      -- Original was given just update inerts and Stop
+                     updInertSetTcS_ (\is -> updInertSet is workItem')
+                 else -- Original is wanted so it's given form may rewrite the inerts. 
+                     do { inerts <- getTcSInerts
+                        ; (kicked_out_cts, remaining_inerts) 
+                            <- kick_out_rewritable inerts workItem' new_tv new_fl
+                               -- Kick rewriteable inerts back in the worklist
+                        ; updWorkListTcS (appendWorkListCt (bagToList kicked_out_cts))
+                               -- Add solved guy in inerts
+                        ; updInertSetTcS_ (\_ -> updInertSet remaining_inerts workItem') } 
+                 -- ... and stop!
+               ; return Stop }
+           where new_fl = cc_flavor workItem'
+                 new_tv = cc_tyvar workItem'
+
+--                          ; (                 
+--           | isGivenOrSolvedCt workItem -- Original was given, keep going with new item
+--           = do { bumpStepCountTcS 
+--                ; traceFireTcS (cc_depth workItem) 
+--                               (ptext (sLit "Spontaneous (g)") <+> ppr workItem)
+--                ; continueWith workItem' }
+--           | otherwise                 -- Original was W/D, throw new item back in worklist
+--           = do { bumpStepCountTcS 
+--                ; inerts <- getTcSInerts 
+--                ; continueWith workItem' -- Continue with the solved guy
+
+-- ****** NO: throw out all inerts that this guy can rewrite now and continueWith workItem' !!! 
+--                ; traceFireTcS (cc_depth workItem) 
+--                               (ptext (sLit "Spontaneous (w/d)") <+> ppr workItem)
+--                ; stopAndEmitWork workItem' }
                              
 data SPSolveResult = SPCantSolve
                    | SPSolved WorkItem 
@@ -492,48 +517,6 @@ interactWithInertEqsStage  wi
             -- No more rewrites are possible at all, so move on to a next stage
             | otherwise = continueWith ct
 
-        kick_out_rewritable (IS { inert_eqs    = eqmap
-                                , inert_eq_tvs = inscope
-                                , inert_dicts  = dictmap
-                                , inert_ips    = ipmap
-                                , inert_funeqs = funeqmap
-                                , inert_irreds = irreds
-                                , inert_frozen = frozen } ) ct tv fl
-           = do { frozen_rewritten <- mapBagM rewrite_frozen frozen
-                   -- We do not want to kick out the frozens in the work list because the 
-                   -- semantics of a CNonCanonical depends on whether it appears in the 
-                   -- worklist or in the inert set. Fortunately, we may simply rewrite them.
-
-                ; let kicked_out = dicts_out `andCts` eqs_out  `andCts` ips_out
-                                             `andCts` feqs_out `andCts` irs_out
-            
-                ; let remaining = IS { inert_eqs = eqs_in
-                                     , inert_eq_tvs = inscope -- keep the same, safe and cheap
-                                     , inert_dicts = dicts_in
-                                     , inert_ips = ips_in
-                                     , inert_funeqs = feqs_in
-                                     , inert_irreds = irs_in
-                                     , inert_frozen = frozen_rewritten }
-                ; return (kicked_out, remaining) }
-
-             where (eqs_out,eqs_in)     = partitionEqMap rewritable eqmap
-                   (dicts_out,dicts_in) = partitionCCanMap rewritable dictmap
-                   (ips_out, ips_in)    = partitionCCanMap rewritable ipmap 
-                   (feqs_out,feqs_in)   = partitionCCanMap rewritable funeqmap
-                   (irs_out, irs_in)    = partitionBag rewritable irreds
-
-                   rewritable ct = (fl `canRewrite` cc_flavor ct) && 
-                                   (tv `elemVarSet` tyVarsOfCt ct)
-
-                   rewrite_frozen ct 
-                     = do { traceTcS "checpoint #3" empty 
-                          ; v' <- rewriteFromInertEqs
-                                       (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
-                          ; traceTcS "checpoint #4" empty 
-                          ; return ct { cc_id = v'} } 
-                   work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
-
-
         figure_out_canonicity wi_orig ev
             -- Figure out if the new ev. variable is still canonical
             = case (wi_orig, predTypePredTree (evVarPred ev)) of 
@@ -562,6 +545,49 @@ interactWithInertEqsStage  wi
                 (_,_) 
                     -> pprPanic "interactWithInertEqStage" $ 
                        text "Rewrote one predicate to another! Clear bug!"
+
+kick_out_rewritable :: InertSet -> Ct -> TyVar -> CtFlavor -> TcS (Cts,InertSet)
+kick_out_rewritable (IS { inert_eqs    = eqmap
+                        , inert_eq_tvs = inscope
+                        , inert_dicts  = dictmap
+                        , inert_ips    = ipmap
+                        , inert_funeqs = funeqmap
+                        , inert_irreds = irreds
+                        , inert_frozen = frozen } ) ct tv fl
+           = do { frozen_rewritten <- mapBagM rewrite_frozen frozen
+                   -- We do not want to kick out the frozens in the work list because the 
+                   -- semantics of a CNonCanonical depends on whether it appears in the 
+                   -- worklist or in the inert set. Fortunately, we may simply rewrite them.
+
+                ; let kicked_out = dicts_out `andCts` eqs_out  `andCts` ips_out
+                                             `andCts` feqs_out `andCts` irs_out
+            
+                ; let remaining = IS { inert_eqs = eqs_in
+                                     , inert_eq_tvs = inscope -- keep the same, safe and cheap
+                                     , inert_dicts = dicts_in
+                                     , inert_ips = ips_in
+                                     , inert_funeqs = feqs_in
+                                     , inert_irreds = irs_in
+                                     , inert_frozen = frozen_rewritten }
+                ; return (kicked_out, remaining) }
+
+            where (eqs_out,eqs_in)     = partitionEqMap rewritable eqmap
+                  (dicts_out,dicts_in) = partitionCCanMap rewritable dictmap
+                  (ips_out, ips_in)    = partitionCCanMap rewritable ipmap 
+                  (feqs_out,feqs_in)   = partitionCCanMap rewritable funeqmap
+                  (irs_out, irs_in)    = partitionBag rewritable irreds
+
+                  rewritable ct = (fl `canRewrite` cc_flavor ct) && 
+                                  (tv `elemVarSet` tyVarsOfCt ct)
+
+                  rewrite_frozen ct 
+                     = do { traceTcS "checpoint #3" empty 
+                          ; v' <- rewriteFromInertEqs
+                                       (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
+                          ; traceTcS "checpoint #4" empty 
+                          ; return ct { cc_id = v'} } 
+                  work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
+
 
 \end{code}
 
