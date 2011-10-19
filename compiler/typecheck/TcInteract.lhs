@@ -24,6 +24,7 @@ import HsBinds
 import Class
 import TyCon
 import Name
+import IParam
 
 import FunDeps
 
@@ -811,7 +812,8 @@ doInteractWithInert (CIPCan { cc_id = id1, cc_flavor = ifl, cc_ip_nm = nm1, cc_i
            Derived {} -> pprPanic "Unexpected derived IP" (ppr workItem)
            Wanted  {} ->
                do { setEvBind (cc_id workItem) $ 
-                    EvCast id1 (mkSymCo (mkEqVarLCo eqv))
+                    EvCast id1 (mkSymCo (mkTyConAppCo (ipTyCon nm1) [mkEqVarLCo eqv]))
+                    -- DV: Changing: used to be (mkSymCo (mkEqVarLCo eqv))
                   ; irWorkItemConsumed "IP/IP (solved by rewriting)" } }
 
 doInteractWithInert (CFunEqCan { cc_id = eqv1, cc_flavor = fl1, cc_fun = tc1
