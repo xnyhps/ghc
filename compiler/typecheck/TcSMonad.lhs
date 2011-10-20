@@ -189,7 +189,7 @@ extendWorkListNonEq ct wl = wl { wl_rest = ct : wl_rest wl }
 extendWorkListCt :: Ct -> WorkList -> WorkList
 -- Agnostic
 extendWorkListCt ct wl
- | isCoVar (cc_id ct) = extendWorkListEq ct wl
+ | isLCoVar (cc_id ct) = extendWorkListEq ct wl
  | otherwise = extendWorkListNonEq ct wl
 
 appendWorkListCt :: [Ct] -> WorkList -> WorkList
@@ -209,8 +209,8 @@ workListFromNonEq ct = WorkList { wl_eqs = [], wl_rest = [ct] }
 
 workListFromCt :: Ct -> WorkList
 -- Agnostic 
-workListFromCt ct | isCoVar (cc_id ct) = workListFromEq ct 
-                  | otherwise          = workListFromNonEq ct
+workListFromCt ct | isLCoVar (cc_id ct) = workListFromEq ct 
+                  | otherwise           = workListFromNonEq ct
 
 -- Pretty printing 
 instance Outputable WorkList where 
