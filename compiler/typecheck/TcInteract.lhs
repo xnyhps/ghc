@@ -281,22 +281,6 @@ spontaneousSolveStage workItem
                ; return Stop }
            where new_fl = cc_flavor workItem'
                  new_tv = cc_tyvar workItem'
-
---                          ; (                 
---           | isGivenOrSolvedCt workItem -- Original was given, keep going with new item
---           = do { bumpStepCountTcS 
---                ; traceFireTcS (cc_depth workItem) 
---                               (ptext (sLit "Spontaneous (g)") <+> ppr workItem)
---                ; continueWith workItem' }
---           | otherwise                 -- Original was W/D, throw new item back in worklist
---           = do { bumpStepCountTcS 
---                ; inerts <- getTcSInerts 
---                ; continueWith workItem' -- Continue with the solved guy
-
--- ****** NO: throw out all inerts that this guy can rewrite now and continueWith workItem' !!! 
---                ; traceFireTcS (cc_depth workItem) 
---                               (ptext (sLit "Spontaneous (w/d)") <+> ppr workItem)
---                ; stopAndEmitWork workItem' }
                              
 data SPSolveResult = SPCantSolve
                    | SPSolved WorkItem 
@@ -520,7 +504,8 @@ interactWithInertEqsStage  wi
 
         figure_out_canonicity wi_orig ev
             -- Figure out if the new ev. variable is still canonical
-            = case (wi_orig, predTypePredTree (evVarPred ev)) of 
+            = let pt_tree = predTypePredTree (evVarPred ev) in
+              case (wi_orig, pt_tree) of 
                 (CTyEqCan {cc_flavor = fl, cc_depth = d }, EqPred ty1 ty)
                     | Just tv <- getTyVar_maybe ty1
                     , not (tv `elemVarSet` tyVarsOfType ty)
@@ -543,9 +528,14 @@ interactWithInertEqsStage  wi
                                 , cc_class = cl, cc_tyargs = xis, cc_depth = d }
                 (CNonCanonical {}, _) -- Not sure this case can happen
                     -> wi_orig { cc_id = ev }
-                (_,_) 
+                (CIrredEvCan {cc_flavor = fl, cc_depth = d},_) 
+                    -- Subtle case: An irreducible guy got concretized!
+                    -> CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth = d }
+                (_,_)
                     -> pprPanic "interactWithInertEqStage" $ 
-                       text "Rewrote one predicate to another! Clear bug!"
+                       text "Rewrote one predicate to another! Clear bug!" <+> 
+                            vcat [ text "wi_orig   =" <+> ppr wi_orig
+                                 , text "evVarPRed =" <+> ppr (evVarPred ev) ]
 
 kick_out_rewritable :: InertSet -> Ct -> TyVar -> CtFlavor -> TcS (Cts,InertSet)
 kick_out_rewritable (IS { inert_eqs    = eqmap

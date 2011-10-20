@@ -102,8 +102,6 @@ canonicalize (CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth  = d })
         go ev (EqPred ty1 ty2) = canEq    d fl ev ty1 ty2
         go ev (IPPred {})      = canIP    d fl ev
         go ev (TuplePred tys)
-          | null tys = return ()
-          | otherwise
           = do { evs <- zipWithM go_tup_one tys [0..]
                ; when (isWanted fl) $ setEvBind ev (EvTupleMk evs) }
         go ev (IrredPred ev_ty)    = canIrredEvidence d fl ev ev_ty
@@ -159,18 +157,16 @@ canClass d fl v
        ; v' <- rewriteFromInertEqs ieqs fl v
                -- Flatten type 
        ; (xi, co) <- flatten d fl (evVarPred v')
-
                -- Get the final type (after rewriting and flattening)
        ; let (ClassPred cls xis) = predTypePredTree xi
 
        ; v_new <- 
            if isReflCo co then return v'
-           else if isGivenOrSolved fl then return (setVarType v' xi) -- flattening
            else do { v_new <- newEvVar xi
                    ; when (isWanted fl) $ 
                           setEvBind v' (EvCast v_new co)
---                   ; when (isGivenOrSolved fl) $ -- Is this going to happen? 
---                          setEvBind v_new (EvCast v' (mkSymCo co))
+                   ; when (isGivenOrSolved fl) $
+                          setEvBind v_new (EvCast v' (mkSymCo co))
                    ; return v_new }
 
           -- Add superclasses of this one here, See Note [Adding superclasses]. 
@@ -314,12 +310,12 @@ canIrredEvidence :: SubGoalDepth -- Depth
                  -> CtFlavor -> EvVar -> TcType -> TcS ()
 canIrredEvidence d fl v ty 
   = do { (xi,co) <- flatten d fl ty -- co :: xi ~ ty
-       ; v_new <- if isReflCo co || isGivenOrSolved fl then return v
+       ; v_new <- if isReflCo co then return v
                   else do { v' <- newEvVar xi
                           ; when (isWanted fl) $ 
-                            setEvBind v  (EvCast v' co)
+                               setEvBind v  (EvCast v' co)
                           ; when (isGivenOrSolved fl) $ 
-                            setEvBind v' (EvCast v (mkSymCo co))
+                               setEvBind v' (EvCast v (mkSymCo co))
                           ; return v' }
        ; updWorkListTcS $ 
          extendWorkListNonEq (CIrredEvCan { cc_id     = v_new
@@ -896,7 +892,7 @@ canEqLeafOriented :: SubGoalDepth -- Depth
                   -> CtFlavor -> EqVar 
                   -> TypeClassifier -> TcType -> TcS ()
 -- First argument is not OtherCls
-canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1
+canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1 ~ s2
   | let k1 = kindAppResult (tyConKind fn) tys1,
     let k2 = typeKind s2, 
     not (k1 `compatKind` k2) -- Establish the kind invariant for CFunEqCan
@@ -911,25 +907,23 @@ canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1
                                               -- co2  :: xi2 ~ s2
        ; let no_flattening_happened = all isReflCo (co2:cos1)
 
-       ; eqv_new <- if no_flattening_happened  then return eqv else 
-                    if isGivenOrSolved fl
-                    then return $ 
-                         setVarType eqv (mkEqPred (unClassify (FunCls fn xis1),xi2))
-                    else if isWanted fl then 
-                          do { eqv' <- newEqVar (unClassify (FunCls fn xis1)) xi2
-
-                             ; let -- cv' : F xis ~ xi2
-                                   cv' = mkEqVarLCo eqv'
-                                   -- fun_co :: F xis1 ~ F tys1
-                                   fun_co = mkTyConAppCo fn cos1
-                                   -- want_co :: F tys1 ~ s2
-                                   want_co = mkSymCo fun_co
-                                                `mkTransCo` cv'
-                                                `mkTransCo` co2
-                             ; setEqBind eqv want_co
-                             ; return eqv' }
-                    else -- Derived 
-                        newDerivedId (mkEqPred (unClassify (FunCls fn xis1), xi2))
+       ; eqv_new <- if no_flattening_happened then return eqv else 
+                        do { eqv' <- newEqVar (unClassify (FunCls fn xis1)) xi2
+                           ; let -- cv' : F xis1 ~ xi2
+                                 cv' = mkEqVarLCo eqv'
+                                 -- cv  : F tys1 ~ s2
+                                 cv  = mkEqVarLCo eqv
+                                 -- fun_co :: F xis1 ~ F tys1
+                                 fun_co = mkTyConAppCo fn cos1
+                           ; when (isWanted fl) $
+                                  setEqBind eqv  
+                                   -- F tys1 ~ F xis1 ~ xi2 ~ s2
+                                     ((mkSymCo fun_co) `mkTransCo` cv' `mkTransCo` co2)
+                           ; when (isGivenOrSolved fl) $
+                                  setEqBind eqv'
+                                   -- F xis ~ F tys1 ~  s2 ~ xi2
+                                     (fun_co `mkTransCo` cv `mkTransCo` (mkSymCo co2))
+                           ; return eqv' }
 
        ; let final_cc = CFunEqCan { cc_id     = eqv_new
                                   , cc_flavor = fl
@@ -951,7 +945,7 @@ canEqLeafTyVarLeft :: SubGoalDepth -- Depth
                    -> CtFlavor -> EqVar
                    -> TcTyVar -> TcType -> TcS ()
 -- Establish invariants of CTyEqCans 
-canEqLeafTyVarLeft d fl eqv tv s2       -- cv : tv ~ s2
+canEqLeafTyVarLeft d fl eqv tv s2       -- eqv : tv ~ s2
   | not (k1 `compatKind` k2) -- Establish the kind invariant for CTyEqCan
   = canEqFailure d fl eqv
        -- Eagerly fails, see Note [Kind errors] in TcInteract
@@ -964,16 +958,17 @@ canEqLeafTyVarLeft d fl eqv tv s2       -- cv : tv ~ s2
            Nothing   -> canEqFailure d fl eqv ;
            Just xi2' ->
     do { let no_flattening_happened = isReflCo co
-       ; eqv_new <- if no_flattening_happened  then return eqv 
-                    else if isGivenOrSolved fl then 
-                             return $ 
-                             setVarType eqv (mkEqPred (mkTyVarTy tv,xi2'))
-                    else if isWanted fl then 
-                          do { eqv' <- newEqVar (mkTyVarTy tv) xi2'  -- cv' : tv ~ xi2
-                             ; setEqBind eqv $ mkTransCo (mkEqVarLCo eqv') co
-                             ; return eqv' }
-                    else -- Derived
-                        newDerivedId (mkEqPred (mkTyVarTy tv, xi2'))
+       ; eqv_new <- if no_flattening_happened  then return eqv else
+                        do { eqv' <- newEqVar (mkTyVarTy tv) xi2' -- eqv' : tv ~ xi2'
+                           ; let cv  = mkEqVarLCo eqv  -- cv : tv ~ s2
+                                 cv' = mkEqVarLCo eqv' -- cv': tv ~ xi2'
+                           ; when (isWanted fl) $
+                                  -- tv ~ xi2' ~ s2
+                                  setEqBind eqv (cv' `mkTransCo` co)
+                           ; when (isGivenOrSolved fl) $
+                                  -- tv ~ s2 ~ xi2'
+                                  setEqBind eqv' (cv `mkTransCo` mkSymCo co)
+                           ; return eqv' }
 
        ; let final_cc = CTyEqCan { cc_id     = eqv_new
                                  , cc_flavor = fl
