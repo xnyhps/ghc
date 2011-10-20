@@ -1418,7 +1418,7 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                                       ; setEqBind eqv' (mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe)
                                       ; let ct = CNonCanonical { cc_id = eqv'
                                                                , cc_flavor = fl
-                                                               , cc_depth = cc_depth workItem } -- Or +1? 
+                                                               , cc_depth = cc_depth workItem + 1}  
                                       ; updWorkListTcS (extendWorkListEq ct) 
 
                                       ; return $ 
@@ -1428,7 +1428,7 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                        Derived {} -> do { eqv' <- newDerivedId (mkEqPred (xi, rhs_ty))
                                         ; let ct = CNonCanonical { cc_id = eqv'
                                                                  , cc_flavor = fl
-                                                                 , cc_depth = cc_depth workItem } -- Or +1?
+                                                                 , cc_depth = cc_depth workItem +1 } 
                                         ; updWorkListTcS (extendWorkListEq ct) 
                                         ; return $ 
                                           SomeTopInt { tir_rule = "Fun/Top (derived)"

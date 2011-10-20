@@ -229,7 +229,11 @@ funTyConName :: Name
 funTyConName = mkPrimTyConName (fsLit "(->)") funTyConKey funTyCon
 
 funTyCon :: TyCon
-funTyCon = mkFunTyCon funTyConName (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind)
+funTyCon = mkFunTyCon funTyConName $ 
+           mkArrowKinds [liftedTypeKind, liftedTypeKind] liftedTypeKind
+-- DV: used to be (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind)
+--     but I am modifying this in-flight for the GHC kinds merge
+
         -- You might think that (->) should have type (?? -> ? -> *), and you'd be right
 	-- But if we do that we get kind errors when saying
 	--	instance Control.Arrow (->)

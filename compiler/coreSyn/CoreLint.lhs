@@ -675,9 +675,13 @@ lintCoercion co@(TyConAppCo tc cos)
                                     -- hopefully go away when we merge in kind polymorphism.
   | tc `hasKey` eqTyConKey
   = lint_eq_co tc co cos
+
   | otherwise
   = do { (ss,ts) <- mapAndUnzipM lintCoercion cos
-       ; check_co_app co (tyConKind tc) ss
+       ; let kind_to_check = if (tc `hasKey` funTyConKey) && (length cos == 2)
+                             then mkArrowKinds [argTypeKind,openTypeKind] liftedTypeKind
+                             else tyConKind tc -- TODO: Fix this when kind polymorphism is in! 
+       ; check_co_app co kind_to_check ss
        ; return (mkTyConApp tc ss, mkTyConApp tc ts) }
 
 lintCoercion co@(AppCo co1 co2)
@@ -763,7 +767,7 @@ lintType ty@(AppTy t1 t2)
        ; lint_ty_app ty k1 [t2] }
 
 lintType ty@(FunTy t1 t2)
-  = lint_ty_app ty (tyConKind funTyCon) [t1,t2]
+  = lint_ty_app ty (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind) [t1,t2]
 
 lintType ty@(TyConApp tc tys)
   | tc `hasKey` eqPrimTyConKey	-- See Note [The ~# TyCon] in TysPrim
@@ -791,7 +795,10 @@ lint_eq_pred ty arg_tys = case arg_tys of
                     ; k2 <- lintType ty2
                     ; unless (k1 `eqKind` k2) 
                              (addErrL (sep [ ptext (sLit "Kind mis-match in equality predicate:")
-                                           , nest 2 (ppr ty) ]))
+                                           , nest 2 (ppr ty) 
+                                           , nest 2 $ text "kind of left type is: " <+> ppr k1 
+                                           , nest 2 $ text "kind or right type is:" <+> ppr k2
+                                           ]))
                     ; return constraintKind }
   [ty1] -> do { k1 <- lintType ty1;
                 return (k1 `mkFunTy` constraintKind) }
