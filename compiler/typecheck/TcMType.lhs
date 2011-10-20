@@ -367,22 +367,27 @@ writeMetaTyVarRef tyvar ref ty
        ; writeMutVar ref (Indirect ty) }
 
 -- Everything from here on only happens if DEBUG is on
-  | not (isPredTy tv_kind)   -- Don't check kinds for updates to coercion variables
-  , not (ty_kind `isSubKind` tv_kind)
-  -- IA0_TODO: the kind are not zonked sometimes
-  = WARN( True, hang (text "Ill-kinded update to meta tyvar")
-                   2 (ppr tyvar $$ ppr tv_kind $$ ppr ty $$ ppr ty_kind) )
-    do { traceTc "writeMetaTyVar" (ppr tyvar <+> text ":=" <+> ppr ty)
-       ; writeMutVar ref (Indirect ty) }
-
   | otherwise
   = do { meta_details <- readMutVar ref; 
+       -- Zonk kinds before updating
+       ; zonked_tv_kind <- zonkTcKind tv_kind -- JPM: move up
+       ; zonked_ty_kind <- zonkTcKind ty_kind
+
+       -- Check for double updates
        ; ASSERT2( isFlexi meta_details, 
                   hang (text "Double update of meta tyvar")
                    2 (ppr tyvar $$ ppr meta_details) )
 
          traceTc "writeMetaTyVar" (ppr tyvar <+> text ":=" <+> ppr ty)
-       ; writeMutVar ref (Indirect ty) }
+       ; writeMutVar ref (Indirect ty) 
+       ; when (   not (isPredTy tv_kind) 
+                    -- Don't check kinds for updates to coercion variables
+               && not (zonked_ty_kind `isSubKind` zonked_tv_kind))
+       $ WARN( True, hang (text "Ill-kinded update to meta tyvar")
+                        2 (    ppr tyvar <+> text "::" <+> ppr tv_kind 
+                           <+> text ":=" 
+                           <+> ppr ty    <+> text "::" <+> ppr ty_kind) )
+         (return ()) }
   where
     tv_kind = tyVarKind tyvar
     ty_kind = typeKind ty
@@ -577,8 +582,7 @@ zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 --
 -- We leave skolem TyVars alone; they are immutable.
 zonkQuantifiedTyVar tv
-  = pprTrace "zonkQuantifiedTyVar" (ppr tv) $
-    ASSERT2( isTcTyVar tv, ppr tv ) 
+  = ASSERT2( isTcTyVar tv, ppr tv ) 
     case tcTyVarDetails tv of
       SkolemTv {} -> WARN( True, ppr tv )  -- Dec10: Can this really happen?
                      do { kind <- zonkTcKind (tyVarKind tv)
@@ -616,8 +620,7 @@ skolemiseUnboundMetaTyVar tv details
         ; (if isSuperKind final_kind
            then writeMetaKindVar
            else writeMetaTyVar) tv (mkTyVarTy final_tv)
-        ; pprTrace "skolemiseUnboundMetaTyVar" (ppr (tyVarKind tv, final_kind))
-        $ return final_tv }
+        ; return final_tv }
 \end{code}
 
 \begin{code}

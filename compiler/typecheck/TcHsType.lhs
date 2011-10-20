@@ -823,9 +823,9 @@ tcTyVarBndrs bndrs thing_inside = do
     tcExtendTyVarEnv tyvars (thing_inside tyvars)
   where
     zonk (name, kind)
-      = do { -- kind' <- zonkTcKindToKind anyKind kind -- JPM
-             checkTc (noHashInKind kind) (ptext (sLit "Kind signature contains # or (#)"))
-           ; return (mkTyVar name kind) }
+      = do { kind' <- zonkTcKind kind -- JPM
+           ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
+           ; return (mkTyVar name kind') }
 
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
 -- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside

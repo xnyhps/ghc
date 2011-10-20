@@ -997,23 +997,25 @@ zonkRule :: ZonkEnv -> RuleDecl TcId -> TcM (RuleDecl Id)
 zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
   = do { (env_rhs, new_bndrs) <- mapAccumLM zonk_bndr env vars
 
-       ; unbound_tv_set <- newMutVar emptyVarSet
-       ; let env_lhs = setZonkType env_rhs (\_ -> zonkTypeCollecting unbound_tv_set)
+       ; unbound_tkv_set <- newMutVar emptyVarSet
+       ; let env_lhs = setZonkType env_rhs (\_ -> zonkTypeCollecting unbound_tkv_set)
         -- See Note [Zonking the LHS of a RULE]
 
        ; new_lhs <- zonkLExpr env_lhs lhs
        ; new_rhs <- zonkLExpr env_rhs rhs
 
-       ; unbound_tvs <- readMutVar unbound_tv_set
+       ; unbound_tkvs <- readMutVar unbound_tkv_set
+
        -- We want to make sure that all kind variables are zonked
-       ; zonked_unbound_tvs <- zonkTcTyVarsAndFV unbound_tvs
+       ; let zonkTcKiTyVars vars = map (getTyVar "zonkRule zonkTcKiTyVars")
+                                <$> zonkTcTyVars (varSetElemsKvsFirst vars)
+       ; zonked_unbound_tkvs <- zonkTcKiTyVars unbound_tkvs
        ; let final_bndrs :: [RuleBndr Var]
-             final_bndrs = map (RuleBndr . noLoc)
-                            (varSetElemsKvsFirst zonked_unbound_tvs)
+             final_bndrs = map (RuleBndr . noLoc) zonked_unbound_tkvs
                            ++ new_bndrs
 
-       ; pprTrace "zonkRule" (ppr (unbound_tvs, zonked_unbound_tvs)) 
-       $ return (HsRule name act final_bndrs new_lhs fv_lhs new_rhs fv_rhs) }
+       ; {- pprTrace "zonkRule" (ppr (unbound_tkvs, zonked_unbound_tkvs)) 
+       $ -} return (HsRule name act final_bndrs new_lhs fv_lhs new_rhs fv_rhs) }
   where
    zonk_bndr env (RuleBndr (L loc v)) 
       = do { (env', v') <- zonk_it env v; return (env', RuleBndr (L loc v')) }
@@ -1163,7 +1165,8 @@ zonkTypeCollecting unbound_tv_set
   where
     zonk_unbound_tyvar tv 
         = do { tv' <- zonkQuantifiedTyVar tv
-             ; tv_set <- pprTrace "zonkTypeCollecting" (ppr (tv,tv')) $ readMutVar unbound_tv_set
+             ; tv_set <- {- pprTrace "zonkTypeCollecting" (ppr (tv,tv'))
+                       $ -} readMutVar unbound_tv_set
              ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
              ; return (mkTyVarTy tv') }
 
