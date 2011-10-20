@@ -918,7 +918,8 @@ simple_opt_expr' subst expr
       = case altcon of
           DEFAULT -> go rhs
           _       -> mkLets (catMaybes mb_binds) $ simple_opt_expr subst' rhs
-            where (subst', mb_binds) = mapAccumL simple_opt_out_bind subst (zipEqual "simpleOptExpr" bs es)
+            where (subst', mb_binds) = mapAccumL simple_opt_out_bind subst 
+                                                 (zipEqual "simpleOptExpr" bs es)
 
       | otherwise
       = Case e' b' (substTy subst ty)
@@ -985,9 +986,11 @@ simple_opt_bind' subst (NonRec b r)
 
 ----------------------
 simple_opt_out_bind :: Subst -> (InVar, OutExpr) -> (Subst, Maybe CoreBind)
-simple_opt_out_bind subst (b, r') = case maybe_substitute subst b r' of
-      Just ext_subst -> (ext_subst, Nothing)
-      Nothing        -> (subst', Just (NonRec b2 r'))
+simple_opt_out_bind subst (b, r') 
+  | Just ext_subst <- maybe_substitute subst b r'
+  = (ext_subst, Nothing)
+  | otherwise
+  = (subst', Just (NonRec b2 r'))
   where
     (subst', b') = subst_opt_bndr subst b
     b2 = add_info subst' b b'
@@ -1007,6 +1010,8 @@ maybe_substitute subst b r
     Just (extendCvSubst subst b co)
 
   | isId b              -- let x = e in <body>
+  , not (isCoVar b)	-- See Note [Do not inline CoVars unconditionally]
+    		 	-- in SimplUtils
   , safe_to_inline (idOccInfo b) 
   , isAlwaysActive (idInlineActivation b)	-- Note [Inline prag in simplOpt]
   , not (isStableUnfolding (idUnfolding b))

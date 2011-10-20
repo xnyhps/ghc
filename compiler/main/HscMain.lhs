@@ -300,18 +300,17 @@ hscGetModuleInterface hsc_env mod
 -- | Rename some import declarations
 hscRnImportDecls
         :: HscEnv
-        -> Module
         -> [LImportDecl RdrName]
         -> IO GlobalRdrEnv
 
 -- It is important that we use tcRnImports instead of calling rnImports directly
 -- because tcRnImports will force-load any orphan modules necessary, making extra
 -- instances/family instances visible (GHC #4832)
-hscRnImportDecls hsc_env this_mod import_decls
+hscRnImportDecls hsc_env import_decls
   = runHsc hsc_env $ ioMsgMaybe $ 
-    initTc hsc_env HsSrcFile False this_mod $
+    initTc hsc_env HsSrcFile False iNTERACTIVE $ -- iNTERACTIVE, see #5545
     fmap tcg_rdr_env $ 
-    tcRnImports hsc_env this_mod import_decls
+    tcRnImports hsc_env iNTERACTIVE import_decls
 #endif
 
 -- -----------------------------------------------------------------------------
@@ -890,7 +889,7 @@ checkSafeImports dflags hsc_env tcg_env
     = do
         imps <- mapM condense imports'
         pkgs <- mapM checkSafe imps
-        checkPkgTrust pkg_reqs
+        when (packageTrustOn dflags) $ checkPkgTrust pkg_reqs
 
         -- add in trusted package requirements for this module
         let new_trust = emptyImportAvails { imp_trust_pkgs = catMaybes pkgs }
@@ -936,7 +935,9 @@ checkSafeImports dflags hsc_env tcg_env
         -- modules in the home package are trusted but otherwise
         -- we check the package trust flag.
         packageTrusted :: SafeHaskellMode -> Bool -> Module -> Bool
-        packageTrusted Sf_Safe False _ = True
+        packageTrusted _ _ _
+            | not (packageTrustOn dflags) = True
+        packageTrusted Sf_Safe False _    = True
         packageTrusted _ _ m
             | isHomePkg m = True
             | otherwise   = trusted $ getPackageDetails (pkgState dflags)
@@ -1219,7 +1220,7 @@ myCoreToStg :: DynFlags -> Module -> CoreProgram
 myCoreToStg dflags this_mod prepd_binds
  = do 
       stg_binds <- {-# SCC "Core2Stg" #-}
-	     coreToStg (thisPackage dflags) prepd_binds
+	     coreToStg dflags prepd_binds
 
       (stg_binds2, cost_centre_info) <- {-# SCC "Stg2Stg" #-}
 	     stg2stg dflags this_mod stg_binds
