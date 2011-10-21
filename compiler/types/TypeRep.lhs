@@ -292,7 +292,8 @@ tyVarsOfType :: Type -> VarSet
 -- tyVarsOfType returns the free type *and kind* variables of a type
 -- For example, tyVarsOfType (a::k) returns {a,k}, not just {a}
 -- See tyVarsOfTypeStratified for a function that returns only current level variables
-tyVarsOfType (TyVarTy v)         = unitVarSet v `unionVarSet` tyVarsOfType (tyVarKind v)
+tyVarsOfType (TyVarTy v)         = unitVarSet v -- `unionVarSet` tyVarsOfType (tyVarKind v)
+	     	      		   	      	-- Commenting out as experiment!
 tyVarsOfType (TyConApp _ tys)    = tyVarsOfTypes tys
 tyVarsOfType (FunTy arg res)     = tyVarsOfType arg `unionVarSet` tyVarsOfType res
 tyVarsOfType (AppTy fun arg)     = tyVarsOfType fun `unionVarSet` tyVarsOfType arg

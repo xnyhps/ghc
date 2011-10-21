@@ -1020,6 +1020,8 @@ absVarsOf id_env v
 			Nothing	           -> [v]
 
     add_tyvars v = v : varSetElems (varTypeTyVars v)
+    -- ToDo: should also abstract over kind variables free 
+    --       in the kinds of the type variables!
 \end{code}
 
 \begin{code}

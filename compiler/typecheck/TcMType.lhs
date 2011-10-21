@@ -369,8 +369,8 @@ writeMetaTyVarRef tyvar ref ty
 -- Everything from here on only happens if DEBUG is on
   | otherwise
   = do { meta_details <- readMutVar ref; 
-       -- Zonk kinds before updating
-       ; zonked_tv_kind <- zonkTcKind tv_kind -- JPM: move up
+       -- Zonk kinds to allow the error check to work
+       ; zonked_tv_kind <- zonkTcKind tv_kind 
        ; zonked_ty_kind <- zonkTcKind ty_kind
 
        -- Check for double updates
@@ -519,15 +519,21 @@ zonkTcTyVar :: TcTyVar -> TcM TcType
 -- Simply look through all Flexis
 zonkTcTyVar tv
   = ASSERT2( isTcTyVar tv, ppr tv ) do
-    z_tv <- updateTyVarKindM zonkTcKind tv
     case tcTyVarDetails tv of
-      SkolemTv {}   -> return (TyVarTy z_tv)
-      RuntimeUnk {} -> return (TyVarTy z_tv)
+      SkolemTv {}   -> zonk_kind_and_return
+      RuntimeUnk {} -> zonk_kind_and_return
       FlatSkol ty   -> zonkTcType ty
       MetaTv _ ref  -> do { cts <- readMutVar ref
                           ; case cts of
-		               Flexi       -> return (TyVarTy z_tv)
+		               Flexi       -> zonk_kind_and_return
 			       Indirect ty -> zonkTcType ty }
+  where
+    zonk_kind_and_return = do { z_tv <- zonkTyVarKind tv
+                              ; return (TyVarTy z_tv) }
+
+zonkTyVarKind :: TyVar -> TcM TyVar
+zonkTyVarKind tv = do { kind' <- zonkTcKind (tyVarKind tv)
+                      ; return (setTyVarKind tv kind') }
 
 zonkTcTypeAndSubst :: TvSubst -> TcType -> TcM TcType
 -- Zonk, and simultaneously apply a non-necessarily-idempotent substitution
@@ -727,7 +733,7 @@ leads to problems.  Consider this program from the regression test suite:
 
 It leads to the deferral of an equality (wrapped in an implication constraint)
 
-  forall a. (String -> String -> String) ~ a
+  forall a. () => ((String -> String -> String) ~ a)
 
 which is propagated up to the toplevel (see TcSimplify.tcSimplifyInferCheck).
 In the meantime `a' is zonked and quantified to form `evalRHS's signature.

@@ -1006,11 +1006,8 @@ zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
 
        ; unbound_tkvs <- readMutVar unbound_tkv_set
 
-       -- We want to make sure that all kind variables are zonked
-       ; let zonkTcKiTyVars vars = map (getTyVar "zonkRule zonkTcKiTyVars")
-                                <$> zonkTcTyVars (varSetElemsKvsFirst vars)
-       ; zonked_unbound_tkvs <- zonkTcKiTyVars unbound_tkvs
-       ; let final_bndrs :: [RuleBndr Var]
+       ; let .. put kind vars first... 
+             final_bndrs :: [RuleBndr Var]
              final_bndrs = map (RuleBndr . noLoc) zonked_unbound_tkvs
                            ++ new_bndrs
 
@@ -1160,11 +1157,14 @@ zonkTcTypeToTypes env tys = mapM (zonkTcTypeToType env) tys
 
 zonkTypeCollecting :: TcRef TyVarSet -> TcType -> TcM Type
 -- This variant collects unbound type variables in a mutable variable
+-- Works on both types and kinds
 zonkTypeCollecting unbound_tv_set
-  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM mkTyVarTy
+  = zonk_it
   where
+    zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM mkTyVarTy
     zonk_unbound_tyvar tv 
-        = do { tv' <- zonkQuantifiedTyVar tv
+        = do { kind <- zonk_it (tyVarKind tv)
+             ; tv' <- zonkQuantifiedTyVar (setTyVarKind tv kind)
              ; tv_set <- {- pprTrace "zonkTypeCollecting" (ppr (tv,tv'))
                        $ -} readMutVar unbound_tv_set
              ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
@@ -1173,11 +1173,14 @@ zonkTypeCollecting unbound_tv_set
 zonkTypeZapping :: VarEnv Var -> TcType -> TcM Type
 -- This variant is used for everything except the LHS of rules
 -- It zaps unbound type variables to (), or some other arbitrary type
+-- Works on both types and kinds
 zonkTypeZapping env ty 
-  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) ty -- JPM zonk_bound_tyvar
+  = zonk_it ty
   where
+    zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM zonk_bound_tyvar
+
     -- See Note [Zonking mutable unbound type or kind variables]
-    zonk_unbound_tyvar tv = do { kind <- zonkTcKindToKind anyKind (tyVarKind tv)
+    zonk_unbound_tyvar tv = do { kind <- zonk_it (tyVarKind tv)
                                ; let ty = if isSuperKind kind
                                           -- ty is actually a kind, zonk to AnyK
                                           then anyKind

@@ -204,6 +204,18 @@ Allow constraints which consist only of type variables, with no repeats.
 *                                                                                 *
 ***********************************************************************************
 
+Note [Which variables to quantify]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose the inferred type of a function is
+   T kappa (alpha:kappa) -> Int
+where alpha is a type unification variable and 
+      kappa is a kind unification variable
+Then we want to quantify over *both* alpha and kappa.  But notice that
+kappa appears "at top level" of the type, as well as inside the kind
+of alpha.  So it should be fine to just look for the "top level"
+kind/type variables of the type, without looking transitively into the
+kinds of those type variables.
+
 \begin{code}
 simplifyInfer :: Bool
               -> Bool                  -- Apply monomorphism restriction
@@ -221,6 +233,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
   = do { gbl_tvs     <- tcGetGlobalTyVars            -- Already zonked
        ; zonked_taus <- zonkTcTypes (map snd name_taus)
        ; let tvs_to_quantify = tyVarsOfTypes zonked_taus `minusVarSet` gbl_tvs
+       	                       -- See Note [Which variables to quantify]
        ; qtvs <- zonkQuantifiedTyVars (varSetElemsKvsFirst tvs_to_quantify)
        ; return (qtvs, [], False, emptyTcEvBinds) }
 
