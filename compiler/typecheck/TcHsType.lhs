@@ -1128,8 +1128,8 @@ checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
                n_exp_as = length exp_as
                n_act_as = length act_as
 
-               (env1, tidy_exp_kind) = tidyKind env0 exp_kind
-               (env2, tidy_act_kind) = tidyKind env1 act_kind
+               (env1, tidy_exp_kind) = tidyOpenKind env0 exp_kind
+               (env2, tidy_act_kind) = tidyOpenKind env1 act_kind
 
                err | n_exp_as < n_act_as     -- E.g. [Maybe]
                    = quotes (ppr ty) <+> ptext (sLit "is not applied to enough type arguments")

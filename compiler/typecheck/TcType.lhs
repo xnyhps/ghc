@@ -439,13 +439,14 @@ pprUserTypeCtxt GenSigCtxt       = ptext (sLit "a type expected by the context")
 -- 
 -- It doesn't change the uniques at all, just the print names.
 tidyTyVarBndr :: TidyEnv -> TyVar -> (TidyEnv, TyVar)
-tidyTyVarBndr (tidy_env, subst) tyvar
+tidyTyVarBndr tidy_env@(occ_env, subst) tyvar
   = case tidyOccName tidy_env occ1 of
       (tidy', occ') -> ((tidy', subst'), tyvar')
 	where
           subst' = extendVarEnv subst tyvar tyvar'
-          tyvar' = setTyVarName tyvar name'
+          tyvar' = setTyVarKind (setTyVarName tyvar name') kind'
           name'  = tidyNameOcc name occ'
+          kind'  = tidyKind tidy_env (tyVarKind tyvar)
   where
     name = tyVarName tyvar
     occ  = getOccName name
@@ -523,8 +524,11 @@ tidyTopType :: Type -> Type
 tidyTopType ty = tidyType emptyTidyEnv ty
 
 ---------------
-tidyKind :: TidyEnv -> Kind -> (TidyEnv, Kind)
-tidyKind env k = tidyOpenType env k
+tidyOpenKind :: TidyEnv -> Kind -> (TidyEnv, Kind)
+tidyOpenKind = tidyOpenType
+
+tidyKind :: TidyEnv -> Kind -> Kind
+tidyKind = tidyType
 \end{code}
 
 %************************************************************************
