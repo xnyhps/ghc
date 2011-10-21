@@ -856,7 +856,7 @@ canEqLeaf :: SubGoalDepth -- Depth
   --    * one of the two arguments is not OtherCls
   --    * the two types are not equal (looking through synonyms)
 
-canEqLeaf d _untch fl eqv cls1 cls2
+canEqLeaf _d _untch fl eqv cls1 cls2
 -- First have a case for reflexivity since the guard in the top of canEq 
 -- is not enough as the leaf equality may now be rewritten from some inerts.
   | ty1 <- unClassify cls1 

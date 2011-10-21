@@ -693,7 +693,7 @@ doInteractWithInert :: Ct -> Ct -> TcS InteractResult
 -- Identical class constraints.
 doInteractWithInert
   inertItem@(CDictCan { cc_id = d1, cc_flavor = fl1, cc_class = cls1, cc_tyargs = tys1 }) 
-   workItem@(CDictCan { cc_id = d2, cc_flavor = fl2, cc_class = cls2, cc_tyargs = tys2 })
+   workItem@(CDictCan { cc_id = _d2, cc_flavor = fl2, cc_class = cls2, cc_tyargs = tys2 })
 
   | cls1 == cls2  
   = do { let pty1 = mkClassPred cls1 tys1
@@ -722,7 +722,7 @@ doInteractWithInert
                | otherwise         -> irKeepGoing "NOP"
 
            -- Actual Functional Dependencies
-           Just (rewritten_tys2,cos2,fd_work) 
+           Just (rewritten_tys2,_cos2,fd_work)
                | not (eqTypes tys1 rewritten_tys2) 
                -- Standard thing: create derived fds and keep on going. Importantly we don't
                -- throw workitem back in the worklist because this can cause loops. See #5236.
@@ -730,8 +730,7 @@ doInteractWithInert
                      ; irKeepGoing "Cls/Cls (new fundeps)" } -- Just keep going without droping the inert 
 
                -- This WHOLE otherwise branch is an optimization where the fd made the things match
-               | otherwise  
-               , let dict_co = mkTyConAppCo (classTyCon cls1) cos2
+               | otherwise
                -> case fl2 of
                     Given {} 
                         -> pprPanic "Unexpected given!" (ppr inertItem $$ ppr workItem)
@@ -740,7 +739,7 @@ doInteractWithInert
                     Derived {}
                         -- The types were made to exactly match so we don't need 
                         -- the workitem any longer.
-                        -> do { emitFDWorkAsDerived fd_work (cc_depth workItem) 
+                        -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
                               ; irWorkItemConsumed "Cls/Cls fundep (solved)" } 
 		    Wanted  {}
                         | isDerived fl1 -- Just do the safe thing if inert is derived, 

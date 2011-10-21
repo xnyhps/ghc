@@ -289,12 +289,12 @@ lintCoreExpr e@(App _ _)
     , Just dc <- isDataConWorkId_maybe x
     , dc == eqBoxDataCon
     , [Type arg_ty1, Type arg_ty2, co_e] <- args
-    = do arg_kind1 <- lintType arg_ty1
-         arg_kind2 <- lintType arg_ty2
-         unless (arg_kind1 `eqKind` arg_kind2)
+    = do arg_ty1' <- lintInTy arg_ty1
+         arg_ty2' <- lintInTy arg_ty2
+         unless (typeKind arg_ty1' `eqKind` typeKind arg_ty2')
                 (addErrL (mkEqBoxKindErrMsg arg_ty1 arg_ty2))
          
-         lintCoreArg (mkCoercionType arg_ty1 arg_ty2 `mkFunTy` mkEqPred (arg_ty1, arg_ty2)) co_e
+         lintCoreArg (mkCoercionType arg_ty1' arg_ty2' `mkFunTy` mkEqPred (arg_ty1', arg_ty2')) co_e
     | otherwise
     = do { fun_ty <- lintCoreExpr fun
          ; addLoc (AnExpr e) $ foldM lintCoreArg fun_ty args }
@@ -701,7 +701,8 @@ lintCoercion (CoVarCo cv)
                   2 (ptext (sLit "With offending type:") <+> ppr (varType cv)))
   | otherwise
   = do { checkTyCoVarInScope cv
-       ; return (coVarKind cv) }
+       ; cv' <- lookupIdInScope cv 
+       ; return (coVarKind cv') }
 
 lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = tvs
                                    , co_ax_lhs = lhs

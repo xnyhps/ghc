@@ -260,13 +260,7 @@ dsLCoercion co k
 ---------------------------------------
 dsEvTerm :: EvTerm -> CoreExpr
 dsEvTerm (EvId v) = Var v
--- Decompose, if coercion: 
-{- dsEvTerm (EvCast v co)          
-  | isLCoVar v -- If it's a lifted coercion then treat it specially
-  = dsEvTerm (EvCoercionBox lco)
-  where lco = mkSymCo (mkNthCo 0 co) `mkTransCo` (mkEqVarLCo v) `mkTransCo` (mkNthCo 1 co) 
--}
--- Otherwise 
+
 dsEvTerm (EvCast v co) 
   = dsLCoercion co $ Cast (Var v) -- 'v' is always a lifted evidence variable so it is
                                   -- unnecessary to call varToCoreExpr v here.

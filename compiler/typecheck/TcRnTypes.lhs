@@ -56,7 +56,7 @@ module TcRnTypes(
 
 	-- Pretty printing
         pprEvVarTheta, pprWantedEvVar, pprWantedsWithLocs,
-	pprEvVars, pprEvVarWithType,
+	pprEvVars, pprEvVarWithType, pprWantedEvVarWithLoc,
         pprArising, pprArisingAt,
 
 	-- Misc other types
@@ -98,7 +98,6 @@ import ListSetOps
 import FastString
 
 import Data.Set (Set)
-import Pair
 
 \end{code}
 

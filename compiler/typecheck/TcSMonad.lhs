@@ -772,10 +772,7 @@ tryTcS :: TcS a -> TcS a
 -- Moreover, we will simply throw away all the evidence generated. 
 tryTcS tcs
   = TcS (\env -> 
-             do { wl_orig <- TcM.readTcRef (tcs_worklist env)
-                ; is_orig <- TcM.readTcRef (tcs_inerts env) 
-
-                ; wl_var <- TcM.newTcRef emptyWorkList
+             do { wl_var <- TcM.newTcRef emptyWorkList
                 ; is_var <- TcM.newTcRef emptyInert
 
                 ; ty_binds_var <- TcM.newTcRef emptyVarEnv
@@ -808,8 +805,6 @@ updWorkListTcS f
   = do { wl_var <- getTcSWorkListRef 
        ; wl_curr <- wrapTcS (TcM.readTcRef wl_var)
        ; let new_work = f wl_curr 
-       ; traceTcS "updWorkListTcS" $ 
-                  text "WorkList set to:" <+> ppr new_work 
        ; wrapTcS (TcM.writeTcRef wl_var new_work) }
 
 updInertSetTcS :: (InertSet -> (InertSet,a)) -> TcS a 
