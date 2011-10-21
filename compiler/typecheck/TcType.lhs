@@ -80,6 +80,7 @@ module TcType (
   -- * Tidying type related things up for printing
   tidyType,      tidyTypes,
   tidyOpenType,  tidyOpenTypes,
+  tidyOpenKind,
   tidyTyVarBndr, tidyFreeTyVars,
   tidyOpenTyVar, tidyOpenTyVars,
   tidyTopType,
@@ -440,7 +441,7 @@ pprUserTypeCtxt GenSigCtxt       = ptext (sLit "a type expected by the context")
 -- It doesn't change the uniques at all, just the print names.
 tidyTyVarBndr :: TidyEnv -> TyVar -> (TidyEnv, TyVar)
 tidyTyVarBndr tidy_env@(occ_env, subst) tyvar
-  = case tidyOccName tidy_env occ1 of
+  = case tidyOccName occ_env occ1 of
       (tidy', occ') -> ((tidy', subst'), tyvar')
 	where
           subst' = extendVarEnv subst tyvar tyvar'
