@@ -34,7 +34,7 @@ module Kind (
         isAnyKind, isAnyKindCon,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
-        isSubKindCon, isSubOpenTypeKindCon,
+        isSubKindCon, isSubKindConTc, isSubOpenTypeKindCon,
 
         -- ** Functions on variables
         isKiVar, splitKiTyVars, partitionKiTyVars,
@@ -220,9 +220,17 @@ isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@
 isSubKindCon kc1 kc2
   | kc1 == kc2                                             = True
-  | isSubArgTypeKindCon kc1   && isArgTypeKindCon kc2      = True
+  | isSubArgTypeKindCon  kc1  && isArgTypeKindCon  kc2     = True
   | isSubOpenTypeKindCon kc1  && isOpenTypeKindCon kc2     = True
   | otherwise                                              = False
+
+-- This is a variant on isSubKindCon used during type checking, where
+-- we don't want Constraint to be a subkind of anything.
+isSubKindConTc :: TyCon -> TyCon -> Bool
+isSubKindConTc kc1 kc2
+  | kc1 == kc2                                         = True
+  | isConstraintKindCon kc1 || isConstraintKindCon kc2 = False
+  | otherwise                                          = isSubKindCon kc1 kc2
 
 defaultKind :: Kind -> Kind
 -- ^ Used when generalising: default kind ? and ?? to *. See "Type#kind_subtyping" for more

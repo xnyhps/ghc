@@ -774,9 +774,6 @@ uVar origin swapped tv1 ty2
     k1 = tyVarKind tv1
     k2 = typeKind ty2
     ty1 = mkTyVarTy tv1
-    ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
-                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
-                               , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
 
 ----------------
 uUnfilledVar :: [EqOrigin]
@@ -828,19 +825,21 @@ uUnfilledVars :: [EqOrigin]
 --           Neither is filled in yet
 
 uUnfilledVars origin swapped tv1 details1 tv2 details2
-  = do { traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1'
-                                  <+> text "with"            <+> ppr k2')
-       ; sub_kind <- unifyKind ctxt k1 k2
-       ; traceTc "uUnfilledVars" (ppr k1 <+> text (show sk) <+> ppr k2)
+  = do { traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
+                                  <+> text "with"            <+> ppr k2)
+       ; sub_kind <- unifyKind (mkKindErrorMsg ty1 ty2 k1 k2) k1 k2
+
        ; case (sub_kind, details1, details2) of
-           (LT, _, MetaTv _ ref2) -> updateMeta tv2 ref2 ty1   -- k1 <= k2, so update tv2
-           (GT, MetaTv _ ref1, _) -> updateMeta tv1 ref1 ty2   -- k2 <= k1, so update tv1
-	   (EQ, MetaTv i1 ref1, MetaTv i2 ref2)
-               | nicer_to_update_tv1 i1 i2 -> updateMeta tv1 ref1 ty2
- 	   	 | otherwise                 -> updateMeta tv2 ref2 ty1
+           -- k1 <= k2, so update tv2
+           (LT, _, MetaTv _ ref2) -> updateMeta tv2 ref2 ty1
+           -- k2 <= k1, so update tv1
+           (GT, MetaTv _ ref1, _) -> updateMeta tv1 ref1 ty2
+           (EQ, MetaTv i1 ref1, MetaTv i2 ref2)
+                | nicer_to_update_tv1 i1 i2 -> updateMeta tv1 ref1 ty2
+                | otherwise                 -> updateMeta tv2 ref2 ty1
 
            (_, _, _) -> unSwap swapped (uType_defer origin) ty1 ty2 } 
-           	        -- Defer for skolems of all sorts
+                        -- Defer for skolems of all sorts
   where
     k1       = tyVarKind tv1
     k2       = tyVarKind tv2
@@ -854,10 +853,6 @@ uUnfilledVars origin swapped tv1 details1 tv2 details2
         -- variables in preference to ones gotten (say) by
         -- instantiating a polymorphic function with a user-written
         -- type sig
-
-    ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
-                , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1'
-                               , ppr ty2 <+> dcolon <+> ppr k2' ]) ]
 
 ----------------
 checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
@@ -884,9 +879,10 @@ checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
 
 checkTauTvUpdate tv ty
   = do { ty' <- zonkTcType ty
-       ; sub_k <- unifyKind (tyVarKind tv) (typeKind ty')
        ; let k2 = typeKind ty'
        ; k1 <- zonkTcKind (tyVarKind tv)
+       ; sub_k <- unifyKind (mkKindErrorMsg tv ty' k1 k2)
+                            (tyVarKind tv) (typeKind ty')
 
        ; case sub_k of
            LT -> return Nothing
@@ -1142,9 +1138,9 @@ unifyKind ctxt k1@(TyConApp kc1 []) k2@(TyConApp kc2 [])
   | kc1 == kc2               = return EQ
   | kc1 `isSubKindConTc` kc2 = return LT
   | kc2 `isSubKindConTc` kc1 = return GT
-  | otherise                 = unifyKindMisMatch ctxt k1 k2
+  | otherwise                = unifyKindMisMatch ctxt k1 k2
 
-unifyKind ctxt k1 k2 = do { unifyKindEq k1 k2; return EQ }
+unifyKind ctxt k1 k2 = do { unifyKindEq ctxt k1 k2; return EQ }
   -- In all other cases, let unifyKindEq do the work
 
 uKVar :: Bool -> SDoc -> MetaKindVar -> TcKind -> TcM Ordering
@@ -1152,7 +1148,7 @@ uKVar isFlipped ctxt kv1 k2
   | isMetaTyVar kv1
   = do  { mb_k1 <- readMetaKindVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar ctxt kv1 k2
+            Flexi -> uUnboundKVar ctxt kv1 k2 >> return EQ
             Indirect k1 -> unifyKind ctxt k1 k2 }
   | TyVarTy kv2 <- k2, isMetaTyVar kv2
   = uKVar (not isFlipped) ctxt kv2 (TyVarTy kv1)
@@ -1227,7 +1223,13 @@ kindSimpleKind k
   | isArgTypeKind k  = liftedTypeKind
   | otherwise        = k
 
-unifyKindMisMatch :: SDoc -> TcKind -> TcKind -> TcM ()
+--mkKindErrorMsg :: TcTyVar -> TcTyVar -> TcTyVar -> TcTyVar -> SDoc
+mkKindErrorMsg ty1 ty2 k1 k2 = 
+        vcat [ ptext (sLit "Kind incompatibility when matching types:")
+             , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
+                            , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
+
+unifyKindMisMatch :: SDoc -> TcKind -> TcKind -> TcM a
 unifyKindMisMatch ctxt ki1 ki2 = do
     ki1' <- zonkTcKind ki1
     ki2' <- zonkTcKind ki2

@@ -1006,9 +1006,9 @@ zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
 
        ; unbound_tkvs <- readMutVar unbound_tkv_set
 
-       ; let .. put kind vars first... 
-             final_bndrs :: [RuleBndr Var]
-             final_bndrs = map (RuleBndr . noLoc) zonked_unbound_tkvs
+       ; let final_bndrs :: [RuleBndr Var]
+             final_bndrs = map (RuleBndr . noLoc)
+                             (varSetElemsKvsFirst unbound_tkvs)
                            ++ new_bndrs
 
        ; {- pprTrace "zonkRule" (ppr (unbound_tkvs, zonked_unbound_tkvs)) 
