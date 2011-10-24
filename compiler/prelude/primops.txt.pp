@@ -1880,6 +1880,9 @@ primtype Any a
 	into interface files, we'll get a crash; at least until we add interface-file
 	syntax to support them. }
 
+primtype AnyK
+	{ JPM Todo }
+
 pseudoop   "unsafeCoerce#"
    a -> b
    { The function {\tt unsafeCoerce\#} allows you to side-step the typechecker entirely. That

@@ -311,7 +311,7 @@ kindTyConType kind = TyConApp kind []
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, argTypeKind, ubxTupleKind, constraintKind :: Kind
 
-anyKind      = kindTyConType anyKindTyCon
+anyKind          = kindTyConType anyKindTyCon
 liftedTypeKind   = kindTyConType liftedTypeKindTyCon
 unliftedTypeKind = kindTyConType unliftedTypeKindTyCon
 openTypeKind     = kindTyConType openTypeKindTyCon
@@ -612,6 +612,8 @@ threadIdPrimTyCon = pcPrimTyCon0 threadIdPrimTyConName PtrRep
 		Any
 %*									*
 %************************************************************************
+
+JPM Todo: Document AnyK
 
 Note [Any types]
 ~~~~~~~~~~~~~~~~
