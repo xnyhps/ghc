@@ -6,10 +6,10 @@ module TcSMonad (
 
     WorkList(..), isEmptyWorkList, emptyWorkList,
     workListFromEq, workListFromNonEq, workListFromCt, 
-    extendWorkListEq, extendWorkListNonEq, extendWorkListCt, appendWorkListCt,
-                    
+    extendWorkListEq, extendWorkListNonEq, extendWorkListCt, 
+    appendWorkListCt, appendWorkListEqs,
 
-    getTcSWorkList, updWorkListTcS, 
+    getTcSWorkList, updWorkListTcS, updWorkListTcS_return,
 
     Ct(..), Xi, tyVarsOfCt, tyVarsOfCts, tyVarsOfCDicts, 
     emitFrozenError,
@@ -56,8 +56,8 @@ module TcSMonad (
     getInertEqs, getRelevantInertFunEq, rewriteFromInertEqs, 
     tyVarsOfInert, emptyInert, getTcSInerts, updInertSet, extractUnsolved,
     extractUnsolvedTcS,
-    updInertSetTcS, updInertSetTcS_, partitionCCanMap, partitionEqMap,
-    getRelevantCts,
+    updInertSetTcS, partitionCCanMap, partitionEqMap,
+    getRelevantCts, kickOutRewritableInerts, extractRelevantInerts,
     CCanMap (..),
 
 
@@ -178,6 +178,12 @@ better rewrite it as much as possible before reporting it as an error to the use
 -- See Note [WorkList]
 data WorkList = WorkList { wl_eqs  :: [Ct], wl_rest :: [Ct] }
 
+
+unionWorkList :: WorkList -> WorkList -> WorkList
+unionWorkList new_wl orig_wl = 
+   WorkList { wl_eqs = wl_eqs new_wl ++ wl_eqs orig_wl
+            , wl_rest = wl_rest new_wl ++ wl_rest orig_wl }
+
 extendWorkListEq :: Ct -> WorkList -> WorkList
 -- Extension by equality
 extendWorkListEq ct wl = wl { wl_eqs = ct : wl_eqs wl }
@@ -193,7 +199,12 @@ extendWorkListCt ct wl
  | otherwise = extendWorkListNonEq ct wl
 
 appendWorkListCt :: [Ct] -> WorkList -> WorkList
+-- Agnostic
 appendWorkListCt cts wl = foldr extendWorkListCt wl cts
+
+appendWorkListEqs :: [Ct] -> WorkList -> WorkList
+-- Append a list of equalities
+appendWorkListEqs cts wl = foldr extendWorkListEq wl cts
 
 isEmptyWorkList :: WorkList -> Bool
 isEmptyWorkList wl = null (wl_eqs wl) &&  null (wl_rest wl)
@@ -325,12 +336,12 @@ partitionCCanMap pred cmap
                                           new_acc_cts = acc_cts `andCts` cts_out
                                           (cts_out, cts_keep) = partitionBag pred this_cts
 
-partitionEqMap :: (Ct -> Bool) -> TyVarEnv (Ct,Coercion) -> (Cts, TyVarEnv (Ct,Coercion))
+partitionEqMap :: (Ct -> Bool) -> TyVarEnv (Ct,Coercion) -> ([Ct], TyVarEnv (Ct,Coercion))
 partitionEqMap pred isubst 
-  = let eqs_out = foldVarEnv extend_if_pred emptyCts isubst
+  = let eqs_out = foldVarEnv extend_if_pred [] isubst
         eqs_in  = filterVarEnv_Directly (\_ (ct,_) -> not (pred ct)) isubst
     in (eqs_out, eqs_in)
-  where extend_if_pred (ct,_) cts = if pred ct then extendCts cts ct else cts 
+  where extend_if_pred (ct,_) cts = if pred ct then ct : cts else cts
 
 
 extractUnsolvedCMap :: CCanMap a -> (Cts, CCanMap a)
@@ -386,7 +397,7 @@ instance Outputable InertSet where
                 , vcat (map ppr (Bag.bagToList $ cCanMapToBag (inert_ips is))) 
                 , vcat (map ppr (Bag.bagToList $ cCanMapToBag (inert_funeqs is)))
                 , text "Frozen errors =" <+> -- Clearly print frozen errors
-                    vcat (map ppr (Bag.bagToList $ inert_frozen is))
+                    braces (vcat (map ppr (Bag.bagToList $ inert_frozen is)))
                 , text "Warning: Not displaying cached (solved) non-canonicals."
                 ]
                        
@@ -417,7 +428,7 @@ updInertSet is item
   = is { inert_dicts = updCCanMap (cls,item) (inert_dicts is) } 
   | Just x  <- isCIPCan_Maybe item      -- IP 
   = is { inert_ips   = updCCanMap (x,item) (inert_ips is) }  
-  | isCIrredEvCan item                     -- Presently-irreducible evidence
+  | isCIrredEvCan item                  -- Presently-irreducible evidence
   = is { inert_irreds = inert_irreds is `Bag.snocBag` item }
 
   | Just tc <- isCFunEqCan_Maybe item   -- Function equality 
@@ -425,20 +436,38 @@ updInertSet is item
   | otherwise 
   = is { inert_frozen = inert_frozen is `Bag.snocBag` item }
 
+updInertSetTcS :: AtomicInert -> TcS ()
+-- Add a new item in the inerts of the monad
+updInertSetTcS item
+  = modifyInertTcS (\is -> ((), updInertSet is item))
+
+modifyInertTcS :: (InertSet -> (a,InertSet)) -> TcS a 
+modifyInertTcS f 
+  = modifyInertTcSTcS (return . f)
+
+modifyInertTcSTcS :: (InertSet -> TcS (a,InertSet)) -> TcS a
+-- Run the computation with the current inerts, store new 
+-- inerts and return value.
+modifyInertTcSTcS f 
+  = do { is_var <- getTcSInertsRef
+       ; is_curr <- wrapTcS (TcM.readTcRef is_var)
+       ; (a,is_new) <- f is_curr
+       ; wrapTcS (TcM.writeTcRef is_var is_new)
+       ; return a }
+
+
+
 extractUnsolvedTcS :: TcS (Cts,Cts) 
 -- Extracts frozen errors and remaining unsolved and sets the 
 -- inert set to be the remaining! 
 extractUnsolvedTcS = 
-  do { is <- getTcSInerts
-     ; let (is', insol, unsol) = extractUnsolved is
-     ; updInertSetTcS_ (\_ -> is') 
-     ; return (insol,unsol) }
+  modifyInertTcS extractUnsolved 
 
-extractUnsolved :: InertSet -> (InertSet, Cts, Cts)
+extractUnsolved :: InertSet -> ((Cts,Cts), InertSet)
 -- Postcondition
 -- -------------
 -- When: 
---   (is_solved, frozen, cts) <- extractUnsolved inert
+--   ((frozen,cts),is_solved) <- extractUnsolved inert
 -- Then: 
 -- -----------------------------------------------------------------------------
 --  cts       |  The unsolved (Derived or Wanted only) residual 
@@ -457,7 +486,7 @@ extractUnsolved is@(IS {inert_eqs = eqs, inert_irreds = irreds})
                         , inert_irreds = solved_irreds
                         , inert_frozen = emptyCts
                         , inert_funeqs = solved_funeqs }
-    in (is_solved, inert_frozen is, unsolved)
+    in ((inert_frozen is, unsolved), is_solved)
 
   where solved_eqs = filterVarEnv_Directly (\_ (ct,_) -> isGivenOrSolvedCt ct) eqs
         unsolved_eqs = foldVarEnv (\(ct,_co) cts -> cts `extendCts` ct) emptyCts $
@@ -470,6 +499,81 @@ extractUnsolved is@(IS {inert_eqs = eqs, inert_irreds = irreds})
 
         unsolved = unsolved_eqs `unionBags` unsolved_irreds `unionBags`
                    unsolved_ips `unionBags` unsolved_dicts `unionBags` unsolved_funeqs
+
+
+
+kickOutRewritableInerts :: Ct -> TcS () 
+-- Pre:  ct is a CTyEqCan 
+-- Post: the TcS monad is left with the thinner non-rewritable inerts; the 
+--       rewritable end up in the worklist
+kickOutRewritableInerts ct 
+  = modifyInertTcSTcS (kick_out_rewritable ct) >>= (updWorkListTcS . unionWorkList)
+
+kick_out_rewritable :: Ct -> InertSet -> TcS (WorkList,InertSet)
+kick_out_rewritable ct (IS { inert_eqs    = eqmap
+                           , inert_eq_tvs = inscope
+                           , inert_dicts  = dictmap
+                           , inert_ips    = ipmap
+                           , inert_funeqs = funeqmap
+                           , inert_irreds = irreds
+                           , inert_frozen = frozen } )
+           = do { frozen_rewritten <- mapBagM rewrite_frozen frozen
+                   -- We do not want to kick out the frozens in the work list because the 
+                   -- semantics of a CNonCanonical depends on whether it appears in the 
+                   -- worklist or in the inert set. Fortunately, we may simply rewrite them.
+
+                ; let kicked_out = WorkList { wl_eqs  = eqs_out ++ bagToList feqs_out
+                                            , wl_rest = bagToList (dicts_out `andCts` ips_out `andCts` irs_out) }
+            
+                ; let remaining = IS { inert_eqs = eqs_in
+                                     , inert_eq_tvs = inscope -- keep the same, safe and cheap
+                                     , inert_dicts = dicts_in
+                                     , inert_ips = ips_in
+                                     , inert_funeqs = feqs_in
+                                     , inert_irreds = irs_in
+                                     , inert_frozen = frozen_rewritten }
+                ; return (kicked_out, remaining) }
+
+            where fl = cc_flavor ct
+                  tv = cc_tyvar ct
+
+                  (eqs_out,eqs_in)     = partitionEqMap rewritable eqmap
+                  (dicts_out,dicts_in) = partitionCCanMap rewritable dictmap
+                  (ips_out, ips_in)    = partitionCCanMap rewritable ipmap 
+                  (feqs_out,feqs_in)   = partitionCCanMap rewritable funeqmap
+                  (irs_out, irs_in)    = partitionBag rewritable irreds
+
+                  rewritable ct = (fl `canRewrite` cc_flavor ct) && 
+                                  (tv `elemVarSet` tyVarsOfCt ct)
+
+                  rewrite_frozen ct 
+                     = do { traceTcS "checpoint #3" empty 
+                          ; v' <- rewriteFromInertEqs
+                                       (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
+                          ; traceTcS "checpoint #4" empty 
+                          ; return ct { cc_id = v'} } 
+                  work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
+
+
+extractRelevantInerts :: Ct -> TcS Cts
+-- Returns the constraints from the inert set that are 'relevant' to react with 
+-- this constraint. The monad is left with the 'thinner' inerts. 
+-- NB: This function contains logic specific to the constraint solver, maybe move there?
+extractRelevantInerts wi 
+  = modifyInertTcS (extract_inert_relevants wi)
+  where extract_inert_relevants (CDictCan {cc_class = cl}) is = 
+            let (cts,dict_map) = getRelevantCts cl (inert_dicts is) 
+            in (cts, is { inert_dicts = dict_map })
+        extract_inert_relevants (CFunEqCan {cc_fun = tc}) is = 
+            let (cts,feqs_map)  = getRelevantCts tc (inert_funeqs is) 
+            in (cts, is { inert_funeqs = feqs_map })
+        extract_inert_relevants (CIPCan { cc_ip_nm = nm } ) is = 
+            let (cts, ips_map) = getRelevantCts nm (inert_ips is) 
+            in (cts, is { inert_ips = ips_map })
+        extract_inert_relevants (CIrredEvCan { }) is = 
+            let cts = inert_irreds is 
+            in (cts, is { inert_irreds = emptyCts })
+        extract_inert_relevants _ is = (emptyCts,is)
 \end{code}
 
 
@@ -723,6 +827,7 @@ doWithInert inert (TcS action)
   = TcS $ \env -> do { new_inert_var <- TcM.newTcRef inert
                      ; action (env { tcs_inerts = new_inert_var }) }
 
+
 nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a 
 nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside) 
   = TcS $ \ TcSEnv { tcs_ty_binds = ty_binds
@@ -802,21 +907,15 @@ getTcSWorkList = getTcSWorkListRef >>= wrapTcS . (TcM.readTcRef)
 
 updWorkListTcS :: (WorkList -> WorkList) -> TcS () 
 updWorkListTcS f 
-  = do { wl_var <- getTcSWorkListRef 
+  = updWorkListTcS_return (\w -> ((),f w))
+
+updWorkListTcS_return :: (WorkList -> (a,WorkList)) -> TcS a
+updWorkListTcS_return f
+  = do { wl_var <- getTcSWorkListRef
        ; wl_curr <- wrapTcS (TcM.readTcRef wl_var)
-       ; let new_work = f wl_curr 
-       ; wrapTcS (TcM.writeTcRef wl_var new_work) }
-
-updInertSetTcS :: (InertSet -> (InertSet,a)) -> TcS a 
-updInertSetTcS f 
-  = do { is_var <- getTcSInertsRef
-       ; is_curr <- wrapTcS (TcM.readTcRef is_var)
-       ; let (is_new,ret) = f is_curr
-       ; wrapTcS (TcM.writeTcRef is_var is_new) 
-       ; return ret } 
-
-updInertSetTcS_ :: (InertSet -> InertSet) -> TcS () 
-updInertSetTcS_ f = updInertSetTcS (\x -> (f x,())) 
+       ; let (res,new_work) = f wl_curr
+       ; wrapTcS (TcM.writeTcRef wl_var new_work)
+       ; return res }
 
 emitFrozenError :: CtFlavor -> EvVar -> SubGoalDepth -> TcS ()
 -- Emits a non-canonical constraint that will stand for a frozen error in the inerts. 
@@ -1126,29 +1225,29 @@ rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -> TcS EvVar
 rewriteFromInertEqs (subst,inscope) fl v 
   = do { let co = liftInertEqsPred subst inscope fl (evVarPred v) 
-       ; traceTcS "rewriteFromInertEqs" $ text "lifted coercion is: " <+> ppr co
-       ; traceTcS "rewriteFromInertEqs" $ text "its coercion kind is:" <+> ppr (pSnd (liftedCoercionKind co))
        ; if isReflCo co then return v 
-         else do { v' <- newEvVar (pSnd (liftedCoercionKind co)) 
+         else do { traceTcS "rewriteFromInertEqs" $
+                   text "Original item =" <+> ppr v <+> dcolon <+> ppr (evVarPred v)
+                 ; v' <- newEvVar (pSnd (liftedCoercionKind co))
                  ; case fl of 
                      Wanted {}  -> setEvBind v (EvCast v' (mkSymCo co)) 
                      Given {}   -> setEvBind v' (EvCast v co) 
                      Derived {} -> return ()
-                 ; return v' } }
+                 ; traceTcS "rewriteFromInertEqs" $
+                   text "Rewritten item =" <+> ppr v' <+> dcolon <+> ppr (evVarPred v')
+                 ; return v' }
+       }
 
--- See Note [LiftInertEqs] 
-liftInertEqsPred :: TyVarEnv (Ct,Coercion) 
-                 -> InScopeSet 
-                 -> CtFlavor 
+-- See Note [LiftInertEqs]
+liftInertEqsPred :: TyVarEnv (Ct,Coercion)
+                 -> InScopeSet
+                 -> CtFlavor
                  -> PredType -> Coercion
 liftInertEqsPred subst inscope fl pty
   = ty_cts_subst subst inscope fl pty
 
 ty_cts_subst :: TyVarEnv (Ct,Coercion)
              -> InScopeSet -> CtFlavor -> Type -> Coercion
--- The reason I am returning the Type and not just the Coercions is that I want to 
--- avoid calling coercionKind on the returned coercion from rewriteFromInertEqs because 
--- coercionKind is not expecting any lifted coercions variables. A bit annoying but OK. 
 ty_cts_subst subst inscope fl ty 
   = go ty 
   where go (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)

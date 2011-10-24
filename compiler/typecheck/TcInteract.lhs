@@ -16,7 +16,7 @@ import Unify
 
 import Id 
 import Var
-import VarEnv ( unitVarEnv )
+import VarEnv ( )
 
 import TcType
 import HsBinds
@@ -132,25 +132,25 @@ data SelectWorkItem
 selectNextWorkItem :: SubGoalDepth -- Max depth allowed
                    -> TcS SelectWorkItem
 selectNextWorkItem max_depth
-  = getTcSWorkList >>= pick_next 
+  = updWorkListTcS_return pick_next
   where 
-    pick_next :: WorkList -> TcS SelectWorkItem 
+    pick_next :: WorkList -> (SelectWorkItem, WorkList)
     -- A simple priorititization of equalities (for now)
     -- --------------------------------------------------------
     pick_next wl@(WorkList { wl_eqs = eqs, wl_rest = rest })
       = case (eqs,rest) of
           ([],[])                        -- No more work
-              -> return NoWorkRemaining
+              -> (NoWorkRemaining,wl)
           ((ct:cts),_)
             | cc_depth ct > max_depth  -- Depth exceeded
-            -> return (MaxDepthExceeded ct)
+            -> (MaxDepthExceeded ct,wl)
             | otherwise                -- Equality work 
-            -> updWorkListTcS (\_ -> wl {wl_eqs = cts}) >> return (NextWorkItem ct)
+            -> (NextWorkItem ct, wl { wl_eqs = cts })
           ([],(ct:cts))
             | cc_depth ct > max_depth  -- Depth exceeded
-            -> return (MaxDepthExceeded ct)
+            -> (MaxDepthExceeded ct,wl)
             | otherwise                -- Non-equality work
-           -> updWorkListTcS (\_ -> wl {wl_rest = cts}) >> return (NextWorkItem ct)
+           -> (NextWorkItem ct, wl {wl_rest = cts})
 
 runSolverPipeline :: [(String,SimplifierStage)] -- The pipeline 
                   -> WorkItem                   -- The work item 
@@ -166,7 +166,7 @@ runSolverPipeline pipeline workItem
 
        ; case final_res of 
            Stop            -> return () 
-           ContinueWith ct -> updInertSetTcS_ (`updInertSet` ct)
+           ContinueWith ct -> updInertSetTcS ct
        }
   where run_pipeline :: [(String,SimplifierStage)] -> StopOrContinue -> TcS StopOrContinue
         run_pipeline [] res = return res 
@@ -266,21 +266,13 @@ spontaneousSolveStage workItem
                ; traceFireTcS (cc_depth workItem) $
                  ptext (sLit "Spontaneous") 
                            <+> parens (ppr (cc_flavor workItem)) <+> ppr workItem
-               ; if isGivenOrSolvedCt workItem then 
-                      -- Original was given just update inerts and Stop
-                     updInertSetTcS_ (\is -> updInertSet is workItem')
-                 else -- Original is wanted so it's given form may rewrite the inerts. 
-                     do { inerts <- getTcSInerts
-                        ; (kicked_out_cts, remaining_inerts) 
-                            <- kick_out_rewritable inerts workItem' new_tv new_fl
-                               -- Kick rewriteable inerts back in the worklist
-                        ; updWorkListTcS (appendWorkListCt (bagToList kicked_out_cts))
-                               -- Add solved guy in inerts
-                        ; updInertSetTcS_ (\_ -> updInertSet remaining_inerts workItem') } 
-                 -- ... and stop!
+               -- If original was /not/ given we may have to kick out now-rewritable inerts
+               ; when (not (isGivenOrSolvedCt workItem)) $
+                 kickOutRewritableInerts workItem'
+               -- Add solved guy in inerts anyway
+               ; updInertSetTcS workItem'
+               -- .. and Stop 
                ; return Stop }
-           where new_fl = cc_flavor workItem'
-                 new_tv = cc_tyvar workItem'
                              
 data SPSolveResult = SPCantSolve
                    | SPSolved WorkItem 
@@ -473,32 +465,19 @@ interactWithInertEqsStage  wi
   where apply_inert_subst wi 
             -- Applies the inert substitutions to the work item 
           = do { ieqs  <- getInertEqs
-               ; traceTcS "interactWithInertEqsSage, before rewriting {" empty 
                ; evvar <- rewriteFromInertEqs ieqs (cc_flavor wi) (cc_id wi)
-               ; traceTcS "interactWithInertEqsSage, finished rewriting }" $ 
-                 text "new evidence variable = " <+> ppr evvar
                ; return (figure_out_canonicity wi evvar) }
 
         rewrite_inerts_or_continue ct
-            -- Tries to see if this constraint can rewrite any of the inerts
+            -- Tries to see if /this/ constraint can rewrite any of the inerts
             | isCTyEqCan ct
-            , tv <- cc_tyvar ct
-            , fl <- cc_flavor ct 
-            = do { inerts <- getTcSInerts
-                 ; traceTcS "checpoint #1" empty 
-                 ; (kicked_out_cts, remaining_inerts) <- kick_out_rewritable inerts ct tv fl
-                 ; traceTcS "checpoint #2" empty 
-                   -- Emit the kicked out constraints
-                 ; updWorkListTcS (appendWorkListCt (bagToList kicked_out_cts))
-                   -- /Set/ the inert set to contain the new guy, and stop
-                 ; if isGivenOrSolved fl then 
-                       do { updInertSetTcS_ (\_ -> updInertSet remaining_inerts ct)
-                          ; return Stop }
-                   else continueWith ct
-                 }
-                 -- If he is wanted/derived pass him on to the next 
-                 -- stage of spontaneous solving
-
+            = do { kickOutRewritableInerts ct
+                 ; if isGivenOrSolved (cc_flavor ct) then 
+                       -- When given, directly add him in inerts
+                       updInertSetTcS ct >> return Stop 
+                   else
+                       -- Otherwise pass him on to the next stage
+                       continueWith ct }
             -- No more rewrites are possible at all, so move on to a next stage
             | otherwise = continueWith ct
 
@@ -516,7 +495,8 @@ interactWithInertEqsStage  wi
                 (CFunEqCan {cc_flavor = fl, cc_depth = d}, EqPred ty1 xi)
                     | Just (tc,xis) <- splitTyConApp_maybe ty1
                     -> CFunEqCan { cc_id = ev, cc_flavor = fl
-                                 , cc_fun = tc, cc_tyargs = xis, cc_rhs = xi, cc_depth = d }
+                                 , cc_fun = tc, cc_tyargs = xis
+                                 , cc_rhs = xi, cc_depth = d }
                 (CIrredEvCan {cc_flavor = fl, cc_depth = d}, IrredPred ty) 
                     -> CIrredEvCan { cc_id = ev, cc_flavor = fl
                                    , cc_ty = ty, cc_depth = d }
@@ -533,52 +513,9 @@ interactWithInertEqsStage  wi
                     -> CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth = d }
                 (_,_)
                     -> pprPanic "interactWithInertEqStage" $ 
-                       text "Rewrote one predicate to another! Clear bug!" <+> 
+                       text "Rewrote one type of predicate to another: Clear bug!" <+> 
                             vcat [ text "wi_orig   =" <+> ppr wi_orig
                                  , text "evVarPRed =" <+> ppr (evVarPred ev) ]
-
-kick_out_rewritable :: InertSet -> Ct -> TyVar -> CtFlavor -> TcS (Cts,InertSet)
-kick_out_rewritable (IS { inert_eqs    = eqmap
-                        , inert_eq_tvs = inscope
-                        , inert_dicts  = dictmap
-                        , inert_ips    = ipmap
-                        , inert_funeqs = funeqmap
-                        , inert_irreds = irreds
-                        , inert_frozen = frozen } ) ct tv fl
-           = do { frozen_rewritten <- mapBagM rewrite_frozen frozen
-                   -- We do not want to kick out the frozens in the work list because the 
-                   -- semantics of a CNonCanonical depends on whether it appears in the 
-                   -- worklist or in the inert set. Fortunately, we may simply rewrite them.
-
-                ; let kicked_out = dicts_out `andCts` eqs_out  `andCts` ips_out
-                                             `andCts` feqs_out `andCts` irs_out
-            
-                ; let remaining = IS { inert_eqs = eqs_in
-                                     , inert_eq_tvs = inscope -- keep the same, safe and cheap
-                                     , inert_dicts = dicts_in
-                                     , inert_ips = ips_in
-                                     , inert_funeqs = feqs_in
-                                     , inert_irreds = irs_in
-                                     , inert_frozen = frozen_rewritten }
-                ; return (kicked_out, remaining) }
-
-            where (eqs_out,eqs_in)     = partitionEqMap rewritable eqmap
-                  (dicts_out,dicts_in) = partitionCCanMap rewritable dictmap
-                  (ips_out, ips_in)    = partitionCCanMap rewritable ipmap 
-                  (feqs_out,feqs_in)   = partitionCCanMap rewritable funeqmap
-                  (irs_out, irs_in)    = partitionBag rewritable irreds
-
-                  rewritable ct = (fl `canRewrite` cc_flavor ct) && 
-                                  (tv `elemVarSet` tyVarsOfCt ct)
-
-                  rewrite_frozen ct 
-                     = do { traceTcS "checpoint #3" empty 
-                          ; v' <- rewriteFromInertEqs
-                                       (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
-                          ; traceTcS "checpoint #4" empty 
-                          ; return ct { cc_id = v'} } 
-                  work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
-
 
 \end{code}
 
@@ -639,20 +576,15 @@ interactWithInertsStage :: WorkItem -> TcS StopOrContinue
 -- react with anything at this stage. 
 interactWithInertsStage wi 
   = do { ctxt <- getTcSContext
-       ; if simplEqsOnly ctxt then return (ContinueWith wi)
-         else do { relevant_cts <- updInertSetTcS (extract_inert_relevants wi)
-                 ; -- Now TcS monad has the thinner inerts and we need to fold over 
-                   -- the inert_ct. It is the interaction solver's responsibility to emit
-                   -- to the work list, but we will be responsible for augmenting inerts. 
-                 ; thin_inerts <- getTcSInerts 
-                 ; (final_inerts, ret) <- 
-                     foldlBagM interact_next (thin_inerts, ContinueWith wi) relevant_cts 
-                 ; updInertSetTcS (\_ -> (final_inerts,ret)) }
-       }
-                 
-  where interact_next (is,Stop) atomic_inert 
-          = return (updInertSet is atomic_inert, Stop) 
-        interact_next (is,ContinueWith wi) atomic_inert 
+       ; if simplEqsOnly ctxt then 
+             return (ContinueWith wi)
+         else 
+             extractRelevantInerts wi >>= 
+               foldlBagM interact_next (ContinueWith wi) }
+
+  where interact_next Stop atomic_inert 
+          = updInertSetTcS atomic_inert >> return Stop
+        interact_next (ContinueWith wi) atomic_inert 
           = do { ir <- doInteractWithInert atomic_inert wi
                ; let mk_msg rule keep_doc 
                        = text rule <+> keep_doc
@@ -663,29 +595,18 @@ interactWithInertsStage wi
                        -> do { bumpStepCountTcS
                              ; traceFireTcS (cc_depth wi) 
                                             (mk_msg rule (text "WorkItemConsumed"))
-                             ; return (updInertSet is atomic_inert, Stop) } 
+                             ; updInertSetTcS atomic_inert
+                             ; return Stop } 
                    IRInertConsumed { ir_fire = rule }
                        -> do { bumpStepCountTcS
                              ; traceFireTcS (cc_depth atomic_inert) 
                                             (mk_msg rule (text "InertItemConsumed"))
-                             ; return (is, ContinueWith wi) } 
+                             ; return (ContinueWith wi) }
                    IRKeepGoing {} -- Should we do a bumpStepCountTcS? No for now.
-                       -> return (updInertSet is atomic_inert, ContinueWith wi) }
+                       -> do { updInertSetTcS atomic_inert
+                             ; return (ContinueWith wi) }
+               }
    
-        extract_inert_relevants (CDictCan {cc_class = cl}) is = 
-            let (cts,dict_map) = getRelevantCts cl (inert_dicts is) 
-            in (is { inert_dicts = dict_map },cts)
-        extract_inert_relevants (CFunEqCan {cc_fun = tc}) is = 
-            let (cts,feqs_map)  = getRelevantCts tc (inert_funeqs is) 
-            in (is { inert_funeqs = feqs_map },cts)
-        extract_inert_relevants (CIPCan { cc_ip_nm = nm } ) is = 
-            let (cts, ips_map) = getRelevantCts nm (inert_ips is) 
-            in (is { inert_ips = ips_map },cts)
-        extract_inert_relevants (CIrredEvCan { }) is = 
-            let cts = inert_irreds is 
-            in (is { inert_irreds = emptyCts },cts)
-        extract_inert_relevants _ is = (is,emptyCts)
-
 --------------------------------------------
 data WhichComesFromInert = LeftComesFromInert | RightComesFromInert
 

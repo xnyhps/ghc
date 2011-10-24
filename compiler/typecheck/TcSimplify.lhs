@@ -742,7 +742,7 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
       = do { (implic_eqs, unsolved_implics) <- solveNestedImplications implics
 
            ; inerts <- getTcSInerts
-           ; let (_,_,unsolved_flats) = extractUnsolved inerts 
+           ; let ((_,unsolved_flats),_) = extractUnsolved inerts
 
            ; improve_eqs <- if not (isEmptyBag implic_eqs)
                             then return implic_eqs
@@ -766,7 +766,7 @@ solveNestedImplications implics
   = return (emptyBag, emptyBag)
   | otherwise 
   = do { inerts <- getTcSInerts
-       ; let (thinner_inerts, _insoluble_flats, unsolved_flats) = extractUnsolved inerts 
+       ; let ((_insoluble_flats, unsolved_flats),thinner_inerts) = extractUnsolved inerts 
 
        ; (implic_eqs, unsolved_implics) 
            <- doWithInert thinner_inerts $ 
@@ -799,7 +799,6 @@ solveNestedImplications implics
 
         pushable_wanted :: Ct -> Bool 
         pushable_wanted cc 
---          | not (isCFrozenErr cc)  I don't think this is needed any longer, we've dealt with frozen errors separately
          | isWantedCt cc 
          = isEqPred (evVarPred (cc_id cc)) -- see Note [Preparing inert set for implications]
          | otherwise = False 

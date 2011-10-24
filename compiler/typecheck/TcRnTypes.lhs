@@ -846,8 +846,16 @@ data Ct
 
 instance Outputable Ct where
   ppr ct = ppr (cc_flavor ct) <> braces (ppr (cc_depth ct))
-           <+> ppr ev_var <+> dcolon <+> ppr (varType ev_var) 
-         where ev_var = cc_id ct
+                  <+> ppr ev_var <+> dcolon <+> ppr (varType ev_var) 
+                  <+> parens (text ct_sort)
+         where ev_var  = cc_id ct
+               ct_sort = case ct of 
+                           CTyEqCan {}      -> "CTyEqCan"
+                           CFunEqCan {}     -> "CFunEqCan"
+                           CNonCanonical {} -> "CNonCanonical"
+                           CDictCan {}      -> "CDictCan"
+                           CIPCan {}        -> "CIPCan"
+                           CIrredEvCan {}   -> "CIrredEvCan"
 \end{code}
 
 \begin{code}

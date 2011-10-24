@@ -459,7 +459,7 @@ flatten d fl (TyConApp tc tys)
                                ; return (mkEqVarLCo eqv, rhs_var, [ct]) } }
 
            -- Emit the flat constraints
-         ; updWorkListTcS (appendWorkListCt ct)
+         ; updWorkListTcS $ appendWorkListEqs ct
 
          ; let (cos_args, cos_rest) = splitAt (tyConArity tc) cos
          ; return ( foldl AppTy rhs_var xi_rest
@@ -1219,7 +1219,7 @@ emitFDWork :: Bool
            -> [(EvVar,WantedLoc)] 
            -> SubGoalDepth -> TcS () 
 emitFDWork as_wanted evlocs d 
-  = updWorkListTcS (appendWorkListCt fd_cts)
+  = updWorkListTcS $ appendWorkListEqs fd_cts
   where fd_cts = map mk_fd_ct evlocs 
         mk_fl wl = if as_wanted then (Wanted wl) else (Derived wl)
         mk_fd_ct (v,wl) = CNonCanonical { cc_id = v
