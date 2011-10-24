@@ -579,11 +579,11 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
          -- (2) type check indexed data type declaration
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-       ; (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
-       ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
+       ; tcTyVarBndrsKindGen k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
 
          -- kind check the type indexes and the context
-       { t_typats     <- mapM tcHsKindedType k_typats
+       { (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
+       ; t_typats     <- mapM tcHsKindedType k_typats
        ; stupid_theta <- tcHsKindedContext =<< kcHsContext ctxt
        ; let t_ktvs = t_kvs ++ t_tvs
              t_ktpats = t_kipats ++ t_typats
