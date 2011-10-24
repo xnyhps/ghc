@@ -317,7 +317,7 @@ kcSynDecl1 (CyclicSCC decls)       = do { recSynErr decls; failM }
 				     -- of out-of-scope tycons
 
 kcSynDecl :: TyClDecl Name -> TcM (Name, TcKind)
-kcSynDecl decl
+kcSynDecl decl	      -- Vanilla type synonyoms only, not family instances
   = tcAddDeclCtxt decl $
     kcHsTyVars (tcdTyVars decl) $ \ k_tvs ->
     do { traceTc "kcd1" (ppr (unLoc (tcdLName decl)) <+> brackets (ppr (tcdTyVars decl))
@@ -662,8 +662,11 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
        ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
                   -- ToDo: the ExpKind could be better
 
-         -- we need the exact same number of type parameters as the family
-         -- declaration
+         -- A family instance must have exactly same number of type parameters 
+	 -- as the family declaration.  You can't write
+	 -- 	type family F a :: * -> *
+	 --     type instance F Int y = y
+	 -- because then the type (F Int) would be like (\y.y)
        ; let famArity = tyConArity fam_tc - length k_kipats
        ; checkTc (length k_typats == famArity) $
                  wrongNumberOfParmsErr famArity
@@ -697,8 +700,9 @@ kcFamTyPats :: TyCon
              -- ^^ meta kv  -- ^^kinded tvs    ^^kinded ty pats  ^^res kind
             -> TcM a
 -- JPM decl should be split into its two components
+-- See Note [Quantifying over family patterns]
 kcFamTyPats fam_tc decl thing_inside
-  = kcHsTyVars (tcdTyVars decl) $ \tvs ->
+  = kcHsTyVars (filterOut in_scope (tcdTyVars decl)) $ \tvs ->
     do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
          -- Instantiate with meta kind vars
        ; kvs' <- mapM (const newMetaKindVar) kvs
@@ -716,9 +720,26 @@ kcFamTyPats fam_tc decl thing_inside
        ; typats <- zipWithM kcCheckLHsType hs_typats
                             [ EK kind (EkArg (ppr fam_tc) n)
                             | (kind,n) <- kinds `zip` [1..]]
-       ; thing_inside kvs' tvs typats resultKind
+       ; (t_kvs, kvs'') <- kindGeneralizeKinds kvs'
+       ; thing_inside (t_kvs ++ tvs) (kvs'' ++ typats) resultKind
        }
 \end{code}
+
+Note [Quantifying over family patterns]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  data family Dist a 
+
+  -- Any :: forall k. k
+  data instance Dist Any = DA
+  -- Generates  data DistAny k = DA
+  --            ax7 k :: Dist k (Any k) ~ DistAny k 
+  -- The 'k' comes from kindGeneralizeKinds (Any k)
+
+  -- Proxy :: forall k. k -> *
+  data instance Dist (Proxy a) = DP
+  -- Generates  data DistProxy = DP
+  --            ax8 k (a::k) :: Dist * (Proxy k a) ~ DistProxy k a
+  -- The 'k' comes from the kcHsTyVars (a::k)
 
 Note [Associated type instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

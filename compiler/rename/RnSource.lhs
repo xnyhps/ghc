@@ -852,13 +852,12 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 bindQTvs :: HsDocContext -> Maybe Name -> [LHsTyVarBndr RdrName]
          -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
          -> RnM (a, FreeVars)
--- For *associated* type/data family instances (in an instance decl)
--- don't quantify over the already-in-scope type variables
 bindQTvs doc mb_cls tyvars thing_inside
   | isNothing mb_cls    -- Not associated
   = bindTyVarsFV doc tyvars thing_inside
   | otherwise 	 	-- Associated
   = do { let tv_rdr_names = map hsLTyVarLocName tyvars
+       	     -- *All* the free vars of the family patterns
 
        -- Check for duplicated bindings
        -- This test is irrelevant for data/type *instances*, where the tyvars

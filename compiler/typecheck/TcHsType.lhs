@@ -811,6 +811,13 @@ kcHsTyVar (KindedTyVar name kind _) = do
   kind' <- scDsLHsKind kind
   return (KindedTyVar name kind kind')
 
+-- JPM: in kcHsTyVar, check for already-in-scope (in type env); 
+-- if so return (KindedTyVar name k k), where k is the kind
+-- This can occur in 
+--   instance C (a,b) where
+--     type F (a,b) c = ...
+-- Here a,b will be in scope when processing the associated type isntance for F
+
 ------------------
 tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-zonking
 	     -> ([TyVar] -> TcM r)
@@ -1174,6 +1181,10 @@ checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
         Sort checking kinds
 %*                                                                      *
 %************************************************************************
+
+JPM: add comments on this function; maybe rename ti to tcLHsKind.
+One-pass algorithm!  Main purpose: from HsType to Type
+Give an example of something that can fail.
 
 \begin{code}
 

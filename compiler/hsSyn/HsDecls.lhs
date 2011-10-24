@@ -534,9 +534,18 @@ tcdTyPats = Just tys
    This is a data/type family instance declaration
    tcdTyVars are fv(tys)
 
-   Eg   instance C (a,b) where
-          type F a x y = x->y
-   After the renamer, the tcdTyVars of the F decl are {x,y}
+   Eg   class C s t where
+          type F t p :: *
+        instance C w (a,b) where
+          type F (a,b) x = x->a
+   The tcdTyVars of the F decl are {a,b,x}, even though the F decl
+   is nested inside the 'instance' decl. 
+
+   However after the renamer, the uniques will match up:
+        instance C w7 (a8,b9) where
+          type F (a8,b9) x10 = x10->a8
+   so that we can compare the type patter in the 'instance' decl and
+   in the associated 'type' decl
 
 ------------------------------
 Simple classifiers
