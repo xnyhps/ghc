@@ -671,9 +671,9 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
          -- (2) type check type equation
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-       ; (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
        ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
-       { t_typats <- mapM tcHsKindedType k_typats
+       { (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
+       ; t_typats <- mapM tcHsKindedType k_typats
        ; t_rhs    <- tcHsKindedType k_rhs
 
         -- NB: we don't check well-formedness of the instance here because we call
