@@ -286,7 +286,7 @@ isLiftedTypeKind _                = False
 %*									*
 %************************************************************************
 
-\begin{code}
+\begin{code} 
 tyVarsOfType :: Type -> VarSet
 -- ^ NB: for type synonyms tyVarsOfType does /not/ expand the synonym
 -- tyVarsOfType returns the free type *and kind* variables of a type
@@ -297,7 +297,7 @@ tyVarsOfType (TyVarTy v)         = unitVarSet v -- `unionVarSet` tyVarsOfType (t
 tyVarsOfType (TyConApp _ tys)    = tyVarsOfTypes tys
 tyVarsOfType (FunTy arg res)     = tyVarsOfType arg `unionVarSet` tyVarsOfType res
 tyVarsOfType (AppTy fun arg)     = tyVarsOfType fun `unionVarSet` tyVarsOfType arg
-tyVarsOfType (ForAllTy tyvar ty) = delVarSet (tyVarsOfType ty) tyvar `unionVarSet` tyVarsOfType (tyVarKind tyvar)
+tyVarsOfType (ForAllTy tyvar ty) = delVarSet (tyVarsOfType ty) tyvar -- `unionVarSet` tyVarsOfType (tyVarKind tyvar)
 
 tyVarsOfTypes :: [Type] -> TyVarSet
 tyVarsOfTypes tys = foldr (unionVarSet . tyVarsOfType) emptyVarSet tys
