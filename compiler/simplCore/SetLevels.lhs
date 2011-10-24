@@ -71,6 +71,7 @@ import Demand		( StrictSig, increaseStrictSigArity )
 import Name		( getOccName, mkSystemVarName )
 import OccName		( occNameString )
 import Type		( isUnLiftedType, Type, sortQuantVars )
+import Kind		( kiVarsOfKinds )
 import BasicTypes	( Arity )
 import UniqSupply
 import Util
@@ -1008,7 +1009,9 @@ absVarsOf :: IdEnv ([Var], LevelledExpr) -> Var -> [Var]
 	-- variables
 	--
 	-- Also, if x::a is an abstracted variable, then so is a; that is,
-	--	we must look in x's type
+	-- we must look in x's type. What's more, if a mentions kind variables,
+	-- we must also return those.
+	-- 
 	-- And similarly if x is a coercion variable.
 absVarsOf id_env v 
   | isId v    = [av2 | av1 <- lookup_avs v
@@ -1019,9 +1022,9 @@ absVarsOf id_env v
 			Just (abs_vars, _) -> abs_vars
 			Nothing	           -> [v]
 
-    add_tyvars v = v : varSetElems (varTypeTyVars v)
-    -- ToDo: should also abstract over kind variables free 
-    --       in the kinds of the type variables!
+    add_tyvars v = v : (varSetElems tyvars ++ varSetElems kivars)
+    tyvars = varTypeTyVars v
+    kivars = kiVarsOfKinds (map tyVarKind (varSetElems tyvars))
 \end{code}
 
 \begin{code}

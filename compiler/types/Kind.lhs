@@ -38,6 +38,7 @@ module Kind (
 
         -- ** Functions on variables
         isKiVar, splitKiTyVars, partitionKiTyVars,
+        kiVarsOfKind, kiVarsOfKinds,
 
         -- ** Promotion related functions
         promoteType, isPromotableType, isPromotableKind
@@ -260,6 +261,13 @@ partitionKiTyVars = partition (isSuperKind . tyVarKind)
 -- Checks if this "type or kind" variable is a kind variable
 isKiVar :: TyVar -> Bool
 isKiVar v = isSuperKind (varType v)
+
+-- Returns the free kind variables in a kind
+kiVarsOfKind :: Kind -> VarSet
+kiVarsOfKind = tyVarsOfTypeStratified
+
+kiVarsOfKinds :: [Kind] -> VarSet
+kiVarsOfKinds = tyVarsOfTypesStratified
 
 
 -- About promoting a type to a kind
