@@ -770,10 +770,6 @@ uVar origin swapped tv1 ty2
             Filled ty1  -> unSwap swapped (uType_np origin) ty1 ty2
             Unfilled details1 -> uUnfilledVar origin swapped tv1 details1 ty2
         }
-  where
-    k1 = tyVarKind tv1
-    k2 = typeKind ty2
-    ty1 = mkTyVarTy tv1
 
 ----------------
 uUnfilledVar :: [EqOrigin]
@@ -1165,7 +1161,7 @@ unifyKindEq ctxt k1 (TyVarTy kv2) = uKVarEq True  ctxt kv2 k1
 unifyKindEq ctxt (FunTy a1 r1) (FunTy a2 r2)
   = do { unifyKindEq ctxt a1 a2; unifyKindEq ctxt r1 r2 }
   
-unifyKindEq ctxt k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
+unifyKindEq ctxt (TyConApp kc1 k1s) (TyConApp kc2 k2s)
   | kc1 == kc2
   = ASSERT (length k1s == length k2s)
        -- Should succeed since the kind constructors are the same, 
@@ -1223,7 +1219,9 @@ kindSimpleKind k
   | isArgTypeKind k  = liftedTypeKind
   | otherwise        = k
 
---mkKindErrorMsg :: TcTyVar -> TcTyVar -> TcTyVar -> TcTyVar -> SDoc
+-- JPM Todo: maybe this is not the most informative signature possible
+mkKindErrorMsg :: (Outputable a, Outputable b, Outputable c, Outputable d)
+               => a -> b -> c -> d -> SDoc
 mkKindErrorMsg ty1 ty2 k1 k2 = 
         vcat [ ptext (sLit "Kind incompatibility when matching types:")
              , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1

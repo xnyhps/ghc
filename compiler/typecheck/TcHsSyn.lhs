@@ -39,7 +39,6 @@ import Coercion
 import TysPrim
 import TysWiredIn
 import Type
-import TypeRep
 import DataCon
 import Name
 import NameSet
@@ -1174,7 +1173,7 @@ zonkTypeZapping :: VarEnv Var -> TcType -> TcM Type
 -- This variant is used for everything except the LHS of rules
 -- It zaps unbound type variables to (), or some other arbitrary type
 -- Works on both types and kinds
-zonkTypeZapping env ty 
+zonkTypeZapping _env ty 
   = zonk_it ty
   where
     zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM zonk_bound_tyvar
@@ -1187,10 +1186,12 @@ zonkTypeZapping env ty
                                           else anyTypeOfKind kind
                                ; {- pprTrace "zonkTypeZapping" (ppr (tv, tyVarKind tv, kind, ty)) $ -} writeMetaTyVar tv ty
                                ; return ty }
+{-
     zonk_bound_tyvar tv = pprTrace "zonk_bound_tyvar enter" (ppr tv) $ 
                           case lookupVarEnv env tv of
                             Nothing  -> pprTrace "zonk_bound_tyvar Nothing" empty $ TyVarTy tv
                             Just tv' -> pprTrace "zonk_bound_tyvar Just" empty $ TyVarTy tv'
+-}
 
 zonkTcLCoToLCo :: ZonkEnv -> LCoercion -> TcM LCoercion
 zonkTcLCoToLCo env co
