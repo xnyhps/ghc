@@ -444,6 +444,11 @@ AC_SUBST(CONF_CPP_OPTS_STAGE0)
 AC_SUBST(CONF_CPP_OPTS_STAGE1)
 AC_SUBST(CONF_CPP_OPTS_STAGE2)
 
+dnl ** Set up the variables for the platform in the settings file.
+dnl May need to use gcc to find platform details.
+dnl --------------------------------------------------------------
+FPTOOLS_SET_HASKELL_PLATFORM_VARS
+
 FP_SETTINGS
 
 dnl ** figure out how to do context diffs
@@ -697,37 +702,7 @@ dnl ** check for ld, whether it has an -x option, and if it is GNU ld
 FP_PROG_LD_X
 FP_PROG_LD_IS_GNU
 FP_PROG_LD_BUILD_ID
-
-dnl ** check for Apple-style dead-stripping support
-dnl    (.subsections-via-symbols assembler directive)
-
-
-AC_MSG_CHECKING(for .subsections_via_symbols)
-AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM([], [__asm__ (".subsections_via_symbols");])],
-    [AC_MSG_RESULT(yes)
-     AC_DEFINE([HAVE_SUBSECTIONS_VIA_SYMBOLS],[1],
-               [Define to 1 if Apple-style dead-stripping is supported.])
-    ],
-    [AC_MSG_RESULT(no)])
-
-dnl *** check for GNU non-executable stack note support (ELF only)
-dnl     (.section .note.GNU-stack,"",@progbits)
-
-dnl This test doesn't work with "gcc -g" in gcc 4.4 (GHC trac #3889:
-dnl     Error: can't resolve `.note.GNU-stack' {.note.GNU-stack section} - `.Ltext0' {.text section}
-dnl so we empty CFLAGS while running this test
-CFLAGS2="$CFLAGS"
-CFLAGS=
-AC_MSG_CHECKING(for GNU non-executable stack support)
-AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM([__asm__ (".section .note.GNU-stack,\"\",@progbits");], [0])],
-    [AC_MSG_RESULT(yes)
-     AC_DEFINE([HAVE_GNU_NONEXEC_STACK],[1],
-               [Define to 1 if GNU non-executable stack notes are supported.])
-    ],
-    [AC_MSG_RESULT(no)])
-CFLAGS="$CFLAGS2"
+FP_PROG_LD_NO_COMPACT_UNWIND
 
 FP_VISIBILITY_HIDDEN
 
@@ -802,7 +777,7 @@ AC_SUBST(BUILD_DOCBOOK_PS)
 AC_SUBST(BUILD_DOCBOOK_PDF)
 
 LIBRARY_VERSION(base)
-LIBRARY_VERSION(Cabal, Cabal/cabal)
+LIBRARY_VERSION(Cabal, Cabal/Cabal)
 LIBRARY_VERSION(ghc-prim)
 LIBRARY_ghc_VERSION="$ProjectVersion"
 AC_SUBST(LIBRARY_ghc_VERSION)

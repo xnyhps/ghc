@@ -32,7 +32,7 @@ module CoreSubst (
 
 	-- ** Simple expression optimiser
         simpleOptPgm, simpleOptExpr, simpleOptExprWith,
-        exprIsConApp_maybe
+        exprIsConApp_maybe, exprIsLiteral_maybe
     ) where
 
 #include "HsVersions.h"
@@ -40,6 +40,7 @@ module CoreSubst (
 import CoreSyn
 import CoreFVs
 import CoreUtils
+import Literal  ( Literal )
 import OccurAnal( occurAnalyseExpr, occurAnalysePgm )
 
 import qualified Type
@@ -1232,16 +1233,14 @@ dealWithCoercion co stuff@(dc, _dc_univ_args, dc_args)
           -- Cast the value arguments (which include dictionaries)
         new_val_args = zipWith cast_arg arg_tys val_args
         cast_arg arg_ty arg = mkCoerce (theta_subst arg_ty) arg
-    in
-#ifdef DEBUG
-    let dump_doc = vcat [ppr dc,      ppr dc_univ_tyvars, ppr dc_ex_tyvars,
+
+        dump_doc = vcat [ppr dc,      ppr dc_univ_tyvars, ppr dc_ex_tyvars,
                          ppr arg_tys, ppr dc_args,        ppr _dc_univ_args,
                          ppr ex_args, ppr val_args]
     in
     ASSERT2( eqType _from_ty (mkTyConApp to_tc _dc_univ_args), dump_doc )
     ASSERT2( all isTypeArg ex_args, dump_doc )
     ASSERT2( equalLength val_args arg_tys, dump_doc )
-#endif
     Just (dc, to_tc_arg_tys, ex_args ++ new_val_args)
 
   | otherwise
@@ -1270,3 +1269,18 @@ Note [DFun arity check]
 Here we check that the total number of supplied arguments (inclding 
 type args) matches what the dfun is expecting.  This may be *less*
 than the ordinary arity of the dfun: see Note [DFun unfoldings] in CoreSyn
+
+\begin{code}
+exprIsLiteral_maybe :: IdUnfoldingFun -> CoreExpr -> Maybe Literal
+-- Same deal as exprIsConApp_maybe, but much simpler
+-- Nevertheless we do need to look through unfoldings for
+-- Integer literals, which are vigorously hoisted to top level
+-- and not subsequently inlined
+exprIsLiteral_maybe id_unf e
+  = case e of
+      Lit l     -> Just l
+      Note _ e' -> exprIsLiteral_maybe id_unf e'
+      Var v     | Just rhs <- expandUnfolding_maybe (id_unf v)
+                -> exprIsLiteral_maybe id_unf rhs
+      _         -> Nothing
+\end{code}       

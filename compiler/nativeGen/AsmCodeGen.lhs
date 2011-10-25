@@ -150,7 +150,8 @@ data NcgImpl statics instr jumpDest = NcgImpl {
 --------------------
 nativeCodeGen :: DynFlags -> Handle -> UniqSupply -> [RawCmmGroup] -> IO ()
 nativeCodeGen dflags h us cmms
- = let nCG' :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr) => NcgImpl statics instr jumpDest -> IO ()
+ = let platform = targetPlatform dflags
+       nCG' :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr) => NcgImpl statics instr jumpDest -> IO ()
        nCG' ncgImpl = nativeCodeGen' dflags ncgImpl h us cmms
        x86NcgImpl = NcgImpl {
                          cmmTopCodeGen             = X86.CodeGen.cmmTopCodeGen
@@ -160,13 +161,13 @@ nativeCodeGen dflags h us cmms
                         ,shortcutStatics           = X86.Instr.shortcutStatics
                         ,shortcutJump              = X86.Instr.shortcutJump
                         ,pprNatCmmDecl              = X86.Ppr.pprNatCmmDecl
-                        ,maxSpillSlots             = X86.Instr.maxSpillSlots
+                        ,maxSpillSlots             = X86.Instr.maxSpillSlots (target32Bit platform)
                         ,allocatableRegs           = X86.Regs.allocatableRegs
                         ,ncg_x86fp_kludge          = id
                         ,ncgExpandTop              = id
                         ,ncgMakeFarBranches        = id
                     }
-   in case platformArch $ targetPlatform dflags of
+   in case platformArch platform of
                  ArchX86    -> nCG' (x86NcgImpl { ncg_x86fp_kludge = map x86fp_kludge })
                  ArchX86_64 -> nCG' x86NcgImpl
                  ArchPPC ->
@@ -203,6 +204,14 @@ nativeCodeGen dflags h us cmms
                      panic "nativeCodeGen: No NCG for ARM"
                  ArchPPC_64 ->
                      panic "nativeCodeGen: No NCG for PPC 64"
+                 ArchAlpha ->
+                     panic "nativeCodeGen: No NCG for Alpha"
+                 ArchMipseb ->
+                     panic "nativeCodeGen: No NCG for mipseb"
+                 ArchMipsel ->
+                     panic "nativeCodeGen: No NCG for mipsel"
+                 ArchUnknown ->
+                     panic "nativeCodeGen: No NCG for unknown arch"
 
 nativeCodeGen' :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr)
                => DynFlags
@@ -498,24 +507,25 @@ x86fp_kludge (CmmProc info lbl (ListGraph code)) =
 makeImportsDoc :: DynFlags -> [CLabel] -> Pretty.Doc
 makeImportsDoc dflags imports
  = dyld_stubs imports
-
-#if HAVE_SUBSECTIONS_VIA_SYMBOLS
-                -- On recent versions of Darwin, the linker supports
-                -- dead-stripping of code and data on a per-symbol basis.
-                -- There's a hack to make this work in PprMach.pprNatCmmDecl.
-            Pretty.$$ Pretty.text ".subsections_via_symbols"
-#endif
-#if HAVE_GNU_NONEXEC_STACK
+            Pretty.$$
+            -- On recent versions of Darwin, the linker supports
+            -- dead-stripping of code and data on a per-symbol basis.
+            -- There's a hack to make this work in PprMach.pprNatCmmDecl.
+            (if platformHasSubsectionsViaSymbols (targetPlatform dflags)
+             then Pretty.text ".subsections_via_symbols"
+             else Pretty.empty)
+            Pretty.$$ 
                 -- On recent GNU ELF systems one can mark an object file
                 -- as not requiring an executable stack. If all objects
                 -- linked into a program have this note then the program
                 -- will not use an executable stack, which is good for
                 -- security. GHC generated code does not need an executable
                 -- stack so add the note in:
-            Pretty.$$ Pretty.text ".section .note.GNU-stack,\"\",@progbits"
-#endif
+            (if platformHasGnuNonexecStack (targetPlatform dflags)
+             then Pretty.text ".section .note.GNU-stack,\"\",@progbits"
+             else Pretty.empty)
                 -- And just because every other compiler does, lets stick in
-		-- an identifier directive: .ident "GHC x.y.z"
+                -- an identifier directive: .ident "GHC x.y.z"
             Pretty.$$ let compilerIdent = Pretty.text "GHC" Pretty.<+>
 	                                  Pretty.text cProjectVersion
                        in Pretty.text ".ident" Pretty.<+>
