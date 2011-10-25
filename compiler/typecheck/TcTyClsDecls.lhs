@@ -654,7 +654,7 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
 -------------------------
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
 tcSynFamInstDecl fam_tc (decl@TySynonym {})
-  = kcFamTyPats fam_tc decl $ \t_tvs {-k_kipats-} t_typats resKind ->
+  = kcFamTyPats fam_tc decl $ \stuff ->
     do { -- check that the family declaration is for a synonym
          checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
@@ -665,16 +665,28 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
          -- (2) type check type equation
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
+      ; tcFamTyPats stuff $ \ final_tvs final_pats -> do
+
+      {
        -- ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
          -- t_typats <- mapM tcHsKindedType k_typats
        ; t_rhs    <- tcHsKindedType k_rhs
-       ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats
+
+--        ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats
 
         -- NB: we don't check well-formedness of the instance here because we call
         -- this function from within the TcTyClsDecls fixpoint. The callers must do
         -- the check.
 
-       ; return (t_kvs ++ t_tvs, t_kipats {- ++ t_typats -}, t_rhs) }
+       ; return (final_tvs, final_pats, t_rhs) }
+
+tcSynFamInstDecl fam_tc (decl@TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
+                                        , tcdSynRhs = rhs })
+  = do { checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
+
+       ; tcFamTyPats fam_tc tvs pats (kcRhsType rhs) $ \ tvs' pats' -> do
+       { rhs' <- tcRhsType rhs
+       ; return (tvs', pats', rhs') }
 
 tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
@@ -685,6 +697,29 @@ tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 --   not check whether there is a pattern for each type index; the latter
 --   check is only required for type synonym instances.
 
+-----------------
+Plan A
+tcFamTyPats :: TyCon
+            -> [LHsTyVarBndr Name] -> [LHsType Name]
+	    -> TcM ()      -- Kind checker
+            -> (final_tvs -> final_pats -> result_kind -> TcM a)
+	    -> TcM a
+
+-----------------
+Plan B
+kcFamTyPats :: TyCon
+            -> [LHsTyVarBndr Name] -> [LHsType Name]
+            -> (([LHsTyVarBndr Name], [TcKind], [LHsType Name], TcKind) -> TcM a)
+	    -> TcM a
+
+tcFamTyPats :: TyCon
+            -> ([LHsTyVarBndr Name], [TcKind], [LHsType Name], TcKind)
+            -> (final_tvs -> final_pats -> TcM a)
+	    -> TcM a
+checkFamTyFreeness!
+
+-----------------
+-- Current
 kcFamTyPats :: TyCon
             -> TyClDecl Name
             -> ([KindVar] -> [Kind] -> Kind -> TcM a)

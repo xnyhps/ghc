@@ -581,6 +581,7 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
          -- all the meta kind variables
        -- ; tcTyVarBndrsKindGen k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
 
+       ; tcFamTyPats ... $ \ final_tvs final_pats -> do
          -- kind check the type indexes and the context
          -- t_typats     <- mapM tcHsKindedType k_typats
        ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats

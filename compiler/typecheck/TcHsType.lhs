@@ -782,16 +782,17 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 Note [Kind-checking kind-polymorphic types]  IA0_TODO: add explicit kind polymorphism
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider:
-  f :: forall k f (a::k). f a -> Int
+  f :: forall (f::k -> *) a. f a -> Int
 
-The renamer (or parser) already decided for us if k, f or a are type
-or kind variables. It did so by clissifying them with the correct data
-constructor.
+Here, the [LHsTyVarBndr Name] of the forall type will be [f,a], where
+  a is a  UserTyVar   -> type variable without kind annotation
+  f is a  KindedTyVar -> type variable with kind annotation
 
-  UserTyVar -> type variable without kind annotation
-  KindedTyVar -> type variable with kind annotation
-  UserKiVar -> kind variable (they don't need annotation,
-                              since we only have BOX for a super kind)
+If were were to allow binding sites for kind variables, thus
+  f :: forall @k (f :: k -> *) a. f a -> Int
+then we'd also need
+  k is a   UserKiVar   -> kind variable (they don't need annotation,
+                          since we only have BOX for a super kind)
 
 \begin{code}
 kcHsTyVars :: [LHsTyVarBndr Name] 
@@ -803,14 +804,16 @@ kcHsTyVars tvs thing_inside
        ; tcExtendKindEnvTvs kinded_tvs thing_inside }
 
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
--- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
+-- Return a *kind-annotated* binder, whose PostTcKind is
+-- initialised with a kind variable.
+-- Typically the Kind inside the KindedTyVar will and a tyvar with a mutable kind in it	
 -- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
 -- See Note [Kind-checking kind-polymorphic types]
 kcHsTyVar tyvar = do in_scope <- getInLocalScope
                      if False -- in_scope (hsTyVarName tyvar)
                       then do inscope_tyvar <- tcLookupTyVar (hsTyVarName tyvar)
                               {- pprTrace "kcHsTyVar in scope" (ppr tyvar) -} 
-                              return (UserTyVar (tyVarName inscope_tyvar) (tyVarKind inscope_tyvar)) -- JPM should return KindedTyVar ?
+                              return (UserTyVar (tyVarName inscope_tyvar) (tyVarKind inscope_tyvar)) 
                        else {- pprTrace "kcHsTyVar not in scope" (ppr tyvar) $ -} kcHsTyVar' tyvar
     where
         kcHsTyVar' (UserTyVar name _)        = UserTyVar name <$> newMetaKindVar

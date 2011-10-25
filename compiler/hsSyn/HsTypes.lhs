@@ -289,7 +289,7 @@ data HsTyVarBndr name
 
   | KindedTyVar
          name
-         (LHsKind name)
+         (LHsKind name)	-- The user-supplied kind signature
          PostTcKind
       --  *** NOTA BENE *** A "monotype" in a pragma can have
       -- for-alls in it, (mostly to do with dictionaries).  These
