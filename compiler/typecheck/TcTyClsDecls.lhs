@@ -654,7 +654,7 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
 -------------------------
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
 tcSynFamInstDecl fam_tc (decl@TySynonym {})
-  = kcFamTyPats fam_tc decl $ \k_kipats k_tvs k_typats resKind ->
+  = kcFamTyPats fam_tc decl $ \t_tvs {-k_kipats-} t_typats resKind ->
     do { -- check that the family declaration is for a synonym
          checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
@@ -662,28 +662,19 @@ tcSynFamInstDecl fam_tc (decl@TySynonym {})
        ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
                   -- ToDo: the ExpKind could be better
 
-         -- A family instance must have exactly same number of type parameters 
-	 -- as the family declaration.  You can't write
-	 -- 	type family F a :: * -> *
-	 --     type instance F Int y = y
-	 -- because then the type (F Int) would be like (\y.y)
-       ; let famArity = tyConArity fam_tc - length k_kipats
-       ; checkTc (length k_typats == famArity) $
-                 wrongNumberOfParmsErr famArity
-
          -- (2) type check type equation
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-       ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
-       { (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
-       ; t_typats <- mapM tcHsKindedType k_typats
+       -- ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
+         -- t_typats <- mapM tcHsKindedType k_typats
        ; t_rhs    <- tcHsKindedType k_rhs
+       ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats
 
         -- NB: we don't check well-formedness of the instance here because we call
         -- this function from within the TcTyClsDecls fixpoint. The callers must do
         -- the check.
 
-       ; return (t_kvs ++ t_tvs, t_kipats ++ t_typats, t_rhs) }}
+       ; return (t_kvs ++ t_tvs, t_kipats {- ++ t_typats -}, t_rhs) }
 
 tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
@@ -696,13 +687,14 @@ tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
 kcFamTyPats :: TyCon
             -> TyClDecl Name
-            -> ([TcKind]     -> [LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
-             -- ^^ meta kv  -- ^^kinded tvs    ^^kinded ty pats  ^^res kind
+            -> ([KindVar] -> [Kind] -> Kind -> TcM a)
+-- -> ([TcKind] -> [LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
             -> TcM a
+
 -- JPM decl should be split into its two components
 -- See Note [Quantifying over family patterns]
 kcFamTyPats fam_tc decl thing_inside
-  = kcHsTyVars (filterOut in_scope (tcdTyVars decl)) $ \tvs ->
+  = kcHsTyVars (tcdTyVars decl) $ \tvs ->
     do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
          -- Instantiate with meta kind vars
        ; kvs' <- mapM (const newMetaKindVar) kvs
@@ -715,13 +707,30 @@ kcFamTyPats fam_tc decl thing_inside
        ; checkTc (length kinds >= length hs_typats) $
                  tooManyParmsErr (tcdLName decl) -- JPM use name of fam_tc
 
+{-
+        -- JPM: restore this check
+         -- A family instance must have exactly same number of type parameters 
+	 -- as the family declaration.  You can't write
+	 -- 	type family F a :: * -> *
+	 --     type instance F Int y = y
+	 -- because then the type (F Int) would be like (\y.y)
+       ; let famArity = tyConArity fam_tc - length k_kipats
+       ; checkTc (length k_typats == famArity) $
+                 wrongNumberOfParmsErr famArity
+-}
+
          -- Type functions can have a higher-kinded result
        ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind
+             mkUserTyVar k = noLoc (UserTyVar (tyVarName k) (tyVarKind k))
        ; typats <- zipWithM kcCheckLHsType hs_typats
                             [ EK kind (EkArg (ppr fam_tc) n)
                             | (kind,n) <- kinds `zip` [1..]]
+
+       ; tcTyVarBndrsKindGen tvs $ \tvs' -> do {
        ; (t_kvs, kvs'') <- kindGeneralizeKinds kvs'
-       ; thing_inside (t_kvs ++ tvs) (kvs'' ++ typats) resultKind
+       ; k_typats <- mapM tcHsKindedType typats
+       ; thing_inside (t_kvs ++ tvs') (kvs'' ++ k_typats) resultKind }
+--     ; thing_inside kvs' tvs typats resultKind
        }
 \end{code}
 

@@ -580,7 +580,7 @@ Consider
         in ...
 
 Can we generalise 'g' under the OutsideIn algorithm?  Yes, 
-becuase all g's free variables are top-level; that is they themselves
+because all g's free variables are top-level; that is they themselves
 have no free type variables, and it is the type variables in the
 environment that makes things tricky for OutsideIn generalisation.
 

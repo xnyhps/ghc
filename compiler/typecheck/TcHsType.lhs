@@ -190,7 +190,7 @@ tcHsInstHead (L loc hs_ty)
                -- head we only allow something of kind Constraint.
             ; return (tv_names', ctxt', cls_ty') }
           -- Now desugar the kind-checked type
-        ; tcTyVarBndrsKindGen tvs  $ \ tvs' -> do
+        ; tcTyVarBndrsKindGen tvs $ \ tvs' -> do
             cls_ty' <- ds_type cls_ty
             let Just (tc, tys) = splitTyConApp_maybe cls_ty'
             ctxt' <- dsHsTypes ctxt
@@ -806,17 +806,24 @@ kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 -- Return a *kind-annotated* binder, and a tyvar with a mutable kind in it	
 -- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
 -- See Note [Kind-checking kind-polymorphic types]
-kcHsTyVar (UserTyVar name _)  = UserTyVar name <$> newMetaKindVar
-kcHsTyVar (KindedTyVar name kind _) = do
-  kind' <- scDsLHsKind kind
-  return (KindedTyVar name kind kind')
+kcHsTyVar tyvar = do in_scope <- getInLocalScope
+                     if False -- in_scope (hsTyVarName tyvar)
+                      then do inscope_tyvar <- tcLookupTyVar (hsTyVarName tyvar)
+                              {- pprTrace "kcHsTyVar in scope" (ppr tyvar) -} 
+                              return (UserTyVar (tyVarName inscope_tyvar) (tyVarKind inscope_tyvar)) -- JPM should return KindedTyVar ?
+                       else {- pprTrace "kcHsTyVar not in scope" (ppr tyvar) $ -} kcHsTyVar' tyvar
+    where
+        kcHsTyVar' (UserTyVar name _)        = UserTyVar name <$> newMetaKindVar
+        kcHsTyVar' (KindedTyVar name kind _) = do
+          kind' <- scDsLHsKind kind
+          return (KindedTyVar name kind kind')
 
 -- JPM: in kcHsTyVar, check for already-in-scope (in type env); 
 -- if so return (KindedTyVar name k k), where k is the kind
 -- This can occur in 
 --   instance C (a,b) where
 --     type F (a,b) c = ...
--- Here a,b will be in scope when processing the associated type isntance for F
+-- Here a,b will be in scope when processing the associated type instance for F
 
 ------------------
 tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-zonking
@@ -827,12 +834,14 @@ tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-
 -- Fix #5426: avoid abstraction over kinds containing # or (#)
 tcTyVarBndrs bndrs thing_inside = do
     tyvars <- mapM (zonk . hsTyVarNameKind . unLoc) bndrs
+    {- pprTrace "tcTyVarBndrs tyvars" (ppr tyvars) $ -}
     tcExtendTyVarEnv tyvars (thing_inside tyvars)
   where
     zonk (name, kind)
       = do { kind' <- zonkTcKind kind -- JPM
            ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
-           ; return (mkTyVar name kind') }
+           ; {- pprTrace "tcTyVarBndrs zonk" (ppr (name,kind,kind'))
+           $ -} return (mkTyVar name kind') }
 
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
 -- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
@@ -872,11 +881,13 @@ kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 kindGeneralizeKinds kinds = do
   gbl_tvs <- tcGetGlobalTyVars -- Already zonked
   zonked_kinds <- mapM zonkTcKind kinds
-  let tvs_to_quantify = tyVarsOfTypes zonked_kinds `minusVarSet` gbl_tvs
-      kvs_to_quantify = fst (splitKiTyVars (varSetElems tvs_to_quantify))
+  let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds `minusVarSet` gbl_tvs)
+      kvs_to_quantify = fst (splitKiTyVars tvs_to_quantify)
   -- JPM: improve this ASSERT
-  kvs <- ASSERT ( varSetElems tvs_to_quantify == kvs_to_quantify )
+  kvs <- -- ASSERT ( tvs_to_quantify == kvs_to_quantify )
+         {- pprTrace "kindGeneralizeKinds" (ppr (varSetElems (tyVarsOfTypes zonked_kinds), tvs_to_quantify, kvs_to_quantify)) $ -}
          zonkQuantifiedTyVars kvs_to_quantify
+
   let bodys = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
   traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
                             <+> ppr kvs   <+> ppr bodys)

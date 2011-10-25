@@ -460,7 +460,7 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
         ; idx_tycons0 <- tcExtendTyVarEnv tyvars $
                         mapAndRecoverM (tcAssocDecl clas mini_env) ats
 
-        -- Check for misssing associated types and build them
+        -- Check for missing associated types and build them
         -- from their defaults (if available)
         ; let defined_ats = mkNameSet $ map (tcdName . unLoc) ats
               check_at_instance (fam_tc, defs)
@@ -565,7 +565,7 @@ tcFamInstDecl1 fam_tc (decl@TySynonym {})
   -- "newtype instance" and "data instance"
 tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
                                    , tcdCons = cons})
-  = kcFamTyPats fam_tc decl $ \k_kipats k_tvs k_typats resKind ->
+  = kcFamTyPats fam_tc decl $ \t_tvs {-k_kipats-} t_typats resKind ->
     do { -- check that the family declaration is for the right kind
          checkTc (isFamilyTyCon fam_tc) (notFamily fam_tc)
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)
@@ -579,20 +579,23 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
          -- (2) type check indexed data type declaration
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-       ; tcTyVarBndrsKindGen k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
+       -- ; tcTyVarBndrsKindGen k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
 
          -- kind check the type indexes and the context
-       { (t_kvs, t_kipats) <- kindGeneralizeKinds k_kipats
-       ; t_typats     <- mapM tcHsKindedType k_typats
+         -- t_typats     <- mapM tcHsKindedType k_typats
+       ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats
+
        ; stupid_theta <- tcHsKindedContext =<< kcHsContext ctxt
+       ; traceTc "tcFamInstDecl1" (ppr (t_kvs, t_tvs) $$ ppr (t_kipats, t_typats))
        ; let t_ktvs = t_kvs ++ t_tvs
-             t_ktpats = t_kipats ++ t_typats
+             t_ktpats = t_kipats -- ++ t_typats
 
          -- (3) Check that
          --     (a) left-hand side contains no type family applications
          --         (vanilla synonyms are fine, though, and we checked for
          --         foralls earlier)
-       ; mapM_ checkTyFamFreeness t_typats
+       ; {- pprTrace "tcFamInstDecl1 (k_tvs,k_kipats,k_typats,t_kipats,t_typats,t_kvs,t_tvs)" (ppr (k_tvs,k_kipats,k_typats,t_kipats,t_typats,t_kvs,t_tvs))
+       $ -} mapM_ checkTyFamFreeness t_typats
 
        ; dataDeclChecks (tcdName decl) new_or_data stupid_theta cons
 
@@ -616,7 +619,7 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
                  -- dependency.  (2) They are always valid loop breakers as
                  -- they involve a coercion.
              })
-       }}
+       }
        where
          h98_syntax = case cons of      -- All constructors have same shape
                         L _ (ConDecl { con_res = ResTyGADT _ }) : _ -> False
@@ -641,7 +644,7 @@ tcAssocDecl clas mini_env (L loc decl)
                  (badATErr clas (tyConName at_tc))
 
        -- See Note [Checking consistent instantiation]
-       ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
+       -- ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys -- JPM restore
 
        ; return at_tc }
   where
