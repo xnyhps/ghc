@@ -707,28 +707,25 @@ kcFamTyPats fam_tc decl thing_inside
        ; checkTc (length kinds >= length hs_typats) $
                  tooManyParmsErr (tcdLName decl) -- JPM use name of fam_tc
 
-{-
-        -- JPM: restore this check
-         -- A family instance must have exactly same number of type parameters 
-	 -- as the family declaration.  You can't write
-	 -- 	type family F a :: * -> *
-	 --     type instance F Int y = y
-	 -- because then the type (F Int) would be like (\y.y)
-       ; let famArity = tyConArity fam_tc - length k_kipats
-       ; checkTc (length k_typats == famArity) $
-                 wrongNumberOfParmsErr famArity
--}
-
          -- Type functions can have a higher-kinded result
        ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind
-             mkUserTyVar k = noLoc (UserTyVar (tyVarName k) (tyVarKind k))
        ; typats <- zipWithM kcCheckLHsType hs_typats
                             [ EK kind (EkArg (ppr fam_tc) n)
                             | (kind,n) <- kinds `zip` [1..]]
 
+         -- A family instance must have exactly same number of type parameters 
+         -- as the family declaration.  You can't write
+         --     type family F a :: * -> *
+         --     type instance F Int y = y
+         -- because then the type (F Int) would be like (\y.y)
+       ; let famArity = tyConArity fam_tc - length kvs
+       ; checkTc (length typats == famArity) $
+                 wrongNumberOfParmsErr famArity
+
        ; tcTyVarBndrsKindGen tvs $ \tvs' -> do {
        ; (t_kvs, kvs'') <- kindGeneralizeKinds kvs'
        ; k_typats <- mapM tcHsKindedType typats
+
        ; thing_inside (t_kvs ++ tvs') (kvs'' ++ k_typats) resultKind }
 --     ; thing_inside kvs' tvs typats resultKind
        }

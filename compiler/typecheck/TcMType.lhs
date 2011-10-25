@@ -590,8 +590,7 @@ zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 zonkQuantifiedTyVar tv
   = ASSERT2( isTcTyVar tv, ppr tv ) 
     case tcTyVarDetails tv of
-      SkolemTv {} -> WARN( True, ppr tv )  -- Dec10: Can this really happen?
-                     do { kind <- zonkTcKind (tyVarKind tv)
+      SkolemTv {} -> do { kind <- zonkTcKind (tyVarKind tv)
                         ; return $ setTyVarKind tv kind }
 	-- It might be a skolem type variable, 
 	-- for example from a user type signature
