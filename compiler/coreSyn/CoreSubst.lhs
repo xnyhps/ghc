@@ -1232,7 +1232,7 @@ dealWithCoercion co stuff@(dc, _dc_univ_args, dc_args)
 
           -- Cast the value arguments (which include dictionaries)
         new_val_args = zipWith cast_arg arg_tys val_args
-        cast_arg arg_ty arg = mkCoerce (theta_subst arg_ty) arg
+        cast_arg arg_ty arg = mkCast arg (theta_subst arg_ty)
 
         dump_doc = vcat [ppr dc,      ppr dc_univ_tyvars, ppr dc_ex_tyvars,
                          ppr arg_tys, ppr dc_args,        ppr _dc_univ_args,

@@ -625,7 +625,7 @@ mkSelectorBinds pat val_expr
                                 (Var bndr_var) error_expr
         return (bndr_var, rhs_expr)
       where
-        error_expr = mkCoerce co (Var err_var)
+        error_expr = mkCast (Var err_var) co
         co         = mkUnsafeCo (exprType (Var err_var)) (idType bndr_var)
 
     is_simple_lpat p = is_simple_pat (unLoc p)
