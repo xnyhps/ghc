@@ -10,6 +10,9 @@
 {-# LANGUAGE UndecidableInstances       #-}
 {-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE MagicHash                  #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# OPTIONS_GHC -fenable-rewrite-rules  #-}
 
 module KindsTest1 where
 
@@ -18,6 +21,8 @@ module KindsTest1 where
 --------------------------------------------------------------------------------
 -- Type-level peano naturals
 --------------------------------------------------------------------------------
+
+undefined = undefined
 
 data Nat = Ze | Su Nat
 
@@ -49,6 +54,9 @@ myPhantom2 (Phantom x) = x
 
 testPhantom2 = myPhantom2 (Phantom Ze)
 
+-- type family T a b :: *
+-- type instance T Nat = Phantom   -- must fail: too few args
+
 --------------------------------------------------------------------------------
 -- Rewrite rules
 --------------------------------------------------------------------------------
@@ -59,6 +67,50 @@ testPhantom2 = myPhantom2 (Phantom Ze)
           myPhantom2 (Phantom x) = x
 
  #-}
+
+--------------------------------------------------------------------------------
+-- castBin
+--------------------------------------------------------------------------------
+
+newtype Bin a = BinPtr Nat -- deriving (Eq, Ord, Show, Bounded)
+
+castBin :: Bin a -> Bin b
+castBin (BinPtr i) = BinPtr i
+
+return :: a -> Proxy a
+return = return
+
+fmap :: (a -> b) -> Proxy a -> Proxy b
+fmap = fmap
+
+putNat :: Nat -> Proxy (Bin Nat)
+putNat n = return (BinPtr n)
+
+data Whatever
+data HasNat = HasNat Nat Whatever
+
+put :: HasNat -> Proxy (Bin HasNat)
+put (HasNat n _) = fmap castBin (putNat n)
+
+--------------------------------------------------------------------------------
+-- DPH Vector
+--------------------------------------------------------------------------------
+
+class DT a where -- forall k:BOX a:k. Constraint
+  data Dist a -- forall k:BOX. k -> *
+
+-- class Star (a :: *)
+
+instance {- (Star a) => -} DT (Proxy a) where -- forall k:BOX a:k. DT * (Proxy k a)
+  data Dist (Proxy a) = DProxy
+
+-- data DistProxy a = DProxy    -- Source
+-- Gives rise to:
+--    DistProxy :: forall k1:BOX. k1 -> *
+--    DProxy    :: forall k1. forall (a:k1). DistProxy k1 a
+--    ax7 k1 a  :: DispProxy k1 a ~ Dist * (Proxy k1 a)
+-- $WDVector :: forall (k1:BOX). forall (a:k1). Dist * (Proxy k1 a)
+-- $WDVector k1 a = (DProxy k1 a) |> ax7 k1 a
 
 --------------------------------------------------------------------------------
 -- Classes
@@ -109,6 +161,141 @@ data A s = A { unA :: Nat }
 runA1 :: (forall s. A s) -> Nat -- Uncomment for error
 runA1 a = unA a
 
+--------------------------------------------------------------------------------
+-- doaitse
+--------------------------------------------------------------------------------
+{-
+data Exists f = forall a . Exists (f a)
+
+data Ref env a where
+  Zero :: Ref (a,env') a -- Comment this line for a bonus
+
+f1 :: forall env. (Exists (Ref env)) -> Nat
+f1 (Exists (ref1 :: Ref env b)) = Ze
+-}
+
+--------------------------------------------------------------------------------
+-- gadt9
+--------------------------------------------------------------------------------
+{-
+data X a b where
+    X :: X a a
+
+data Y x a b where
+    Y :: x a b -> x b c -> Y x a c
+
+doy :: Y X a b -> Y X a b
+doy (Y X X) = Y X X
+-}
+--------------------------------------------------------------------------------
+-- gadt11
+--------------------------------------------------------------------------------
+{-
+data X f = X (f ())
+
+data B a where
+  B1 :: X []
+  B2 :: B [Nat]
+-}
+
+--------------------------------------------------------------------------------
+-- scoped
+--------------------------------------------------------------------------------
+{-
+data C x y where -- * -> * -> *
+     C :: a -> C a a
+
+data D x y where -- k -> * -> *
+     D :: C b c -> D a c
+
+g3 :: forall x y . D x y -> ()
+g3 (D (C (p :: y))) = ()
+-}
+
+--------------------------------------------------------------------------------
+-- GEq1
+--------------------------------------------------------------------------------
+{-
+class GEq' f where
+  geq' :: f a -> f a -> Nat
+
+class Generic a where 
+  type Rep a :: * -> *
+  from :: a -> Rep a a
+
+class GEq a where 
+  geq :: (Generic a, GEq' (Rep a)) => a -> a -> Nat
+  geq x y = geq' (from x) (from y)
+-}
+
+--------------------------------------------------------------------------------
+-- GADT1
+--------------------------------------------------------------------------------
+
+-- We assume the return kind of Id is * (see TcTyClsDecls.mk_res_kind)
+type family Id n
+--type instance Id n = n
+
+--------------------------------------------------------------------------------
+-- SimpleFail4
+--------------------------------------------------------------------------------
+
+class C2 a where
+  type S2 a :: *
+{-
+instance C2 a where
+  type S2 Nat = Nat
+-}
+
+--------------------------------------------------------------------------------
+-- T2677
+--------------------------------------------------------------------------------
+
+type family A1 (x :: *) :: *
+type instance A1 a = a
+type instance A1 a = a -- just works!... but shouldn't.
+
+--------------------------------------------------------------------------------
+-- read056
+--------------------------------------------------------------------------------
+{-
+class C a
+instance C Nat
+
+newtype Foo = Foo Nat
+    deriving C
+-}
+
+--------------------------------------------------------------------------------
+-- T303
+--------------------------------------------------------------------------------
+-- Fails with commented out "ret", without the comment, and both failures seem
+-- still independent from the original T303 failure.
+{-
+class IxMonad m where
+    ret :: a -> m i i a
+
+data T a b c = T
+instance IxMonad T where
+    --ret _ = T
+-}
+--------------------------------------------------------------------------------
+-- rule2
+--------------------------------------------------------------------------------
+{-
+foo :: (forall m. m a -> m b) -> m a -> m b
+foo f = f
+
+blip = foo (\x -> x)
+-}
+--------------------------------------------------------------------------------
+-- T2478
+--------------------------------------------------------------------------------
+-- Lack of zonking?
+{-
+data TrafoE t = forall env2 . TrafoE Nat t
+trafo () = TrafoE
+-}
 --------------------------------------------------------------------------------
 -- Stuff below here depends on (some) libraries being present
 --------------------------------------------------------------------------------
