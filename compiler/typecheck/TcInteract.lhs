@@ -175,7 +175,7 @@ runSolverPipeline pipeline workItem
           = do { traceTcS "runSolverPipeline" $ 
                  text "Stage name = " <+> text stg_name <+> text "{"
                ; res <- stg ct 
-               ; traceTcS "runSolverPipeline" $  text "End stage."
+               ; traceTcS "runSolverPipeline" $  text "} End stage"
                ; run_pipeline stgs res 
                }
 \end{code}

@@ -748,7 +748,7 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
                             then return implic_eqs
                             else applyDefaultingRules unsolved_flats
 
-           ; traceTcS "solveWanteds: simpl_loop end }" $
+           ; traceTcS "solveWanteds: simpl_loop end" $
                  vcat [ text "improve_eqs      =" <+> ppr improve_eqs
                       , text "unsolved_flats   =" <+> ppr unsolved_flats
                       , text "unsolved_implics =" <+> ppr unsolved_implics ]
