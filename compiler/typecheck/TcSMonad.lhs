@@ -441,20 +441,13 @@ updInertSetTcS item
   = modifyInertTcS (\is -> ((), updInertSet is item))
 
 modifyInertTcS :: (InertSet -> (a,InertSet)) -> TcS a 
-modifyInertTcS f 
-  = modifyInertTcSTcS (return . f)
-
-modifyInertTcSTcS :: (InertSet -> TcS (a,InertSet)) -> TcS a
--- Run the computation with the current inerts, store new 
--- inerts and return value.
-modifyInertTcSTcS f 
+-- Modify the inert set with the supplied function
+modifyInertTcS upd 
   = do { is_var <- getTcSInertsRef
-       ; is_curr <- wrapTcS (TcM.readTcRef is_var)
-       ; (a,is_new) <- f is_curr
-       ; wrapTcS (TcM.writeTcRef is_var is_new)
+       ; curr_inert <- wrapTcS (TcM.readTcRef is_var)
+       ; let (a, new_inert) = upd curr_inert
+       ; wrapTcS (TcM.writeTcRef is_var new_inert)
        ; return a }
-
-
 
 extractUnsolvedTcS :: TcS (Cts,Cts) 
 -- Extracts frozen errors and remaining unsolved and sets the 
@@ -500,15 +493,16 @@ extractUnsolved is@(IS {inert_eqs = eqs, inert_irreds = irreds})
                    unsolved_ips `unionBags` unsolved_dicts `unionBags` unsolved_funeqs
 
 
-
 kickOutRewritableInerts :: Ct -> TcS () 
 -- Pre:  ct is a CTyEqCan 
 -- Post: the TcS monad is left with the thinner non-rewritable inerts; the 
 --       rewritable end up in the worklist
 kickOutRewritableInerts ct 
-  = modifyInertTcSTcS (kick_out_rewritable ct) >>= (updWorkListTcS . unionWorkList)
+  = do { wl <- modifyInertTcS (kick_out_rewritable ct)
+       ; traceTcS "Kick out" (ppr ct $$ ppr wl)
+       ; updWorkListTcS (unionWorkList wl) }
 
-kick_out_rewritable :: Ct -> InertSet -> TcS (WorkList,InertSet)
+kick_out_rewritable :: Ct -> InertSet -> (WorkList,InertSet)
 kick_out_rewritable ct (IS { inert_eqs    = eqmap
                            , inert_eq_tvs = inscope
                            , inert_dicts  = dictmap
@@ -516,43 +510,31 @@ kick_out_rewritable ct (IS { inert_eqs    = eqmap
                            , inert_funeqs = funeqmap
                            , inert_irreds = irreds
                            , inert_frozen = frozen } )
-           = do { frozen_rewritten <- mapBagM rewrite_frozen frozen
-                   -- We do not want to kick out the frozens in the work list because the 
-                   -- semantics of a CNonCanonical depends on whether it appears in the 
-                   -- worklist or in the inert set. Fortunately, we may simply rewrite them.
+  = (kicked_out, remaining)
+  where
+    kicked_out = WorkList { wl_eqs  = eqs_out ++ bagToList feqs_out
+                          , wl_rest = bagToList (fro_out `andCts` dicts_out 
+                                        `andCts` ips_out `andCts` irs_out) }
+  
+    remaining = IS { inert_eqs = eqs_in
+                   , inert_eq_tvs = inscope -- keep the same, safe and cheap
+                   , inert_dicts = dicts_in
+                   , inert_ips = ips_in
+                   , inert_funeqs = feqs_in
+                   , inert_irreds = irs_in
+                   , inert_frozen = fro_in }
 
-                ; let kicked_out = WorkList { wl_eqs  = eqs_out ++ bagToList feqs_out
-                                            , wl_rest = bagToList (dicts_out `andCts` ips_out `andCts` irs_out) }
-            
-                ; let remaining = IS { inert_eqs = eqs_in
-                                     , inert_eq_tvs = inscope -- keep the same, safe and cheap
-                                     , inert_dicts = dicts_in
-                                     , inert_ips = ips_in
-                                     , inert_funeqs = feqs_in
-                                     , inert_irreds = irs_in
-                                     , inert_frozen = frozen_rewritten }
-                ; return (kicked_out, remaining) }
+    fl = cc_flavor ct
+    tv = cc_tyvar ct
 
-            where fl = cc_flavor ct
-                  tv = cc_tyvar ct
-
-                  (eqs_out,eqs_in)     = partitionEqMap rewritable eqmap
-                  (dicts_out,dicts_in) = partitionCCanMap rewritable dictmap
-                  (ips_out, ips_in)    = partitionCCanMap rewritable ipmap 
-                  (feqs_out,feqs_in)   = partitionCCanMap rewritable funeqmap
-                  (irs_out, irs_in)    = partitionBag rewritable irreds
-
-                  rewritable ct = (fl `canRewrite` cc_flavor ct) && 
-                                  (tv `elemVarSet` tyVarsOfCt ct)
-
-                  rewrite_frozen ct 
-                     = do { traceTcS "checpoint #3" empty 
-                          ; v' <- rewriteFromInertEqs
-                                       (work_item_subst,inscope) (cc_flavor ct) (cc_id ct)
-                          ; traceTcS "checpoint #4" empty 
-                          ; return ct { cc_id = v'} } 
-                  work_item_subst = unitVarEnv tv (ct, mkEqVarLCo (cc_id ct))
-
+    (eqs_out,   eqs_in)    = partitionEqMap rewritable eqmap
+    (dicts_out, dicts_in) = partitionCCanMap rewritable dictmap
+    (ips_out,   ips_in)   = partitionCCanMap rewritable ipmap 
+    (feqs_out,  feqs_in)  = partitionCCanMap rewritable funeqmap
+    (irs_out,   irs_in)   = partitionBag rewritable irreds
+    (fro_out,   fro_in)   = partitionBag rewritable frozen
+    rewritable ct = (fl `canRewrite` cc_flavor ct) && 
+                    (tv `elemVarSet` tyVarsOfCt ct)
 
 extractRelevantInerts :: Ct -> TcS Cts
 -- Returns the constraints from the inert set that are 'relevant' to react with 
@@ -919,7 +901,8 @@ updWorkListTcS_return f
 emitFrozenError :: CtFlavor -> EvVar -> SubGoalDepth -> TcS ()
 -- Emits a non-canonical constraint that will stand for a frozen error in the inerts. 
 emitFrozenError fl ev depth 
-  = do { inert_ref <- getTcSInertsRef 
+  = do { traceTcS "Emit frozen error" (ppr ev <+> dcolon <+> ppr (evVarPred ev))
+       ; inert_ref <- getTcSInertsRef 
        ; inerts <- wrapTcS (TcM.readTcRef inert_ref)
        ; let ct = CNonCanonical { cc_id = ev
                                 , cc_flavor = fl
@@ -978,7 +961,10 @@ setEvBind :: EvVar -> EvTerm -> TcS ()
 -- Internal
 setEvBind ev t
   = do { tc_evbinds <- getTcEvBinds
-       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t }
+       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t 
+       ; traceTcS "setEvBind1" (ppr ev <+> dcolon <+> ppr (evVarPred ev))
+       ; traceTcS "setEvBind2" (hang (ppr ev <+> dcolon <+> ppr (evVarPred ev))
+                                   2 (equals <+> ppr t)) }
 
 warnTcS :: CtLoc orig -> Bool -> SDoc -> TcS ()
 warnTcS loc warn_if doc 
@@ -1222,11 +1208,16 @@ rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -> EvVar 
                     -> TcS EvVar
 rewriteFromInertEqs (subst,inscope) fl v 
-  = do { let co = liftInertEqsPred subst inscope fl (evVarPred v) 
+  = do { let co = pprTrace "rw0" (ppr v) $
+                  liftInertEqsPred subst inscope fl (evVarPred v) 
        ; if isReflCo co then return v 
          else do { traceTcS "rewriteFromInertEqs" $
                    text "Original item =" <+> ppr v <+> dcolon <+> ppr (evVarPred v)
                  ; v' <- newEvVar (pSnd (liftedCoercionKind co))
+		 ; traceTcS "rw1" (ppr v')
+		 ; traceTcS "rw2" (ppr v' <+> dcolon <+> ppr (evVarPred v'))
+		 ; traceTcS "rw3" (ppr subst)
+		 ; traceTcS "rw4" (ppr co)
                  ; case fl of 
                      Wanted {}  -> setEvBind v (EvCast v' (mkSymCo co)) 
                      Given {}   -> setEvBind v' (EvCast v co) 
@@ -1242,21 +1233,27 @@ liftInertEqsPred :: TyVarEnv (Ct,Coercion)
                  -> CtFlavor
                  -> PredType -> Coercion
 liftInertEqsPred subst inscope fl pty
-  = ty_cts_subst subst inscope fl pty
+  = pprTrace "Hello" (ppr pty) $ 
+    ty_cts_subst subst inscope fl pty
 
 ty_cts_subst :: TyVarEnv (Ct,Coercion)
              -> InScopeSet -> CtFlavor -> Type -> Coercion
 ty_cts_subst subst inscope fl ty 
   = go ty 
-  where go (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)
-        go (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2) 
-        go (TyConApp tc tys) = mkTyConAppCo tc (map go tys)  
+  where 
+        go ty = pprTrace "goty" (ppr ty) $ 
+                go' ty
 
-        go (ForAllTy v ty)   = let co = ty_cts_subst subst' inscope' fl ty 
-                               in (mkForAllCo v' $! co)
-                             where (subst',inscope',v') = upd_tyvar_bndr subst inscope v
+        go' (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)
+        go' (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2) 
+        go' (TyConApp tc tys) = mkTyConAppCo tc (map go tys)  
 
-        go (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2)
+        go' (ForAllTy v ty)   = mkForAllCo v' $! co
+                             where 
+                               (subst',inscope',v') = upd_tyvar_bndr subst inscope v
+                               co = ty_cts_subst subst' inscope' fl ty 
+
+        go' (FunTy ty1 ty2)   = mkFunCo (go ty1) (go ty2)
 
 
         tyvar_cts_subst tv  
