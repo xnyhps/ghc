@@ -858,7 +858,7 @@ tcTyVarBndrsKindGen bndrs thing_inside
        ; tcExtendTyVarEnv ktvs (thing_inside ktvs) }
 \end{code}
 
-Note [Kinds of quanfified type variables]
+Note [Kinds of quantified type variables]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 tcTyVarBndrsKindGen quantifies over a specified list of type variables,
 *and* over the kind variables mentioned in the kinds of those tyvars.
@@ -875,7 +875,7 @@ Reason: we're going to turn this into a for-all type,
 which the type checker will then instantiate, and instantiate does not
 look through unification variables!  
 
-Hence using zonked_kinds when forming 'tyvars'
+Hence using zonked_kinds when forming 'tyvars'.
 
 \begin{code}
 tcTyClTyVars :: Name -> [LHsTyVarBndr Name]	-- LHS of the type or class decl

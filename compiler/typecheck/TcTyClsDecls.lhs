@@ -692,8 +692,8 @@ tcFamTyPats :: TyCon
 -- nested inside an instance decl, thus
 --	  instance C [a] where
 --	    type F [a] = ...
--- In that case, the type variable 'a' will *already be in in scope*
--- (and, if C is poly-kinded, so will it's kind parameter).
+-- In that case, the type variable 'a' will *already be in scope*
+-- (and, if C is poly-kinded, so will its kind parameter).
 
 tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
   = kcHsTyVars tyvars $ \tvs ->
