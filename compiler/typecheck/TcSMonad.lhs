@@ -125,14 +125,9 @@ import Unique
 import UniqFM
 import Maybes ( orElse )
 
-#ifdef DEBUG
-import StaticFlags( opt_PprStyle_Debug )
 import Control.Monad( when )
-#endif
-
-import Control.Monad
+import StaticFlags( opt_PprStyle_Debug )
 import Data.IORef
-import qualified Data.Map as Map
 \end{code}
 
 \begin{code}
