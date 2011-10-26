@@ -133,6 +133,7 @@ data Coercion
   | TyConAppCo TyCon [Coercion]    -- lift TyConApp 
     	       -- The TyCon is never a synonym; 
 	       -- we expand synonyms eagerly
+	       -- But it can be a type function
 
   | AppCo Coercion Coercion        -- lift AppTy
 
@@ -380,19 +381,15 @@ pprParendCo co = ppr_co TyConPrec co
 ppr_co :: Prec -> Coercion -> SDoc
 ppr_co _ (Refl ty) = angles (ppr ty)
 
-ppr_co p co@(TyConAppCo tc cos)
+ppr_co p co@(TyConAppCo tc [_,_])
   | tc `hasKey` funTyConKey = ppr_fun_co p co
-  | otherwise               = pprTcApp   p ppr_co tc cos
 
-ppr_co p (AppCo co1 co2)    = maybeParen p TyConPrec $
-                              pprCo co1 <+> ppr_co TyConPrec co2
-
-ppr_co p co@(ForAllCo {}) = ppr_forall_co p co
-
-ppr_co _ (CoVarCo cv)     = parenSymOcc (getOccName cv) (ppr cv)
-
+ppr_co p (TyConAppCo tc cos)   = pprTcApp   p ppr_co tc cos
+ppr_co p (AppCo co1 co2)       = maybeParen p TyConPrec $
+                                 pprCo co1 <+> ppr_co TyConPrec co2
+ppr_co p co@(ForAllCo {})      = ppr_forall_co p co
+ppr_co _ (CoVarCo cv)          = parenSymOcc (getOccName cv) (ppr cv)
 ppr_co p (AxiomInstCo con cos) = pprTypeNameApp p ppr_co (getName con) cos
-
 
 ppr_co p (TransCo co1 co2) = maybeParen p FunPrec $
                              ppr_co FunPrec co1
@@ -401,7 +398,8 @@ ppr_co p (TransCo co1 co2) = maybeParen p FunPrec $
 ppr_co p (InstCo co ty) = maybeParen p TyConPrec $
                           pprParendCo co <> ptext (sLit "@") <> pprType ty
 
-ppr_co p (UnsafeCo ty1 ty2) = pprPrefixApp p (ptext (sLit "UnsafeCo")) [pprParendType ty1, pprParendType ty2]
+ppr_co p (UnsafeCo ty1 ty2) = pprPrefixApp p (ptext (sLit "UnsafeCo")) 
+                                           [pprParendType ty1, pprParendType ty2]
 ppr_co p (SymCo co)         = pprPrefixApp p (ptext (sLit "Sym")) [pprParendCo co]
 ppr_co p (NthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pprParendCo co]
 
@@ -412,6 +410,7 @@ angles p = char '<' <> p <> char '>'
 ppr_fun_co :: Prec -> Coercion -> SDoc
 ppr_fun_co p co = pprArrowChain p (split co)
   where
+    split :: Coercion -> [SDoc]
     split (TyConAppCo f [arg,res])
       | f `hasKey` funTyConKey
       = ppr_co FunPrec arg : split res
