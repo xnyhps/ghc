@@ -1297,11 +1297,11 @@ expand tvs rhs tys
 \begin{code}
 
 tyConKind :: TyCon -> Kind
-tyConKind (FunTyCon   { tc_kind = k }) = k
-tyConKind (AlgTyCon   { tc_kind = k }) = k
-tyConKind (TupleTyCon { tc_kind = k }) = k
-tyConKind (SynTyCon   { tc_kind = k }) = k
-tyConKind (PrimTyCon  { tc_kind = k }) = k
+tyConKind (FunTyCon          { tc_kind = k }) = k
+tyConKind (AlgTyCon          { tc_kind = k }) = k
+tyConKind (TupleTyCon        { tc_kind = k }) = k
+tyConKind (SynTyCon          { tc_kind = k }) = k
+tyConKind (PrimTyCon         { tc_kind = k }) = k
 tyConKind (PromotedDataTyCon { tc_kind = k }) = k
 tyConKind tc = pprPanic "tyConKind" (ppr tc)	-- SuperKindTyCon and CoTyCon
 
