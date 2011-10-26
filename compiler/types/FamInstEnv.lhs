@@ -351,9 +351,7 @@ lookupFamInstEnvConflicts' env fam_inst skol_tvs
         old_rhs   = mkTyConApp old_tycon  (substTyVars subst old_tvs)
         new_rhs   = mkTyConApp inst_tycon (substTyVars subst skol_tvs)
 
-
-
-
+-- JPM: why all the duplication?
 lookupFamInstEnvConflicts
     :: FamInstEnvs
     -> FamInst		-- Putative new instance
