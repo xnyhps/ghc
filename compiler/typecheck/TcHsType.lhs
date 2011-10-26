@@ -810,7 +810,7 @@ kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 -- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
 -- See Note [Kind-checking kind-polymorphic types]
 kcHsTyVar tyvar = do in_scope <- getInLocalScope
-                     if False -- in_scope (hsTyVarName tyvar)
+                     if in_scope (hsTyVarName tyvar)
                       then do inscope_tyvar <- tcLookupTyVar (hsTyVarName tyvar)
                               {- pprTrace "kcHsTyVar in scope" (ppr tyvar) -} 
                               return (UserTyVar (tyVarName inscope_tyvar) (tyVarKind inscope_tyvar)) 
@@ -884,15 +884,15 @@ kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 kindGeneralizeKinds kinds = do
   gbl_tvs <- tcGetGlobalTyVars -- Already zonked
   zonked_kinds <- mapM zonkTcKind kinds
-  let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds `minusVarSet` gbl_tvs)
+  let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds {- `minusVarSet` gbl_tvs -})
       kvs_to_quantify = fst (splitKiTyVars tvs_to_quantify)
   -- JPM: improve this ASSERT
-  kvs <- -- ASSERT ( tvs_to_quantify == kvs_to_quantify )
-         {- pprTrace "kindGeneralizeKinds" (ppr (varSetElems (tyVarsOfTypes zonked_kinds), tvs_to_quantify, kvs_to_quantify)) $ -}
+  kvs <- ASSERT2 ( tvs_to_quantify == kvs_to_quantify, ppr (varSetElems (tyVarsOfTypes zonked_kinds), tvs_to_quantify, kvs_to_quantify) )
          zonkQuantifiedTyVars kvs_to_quantify
 
   let bodys = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
-  traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
+  traceTc "generalizeKind" (    ppr kinds <+> ppr zonked_kinds 
+                            <+> ppr tvs_to_quantify <+> ppr kvs_to_quantify
                             <+> ppr kvs   <+> ppr bodys)
   return (kvs, bodys)
 

@@ -12,7 +12,7 @@ module TcTyClsDecls (
 	-- Functions used by TcInstDcls to check 
 	-- data/type family instance declarations
         kcDataDecl, tcConDecls, dataDeclChecks, checkValidTyCon,
-        tcSynFamInstDecl, kcFamTyPats, 
+        tcSynFamInstDecl, tcFamTyPats, 
         wrongKindOfFamily, badATErr, wrongATArgErr
     ) where
 
@@ -652,41 +652,22 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
                 (wrongATArgErr at_ty (mkTyVarTy fam_tc_tv))
 
 -------------------------
+
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
-tcSynFamInstDecl fam_tc (decl@TySynonym {})
-  = kcFamTyPats fam_tc decl $ \stuff ->
-    do { -- check that the family declaration is for a synonym
-         checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
-
-       ; -- (1) kind check the right-hand side of the type equation
-       ; k_rhs <- kcCheckLHsType (tcdSynRhs decl) (EK resKind EkUnk)
-                  -- ToDo: the ExpKind could be better
-
-         -- (2) type check type equation
-         -- We kind generalize the kind patterns since they contain
-         -- all the meta kind variables
-      ; tcFamTyPats stuff $ \ final_tvs final_pats -> do
-
-      {
-       -- ; tcTyVarBndrs k_tvs $ \t_tvs -> do   -- turn kinded into proper tyvars
-         -- t_typats <- mapM tcHsKindedType k_typats
-       ; t_rhs    <- tcHsKindedType k_rhs
-
---        ; (t_kvs, t_kipats) <- kindGeneralizeKinds t_typats -- JPM k_kipats
-
-        -- NB: we don't check well-formedness of the instance here because we call
-        -- this function from within the TcTyClsDecls fixpoint. The callers must do
-        -- the check.
-
-       ; return (final_tvs, final_pats, t_rhs) }
-
 tcSynFamInstDecl fam_tc (decl@TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
                                         , tcdSynRhs = rhs })
   = do { checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
-       ; tcFamTyPats fam_tc tvs pats (kcRhsType rhs) $ \ tvs' pats' -> do
-       { rhs' <- tcRhsType rhs
-       ; return (tvs', pats', rhs') }
+        -- Side effect only, drop the result
+       ; let kindChecker rhs = kcLHsType rhs >> return ()
+
+       ; tcFamTyPats fam_tc tvs pats (kindChecker rhs) 
+                $ \tvs' pats' resultKind -> do
+
+       { rhs'  <- kcCheckLHsType rhs (EK resultKind EkUnk)
+       ; rhs'' <- tcHsKindedType rhs' -- JPM rename tcHsKindedType to tcRhsType
+
+       ; return (tvs', pats', rhs'') } }
 
 tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 
@@ -698,49 +679,25 @@ tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 --   check is only required for type synonym instances.
 
 -----------------
-Plan A
 tcFamTyPats :: TyCon
             -> [LHsTyVarBndr Name] -> [LHsType Name]
-	    -> TcM ()      -- Kind checker
-            -> (final_tvs -> final_pats -> result_kind -> TcM a)
-	    -> TcM a
-
------------------
-Plan B
-kcFamTyPats :: TyCon
-            -> [LHsTyVarBndr Name] -> [LHsType Name]
-            -> (([LHsTyVarBndr Name], [TcKind], [LHsType Name], TcKind) -> TcM a)
-	    -> TcM a
-
-tcFamTyPats :: TyCon
-            -> ([LHsTyVarBndr Name], [TcKind], [LHsType Name], TcKind)
-            -> (final_tvs -> final_pats -> TcM a)
-	    -> TcM a
-checkFamTyFreeness!
-
------------------
--- Current
-kcFamTyPats :: TyCon
-            -> TyClDecl Name
-            -> ([KindVar] -> [Kind] -> Kind -> TcM a)
--- -> ([TcKind] -> [LHsTyVarBndr Name] -> [LHsType Name] -> Kind -> TcM a)
+            -> TcM ()      -- Kind checker
+            -> ([KindVar] -> [TcKind] -> Kind -> TcM a)
             -> TcM a
-
--- JPM decl should be split into its two components
 -- See Note [Quantifying over family patterns]
-kcFamTyPats fam_tc decl thing_inside
-  = kcHsTyVars (tcdTyVars decl) $ \tvs ->
+tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
+  = kcHsTyVars tyvars $ \tvs ->
     do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
          -- Instantiate with meta kind vars
        ; kvs' <- mapM (const newMetaKindVar) kvs
        ; let body' = substKiWith kvs kvs' body
 
        ; let { (kinds, resKind) = splitKindFunTys body'
-             ; hs_typats        = fromJust $ tcdTyPats decl }
+             ; hs_typats        = pats }
 
          -- We may not have more parameters than the kind indicates
        ; checkTc (length kinds >= length hs_typats) $
-                 tooManyParmsErr (tcdLName decl) -- JPM use name of fam_tc
+                 tooManyParmsErr (tyConName fam_tc)
 
          -- Type functions can have a higher-kinded result
        ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind
@@ -748,8 +705,8 @@ kcFamTyPats fam_tc decl thing_inside
                             [ EK kind (EkArg (ppr fam_tc) n)
                             | (kind,n) <- kinds `zip` [1..]]
 
-         -- A family instance must have exactly same number of type parameters 
-         -- as the family declaration.  You can't write
+         -- A family instance must have exactly the same number of type
+         -- parameters as the family declaration.  You can't write
          --     type family F a :: * -> *
          --     type instance F Int y = y
          -- because then the type (F Int) would be like (\y.y)
@@ -757,12 +714,22 @@ kcFamTyPats fam_tc decl thing_inside
        ; checkTc (length typats == famArity) $
                  wrongNumberOfParmsErr famArity
 
+        -- Works by side-effecting
+       ; kind_checker
+
+         -- Type check indexed data type declaration
+         -- We kind generalize the kind patterns since they contain
+         -- all the meta kind variables
        ; tcTyVarBndrsKindGen tvs $ \tvs' -> do {
        ; (t_kvs, kvs'') <- kindGeneralizeKinds kvs'
        ; k_typats <- mapM tcHsKindedType typats
 
+         -- Check that left-hand side contains no type family applications
+         -- (vanilla synonyms are fine, though, and we checked for
+         -- foralls earlier)
+       ; mapM_ checkTyFamFreeness k_typats
+
        ; thing_inside (t_kvs ++ tvs') (kvs'' ++ k_typats) resultKind }
---     ; thing_inside kvs' tvs typats resultKind
        }
 \end{code}
 
@@ -1708,7 +1675,7 @@ wrongATArgErr ty instTy =
         <+> ptext (sLit "but expected") <+> quotes (ppr instTy)
       ]
 
-tooManyParmsErr :: Located Name -> SDoc
+tooManyParmsErr :: Name -> SDoc
 tooManyParmsErr tc_name
   = ptext (sLit "Family instance has too many parameters:") <+>
     quotes (ppr tc_name)
