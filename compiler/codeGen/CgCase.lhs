@@ -121,8 +121,8 @@ allocating more heap than strictly necessary, but it will sometimes
 eliminate a heap check altogether.
 
 \begin{code}
-cgCase (StgApp v []) _live_in_whole_case _live_in_alts bndr
-       alt_type@(PrimAlt _) [(DEFAULT,bndrs,_,rhs)]
+cgCase (StgApp _v []) _live_in_whole_case _live_in_alts bndr
+       (PrimAlt _) [(DEFAULT,bndrs,_,rhs)]
   | isVoidArg (idCgRep bndr)
   = ASSERT( null bndrs )
     WARN( True, ptext (sLit "Case of void constant; missing optimisation somewhere") <+> ppr bndr)
