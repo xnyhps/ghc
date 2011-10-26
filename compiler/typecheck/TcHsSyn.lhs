@@ -994,14 +994,14 @@ zonkRules env rs = mappM (wrapLocM (zonkRule env)) rs
 
 zonkRule :: ZonkEnv -> RuleDecl TcId -> TcM (RuleDecl Id)
 zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
-  = do { (env_rhs, new_bndrs) <- mapAccumLM zonk_bndr env vars
+  = do { unbound_tkv_set <- newMutVar emptyVarSet
+       ; let env_rule = setZonkType env (\_ -> zonkTypeCollecting unbound_tkv_set)
+              -- See Note [Zonking the LHS of a RULE]
 
-       ; unbound_tkv_set <- newMutVar emptyVarSet
-       ; let env_lhs = setZonkType env_rhs (\_ -> zonkTypeCollecting unbound_tkv_set)
-        -- See Note [Zonking the LHS of a RULE]
+       ; (env_inside, new_bndrs) <- mapAccumLM zonk_bndr env_rule vars
 
-       ; new_lhs <- zonkLExpr env_lhs lhs
-       ; new_rhs <- zonkLExpr env_rhs rhs
+       ; new_lhs <- zonkLExpr env_inside lhs
+       ; new_rhs <- zonkLExpr env_inside rhs
 
        ; unbound_tkvs <- readMutVar unbound_tkv_set
 

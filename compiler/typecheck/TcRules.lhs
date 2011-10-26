@@ -85,6 +85,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
 	-- during zonking (see TcHsSyn.zonkRule)
 
        ; let tpl_ids    = lhs_dicts ++ id_bndrs
+{-
              forall_tvs = tyVarsOfTypes (rule_ty : map idType tpl_ids)
 
 	     -- Now figure out what to quantify over
@@ -95,10 +96,13 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
        	     		       `minusVarSet` gbl_tvs
        	     		       `delVarSetList` tv_bndrs
        ; qtvs <- zonkQuantifiedTyVars (varSetElems extra_bound_tvs)
+       ; let all_tvs = tv_bndrs ++ qtvs
+       ; (kvs, _kinds) <- kindGeneralizeKinds $ map tyVarKind all_tvs
+-}
 
        	      -- The tv_bndrs are already skolems, so no need to zonk them
        ; return (HsRule name act
-		    (map (RuleBndr . noLoc) (sortQuantVars (tv_bndrs ++ qtvs ++ tpl_ids)))	-- yuk
+		    (map (RuleBndr . noLoc) (tv_bndrs ++ tpl_ids))
 		    (mkHsDictLet lhs_ev_binds lhs') fv_lhs
 		    (mkHsDictLet rhs_ev_binds rhs') fv_rhs) }
 

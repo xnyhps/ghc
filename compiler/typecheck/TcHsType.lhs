@@ -849,13 +849,35 @@ tcTyVarBndrs bndrs thing_inside = do
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
 -- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
 -- calls thing_inside with [(k :: BOX), (f :: k -> *), (a :: k)]
-tcTyVarBndrsKindGen bndrs thing_inside = do
-    (kvs, kinds) <- kindGeneralizeKinds $ map (hsTyVarKind.unLoc) bndrs
-    let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) kinds
-        ktvs = kvs ++ tyvars
-    traceTc "tcTyVarBndrsKindGen" (ppr (bndrs, kvs, tyvars))
-    tcExtendTyVarEnv ktvs (thing_inside ktvs)
+tcTyVarBndrsKindGen bndrs thing_inside
+  = do { let kinds = map (hsTyVarKind . unLoc) bndrs
+       ; (kvs, zonked_kinds) <- kindGeneralizeKinds kinds
+       ; let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) zonked_kinds
+    	     ktvs = kvs ++ tyvars     -- See Note [Kinds of quantified type variables]
+       ; traceTc "tcTyVarBndrsKindGen" (ppr (bndrs, kvs, tyvars))
+       ; tcExtendTyVarEnv ktvs (thing_inside ktvs) }
+\end{code}
 
+Note [Kinds of quanfified type variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tcTyVarBndrsKindGen quantifies over a specified list of type variables,
+*and* over the kind variables mentioned in the kinds of those tyvars.
+
+Note that we must zonk those kinds (obviously) but less obviously, we
+must return type variables whose kinds are zonked too. Example
+    (a :: k7)  where  k7 := k9 -> k9
+We must return
+    [k9, a:k9->k9]
+and NOT 
+    [k9, a:k7]
+Reason: we're going to turn this into a for-all type, 
+   forall k9. forall (a:k7). blah
+which the type checker will then instantiate, and instantiate does not
+look through unification variables!  
+
+Hence using zonked_kinds when forming 'tyvars'
+
+\begin{code}
 tcTyClTyVars :: Name -> [LHsTyVarBndr Name]	-- LHS of the type or class decl
              -> ([TyVar] -> Kind -> TcM a) -> TcM a
 -- tcTyClTyVars T [a,b] calls thing_inside with
@@ -881,20 +903,28 @@ tcTyClTyVars tycon tyvars thing_inside
 
 -- JPM: document
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
-kindGeneralizeKinds kinds = do
-  gbl_tvs <- tcGetGlobalTyVars -- Already zonked
-  zonked_kinds <- mapM zonkTcKind kinds
-  let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds {- `minusVarSet` gbl_tvs -})
-      kvs_to_quantify = fst (splitKiTyVars tvs_to_quantify)
-  -- JPM: improve this ASSERT
-  kvs <- ASSERT2 ( tvs_to_quantify == kvs_to_quantify, ppr (varSetElems (tyVarsOfTypes zonked_kinds), tvs_to_quantify, kvs_to_quantify) )
-         zonkQuantifiedTyVars kvs_to_quantify
+-- INVARIANT: the returned kinds are zonked, and
+--            mention the returned kind variables
+kindGeneralizeKinds kinds 
+  = do { 	-- Quantify over kind variables free in
+		-- the kinds, and *not* in the environment
+       ; zonked_kinds <- mapM zonkTcKind kinds
+       ; gbl_tvs <- tcGetGlobalTyVars -- Already zonked
+       ; let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds 
+                                            `minusVarSet` gbl_tvs)
+             kvs_to_quantify = fst (splitKiTyVars tvs_to_quantify)
 
-  let bodys = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
-  traceTc "generalizeKind" (    ppr kinds <+> ppr zonked_kinds 
+  -- JPM: improve this ASSERT
+       ; kvs <- ASSERT2 ( tvs_to_quantify == kvs_to_quantify, 
+                          ppr (varSetElems (tyVarsOfTypes zonked_kinds), 
+                               tvs_to_quantify, kvs_to_quantify) )
+                zonkQuantifiedTyVars kvs_to_quantify
+
+       ; let final_kinds = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
+       ; traceTc "generalizeKind" (    ppr kinds <+> ppr zonked_kinds 
                             <+> ppr tvs_to_quantify <+> ppr kvs_to_quantify
-                            <+> ppr kvs   <+> ppr bodys)
-  return (kvs, bodys)
+                            <+> ppr kvs   <+> ppr final_kinds)
+       ; return (kvs, final_kinds) }
 
 kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars
                                     , Kind )     -- this is the old kind where flexis got zonked

@@ -684,13 +684,23 @@ tcFamTyPats :: TyCon
             -> TcM ()      -- Kind checker
             -> ([KindVar] -> [TcKind] -> Kind -> TcM a)
             -> TcM a
--- See Note [Quantifying over family patterns]
+-- Check the type patterns of a type or data family instance
+--     type instance F <pat1> <pat2> = <type>
+-- The 'tyvars' are the free type variables of pats
+-- 
+-- NB: The family instance declaration may be an associated one,
+-- nested inside an instance decl, thus
+--	  instance C [a] where
+--	    type F [a] = ...
+-- In that case, the type variable 'a' will *already be in in scope*
+-- (and, if C is poly-kinded, so will it's kind parameter).
+
 tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
   = kcHsTyVars tyvars $ \tvs ->
-    do { let (kvs, body) = splitForAllTys (tyConKind fam_tc)
+    do { let (fam_kvs, body) = splitForAllTys (tyConKind fam_tc)
          -- Instantiate with meta kind vars
-       ; kvs' <- mapM (const newMetaKindVar) kvs
-       ; let body' = substKiWith kvs kvs' body
+       ; fam_arg_kinds <- mapM (const newMetaKindVar) fam_kvs
+       ; let body' = substKiWith fam_kvs fam_arg_kinds body
 
        ; let { (kinds, resKind) = splitKindFunTys body'
              ; hs_typats        = pats }
@@ -710,18 +720,21 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
          --     type family F a :: * -> *
          --     type instance F Int y = y
          -- because then the type (F Int) would be like (\y.y)
-       ; let famArity = tyConArity fam_tc - length kvs
+       ; let famArity = tyConArity fam_tc - length fam_kvs
        ; checkTc (length typats == famArity) $
                  wrongNumberOfParmsErr famArity
 
-        -- Works by side-effecting
+        -- Kind check the "thing inside"; this just works by 
+	-- side-effecting any kind unification variables
        ; kind_checker
 
          -- Type check indexed data type declaration
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-       ; tcTyVarBndrsKindGen tvs $ \tvs' -> do {
-       ; (t_kvs, kvs'') <- kindGeneralizeKinds kvs'
+	 -- See Note [Quantifying over family patterns]
+       ; zapLclTypeEnv $
+         tcTyVarBndrsKindGen tvs $ \tvs' -> do {
+       ; (t_kvs, fam_arg_kinds') <- kindGeneralizeKinds fam_arg_kinds
        ; k_typats <- mapM tcHsKindedType typats
 
          -- Check that left-hand side contains no type family applications
@@ -729,25 +742,30 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
          -- foralls earlier)
        ; mapM_ checkTyFamFreeness k_typats
 
-       ; thing_inside (t_kvs ++ tvs') (kvs'' ++ k_typats) resultKind }
+       ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resultKind }
        }
 \end{code}
 
 Note [Quantifying over family patterns]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  data family Dist a 
+We need to quantify over two different lots of kind variables:
 
-  -- Any :: forall k. k
-  data instance Dist Any = DA
-  -- Generates  data DistAny k = DA
-  --            ax7 k :: Dist k (Any k) ~ DistAny k 
-  -- The 'k' comes from kindGeneralizeKinds (Any k)
+First, the ones that come from tcTyVarBndrsKindGen, as usual
+  data family Dist a 
 
   -- Proxy :: forall k. k -> *
   data instance Dist (Proxy a) = DP
   -- Generates  data DistProxy = DP
   --            ax8 k (a::k) :: Dist * (Proxy k a) ~ DistProxy k a
-  -- The 'k' comes from the kcHsTyVars (a::k)
+  -- The 'k' comes from the tcTyVarBndrsKindGen (a::k)
+
+Second, the ones that come from the kind argument of the type family
+which we pick up using kindGeneralizeKinds:
+  -- Any :: forall k. k
+  data instance Dist Any = DA
+  -- Generates  data DistAny k = DA
+  --            ax7 k :: Dist k (Any k) ~ DistAny k 
+  -- The 'k' comes from kindGeneralizeKinds (Any k)
 
 Note [Associated type instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1398,7 +1416,8 @@ mkRecSelBind (tycon, sel_name)
     is_naughty = not (tyVarsOfType field_ty `subVarSet` data_tvs)  
     (field_tvs, field_theta, field_tau) = tcSplitSigmaTy field_ty
     sel_ty | is_naughty = unitTy  -- See Note [Naughty record selectors]
-           | otherwise  = mkForAllTys (sortQuantVars (varSetElems data_tvs ++ field_tvs)) $
+           | otherwise  = mkForAllTys (varSetElemsKvsFirst $
+                                       data_tvs `extendVarSetList` field_tvs) $
     	     	          mkPhiTy (dataConStupidTheta con1) $	-- Urgh!
     	     	          mkPhiTy field_theta               $	-- Urgh!
              	          mkFunTy data_ty field_tau

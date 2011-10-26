@@ -38,7 +38,7 @@ module TcEnv(
 	tcGetDefaultTys,
 
 	-- Global type variables
-	tcGetGlobalTyVars,
+	tcGetGlobalTyVars, zapLclTypeEnv,
 
 	-- Template Haskell stuff
 	checkWellStaged, tcMetaTy, thLevel, 
@@ -424,6 +424,14 @@ tcExtendGlobalTyVars :: IORef VarSet -> VarSet -> TcM (IORef VarSet)
 tcExtendGlobalTyVars gtv_var extra_global_tvs
   = do { global_tvs <- readMutVar gtv_var
        ; newMutVar (global_tvs `unionVarSet` extra_global_tvs) }
+
+zapLclTypeEnv :: TcM a -> TcM a
+zapLclTypeEnv thing_inside
+  = do { tvs_var <- newTcRef emptyVarSet 
+       ; let upd env = env { tcl_env = emptyNameEnv
+                           , tcl_rdr = emptyLocalRdrEnv
+                           , tcl_tyvars = tvs_var }
+       ; updLclEnv upd thing_inside }
 \end{code}
 
 
