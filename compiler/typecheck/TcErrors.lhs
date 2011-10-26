@@ -317,7 +317,7 @@ getWantedEqExtra (TypeEqOrigin (UnifyOrigin { uo_actual = act, uo_expected = exp
   -- don't add the extra expected/actual message
   | act `eqType` ty1 && exp `eqType` ty2 = empty
   | exp `eqType` ty1 && act `eqType` ty2 = empty
-  | otherwise                                = mkExpectedActualMsg act exp
+  | otherwise                            = mkExpectedActualMsg act exp
 
 getWantedEqExtra orig _ _ = pprArising orig
 
