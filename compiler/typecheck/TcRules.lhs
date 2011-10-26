@@ -13,13 +13,11 @@ import TcRnMonad
 import TcSimplify
 import TcMType
 import TcType
-import Type( sortQuantVars )
 import TcHsType
 import TcExpr
 import TcEnv
 import Id
 import Name
-import VarSet
 import SrcLoc
 import Outputable
 import FastString
