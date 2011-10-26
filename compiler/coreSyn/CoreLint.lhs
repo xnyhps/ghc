@@ -654,15 +654,10 @@ lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
 
 lintKind kind@(TyConApp tc kis)
-  | isPromotedTypeTyCon tc
   = do { unless (tyConArity tc == length kis) (addErrL malformed_kind)
        ; mapM_ lintKind kis }
-
-  | otherwise  -- handles *, #, Constraint, etc.
-  = unless (isSuperKind tc_kind && null kis) (addErrL malformed_kind)
   where
     malformed_kind = hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind))
-    tc_kind = tyConKind tc
 
 lintKind (TyVarTy kv) = checkTyCoVarInScope kv
 lintKind kind
