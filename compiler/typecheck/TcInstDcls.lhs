@@ -523,6 +523,7 @@ tcFamInstDecl :: TopLevelFlag -> TyClDecl Name -> TcM TyCon
 tcFamInstDecl top_lvl decl
   = do { -- type family instances require -XTypeFamilies
          -- and can't (currently) be in an hs-boot file
+       ; traceTc "tcFamInstDecl" (ppr decl)
        ; let fam_tc_lname = tcdLName decl
        ; type_families <- xoptM Opt_TypeFamilies
        ; is_boot <- tcIsHsBoot   -- Are we compiling an hs-boot file?
@@ -571,11 +572,11 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
        ; checkTc (isAlgTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
          -- Kind check type patterns
-       ; tcFamTyPats fam_tc tvs pats (kcDataDecl decl) $ 
-           \tvs' pats' resultKind -> do {
+       ; tcFamTyPats fam_tc tvs pats (\_always_star -> kcDataDecl decl) $ 
+           \tvs' pats' resultKind -> do
 
          -- Result kind must be '*' (otherwise, we have too few patterns)
-         checkTc (isLiftedTypeKind resultKind) $ tooFewParmsErr (tyConArity fam_tc)
+       { checkTc (isLiftedTypeKind resultKind) $ tooFewParmsErr (tyConArity fam_tc)
 
        ; stupid_theta <- tcHsKindedContext =<< kcHsContext ctxt
        ; dataDeclChecks (tcdName decl) new_or_data stupid_theta cons

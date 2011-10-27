@@ -658,13 +658,12 @@ tcSynFamInstDecl fam_tc (decl@TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
                                         , tcdSynRhs = rhs })
   = do { checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
-        -- Side effect only, drop the result
-       ; let kindChecker rhs = kcLHsType rhs >> return ()
+       ; let kc_rhs rhs kind = kcCheckLHsType rhs (EK kind EkUnk) 
 
-       ; tcFamTyPats fam_tc tvs pats (kindChecker rhs) 
-                $ \tvs' pats' resultKind -> do
+       ; tcFamTyPats fam_tc tvs pats (kc_rhs rhs)
+                $ \tvs' pats' res_kind -> do
 
-       { rhs'  <- kcCheckLHsType rhs (EK resultKind EkUnk)
+       { rhs'  <- kc_rhs rhs res_kind
        ; rhs'' <- tcHsKindedType rhs' -- JPM rename tcHsKindedType to tcRhsType
 
        ; return (tvs', pats', rhs'') } }
@@ -681,7 +680,8 @@ tcSynFamInstDecl _ decl = pprPanic "tcSynFamInstDecl" (ppr decl)
 -----------------
 tcFamTyPats :: TyCon
             -> [LHsTyVarBndr Name] -> [LHsType Name]
-            -> TcM ()      -- Kind checker
+            -> (TcKind -> TcM any)      -- Kind checker for RHS
+                                        -- result is ignored
             -> ([KindVar] -> [TcKind] -> Kind -> TcM a)
             -> TcM a
 -- Check the type patterns of a type or data family instance
@@ -698,35 +698,27 @@ tcFamTyPats :: TyCon
 tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
   = kcHsTyVars tyvars $ \tvs ->
     do { let (fam_kvs, body) = splitForAllTys (tyConKind fam_tc)
-         -- Instantiate with meta kind vars
-       ; fam_arg_kinds <- mapM (const newMetaKindVar) fam_kvs
-       ; let body' = substKiWith fam_kvs fam_arg_kinds body
-
-       ; let { (kinds, resKind) = splitKindFunTys body'
-             ; hs_typats        = pats }
-
-         -- We may not have more parameters than the kind indicates
-       ; checkTc (length kinds >= length hs_typats) $
-                 tooManyParmsErr (tyConName fam_tc)
-
-         -- Type functions can have a higher-kinded result
-       ; let resultKind = mkArrowKinds (drop (length hs_typats) kinds) resKind
-       ; typats <- zipWithM kcCheckLHsType hs_typats
-                            [ EK kind (EkArg (ppr fam_tc) n)
-                            | (kind,n) <- kinds `zip` [1..]]
 
          -- A family instance must have exactly the same number of type
          -- parameters as the family declaration.  You can't write
          --     type family F a :: * -> *
          --     type instance F Int y = y
          -- because then the type (F Int) would be like (\y.y)
-       ; let famArity = tyConArity fam_tc - length fam_kvs
-       ; checkTc (length typats == famArity) $
-                 wrongNumberOfParmsErr famArity
+       ; let fam_arity = tyConArity fam_tc - length fam_kvs
+       ; checkTc (length pats == fam_arity) $
+                 wrongNumberOfParmsErr fam_arity
+
+         -- Instantiate with meta kind vars
+       ; fam_arg_kinds <- mapM (const newMetaKindVar) fam_kvs
+       ; let body' = substKiWith fam_kvs fam_arg_kinds body
+             (kinds, resKind) = splitKindFunTysN fam_arity body'
+       ; typats <- zipWithM kcCheckLHsType pats
+                            [ EK kind (EkArg (ppr fam_tc) n)
+                            | (kind,n) <- kinds `zip` [1..]]
 
         -- Kind check the "thing inside"; this just works by 
 	-- side-effecting any kind unification variables
-       ; kind_checker
+       ; _ <- kind_checker resKind
 
          -- Type check indexed data type declaration
          -- We kind generalize the kind patterns since they contain
@@ -742,7 +734,7 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
          -- foralls earlier)
        ; mapM_ checkTyFamFreeness k_typats
 
-       ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resultKind }
+       ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resKind }
        }
 \end{code}
 

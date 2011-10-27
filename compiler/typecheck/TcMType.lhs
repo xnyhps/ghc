@@ -49,12 +49,12 @@ module TcMType (
 
   --------------------------------
   -- Zonking
-  zonkType, zonkKind, mkZonkTcTyVar, zonkTcPredType, 
+  zonkType, zonkKind, zonkTcPredType, 
   zonkTcTypeCarefully, skolemiseUnboundMetaTyVar,
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
-  zonkTcKindToKind, zonkTcKind, 
+  zonkTcKind, 
   zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
@@ -799,20 +799,6 @@ zonkType zonk_tc_tyvar ty
                              ty' <- go ty
                              tyvar' <- updateTyVarKindM zonkTcKind tyvar
                              return (ForAllTy tyvar' ty')
-
-mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
-	      -> (TcTyVar -> Type)	-- What to do for an immutable var
- 	      -> TcTyVar -> TcM TcType
-mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn tyvar 
-  = ASSERT( isTcTyVar tyvar )
-    case tcTyVarDetails tyvar of
-      SkolemTv {}    -> return (unbound_ivar_fn tyvar)
-      RuntimeUnk {}  -> return (unbound_ivar_fn tyvar)
-      FlatSkol ty    -> zonkType (mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn) ty
-      MetaTv _ ref   -> do { cts <- readMutVar ref
-			   ; case cts of    
-			       Flexi       -> unbound_mvar_fn tyvar  
-			       Indirect ty -> zonkType (mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn) ty }
 \end{code}
 
 
@@ -846,14 +832,6 @@ isSubKindTcM k1 k2
 -------------
 zonkTcKind :: TcKind -> TcM TcKind
 zonkTcKind k = zonkTcType k
-
--------------
-zonkTcKindToKind :: Kind -> TcKind -> TcM Kind
--- When zonking a TcKind to a kind, we need to instantiate kind variables,
--- Haskell specifies that * is to be used, so we follow that.
--- JPM: update documentation
-zonkTcKindToKind default_kind k 
-  = zonkType (mkZonkTcTyVar (\ _ -> return default_kind) mkTyVarTy) k
 \end{code}
 			
 %************************************************************************

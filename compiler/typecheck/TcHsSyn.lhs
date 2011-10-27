@@ -183,11 +183,15 @@ It's all pretty boring stuff, because HsSyn is such a large type, and
 the environment manipulation is tiresome.
 
 \begin{code}
+type UnboundTyVarZonker = TcTyVar-> TcM Type 
+	-- How to zonk an unbound type variable
+        -- Note [Zonking the LHS of a RULE]
+
 data ZonkEnv 
   = ZonkEnv 
-      (VarEnv Var -> TcType -> TcM Type) 	-- How to zonk a type
-    			        -- Note [Zonking the LHS of a RULE]
-      (VarEnv Var)		-- What variables are in scope
+      UnboundTyVarZonker
+      (TyVarEnv TyVar)          -- 
+      (IdEnv Var)		-- What variables are in scope
 	-- Maps an Id or EvVar to its zonked version; both have the same Name
 	-- Note that all evidence (coercion variables as well as dictionaries)
 	-- 	are kept in the ZonkEnv
@@ -205,7 +209,7 @@ extendZonkEnv1 :: ZonkEnv -> Var -> ZonkEnv
 extendZonkEnv1 (ZonkEnv zonk_ty env) id 
   = ZonkEnv zonk_ty (extendVarEnv env id id)
 
-setZonkType :: ZonkEnv -> (VarEnv Var -> TcType -> TcM Type) -> ZonkEnv
+setZonkType :: ZonkEnv -> UnboundTyVarZonker -> ZonkEnv
 setZonkType (ZonkEnv _ env) zonk_ty = ZonkEnv zonk_ty env
 
 zonkEnvIds :: ZonkEnv -> [Id]
@@ -274,9 +278,8 @@ zonkTyBndrX env tv
 
 zonkTyBndr :: ZonkEnv -> TyVar -> TcM TyVar
 zonkTyBndr env tv
-  = do { tv' <- zonkTcTypeToType env (varType tv)
-       ; return (setVarType tv tv') }
-
+  = do { tv' <- zonkTcKindToKind env (tyVarKind tv)
+       ; return (setVarKind tv tv') }
 \end{code}
 
 
@@ -434,7 +437,8 @@ zonk_bind env sig_warn (AbsBinds { abs_tvs = tyvars, abs_ev_vars = evs
 			         , abs_exports = exports
                                  , abs_binds = val_binds })
   = ASSERT( all isImmutableTyVar tyvars )
-    do { (env1, new_evs) <- zonkEvBndrsX env evs
+    do { (env0, new_tyvars) <- zonkTyBndrsX env tyvars
+       ; (env1, new_evs) <- zonkEvBndrsX env0 evs
        ; (env2, new_ev_binds) <- zonkTcEvBinds env1 ev_binds
        ; (new_val_bind, new_exports) <- fixM $ \ ~(new_val_binds, _) ->
          do { let env3 = extendZonkEnv env2 (collectHsBindsBinders new_val_binds)
@@ -442,8 +446,8 @@ zonk_bind env sig_warn (AbsBinds { abs_tvs = tyvars, abs_ev_vars = evs
     	    ; new_exports   <- mapM (zonkExport env3) exports
     	    ; return (new_val_binds, new_exports) } 
        ; sig_warn True (map abe_poly new_exports)
-       ; tyvars' <- mapM (updateTyVarKindM zonkTcKind) tyvars
-       ; return (AbsBinds { abs_tvs = tyvars', abs_ev_vars = new_evs, abs_ev_binds = new_ev_binds
+       ; return (AbsBinds { abs_tvs = new_tyvars, abs_ev_vars = new_evs
+                          , abs_ev_binds = new_ev_binds
 			  , abs_exports = new_exports, abs_binds = new_val_bind }) }
   where
     zonkExport env (ABE{ abe_wrap = wrap, abe_poly = poly_id
@@ -995,7 +999,7 @@ zonkRules env rs = mappM (wrapLocM (zonkRule env)) rs
 zonkRule :: ZonkEnv -> RuleDecl TcId -> TcM (RuleDecl Id)
 zonkRule env (HsRule name act (vars{-::[RuleBndr TcId]-}) lhs fv_lhs rhs fv_rhs)
   = do { unbound_tkv_set <- newMutVar emptyVarSet
-       ; let env_rule = setZonkType env (\_ -> zonkTypeCollecting unbound_tkv_set)
+       ; let env_rule = setZonkType env (zonkTvCollecting unbound_tkv_set)
               -- See Note [Zonking the LHS of a RULE]
 
        ; (env_inside, new_bndrs) <- mapAccumLM zonk_bndr env_rule vars
@@ -1148,26 +1152,51 @@ we have a type or a kind variable; for kind variables we just return AnyK (and
 not the ill-kinded Any BOX).
 
 \begin{code}
+mkZonkTcTyVar :: (TcTyVar -> TcM Type)	-- What to do for an *mutable Flexi* var
+	      -> (TcTyVar -> Type)	-- What to do for an immutable var
+ 	      -> TcTyVar -> TcM TcType
+mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn
+  = zonk_tv
+  where
+    zonk_tv tv 
+     = ASSERT( isTcTyVar tyvar )
+       case tcTyVarDetails tyvar of
+         SkolemTv {}    -> return (unbound_ivar_fn tyvar)
+         RuntimeUnk {}  -> return (unbound_ivar_fn tyvar)
+         FlatSkol ty    -> zonkType zonk_tv ty
+         MetaTv _ ref   -> do { cts <- readMutVar ref
+           		      ; case cts of    
+           		           Flexi -> do { kind <- zonkType zonk_tv (tyVarKind tv)
+                                               ; unbound_mvar_fn (setTyVarKind tyvar kind) }
+           		           Indirect ty -> zonkType zonk_tv ty }
+
+zonkTcKindToKind :: Kind -> TcKind -> TcM Kind
+-- When zonking a TcKind to a kind, we need to instantiate kind variables,
+-- Haskell specifies that * is to be used, so we follow that.
+-- JPM: update documentation
+zonkTcKindToKind default_kind k 
+  = zonkType (mkZonkTcTyVar (\ _ -> return default_kind) mkTyVarTy) k
+
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
-zonkTcTypeToType (ZonkEnv zonk_ty env) ty = zonk_ty env ty
+zonkTcTypeToType (ZonkEnv zonk_unbound_tyvar tv_env id_env)
+  = zonkType (mkZonkTcTyVar zonk_unbound_tyvar zonk_bound_tyvar)
+  where
+    zonk_bound_tyvar tv = case lookupVarEnv tv_env tv of
+                            Nothing  -> pprTrace "zonk_bound_tyvar Nothing" empty $ TyVarTy tv
+                            Just tv' -> pprTrace "zonk_bound_tyvar Just" empty $ TyVarTy tv'
 
 zonkTcTypeToTypes :: ZonkEnv -> [TcType] -> TcM [Type]
 zonkTcTypeToTypes env tys = mapM (zonkTcTypeToType env) tys
 
-zonkTypeCollecting :: TcRef TyVarSet -> TcType -> TcM Type
+zonkTvCollecting :: TcRef TyVarSet -> UnboundTyVarZonker
 -- This variant collects unbound type variables in a mutable variable
 -- Works on both types and kinds
-zonkTypeCollecting unbound_tv_set
-  = zonk_it
-  where
-    zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM mkTyVarTy
-    zonk_unbound_tyvar tv 
-        = do { kind <- zonk_it (tyVarKind tv)
-             ; tv' <- zonkQuantifiedTyVar (setTyVarKind tv kind)
-             ; tv_set <- {- pprTrace "zonkTypeCollecting" (ppr (tv,tv'))
-                       $ -} readMutVar unbound_tv_set
-             ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
-             ; return (mkTyVarTy tv') }
+zonkTypeCollecting unbound_tv_set tv
+  = do { tv' <- zonkQuantifiedTyVar tv
+       ; tv_set <- {- pprTrace "zonkTypeCollecting" (ppr (tv,tv'))
+                 $ -} readMutVar unbound_tv_set
+       ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
+       ; return (mkTyVarTy tv') }
 
 zonkTypeZapping :: VarEnv Var -> TcType -> TcM Type
 -- This variant is used for everything except the LHS of rules
@@ -1176,22 +1205,17 @@ zonkTypeZapping :: VarEnv Var -> TcType -> TcM Type
 zonkTypeZapping _env ty 
   = zonk_it ty
   where
-    zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar mkTyVarTy) -- JPM zonk_bound_tyvar
+    zonk_it = zonkType (mkZonkTcTyVar zonk_unbound_tyvar zonk_bound_tyvar) -- JPM zonk_bound_tyvar
 
     -- See Note [Zonking mutable unbound type or kind variables]
-    zonk_unbound_tyvar tv = do { kind <- zonk_it (tyVarKind tv)
-                               ; let ty = if isSuperKind kind
+    zonk_unbound_tyvar tv = do { let kind = tyVarKind tv   -- JPM: new fn isKindVar
+                                     ty = if isSuperKind kind
                                           -- ty is actually a kind, zonk to AnyK
                                           then anyKind
                                           else anyTypeOfKind kind
                                ; {- pprTrace "zonkTypeZapping" (ppr (tv, tyVarKind tv, kind, ty)) $ -} writeMetaTyVar tv ty
                                ; return ty }
-{-
-    zonk_bound_tyvar tv = pprTrace "zonk_bound_tyvar enter" (ppr tv) $ 
-                          case lookupVarEnv env tv of
-                            Nothing  -> pprTrace "zonk_bound_tyvar Nothing" empty $ TyVarTy tv
-                            Just tv' -> pprTrace "zonk_bound_tyvar Just" empty $ TyVarTy tv'
--}
+
 
 zonkTcLCoToLCo :: ZonkEnv -> LCoercion -> TcM LCoercion
 zonkTcLCoToLCo env co
