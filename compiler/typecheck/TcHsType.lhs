@@ -40,6 +40,7 @@ import RnHsSyn
 import TcRnMonad
 import TcEnv
 import TcMType
+import TcHsSyn ( zonkTcKindToKind )
 import TcUnify
 import TcIface
 import TcType
