@@ -38,6 +38,7 @@ import Var
 import TcRnMonad
 import TcType
 import TcMType
+import TcHsSyn ( mkZonkTcTyVar )
 import TcUnify
 import TcEnv
 

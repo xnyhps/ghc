@@ -19,7 +19,7 @@ module TcHsSyn (
 	-- re-exported from TcMonad
 	TcId, TcIdSet, 
 
-	zonkTopDecls, zonkTopExpr, zonkTopLExpr,
+	zonkTopDecls, zonkTopExpr, zonkTopLExpr, mkZonkTcTyVar,
 	zonkId, zonkTopBndrs, zonkTcKindToKind
   ) where
 
