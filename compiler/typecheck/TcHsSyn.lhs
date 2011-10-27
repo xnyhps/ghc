@@ -39,6 +39,7 @@ import Coercion
 import TysPrim
 import TysWiredIn
 import Type
+import Kind
 import DataCon
 import Name
 import NameSet
@@ -1212,7 +1213,7 @@ zonkTypeZapping tv
   = do { let ty = if isKiVar tv
                   -- ty is actually a kind, zonk to AnyK
                   then anyKind
-                  else anyTypeOfKind kind
+                  else anyTypeOfKind (tyVarKind tv)
        ; writeMetaTyVar tv ty
        ; return ty }
 
