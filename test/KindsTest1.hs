@@ -8,7 +8,6 @@
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE UndecidableInstances       #-}
-{-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE MagicHash                  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -21,8 +20,6 @@ module KindsTest1 where
 --------------------------------------------------------------------------------
 -- Type-level peano naturals
 --------------------------------------------------------------------------------
-
-undefined = undefined
 
 data Nat = Ze | Su Nat
 
@@ -77,20 +74,20 @@ newtype Bin a = BinPtr Nat -- deriving (Eq, Ord, Show, Bounded)
 castBin :: Bin a -> Bin b
 castBin (BinPtr i) = BinPtr i
 
-return :: a -> Proxy a
-return = return
+returnP :: a -> Proxy a
+returnP = undefined
 
-fmap :: (a -> b) -> Proxy a -> Proxy b
-fmap = fmap
+fmapP :: (a -> b) -> Proxy a -> Proxy b
+fmapP = undefined
 
 putNat :: Nat -> Proxy (Bin Nat)
-putNat n = return (BinPtr n)
+putNat n = returnP (BinPtr n)
 
 data Whatever
 data HasNat = HasNat Nat Whatever
 
 put :: HasNat -> Proxy (Bin HasNat)
-put (HasNat n _) = fmap castBin (putNat n)
+put (HasNat n _) = fmapP castBin (putNat n)
 
 --------------------------------------------------------------------------------
 -- DPH Vector
@@ -146,9 +143,6 @@ data Ex where
 readEx :: Ex -> Nat
 readEx (Ex a f) = f a
 
-const :: a -> b -> a
-const a b = a
-
 writeEx :: Ex
 writeEx = Ex Ze (const (Su Ze))
 
@@ -162,6 +156,15 @@ runA1 :: (forall s. A s) -> Nat -- Uncomment for error
 runA1 a = unA a
 
 --------------------------------------------------------------------------------
+-- ContT
+--------------------------------------------------------------------------------
+
+newtype ContT r m a = ContT { runContT :: (a -> m r) -> m r }
+
+mapContT :: (m r -> m r) -> ContT r m a -> ContT r m a
+mapContT f m = ContT $ f . runContT m
+
+--------------------------------------------------------------------------------
 -- doaitse
 --------------------------------------------------------------------------------
 {-
@@ -173,7 +176,6 @@ data Ref env a where
 f1 :: forall env. (Exists (Ref env)) -> Nat
 f1 (Exists (ref1 :: Ref env b)) = Ze
 -}
-
 --------------------------------------------------------------------------------
 -- gadt9
 --------------------------------------------------------------------------------
@@ -197,7 +199,6 @@ data B a where
   B1 :: X []
   B2 :: B [Nat]
 -}
-
 --------------------------------------------------------------------------------
 -- scoped
 --------------------------------------------------------------------------------
@@ -211,7 +212,6 @@ data D x y where -- k -> * -> *
 g3 :: forall x y . D x y -> ()
 g3 (D (C (p :: y))) = ()
 -}
-
 --------------------------------------------------------------------------------
 -- GEq1
 --------------------------------------------------------------------------------
@@ -227,14 +227,12 @@ class GEq a where
   geq :: (Generic a, GEq' (Rep a)) => a -> a -> Nat
   geq x y = geq' (from x) (from y)
 -}
-
 --------------------------------------------------------------------------------
 -- GADT1
 --------------------------------------------------------------------------------
 
--- We assume the return kind of Id is * (see TcTyClsDecls.mk_res_kind)
 type family Id n
---type instance Id n = n
+type instance Id n = n
 
 --------------------------------------------------------------------------------
 -- SimpleFail4
@@ -265,7 +263,6 @@ instance C Nat
 newtype Foo = Foo Nat
     deriving C
 -}
-
 --------------------------------------------------------------------------------
 -- T303
 --------------------------------------------------------------------------------
@@ -282,12 +279,12 @@ instance IxMonad T where
 --------------------------------------------------------------------------------
 -- rule2
 --------------------------------------------------------------------------------
-{-
+
 foo :: (forall m. m a -> m b) -> m a -> m b
 foo f = f
 
 blip = foo (\x -> x)
--}
+
 --------------------------------------------------------------------------------
 -- T2478
 --------------------------------------------------------------------------------
