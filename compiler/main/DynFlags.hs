@@ -384,6 +384,7 @@ data ExtensionFlag
    | Opt_DoAndIfThenElse
    | Opt_RebindableSyntax
    | Opt_ConstraintKinds
+   | Opt_PolyKinds                -- Kind polymorphism
    
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
@@ -1866,6 +1867,7 @@ xFlags = [
   ( "DoAndIfThenElse",                  AlwaysAllowed, Opt_DoAndIfThenElse, nop ),
   ( "RebindableSyntax",                 AlwaysAllowed, Opt_RebindableSyntax, nop ),
   ( "ConstraintKinds",                  AlwaysAllowed, Opt_ConstraintKinds, nop ),
+  ( "PolyKinds",                        AlwaysAllowed, Opt_PolyKinds, nop ),
   ( "MonoPatBinds",                     AlwaysAllowed, Opt_MonoPatBinds, 
     \ turn_on -> when turn_on $ deprecate "Experimental feature now removed; has no effect" ),
   ( "ExplicitForAll",                   AlwaysAllowed, Opt_ExplicitForAll, nop ),
