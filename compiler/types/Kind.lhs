@@ -234,8 +234,8 @@ isSubKindConTc kc1 kc2
   | otherwise                                          = isSubKindCon kc1 kc2
 
 defaultKind :: Kind -> Kind
--- ^ Used when generalising: default kind ? and ?? to *. See "Type#kind_subtyping" for more
--- information on what that means
+-- ^ Used when generalising: default kind ? and ?? to *.
+-- See "Type#kind_subtyping" for more information on what that means
 
 -- When we generalise, we make generic type variables whose kind is
 -- simple (* or *->* etc).  So generic type variables (other than
@@ -247,7 +247,8 @@ defaultKind :: Kind -> Kind
 -- Not 
 --	f :: forall (a::??). a -> Bool
 -- because that would allow a call like (f 3#) as well as (f True),
---and the calling conventions differ.  This defaulting is done in TcMType.zonkTcTyVarBndr.
+-- and the calling conventions differ.
+-- This defaulting is done in TcMType.zonkTcTyVarBndr.
 defaultKind k
   | isSubOpenTypeKind k = liftedTypeKind
   | otherwise           = k
