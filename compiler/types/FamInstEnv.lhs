@@ -386,12 +386,7 @@ lookupFamInstEnvConflicts envs fam_inst skol_tvs
 	      Just subst | conflicting old_fam_inst subst -> Just subst
 	      _other	   	              	          -> Nothing
 
-      -- - In the case of data family instances, any overlap is fundamentally a
-      --   conflict (as these instances imply injective type mappings).
-      -- - In the case of type family instances, overlap is admitted as long as
-      --   the right-hand sides of the overlapping rules coincide under the
-      --   overlap substitution.  We require that they are syntactically equal;
-      --   anything else would be difficult to test for at this stage.
+      -- Note [Family instance overlap conflicts]
     conflicting old_fam_inst subst 
       | isAlgTyCon fam = True
       | otherwise      = not (old_rhs `eqType` new_rhs)
@@ -401,6 +396,21 @@ lookupFamInstEnvConflicts envs fam_inst skol_tvs
         old_rhs   = mkTyConApp old_tycon  (substTyVars subst old_tvs)
         new_rhs   = mkTyConApp inst_tycon (substTyVars subst skol_tvs)
 \end{code}
+
+Note [Family instance overlap conflicts]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- In the case of data family instances, any overlap is fundamentally a
+  conflict (as these instances imply injective type mappings).
+
+- In the case of type family instances, overlap is admitted as long as
+  the right-hand sides of the overlapping rules coincide under the
+  overlap substitution.  eg
+       type instance F a Int = a
+       type instance F Int b = b
+  These two overlap on (F Int Int) but then both RHSs are Int, 
+  so all is well. We require that they are syntactically equal;
+  anything else would be difficult to test for at this stage.
+
 
 While @lookupFamInstEnv@ uses a one-way match, the next function
 @lookupFamInstEnvConflicts@ uses two-way matching (ie, unification).  This is

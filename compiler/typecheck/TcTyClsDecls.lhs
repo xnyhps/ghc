@@ -855,7 +855,7 @@ tcConDecl new_or_data existential_ok rep_tycon res_tmpl 	-- Data types
         <- kcConDecl new_or_data con
     ; addErrCtxt (dataConCtxt name) $
     tcTyVarBndrsKindGen tvs $ \ tvs' -> do
-    { ctxt' <- tcHsKindedContext =<< kcHsContext ctxt
+    { ctxt' <- tcHsKindedContext ctxt
     ; checkTc (existential_ok || conRepresentibleWithH98Syntax con)
 	      (badExistential name)
     ; traceTc "tcConDecl 1" (ppr con)

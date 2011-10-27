@@ -570,12 +570,13 @@ zonkTcPredType = zonkTcType
 \begin{code}
 zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
 zonkQuantifiedTyVars tyvars
-  = do { z_kvs <- mapM zonkQuantifiedTyVar kvs
+  = do { let (kvs, tvs) = splitKiTyVars tyvars
+       ; z_kvs <- mapM zonkQuantifiedTyVar kvs
        ; z_tvs <- mapM zonkQuantifiedTyVar tvs
-       ; let subst = zipOpenTvSubst kvs (map mkTyVarTy z_kvs)
-             zs_tvs = map (updateTyVarKind (substTy subst)) z_tvs
-       ; return $ z_kvs ++ zs_tvs }
-  where (kvs, tvs) = splitKiTyVars tyvars
+           -- By doing the kind variables first, we ensure that
+           -- any kind variables mentioned in the kinds of the
+           -- type variables refer to the now-quantified versions
+       ; return $ z_kvs ++ z_tvs }
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- The quantified type variables often include meta type variables
@@ -619,9 +620,12 @@ skolemiseUnboundMetaTyVar tv details
     do  { span <- getSrcSpanM    -- Get the location from "here"
                                  -- ie where we are generalising
         ; uniq <- newUnique      -- Remove it from TcMetaTyVar unique land
-        ; let final_kind = defaultKind (tyVarKind tv)
+        ; kind <- zonkTcKind (tyVarKind tv)
+        ; let final_kind = defaultKind kind
               final_name = mkInternalName uniq (getOccName tv) span
               final_tv   = mkTcTyVar final_name final_kind details
+
+              -- JPM: combine writeMetaKindVar, writeMetaTyVar
         ; (if isSuperKind final_kind
            then writeMetaKindVar
            else writeMetaTyVar) tv (mkTyVarTy final_tv)

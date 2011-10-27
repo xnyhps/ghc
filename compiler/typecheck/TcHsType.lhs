@@ -256,6 +256,7 @@ tcHsKindedType hs_ty = dsHsType hs_ty
 
 tcHsBangType :: LHsType Name -> TcM Type
 -- Permit a bang, but discard it
+-- Input type has already been kind-checked
 tcHsBangType (L _ (HsBangTy _ ty)) = tcHsKindedType ty
 tcHsBangType ty                    = tcHsKindedType ty
 
@@ -328,7 +329,8 @@ kc_check_hs_type ty@(HsAppTy ty1 ty2) exp_kind
 
 -- This is the general case: infer the kind and compare
 kc_check_hs_type ty exp_kind
-  = do	{ (ty', act_kind) <- kc_hs_type ty
+  = do	{ traceTc "kc_check_hs_type" (ppr ty)
+        ; (ty', act_kind) <- kc_hs_type ty
 		-- Add the context round the inner check only
 		-- because checkExpectedKind already mentions
 		-- 'ty' by name in any error message
@@ -356,7 +358,8 @@ kcLHsType ty = addKcTypeCtxt ty (kc_lhs_type ty)
 kc_lhs_type :: LHsType Name -> TcM (LHsType Name, TcKind)
 kc_lhs_type (L span ty)
   = setSrcSpan span $
-    do { (ty', kind) <- kc_hs_type ty
+    do { traceTc "kc_lhs_type" (ppr ty)
+       ; (ty', kind) <- kc_hs_type ty
        ; return (L span ty', kind) }
 
 -- kc_hs_type *returns* the kind of the type, rather than taking an expected
