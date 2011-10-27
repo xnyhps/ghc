@@ -40,7 +40,6 @@ import RnHsSyn
 import TcRnMonad
 import TcEnv
 import TcMType
-import TcHsSyn ( zonkTcKindToKind )
 import TcUnify
 import TcIface
 import TcType
@@ -640,7 +639,7 @@ ds_type (HsTupleTy hs_con tys) = do
     con <- case hs_con of
         HsUnboxedTuple -> return UnboxedTuple
         HsBoxyTuple kind -> do
-          kind' <- zonkTcKindToKind liftedTypeKind kind -- JPM: add note
+          kind' <- zonkTcKind kind -- JPM: add note
           case () of
             _ | kind' `eqKind` constraintKind -> return ConstraintTuple
             _ | kind' `eqKind` liftedTypeKind -> return BoxedTuple

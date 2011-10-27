@@ -22,6 +22,7 @@ module KindsTest1 where
 --------------------------------------------------------------------------------
 
 data Nat = Ze | Su Nat
+{-
 
 data List a = Nil | Cons a (List a)
 
@@ -154,6 +155,7 @@ data A s = A { unA :: Nat }
 
 runA1 :: (forall s. A s) -> Nat -- Uncomment for error
 runA1 a = unA a
+-}
 
 --------------------------------------------------------------------------------
 -- ContT
@@ -167,6 +169,7 @@ mapContT f m = ContT $ f . runContT m
 --------------------------------------------------------------------------------
 -- doaitse
 --------------------------------------------------------------------------------
+
 {-
 data Exists f = forall a . Exists (f a)
 
@@ -176,19 +179,27 @@ data Ref env a where
 f1 :: forall env. (Exists (Ref env)) -> Nat
 f1 (Exists (ref1 :: Ref env b)) = Ze
 -}
+
 --------------------------------------------------------------------------------
 -- gadt9
 --------------------------------------------------------------------------------
-{-
+
 data X a b where
     X :: X a a
 
-data Y x a b where
-    Y :: x a b -> x b c -> Y x a c
+-- X :: forall k. forall (a:k) (b:k). (a ~ b) => X a b
 
-doy :: Y X a b -> Y X a b
+data Y x a c where
+    Y :: x a b -> x b c -> Y x a c
+--  Y ::  forall j. forall (p:j->j->*) (q:j) (r:j) 
+--                  forall j2. forall (s:j) (s2:j2).
+--                  x a b -> x b c -> Y x a c
+
+doy :: Y X a c -> Y X a c
 doy (Y X X) = Y X X
--}
+
+-- doy k (a:k) (c:k) (Y b (X (g1:a~b)) (X (g2:b~c))) = 
+
 --------------------------------------------------------------------------------
 -- gadt11
 --------------------------------------------------------------------------------

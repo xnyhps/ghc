@@ -254,6 +254,8 @@ defaultKind k
   | otherwise           = k
 
 splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
+-- Precondition: kind variables should precede type variables
+-- Postcondition: appending the two result lists gives the input!
 splitKiTyVars = span (isSuperKind . tyVarKind)
 
 partitionKiTyVars :: [TyVar] -> ([KindVar], [TyVar])

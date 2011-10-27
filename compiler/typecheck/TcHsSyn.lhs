@@ -20,7 +20,7 @@ module TcHsSyn (
 	TcId, TcIdSet, 
 
 	zonkTopDecls, zonkTopExpr, zonkTopLExpr, mkZonkTcTyVar,
-	zonkId, zonkTopBndrs, zonkTcKindToKind
+	zonkId, zonkTopBndrs
   ) where
 
 #include "HsVersions.h"
@@ -285,7 +285,7 @@ zonkTyBndrX env tv
 
 zonkTyBndr :: ZonkEnv -> TyVar -> TcM TyVar
 zonkTyBndr env tv
-  = do { ki <- zonkTcTypeToType env (tyVarKind tv) -- zonkTcKindToKind -- JPM
+  = do { ki <- zonkTcTypeToType env (tyVarKind tv)
        ; return (setVarType tv ki) }
 \end{code}
 
@@ -1139,7 +1139,6 @@ type variables!
 
 Note [Zonking mutable unbound type or kind variables]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 In zonkTypeZapping, we zonk mutable but unbound type or kind variables to an
 arbitrary type. We know if they are unbound even though we don't carry an
 environment, because at the binding site for a variable we bind the mutable
@@ -1177,13 +1176,6 @@ mkZonkTcTyVar unbound_mvar_fn unbound_ivar_fn
            		           Flexi -> do { kind <- zonkType zonk_tv (tyVarKind tv)
                                                ; unbound_mvar_fn (setTyVarKind tv kind) }
            		           Indirect ty -> zonkType zonk_tv ty }
-
-zonkTcKindToKind :: Kind -> TcKind -> TcM Kind
--- When zonking a TcKind to a kind, we need to instantiate kind variables,
--- Haskell specifies that * is to be used, so we follow that.
--- JPM: update documentation
-zonkTcKindToKind default_kind k 
-  = zonkType (mkZonkTcTyVar (\ _ -> return default_kind) mkTyVarTy) k
 
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToType (ZonkEnv zonk_unbound_tyvar tv_env _id_env)
