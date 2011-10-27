@@ -438,7 +438,52 @@ updInertSet is item
 updInertSetTcS :: AtomicInert -> TcS ()
 -- Add a new item in the inerts of the monad
 updInertSetTcS item
-  = modifyInertTcS (\is -> ((), updInertSet is item))
+  = do { traceTcS "updInertSetTcs {" $ text "Trying to insert new inert item:" <+> ppr item
+#ifdef DEBUG
+       -- check_good_update is somewhat expensive, should go in debug mode only
+       ; (subst,inscope) <- getInertEqs
+       ; check_good_update item subst inscope
+#endif
+       ; modifyInertTcS (\is -> ((), updInertSet is item)) 
+       ; traceTcS "updInertSetTcs }" $ empty }
+#ifdef DEBUG
+   where check_good_update ct@(CTyEqCan { cc_tyvar = tv
+                                        , cc_id = ev
+                                        , cc_flavor = fl }) subst inscope
+            | not (isDerived fl)
+              -- A non-derived eq must: (1) be non-rewritable by anything in the inerts
+              --                        (2) not be able to rewrite anything in the inerts
+            = do { let b1 = isReflCo $ 
+                            liftInertEqsPred subst inscope fl (evVarPred ev)
+                 ; when (not b1)
+                     (pprPanic "check_good_update" $ 
+                      text "Fail, item can still be rewritten by inerts:" 
+                               <+> vcat [ text "item      =" <+> ppr ct
+                                        , text "inert_eqs =" <+> ppr subst ]
+                     )
+                 ; let can_rewrite _u (ct,_co) = canRewrite fl (cc_flavor ct)
+                       rewritable_ieqs = filterVarEnv_Directly can_rewrite subst
+                       range_tys = map (\(ct,_co) -> evVarPred (cc_id ct)) (varEnvElts rewritable_ieqs)
+                       b2 = not (tv `elemVarSet`  tyVarsOfTypes range_tys)
+
+                 ; when (not b2)
+                     (pprPanic "check_good_update" $ 
+                      text "Fail, item can itself rewrite inerts: " 
+                               <+> vcat [ text "item      =" <+> ppr ct
+                                        , text "inert_eqs =" <+> ppr subst ]
+                     ) }
+         check_good_update ct subst inscope
+             = do { let b1 = isReflCo $ 
+                             liftInertEqsPred subst inscope (cc_flavor ct) 
+                                                            (evVarPred (cc_id ct))
+                  ; when (not b1)
+                     (pprPanic "check_good_update" $ 
+                      text "Fail, item can still be rewritten by inerts:" 
+                               <+> vcat [ text "item      =" <+> ppr ct
+                                        , text "inert_eqs =" <+> ppr subst ]
+                     )
+                  }
+#endif
 
 modifyInertTcS :: (InertSet -> (a,InertSet)) -> TcS a 
 -- Modify the inert set with the supplied function
@@ -1206,11 +1251,11 @@ rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -- Precondition: Ct are CTyEqCans only!
                     -> CtFlavor 
                     -> EvVar 
-                    -> TcS EvVar
+                    -> TcS (EvVar,Bool)
+-- Boolean flag returned: True <-> no rewriting happened
 rewriteFromInertEqs (subst,inscope) fl v 
-  = do { let co = pprTrace "rw0" (ppr v) $
-                  liftInertEqsPred subst inscope fl (evVarPred v) 
-       ; if isReflCo co then return v 
+  = do { let co = liftInertEqsPred subst inscope fl (evVarPred v)
+       ; if isReflCo co then return (v,True)
          else do { traceTcS "rewriteFromInertEqs" $
                    text "Original item =" <+> ppr v <+> dcolon <+> ppr (evVarPred v)
                  ; v' <- newEvVar (pSnd (liftedCoercionKind co))
@@ -1224,7 +1269,7 @@ rewriteFromInertEqs (subst,inscope) fl v
                      Derived {} -> return ()
                  ; traceTcS "rewriteFromInertEqs" $
                    text "Rewritten item =" <+> ppr v' <+> dcolon <+> ppr (evVarPred v')
-                 ; return v' }
+                 ; return (v',False) }
        }
 
 -- See Note [LiftInertEqs]
@@ -1233,16 +1278,14 @@ liftInertEqsPred :: TyVarEnv (Ct,Coercion)
                  -> CtFlavor
                  -> PredType -> Coercion
 liftInertEqsPred subst inscope fl pty
-  = pprTrace "Hello" (ppr pty) $ 
-    ty_cts_subst subst inscope fl pty
+  = ty_cts_subst subst inscope fl pty
 
 ty_cts_subst :: TyVarEnv (Ct,Coercion)
              -> InScopeSet -> CtFlavor -> Type -> Coercion
 ty_cts_subst subst inscope fl ty 
   = go ty 
   where 
-        go ty = pprTrace "goty" (ppr ty) $ 
-                go' ty
+        go ty = go' ty
 
         go' (TyVarTy tv)      = tyvar_cts_subst tv `orElse` Refl (TyVarTy tv)
         go' (AppTy ty1 ty2)   = mkAppCo (go ty1) (go ty2) 

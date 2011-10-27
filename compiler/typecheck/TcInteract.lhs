@@ -112,16 +112,11 @@ solveInteract
                         -> runSolverPipeline thePipeline ct >> solve_loop }
        ; solve_loop }
 
-type WorkItem = Ct 
+type WorkItem = Ct
 type SimplifierStage = WorkItem -> TcS StopOrContinue
 
 continueWith :: WorkItem -> TcS StopOrContinue
 continueWith work_item = return (ContinueWith work_item) 
-
-stopAndEmitWork :: WorkItem -> TcS StopOrContinue 
-stopAndEmitWork work_item 
-  = updWorkListTcS (extendWorkListCt work_item) >> return Stop
-
 
 data SelectWorkItem 
        = NoWorkRemaining      -- No more work left (effectively we're done!)
@@ -173,7 +168,8 @@ runSolverPipeline pipeline workItem
         run_pipeline _ Stop = return Stop 
         run_pipeline ((stg_name,stg):stgs) (ContinueWith ct)
           = do { traceTcS "runSolverPipeline" $ 
-                 text "Stage name = " <+> text stg_name <+> text "{"
+                 vcat [ text "Stage name = " <+> text stg_name
+                      , text "workitem   = " <+> ppr ct ] <+> text "{"
                ; res <- stg ct 
                ; traceTcS "runSolverPipeline" $  text "} End stage"
                ; run_pipeline stgs res 
@@ -450,73 +446,15 @@ solveWithIdentity d eqv wd tv xi
 \begin{code}
 
 interactWithInertEqsStage  :: WorkItem -> TcS StopOrContinue
-interactWithInertEqsStage  wi 
-  = do { traceTcS "interactWithInertEqsStage, applying equalities {" $ 
-         text "workitem = " <+> ppr wi
-       ; wi' <- apply_inert_subst wi 
-       ; traceTcS "}" $ 
-         text "rewritten workitem = " <+> ppr wi'
-       ; if isCNonCanonical wi' 
-         then do { traceTcS "checkpoint #10" empty 
-                 ; stopAndEmitWork wi' }
-         else do { traceTcS "checkpoint #11" empty 
-                 ; rewrite_inerts_or_continue wi' }
-       }
-  where apply_inert_subst wi 
-            -- Applies the inert substitutions to the work item 
-          = do { ieqs  <- getInertEqs
-               ; evvar <- rewriteFromInertEqs ieqs (cc_flavor wi) (cc_id wi)
-               ; return (figure_out_canonicity wi evvar) }
-
-        rewrite_inerts_or_continue ct
-            -- Tries to see if /this/ constraint can rewrite any of the inerts
-            | isCTyEqCan ct
-            = do { kickOutRewritableInerts ct
-                 ; if isGivenOrSolved (cc_flavor ct) then 
-                       -- When given, directly add him in inerts
-                       updInertSetTcS ct >> return Stop 
-                   else
-                       -- Otherwise pass him on to the next stage
-                       continueWith ct }
-            -- No more rewrites are possible at all, so move on to a next stage
-            | otherwise = continueWith ct
-
-        figure_out_canonicity wi_orig ev
-            -- Figure out if the new ev. variable is still canonical
-            = let pt_tree = predTypePredTree (evVarPred ev) in
-              case (wi_orig, pt_tree) of 
-                (CTyEqCan {cc_flavor = fl, cc_depth = d }, EqPred ty1 ty)
-                    | Just tv <- getTyVar_maybe ty1
-                    , not (tv `elemVarSet` tyVarsOfType ty)
-                    -> CTyEqCan { cc_id = ev, cc_flavor = fl
-                                , cc_tyvar = tv, cc_rhs = ty, cc_depth = d }
-                    | otherwise
-                    -> CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth = d }
-                (CFunEqCan {cc_flavor = fl, cc_depth = d}, EqPred ty1 xi)
-                    | Just (tc,xis) <- splitTyConApp_maybe ty1
-                    -> CFunEqCan { cc_id = ev, cc_flavor = fl
-                                 , cc_fun = tc, cc_tyargs = xis
-                                 , cc_rhs = xi, cc_depth = d }
-                (CIrredEvCan {cc_flavor = fl, cc_depth = d}, IrredPred ty) 
-                    -> CIrredEvCan { cc_id = ev, cc_flavor = fl
-                                   , cc_ty = ty, cc_depth = d }
-                (CIPCan {cc_flavor = fl, cc_depth = d}, IPPred nm ty) 
-                    -> CIPCan { cc_id = ev, cc_flavor = fl
-                              , cc_ip_nm = nm, cc_ip_ty = ty, cc_depth = d }
-                (CDictCan {cc_flavor = fl, cc_depth = d}, ClassPred cl xis) 
-                    -> CDictCan { cc_id = ev, cc_flavor = fl
-                                , cc_class = cl, cc_tyargs = xis, cc_depth = d }
-                (CNonCanonical {}, _) -- Not sure this case can happen
-                    -> wi_orig { cc_id = ev }
-                (CIrredEvCan {cc_flavor = fl, cc_depth = d},_) 
-                    -- Subtle case: An irreducible guy got concretized!
-                    -> CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth = d }
-                (_,_)
-                    -> pprPanic "interactWithInertEqStage" $ 
-                       text "Rewrote one type of predicate to another: Clear bug!" <+> 
-                            vcat [ text "wi_orig   =" <+> ppr wi_orig
-                                 , text "evVarPRed =" <+> ppr (evVarPred ev) ]
-
+interactWithInertEqsStage  ct 
+  | isCTyEqCan ct
+  = do { kickOutRewritableInerts ct
+       ; if isGivenOrSolved (cc_flavor ct) then updInertSetTcS ct >> return Stop
+         else continueWith ct } -- If wanted or derived we may spontaneously solve him
+  | isCNonCanonical ct
+  = pprPanic "Interact with inerts eqs stage met non-canonical constraint!" (ppr ct)
+  | otherwise
+  = continueWith ct
 \end{code}
 
 

@@ -93,26 +93,49 @@ instance Outputable StopOrContinue where
 -- Top-level canonicalization
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 canonicalize :: Ct -> TcS StopOrContinue
-canonicalize (CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth  = d })
-  = go ev (predTypePredTree (evVarPred ev)) >> return Stop
-    -- Must canonicalize so return Stop. 
-    -- NB: Could be improved by returning ContinueWith in some cases. Not 
-    --     clear yet if it will save us much so not doing this for now.
-  where go ev (ClassPred {})   = canClass d fl ev
-        go ev (EqPred ty1 ty2) = canEq    d fl ev ty1 ty2
-        go ev (IPPred {})      = canIP    d fl ev
-        go ev (TuplePred tys)
-          = do { evs <- zipWithM go_tup_one tys [0..]
-               ; when (isWanted fl) $ setEvBind ev (EvTupleMk evs) }
-        go ev (IrredPred ev_ty)    = canIrredEvidence d fl ev ev_ty
+canonicalize ct@(CNonCanonical { cc_id = ev, cc_flavor = fl, cc_depth  = d })
+  = do { traceTcS "canonicalize (non-canonical)" (ppr ct)
+       ; ieqs <- getInertEqs 
+       ; (ev',_no_rewriting) <- rewriteFromInertEqs ieqs fl ev
+       ; can_pred ev' d fl $ predTypePredTree (evVarPred ev')
+       ; return Stop } -- Always Stop when starting from a non-canonical
 
-        go_tup_one ty n
+canonicalize ct
+  = do { traceTcS "canonicalize (canonical)" (ppr ct)
+       ; ieqs <- getInertEqs
+       ; (ev', no_rewriting) <- rewriteFromInertEqs ieqs fl ev
+       ; if no_rewriting then 
+             do { traceTcS "canonicalize (canonical), no rewriting for item" (ppr ct)
+                ; return (ContinueWith ct) }
+         else
+           -- got rewritten from inerts, need to canonicalize again to be safe
+             do { traceTcS "canonicalize (canonical), rewritten item" $ 
+                  vcat [ text "New evVarPred     =" <+> ppr (evVarPred ev') ]
+                ; can_pred ev' d fl (predTypePredTree (evVarPred ev'))
+                ; return Stop } }
+  where fl = cc_flavor ct
+        d  = cc_depth ct
+        ev = cc_id ct
+
+-- Must canonicalize so return Stop. 
+-- NB: Could be improved by returning ContinueWith in some cases. Not 
+--     clear yet if it will save us much so not doing this for now.
+can_pred :: EvVar -> SubGoalDepth -> CtFlavor -> PredTree -> TcS ()
+can_pred ev d fl (ClassPred {})   = canClass d fl ev
+can_pred ev d fl (EqPred ty1 ty2) = canEq    d fl ev ty1 ty2
+can_pred ev d fl (IPPred {})      = canIP    d fl ev
+can_pred ev d fl (TuplePred tys)
+  = do { traceTcS "can_pred" (text "TuplePred!") 
+       ; evs <- zipWithM can_pred_tup_one tys [0..]
+       ; when (isWanted fl) $ setEvBind ev (EvTupleMk evs) }
+  where can_pred_tup_one ty n
           = do { ev' <- newEvVar (predTreePredType ty)
                ; when (isGivenOrSolved fl) $ setEvBind ev' (EvTupleSel ev n)
-               ; go ev' ty
+               ; can_pred ev' d fl ty
                ; return ev' }
-canonicalize ct = return $ ContinueWith ct  -- Already canonical
-
+can_pred ev d fl (IrredPred ev_ty)    
+  = do { traceTcS "can_pred" (text "IrredPred = " <+> ppr ev_ty) 
+       ; canIrredEvidence d fl ev ev_ty }
 
 -- Implicit Parameter Canonicalization
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -120,12 +143,10 @@ canIP :: SubGoalDepth -- Depth
       -> CtFlavor -> EvVar -> TcS ()
 -- Precondition: EvVar is implicit parameter evidence
 canIP d fl v
-  = do { ieqs <- getInertEqs
-       ; v'   <- rewriteFromInertEqs ieqs fl v
-       ; let (IPPred nm ty) = predTypePredTree (evVarPred v') 
+  = do { let (IPPred nm ty) = predTypePredTree (evVarPred v) 
        -- See Note [Canonical implicit parameter constraints] 
        -- to see why we don't flatten ty
-       ; let ct = CIPCan { cc_id     = v'
+       ; let ct = CIPCan { cc_id     = v
                          , cc_flavor = fl
                          , cc_ip_nm  = nm
                          , cc_ip_ty  = ty
@@ -152,21 +173,19 @@ canClass :: SubGoalDepth -- Depth
          -> CtFlavor -> EvVar -> TcS ()
 -- Precondition: EvVar is class evidence 
 canClass d fl v 
-  = do { ieqs <- getInertEqs
-               -- Rewrite from the inerts 
-       ; v' <- rewriteFromInertEqs ieqs fl v
+  = do { 
                -- Flatten type 
-       ; (xi, co) <- flatten d fl (evVarPred v')
+       ; (xi, co) <- flatten d fl (evVarPred v)
                -- Get the final type (after rewriting and flattening)
        ; let (ClassPred cls xis) = predTypePredTree xi
 
        ; v_new <- 
-           if isReflCo co then return v'
+           if isReflCo co then return v
            else do { v_new <- newEvVar xi
                    ; when (isWanted fl) $ 
-                          setEvBind v' (EvCast v_new co)
+                          setEvBind v (EvCast v_new co)
                    ; when (isGivenOrSolved fl) $
-                          setEvBind v_new (EvCast v' (mkSymCo co))
+                          setEvBind v_new (EvCast v (mkSymCo co))
                    ; return v_new }
 
           -- Add superclasses of this one here, See Note [Adding superclasses]. 
@@ -308,20 +327,35 @@ is_improvement_pty ty = go (predTypePredTree ty)
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 canIrredEvidence :: SubGoalDepth -- Depth
                  -> CtFlavor -> EvVar -> TcType -> TcS ()
+-- Precondition: ty not a tuple and no other evidence form
 canIrredEvidence d fl v ty 
-  = do { (xi,co) <- flatten d fl ty -- co :: xi ~ ty
-       ; v_new <- if isReflCo co then return v
+  = do { traceTcS "canIrredEvidence" $
+                  text "presumably irred type is: " <+> ppr ty
+       ; (xi,co) <- flatten d fl ty -- co :: xi ~ ty
+       ; let no_flattening = isReflCo co
+       ; v_new <- if no_flattening then return v
                   else do { v' <- newEvVar xi
                           ; when (isWanted fl) $ 
-                               setEvBind v  (EvCast v' co)
+                                 setEvBind v  (EvCast v' co)
                           ; when (isGivenOrSolved fl) $ 
-                               setEvBind v' (EvCast v (mkSymCo co))
+                                 setEvBind v' (EvCast v (mkSymCo co))
                           ; return v' }
-       ; updWorkListTcS $ 
-         extendWorkListNonEq (CIrredEvCan { cc_id     = v_new
-                                          , cc_flavor = fl
-                                          , cc_ty     = xi 
-                                          , cc_depth  = d }) }
+
+       -- But notice that flattening consults and applies family equations
+       -- from the inerts, so 'xi' may become reducible in which case it is
+       -- safe to emit a CNonCanonical (but not a CIrredEvCan).
+       ; let the_ct 
+              | no_flattening 
+              = CIrredEvCan { cc_id     = v_new
+                            , cc_flavor = fl
+                            , cc_ty     = xi 
+                            , cc_depth  = d }
+              | otherwise 
+              = CNonCanonical { cc_id     = v_new
+                              , cc_flavor = fl
+                              , cc_depth  = d }
+       ; updWorkListTcS (extendWorkListCt the_ct) }
+
 \end{code}
 
 %************************************************************************
@@ -502,8 +536,12 @@ canEq _d fl eqv ty1 ty2
 -- If one side is a variable, orient and flatten, 
 -- WITHOUT expanding type synonyms, so that we tend to 
 -- substitute a ~ Age rather than a ~ Int when @type Age = Int@
-canEq d fl eqv (TyVarTy tv) ty2 = canEqVarTop d fl eqv tv ty2 True 
-canEq d fl eqv ty1 (TyVarTy tv) = canEqVarTop d fl eqv tv ty1 False
+canEq d fl eqv ty1@(TyVarTy {}) ty2 
+  = do { untch <- getUntouchables 
+       ; canEqLeaf d untch fl eqv (classify ty1) (classify ty2) }
+canEq d fl eqv ty1 ty2@(TyVarTy {})
+  = do { untch <- getUntouchables 
+       ; canEqLeaf d untch fl eqv (classify ty1) (classify ty2) }
 
 -- Split up an equality between function types into two equalities.
 canEq d fl eqv (FunTy s1 t1) (FunTy s2 t2)
@@ -529,21 +567,15 @@ canEq d fl eqv (FunTy s1 t1) (FunTy s2 t2)
        ; canEq d fl argeqv s1 s2 -- Inherit original kinds, depths, and locations
        ; canEq d fl reseqv t1 t2 }
 
-canEq d fl eqv (TyConApp fn tys) _ty2 
+canEq d fl eqv ty1@(TyConApp fn tys) ty2 
   | isSynFamilyTyCon fn, length tys == tyConArity fn
   = do { untch <- getUntouchables 
-       ; ieqs <- getInertEqs
-       ; eqv' <- rewriteFromInertEqs ieqs fl eqv 
-       ; let (EqPred ty1' ty2') = predTypePredTree (evVarPred eqv')
-       ; canEqLeaf d untch fl eqv' (classify ty1') (classify ty2') } 
+       ; canEqLeaf d untch fl eqv (classify ty1) (classify ty2) } 
 
-canEq d fl eqv _ty1 (TyConApp fn tys)
+canEq d fl eqv ty1 ty2@(TyConApp fn tys)
   | isSynFamilyTyCon fn, length tys == tyConArity fn
   = do { untch <- getUntouchables 
-       ; ieqs <- getInertEqs
-       ; eqv' <- rewriteFromInertEqs ieqs fl eqv 
-       ; let (EqPred ty1' ty2') = predTypePredTree (evVarPred eqv')
-       ; canEqLeaf d untch fl eqv' (classify ty1') (classify ty2') }
+       ; canEqLeaf d untch fl eqv (classify ty1) (classify ty2) }
 
 canEq d fl eqv (TyConApp tc1 tys1) (TyConApp tc2 tys2)
   | isDecomposableTyCon tc1 && isDecomposableTyCon tc2
@@ -804,45 +836,6 @@ reOrient _fl (FskCls {}) (FunCls {})     = True
 reOrient _fl (FskCls {}) (OtherCls {})   = False 
 
 ------------------
-
-canEqVarTop :: SubGoalDepth -- Depth
-            -> CtFlavor -> EqVar 
-            -> TcTyVar -> Type 
-            -> Bool -- True iff (eqv : tv ~ ty, False when (eqv : ty ~ tv) 
-            -> TcS ()
-canEqVarTop d fl eqv tv ty tv_left 
-  = do { untch <- getUntouchables
-       ; ieqs  <- getInertEqs 
-       ; case lookupVarEnv (fst ieqs) tv of 
-           Just (cc,co) | cc_flavor cc `canRewrite` fl -> 
-                          -- co : tv ~ rhs 
-              do { v_new <- newEqVar (cc_rhs cc) ty  -- v_new :: rhs ~ ty
-
-                          -- Some careful coercion calculations below
-                 ; let co_for_wanted 
-                        | tv_left   = co `mkTransCo` mkEqVarLCo v_new
-                                      -- tv ~ rhs ~ ty  
-                        | otherwise = mkSymCo (mkEqVarLCo v_new) `mkTransCo` (mkSymCo co)
-                                      -- ty ~ rhs ~ tv
-                 ; let co_for_given 
-                        | tv_left   = mkSymCo co `mkTransCo` mkEqVarLCo eqv
-                                      -- rhs ~ tv ~ ty 
-                        | otherwise = mkSymCo co `mkTransCo` mkSymCo (mkEqVarLCo eqv)
-                                      -- rhs ~ tv ~ ty
-
-                 ; when (isWanted fl) $ setEqBind eqv co_for_wanted
-                 ; when (isGivenOrSolved fl) $ setEqBind v_new co_for_given 
-
-                          -- Repeat!
-                 ; canEq d fl v_new (cc_rhs cc) ty }
-
-                -- Otherwise deeply rewrite (to maximise caching) and call canEqLeaf, 
-                -- which will deal with flattening. 
-           _ -> do { eqv' <- rewriteFromInertEqs ieqs fl eqv 
-                   ; let (EqPred ty1' ty2') = predTypePredTree (evVarPred eqv')
-                   ; canEqLeaf d untch fl eqv' (classify ty1') (classify ty2') }
-       }
-       -- NB: don't use VarCls directly because tv1 or tv2 may be scolems!
 
 canEqLeaf :: SubGoalDepth -- Depth
           -> TcsUntouchables 
