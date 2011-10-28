@@ -264,7 +264,8 @@ mkDataConIds wrap_name wkr_name data_con
         -- but that's fine... dataConRepStrictness comes from the data con
         -- not from the worker Id.
 
-    cpr_info | isDataTyCon tycon    &&
+    cpr_info | isProductTyCon tycon &&  -- Just for now, stick to product only
+               isDataTyCon tycon    &&
                wkr_arity > 0        &&
                wkr_arity <= mAX_CPR_SIZE        = retCPR data_con
              | otherwise                        = TopRes
