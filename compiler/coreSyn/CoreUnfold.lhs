@@ -53,7 +53,7 @@ import TyCon
 import Literal
 import PrimOp
 import IdInfo
-import BasicTypes	( Arity )
+import BasicTypes
 import Type
 import Coercion
 import PrelNames
@@ -226,16 +226,25 @@ calcUnfoldingGuidance expr_is_cheap bOMB_OUT_SIZE expr
 	n_val_bndrs = length val_bndrs
 
     	guidance 
-          = case (sizeExpr (iUnbox bOMB_OUT_SIZE) val_bndrs body) of
+          = case (sizeExpr (3# *# iUnbox bOMB_OUT_SIZE) val_bndrs body) of
+	    	 	   -- See Note [Big functions]
       	      TooBig -> UnfNever
-      	      SizeIs size cased_bndrs scrut_discount
-      	        | uncondInline n_val_bndrs (iBox size)
+      	      SizeIs size# cased_bndrs scrut_discount#
+      	        | uncondInline n_val_bndrs size
                 , expr_is_cheap
       	        -> UnfWhen unSaturatedOk boringCxtOk   -- Note [INLINE for small functions]
+
+                | bOMB_OUT_SIZE < size - sum arg_discounts - scrut_discount
+                -> UnfNever
+
 	        | otherwise
-      	        -> UnfIfGoodArgs { ug_args  = map (discount cased_bndrs) val_bndrs
-      	                         , ug_size  = iBox size
-      	        	  	 , ug_res   = iBox scrut_discount }
+      	        -> UnfIfGoodArgs { ug_args  = arg_discounts
+      	                         , ug_size  = size
+      	        	  	 , ug_res   = scrut_discount }
+                where
+                  size           = iBox size#
+                  scrut_discount = iBox scrut_discount#
+                  arg_discounts  = map (discount cased_bndrs) val_bndrs
 
         discount cbs bndr
            = foldlBag (\acc (b',n) -> if bndr==b' then acc+n else acc) 
@@ -243,6 +252,9 @@ calcUnfoldingGuidance expr_is_cheap bOMB_OUT_SIZE expr
     in
     (n_val_bndrs, guidance) }
 \end{code}
+
+Note [Big functions]
+~~~~~~~~~~~~~~~~~~~~
 
 Note [Computing the size of an expression]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -255,6 +267,7 @@ heuristics right has taken a long time.  Here's the basic strategy:
     * Function applications (f e1 .. en): 1 + #value args
 
     * Constructor applications: 1, regardless of #args
+      See Note [Constructor size]
 
     * Let(rec): 1 + size of components
 
@@ -278,6 +291,31 @@ are very cheap, because exposing them to a caller is so valuable.
 [25/5/11] All sizes are now multiplied by 10, except for primops.
 This makes primops look cheap, and seems to be almost unversally
 beneficial.  Done partly as a result of #4978.
+
+Note [Constructor size]
+~~~~~~~~~~~~~~~~~~~~~~~
+Treat a constructors application as size 1, regardless of how many
+arguments it has; we are keen to expose them (and we charge separately
+for their args).  We can't treat them as size zero, else we find that
+(Just x) has size 0, which is the same as a lone variable; and hence
+'v' will always be replaced by (Just x), where v is bound to Just x.
+
+However, unboxed tuples count as size zero. I found occasions where we had 
+	f x y z = case op# x y z of { s -> (# s, () #) }
+and f wasn't getting inlined.
+
+Note [Unboxed tuple result discount]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+I tried giving unboxed tuples a *result discount* of zero.  Why?  When
+returned as a result they do not allocate, so maybe we don't want to
+charge so much for them. If you have a non-zero discount here, we find
+that workers often get inlined back into wrappers, because it look
+like
+    f x = case $wf x of (# a,b #) -> (a,b)
+and we are keener because of the case.  However while this change
+shrank binary sizes by 0.5% it also made spectral/boyer allocate 5%
+more. All other changes were very small. So it's not a big deal but I
+didn't adopt the idea.
 
 Note [Do not inline top-level bottoming functions]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -382,23 +420,23 @@ sizeExpr bOMB_OUT_SIZE top_args expr
     size_up (Case e _ _ alts) 
 	| Var v <- e
         , v `elem` top_args	-- We are scrutinising an argument variable
-	= alts_size v (foldr addAltSize case_size alt_sizes)
-		      (foldr1 maxSize alt_sizes)
+	= arg_scrut_case v (foldr addAltSize (sizeN case_size) alt_sizes)
+		           (foldr1 maxSize alt_sizes)
 		-- Good to inline if an arg is scrutinised, because
 		-- that may eliminate allocation in the caller
 		-- And it eliminates the case itself
         | otherwise
         = size_up e  `addSizeNSD`
-          foldr (addAltSize . size_up_alt) case_size alts
+          foldr addAltSize (sizeN case_size) alt_sizes
       where
 	  alt_sizes = map size_up_alt alts
 
 		-- alts_size tries to compute a good discount for
 		-- the case when we are scrutinising an argument variable
-	  alts_size v (SizeIs tot tot_disc tot_scrut)  -- Size of all alternatives
-		      (SizeIs max _        _)          -- Size of biggest alternative
+	  arg_scrut_case v (SizeIs tot tot_disc tot_scrut)  -- Size of all alternatives
+		           (SizeIs max _        _)          -- Size of biggest alternative
                 = SizeIs tot 
-                         (unitBag (v, iBox (_ILIT(20) +# tot -# max)) `unionBags` tot_disc) 
+                         (unitBag (v, case_size + iBox (tot -# max)) `unionBags` tot_disc) 
                          tot_scrut
 			-- If the variable is known, we produce a discount that
 			-- will take us back to 'max', the size of the largest alternative
@@ -407,9 +445,10 @@ sizeExpr bOMB_OUT_SIZE top_args expr
 			-- Notice though, that we return tot_disc, the total discount from 
 			-- all branches.  I think that's right.
 
-	  alts_size _ tot_size _ = tot_size
+	  arg_scrut_case _ tot_size _ = tot_size
 
-          case_size = sizeN (info_table_size + conditional_tree_size)
+          case_size = info_table_size + conditional_tree_size
+
           info_table_size | is_inline_scrut e = 0	-- No info table
                           | otherwise         = 20
                 -- e.g. for the is_inline_scrut
@@ -417,9 +456,9 @@ sizeExpr bOMB_OUT_SIZE top_args expr
                 --      case touch# x# of _ -> ...  should cost 0
                 -- (see #4978)
 
-          conditional_tree_size = length alts * 5
+          conditional_tree_size = (length alts - 1) * 20
 	    -- The conditional is not a huge deal, but
-            -- we *do* charge something for eac alternative, else we 
+            -- we *do* charge something for each alternative, else we 
 	    -- find that giant case nests are treated as practically free
 	    -- A good example is Foreign.C.Error.errrnoToIOError
 
@@ -455,6 +494,8 @@ sizeExpr bOMB_OUT_SIZE top_args expr
 
     ------------ 
     size_up_call :: Id -> [CoreExpr] -> ExprSize
+    -- The size of the arguments has already been counted
+    -- (in size_up_app).  All we want here is the size of the *call*.
     size_up_call fun val_args
        = case idDetails fun of
            FCallId _        -> sizeN (10 * (1 + length val_args))
@@ -560,37 +601,18 @@ conSize dc n_val_args
 -- See Note [Constructor size]
   | otherwise 
   = SizeIs (_ILIT(10)) emptyBag 
-           (iUnbox (10 * (10 + n_val_args)))
+           (_ILIT(30))  -- Compensate for the size of the application
+	   		-- (namely 10), plus a bonus for eliminating
+			-- the allocation
+
+-- Undoing SDM's change -- it creates MASSIVE discounts
+--           (iUnbox (10 * (10 + n_val_args)))
      -- discount was (10 * (1 + n_val_args)), but it turns out that
      -- adding a bigger constant here is an unambiguous win.  We
      -- REALLY like unfolding constructors that get scrutinised.
      -- [SDM, 25/5/11]
 \end{code}
 
-Note [Constructor size]
-~~~~~~~~~~~~~~~~~~~~~~~
-Treat a constructors application as size 1, regardless of how many
-arguments it has; we are keen to expose them (and we charge separately
-for their args).  We can't treat them as size zero, else we find that
-(Just x) has size 0, which is the same as a lone variable; and hence
-'v' will always be replaced by (Just x), where v is bound to Just x.
-
-However, unboxed tuples count as size zero. I found occasions where we had 
-	f x y z = case op# x y z of { s -> (# s, () #) }
-and f wasn't getting inlined.
-
-Note [Unboxed tuple result discount]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-I tried giving unboxed tuples a *result discount* of zero.  Why?  When
-returned as a result they do not allocate, so maybe we don't want to
-charge so much for them. If you have a non-zero discount here, we find
-that workers often get inlined back into wrappers, because it look
-like
-    f x = case $wf x of (# a,b #) -> (a,b)
-and we are keener because of the case.  However while this change
-shrank binary sizes by 0.5% it also made spectral/boyer allocate 5%
-more. All other changes were very small. So it's not a big deal but I
-didn't adopt the idea.
 
 \begin{code}
 primOpSize :: PrimOp -> Int -> ExprSize
@@ -772,10 +794,11 @@ them inlining is to give them a NOINLINE pragma, which we do in
 StrictAnal.addStrictnessInfoToTopId
 
 \begin{code}
-callSiteInline :: DynFlags
+callSiteInline :: DynFlags -> CompilerPhase 
+               -> Maybe Int	        -- The inlining threshold
 	       -> Id			-- The Id
-	       -> Bool			-- True <=> unfolding is active
-	       -> Bool			-- True if there are are no arguments at all (incl type args)
+	       -> Bool			-- True if there are are no arguments at all 
+                                        --   (including type args)
 	       -> [ArgSummary]		-- One for each value arg; True if it is interesting
 	       -> CallCtxt		-- True <=> continuation is interesting
 	       -> Maybe CoreExpr	-- Unfolding, if any
@@ -808,28 +831,49 @@ instance Outputable CallCtxt where
   ppr CaseCtxt 	      = ptext (sLit "CaseCtxt")
   ppr ValAppCtxt      = ptext (sLit "ValAppCtxt")
 
-callSiteInline dflags id active_unfolding lone_variable arg_infos cont_info
+callSiteInline dflags phase inline_threshold
+               id lone_variable arg_infos cont_info
   = case idUnfolding id of 
       -- idUnfolding checks for loop-breakers, returning NoUnfolding
       -- Things with an INLINE pragma may have an unfolding *and* 
-      -- be a loop breaker  (maybe the knot is not yet untied)
-	CoreUnfolding { uf_tmpl = unf_template, uf_is_top = is_top 
-		      , uf_is_cheap = is_cheap, uf_arity = uf_arity
-                      , uf_guidance = guidance, uf_expandable = is_exp }
-          | active_unfolding -> tryUnfolding dflags id lone_variable 
-                                    arg_infos cont_info unf_template is_top 
-                                    is_cheap is_exp uf_arity guidance
-          | dopt Opt_D_dump_inlinings dflags && dopt Opt_D_verbose_core2core dflags
-          -> pprTrace "Inactive unfolding:" (ppr id) Nothing
-          | otherwise -> Nothing
+      -- be a loop breaker (maybe the knot is not yet untied)
+
 	NoUnfolding 	 -> Nothing 
 	OtherCon {} 	 -> Nothing 
 	DFunUnfolding {} -> Nothing 	-- Never unfold a DFun
 
-tryUnfolding :: DynFlags -> Id -> Bool -> [ArgSummary] -> CallCtxt
+	CoreUnfolding { uf_tmpl = unf_template, uf_is_top = is_top, uf_src = src
+		      , uf_is_cheap = is_cheap, uf_arity = uf_arity
+                      , uf_guidance = guidance, uf_expandable = is_exp }
+          | InlineCompulsory <- src 
+          -> Just unf_template	-- If it's compulsory, do it regardless of all else
+
+          | Just threshold <- inline_threshold
+          , activeUnfolding phase (idInlinePragma id)
+          -> tryUnfolding dflags threshold id lone_variable 
+                          arg_infos cont_info unf_template is_top 
+                          is_cheap is_exp uf_arity guidance
+
+          | dopt Opt_D_dump_inlinings dflags && dopt Opt_D_verbose_core2core dflags
+          -> pprTrace "Inactive unfolding:" (ppr id) Nothing
+
+          | otherwise -> Nothing
+
+activeUnfolding :: CompilerPhase -> InlinePragma -> Bool
+activeUnfolding phase prag 
+  = case phase of
+      InitialPhase -> isInlinePragma prag && isEarlyActive activation
+      		          -- NB: wrappers are not early-active
+			  -- See Note [Wrapper activation] in WorkWrap
+      Phase n      -> isActiveIn n activation
+  where
+    activation = inlinePragmaActivation prag
+    
+
+tryUnfolding :: DynFlags -> Int -> Id -> Bool -> [ArgSummary] -> CallCtxt
              -> CoreExpr -> Bool -> Bool -> Bool -> Arity -> UnfoldingGuidance
 	     -> Maybe CoreExpr	
-tryUnfolding dflags id lone_variable 
+tryUnfolding dflags threshold id lone_variable 
              arg_infos cont_info unf_template is_top 
              is_cheap is_exp uf_arity guidance
 			-- uf_arity will typically be equal to (idArity id), 
@@ -843,6 +887,7 @@ tryUnfolding dflags id lone_variable
                         text "is exp:" <+> ppr is_exp,
                         text "is cheap:" <+> ppr is_cheap,
 			text "guidance" <+> ppr guidance,
+			text "threshold" <+> ppr threshold,
 			extra_doc,
 			text "ANSWER =" <+> if yes_or_no then text "YES" else text "NO"])
 	         result
@@ -893,7 +938,7 @@ tryUnfolding dflags id lone_variable
                 , (text "discounted size =" <+> int discounted_size) )
     	     where
     	       discounted_size = size - discount
-    	       small_enough = discounted_size <= opt_UF_UseThreshold
+    	       small_enough = discounted_size <= threshold
     	       discount = computeDiscount uf_arity arg_discounts 
     	         		          res_discount arg_infos cont_info
 \end{code}
@@ -1106,7 +1151,7 @@ computeDiscount n_vals_wanted arg_discounts res_discount arg_infos cont_info
     arg_discount = sum (zipWith mk_arg_discount arg_discounts arg_infos)
 
     mk_arg_discount _ 	     TrivArg    = 0 
-    mk_arg_discount _        NonTrivArg = 10
+    mk_arg_discount discount NonTrivArg = 10 `min` discount
     mk_arg_discount discount ValueArg   = discount 
 
     res_discount' = case cont_info of

@@ -1260,11 +1260,10 @@ completeCall env var cont
                 -- the substitution; rule matching on un-simplified args would
                 -- be bogus
 
-               n_val_args = length arg_infos
                interesting_cont = interestingCallContext call_cont
-               unfolding    = activeUnfolding env var
-               maybe_inline = callSiteInline dflags var unfolding
-                                             lone_variable arg_infos interesting_cont
+	       mode         = getMode env
+               maybe_inline = callSiteInline dflags (sm_phase mode) (sm_inline mode)
+                                   var lone_variable arg_infos interesting_cont
         ; case maybe_inline of {
             Just expr      -- There is an inlining!
               ->  do { tick (UnfoldingDone var)
@@ -1275,6 +1274,7 @@ completeCall env var cont
 
         { rule_base <- getSimplRules
         ; let info = mkArgInfo var (getRules rule_base var) n_val_args call_cont
+              n_val_args = length arg_infos
         ; rebuildCall env info cont
     }}}
   where

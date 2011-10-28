@@ -531,15 +531,27 @@ Note that exprIsHNF does not imply exprIsCheap.  Eg
 This responds True to exprIsHNF (you can discard a seq), but
 False to exprIsCheap.
 
+Note [Args in exprIsCheap]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+The test for (exprIsCheap' good_app arg) used to be (exprIsTrivial arg) 
+due to concerns about duplicating nested constructor
+applications, but see #4978.  The principle here is that
+   let x = a +# b in c *# x
+should behave equivalently to
+   c *# (a +# b)
+Since lets with cheap RHSs are accepted, so should paps with cheap arguments
+
 \begin{code}
 exprIsCheap :: CoreExpr -> Bool
 exprIsCheap = exprIsCheap' isCheapApp
 
-exprIsExpandable :: CoreExpr -> Bool
-exprIsExpandable = exprIsCheap' isExpandableApp	-- See Note [CONLIKE pragma] in BasicTypes
+isCheapApp :: CheapAppFun
+isCheapApp fn n_val_args = isDataConWorkId fn || n_val_args < idArity fn
 
 type CheapAppFun = Id -> Int -> Bool
+
 exprIsCheap' :: CheapAppFun -> CoreExpr -> Bool
+-- SimplUtils.findArity calls exprIsCheap' too
 exprIsCheap' _        (Lit _)      = True
 exprIsCheap' _        (Type _)    = True
 exprIsCheap' _        (Coercion _) = True
@@ -565,64 +577,76 @@ exprIsCheap' good_app (Let (NonRec x _) e)
 	-- See also 
 
 exprIsCheap' good_app other_expr 	-- Applications and variables
-  = go other_expr []
+  = go other_expr 0
   where
 	-- Accumulate value arguments, then decide
-    go (Cast e _) val_args                 = go e val_args
-    go (App f a) val_args | isRuntimeArg a = go f (a:val_args)
-			  | otherwise      = go f val_args
+    go (Cast e _) n_val_args = go e n_val_args
+    go (App f a) n_val_args 
+       | isRuntimeArg a      = exprIsCheap' good_app a && go f (n_val_args + 1)
+                                -- Note [Args in exprIsCheap]
+       | otherwise           = go f n_val_args
 
-    go (Var _) [] = True	-- Just a type application of a variable
-				-- (f t1 t2 t3) counts as WHNF
-    go (Var f) args
-        = case idDetails f of
-		RecSelId {}  	    	     -> go_sel args
-		ClassOpId {} 	    	     -> go_sel args
-		PrimOpId op  	    	     -> go_primop op args
-		_ | good_app f (length args) -> go_pap args
-                  | isBottomingId f 	     -> True
-                  | otherwise       	     -> False
-			-- Application of a function which
-			-- always gives bottom; we treat this as cheap
-			-- because it certainly doesn't need to be shared!
+    go (Var f) n_val_args
+      | n_val_args == 0    -- Just a type application of a
+      = True               -- variable (f t1 t2 t3p) counts as WHNF
+      | otherwise
+      = case idDetails f of
+	  RecSelId {}   -> go_sel n_val_args
+	  ClassOpId {}  -> go_sel n_val_args
+	  PrimOpId op   -> go_primop op
+	  _             -> good_app f n_val_args
+                        || isBottomingId f
+	  	-- Application of a function which
+	  	-- always gives bottom; we treat this as cheap
+	  	-- because it certainly doesn't need to be shared!
 	
     go _ _ = False
  
     --------------
-    go_pap args = all (exprIsCheap' good_app) args
-        -- Used to be "all exprIsTrivial args" due to concerns about
-        -- duplicating nested constructor applications, but see #4978.
-	-- The principle here is that 
-	--    let x = a +# b in c *# x
-        -- should behave equivalently to
-        --    c *# (a +# b)
-        -- Since lets with cheap RHSs are accepted, 
-        -- so should paps with cheap arguments
-
-    --------------
-    go_primop op args = primOpIsCheap op && all (exprIsCheap' good_app) args
+    go_primop op = primOpIsCheap op
  	-- In principle we should worry about primops
  	-- that return a type variable, since the result
  	-- might be applied to something, but I'm not going
  	-- to bother to check the number of args
  
     --------------
-    go_sel [arg] = exprIsCheap' good_app arg	-- I'm experimenting with making record selection
-    go_sel _     = False		-- look cheap, so we will substitute it inside a
- 					-- lambda.  Particularly for dictionary field selection.
-  		-- BUT: Take care with (sel d x)!  The (sel d) might be cheap, but
-  		--	there's no guarantee that (sel d x) will be too.  Hence (n_val_args == 1)
+    go_sel n_val_args = n_val_args <= 1
+       -- I'm experimenting with making record selection
+       -- look cheap, so we will substitute it inside a
+       -- lambda.  Particularly for dictionary field selection.
+       -- BUT: Take care with (sel d x)!  The (sel d) might be cheap, but
+       -- there's no guarantee that (sel d x) will be too.  Hence (n_val_args <= 1)
 
-isCheapApp :: CheapAppFun
-isCheapApp fn n_val_args
-  = isDataConWorkId fn 
-  || n_val_args < idArity fn
 
-isExpandableApp :: CheapAppFun
+
+exprIsExpandable :: CoreExpr -> Bool
+-- See Note [CONLIKE pragma] in BasicTypes
+exprIsExpandable (Lit _)      = True
+exprIsExpandable (Type _)     = True
+exprIsExpandable (Coercion _) = True
+exprIsExpandable (Var _)      = True
+exprIsExpandable (Note _ e)   = exprIsExpandable e
+exprIsExpandable (Cast e _)   = exprIsExpandable e
+exprIsExpandable (Lam _ e)    = exprIsExpandable e	-- Note [Expandable lambdas]
+exprIsExpandable (Case {})    = False
+exprIsExpandable (Let {})     = False
+exprIsExpandable other_expr   = go other_expr 0	-- Applications and variables
+  where
+	-- Accumulate value arguments, then decide
+    go (Cast e _) n_val_args = go e n_val_args
+    go (App f a)  n_val_args 
+       | isRuntimeArg a      = exprIsExpandable a && go f (n_val_args + 1)
+                                -- Note [Args in exprIsCheap]
+       | otherwise           = go f n_val_args
+
+    go (Var f) n_val_args    = isExpandableApp f n_val_args
+    go _ _ = False
+
+isExpandableApp :: Id -> Int -> Bool
 isExpandableApp fn n_val_args
-  =  isConLikeId fn
-  || n_val_args < idArity fn
-  || go n_val_args (idType fn)
+  =  isConLikeId fn		-- Look for CONLIKE functions
+  || n_val_args < idArity fn	
+  || go n_val_args (idType fn)	-- True if n_val_args == 0
   where
   -- See if all the arguments are PredTys (implicit params or classes)
   -- If so we'll regard it as expandable; see Note [Expandable overloadings]
