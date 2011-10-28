@@ -495,7 +495,7 @@ tcTyClDecl1 _parent _calc_isrec
             (TySynonym {tcdLName = L _ tc_name, tcdTyVars = tvs, tcdSynRhs = rhs_ty})
   = ASSERT( isNoParent _parent )
     tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
-    { rhs_ty' <- tcHsType rhs_ty
+    { rhs_ty' <- tcCheckHsType rhs_ty kind
     ; tycon <- buildSynTyCon tc_name tvs' (SynonymTyCon rhs_ty')
       	       		     kind NoParentTyCon Nothing
     ; return [ATyCon tycon] }

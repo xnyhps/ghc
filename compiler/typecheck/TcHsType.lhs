@@ -594,22 +594,46 @@ kcClass cls = do	-- Must be a class
 %*									*
 %************************************************************************
 
-The type desugarer
+Note [Desugaring types]
+~~~~~~~~~~~~~~~~~~~~~~~
+The type desugarer is phase 2 of dealing with HsTypes.  Specifically:
 
-	* Transforms from HsType to Type
-	* Zonks any kinds
+  * It transforms from HsType to Type
 
-It cannot fail, and does no validity checking, except for 
-structural matters, such as
+  * It zonks any kinds.  The returned type should have no mutable kind
+    or type variables (hence returning Type not TcType):
+      - any unconstrained kind variables are defaulted to AnyK just 
+        as in TcHsSyn. 
+      - there are no mutable type variables because we are 
+        kind-checking a type
+    Reason: the returned type may be put in a TyCon or DataCon where
+    it will never subsequently be zonked.
+
+You might worry about nested scopes:
+        ..a:kappa in scope..
+            let f :: forall b. T '[a,b] -> Int
+In this case, f's type could have a mutable kind variable kappa in it;
+and we might then default it to AnyK when dealing with f's type
+signature.  But we don't expect this to happen because we can't get a
+lexically scoped type variable with a mutable kind variable in it.  A
+delicate point, this.  If it becomes an issue we might need to
+distinguish top-level from nested uses.
+
+Moreover
+  * it cannot fail, 
+  * it does no unifications
+  * it does no validity checking, except for structural matters, such as
 	(a) spurious ! annotations.
 	(b) a class used as a type
 
 \begin{code}
 dsHsType :: LHsType Name -> TcM Type
 -- All HsTyVarBndrs in the intput type are kind-annotated
+-- See Note [Desugaring types]
 dsHsType ty = ds_type (unLoc ty)
 
 ds_type :: HsType Name -> TcM Type
+-- See Note [Desugaring types]
 ds_type ty@(HsTyVar _)
   = ds_app ty []
 
@@ -687,7 +711,7 @@ ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
 ds_type (HsCoreTy ty)       = return ty
 
 ds_type (HsExplicitListTy kind tys) = do
-  kind' <- zonkTcKind kind
+  kind' <- zonkTcKindToKind kind
   go kind' tys
   -- JPM: fold . map
   where
@@ -728,7 +752,7 @@ ds_app ty tys = do
                           return (mkAppTys fun_ty arg_tys)
 
 ds_var_app :: Name -> [Type] -> TcM Type
--- See Note [Looking up naames during when typechecking types]
+-- See Note [Looking up names when typechecking types]
 ds_var_app name arg_tys 
   | isTvNameSpace (rdrNameSpace (nameRdrName name))
   = do { thing <- tcLookup name
@@ -744,9 +768,9 @@ ds_var_app name arg_tys
 	   _           -> wrongThingErr "type" (AGlobal thing) name }
 \end{code}
 
-Note [Looking up naames during when typechecking types]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-There is a delicat point here.  Consider typechecking a data type decl
+Note [Looking up names when typechecking types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There is a delicate point here.  Consider typechecking a data type decl
    data T = MkT T Int
 First we kind-check the decl, to determine the final kind of T, * in
 this case.  Then we enter the knot-tied bit in tcTyClGroup that build
@@ -885,6 +909,9 @@ tcTyClTyVars :: Name -> [LHsTyVarBndr Name]	-- LHS of the type or class decl
              -> ([TyVar] -> Kind -> TcM a) -> TcM a
 -- tcTyClTyVars T [a,b] calls thing_inside with
 -- [k1,k2,a,b] (k2 -> *)  where T : forall k1 k2 (a:k1 -> *) (b:k1). k2 -> *
+--
+-- No need to freshen the k's because they are just skolem 
+-- constants here, and we are at top level anyway.
 tcTyClTyVars tycon tyvars thing_inside
   = do { thing <- tcLookup tycon
        ; let { kind =
@@ -899,10 +926,7 @@ tcTyClTyVars tycon tyvars thing_inside
              ; names = hsLTyVarNames tyvars
              ; tvs = zipWith mkTyVar names kinds
              ; all_vs = kvs ++ tvs }
-       ; all_vs' <- mapM (updateTyVarKindM zonkTcKind) all_vs
-       ; res' <- zonkTcKind res
-       ; tcExtendTyVarEnv all_vs' (thing_inside all_vs' res') }
-
+       ; tcExtendTyVarEnv all_vs (thing_inside all_vs res) }
 
 -- JPM: document
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
