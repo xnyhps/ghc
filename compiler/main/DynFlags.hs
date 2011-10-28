@@ -440,7 +440,7 @@ data DynFlags = DynFlags {
   maxSimplIterations    :: Int,         -- ^ Max simplifier iterations
   shouldDumpSimplPhase  :: Maybe String,
   ruleCheck             :: Maybe String,
-  strictnessBefore      :: [Int],       -- ^ Additional demand analysis
+  strictnessBefore      :: [String],    -- ^ Additional demand analysis
 
   specConstrThreshold   :: Maybe Int,   -- ^ Threshold for SpecConstr
   specConstrCount       :: Maybe Int,   -- ^ Max number of specialisations for any one function
@@ -1554,7 +1554,7 @@ dynamic_flags = [
   , flagA "fno-liberate-case-threshold" (noArg (\d -> d{ liberateCaseThreshold = Nothing }))
   , flagA "frule-check"                 (sepArg (\s d -> d{ ruleCheck = Just s }))
   , flagA "fcontext-stack"              (intSuffix (\n d -> d{ ctxtStkDepth = n }))
-  , flagA "fstrictness-before"          (intSuffix (\n d -> d{ strictnessBefore = n : strictnessBefore d }))
+  , flagA "fstrictness-before"          (hasArg (\s d -> d{ strictnessBefore = s : strictnessBefore d }))
   , flagA "ffloat-lam-args"             (intSuffix (\n d -> d{ floatLamArgs = Just n }))
   , flagA "ffloat-all-lams"             (noArg (\d -> d{ floatLamArgs = Nothing }))
 

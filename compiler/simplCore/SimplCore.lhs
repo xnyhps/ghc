@@ -29,7 +29,7 @@ import FloatIn		( floatInwards )
 import FloatOut		( floatOutwards )
 import FamInstEnv
 import Id
-import BasicTypes       ( CompilerPhase(..), isDefaultInlinePragma )
+import BasicTypes
 import VarSet
 import VarEnv
 import LiberateCase	( liberateCase )
@@ -39,6 +39,7 @@ import SpecConstr	( specConstrProgram)
 import DmdAnal		( dmdAnalPgm )
 import WorkWrap	        ( wwTopBinds )
 import Vectorise        ( vectorise )
+import StaticFlags	( opt_UF_UseThreshold )
 import FastString
 import Util
 
@@ -125,22 +126,28 @@ getCoreToDo dflags
 
     maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
 
-    maybe_strictness_before phase
-      = runWhen (phase `elem` strictnessBefore dflags) CoreDoStrictness
+    maybe_strictness_before name
+      = runWhen (name `elem` strictnessBefore dflags) CoreDoStrictness
 
     base_mode = SimplMode { sm_phase      = panic "base_mode"
                           , sm_names      = []
                           , sm_rules      = rules_on
                           , sm_eta_expand = eta_expand_on
-                          , sm_inline     = True
+                          , sm_inline     = Just opt_UF_UseThreshold
                           , sm_case_case  = True }
 
-    simpl_phase phase names iter
+    simpl_phase :: String -> PhaseNum   -- Name and phase number
+                -> Int 	    -- Max number of iterations of the simplifier
+                -> Float    -- Unfolding multiplier
+                -> CoreToDo
+    simpl_phase name phase iter unf_multiplier
       = CoreDoPasses
-      $   [ maybe_strictness_before phase
+      $   [ maybe_strictness_before name
           , CoreDoSimplify iter
                 (base_mode { sm_phase = Phase phase
-                           , sm_names = names })
+			   , sm_inline = fmap (\t -> round (fromIntegral t * unf_multiplier)) 
+                                              (sm_inline base_mode) 
+                           , sm_names = [name] })
 
           , maybe_rule_check (Phase phase) ]
 
@@ -168,7 +175,7 @@ getCoreToDo dflags
                 -- inlined.  I found that spectral/hartel/genfft lost some useful
                 -- strictness in the function sumcode' if augment is not inlined
                 -- before strictness analysis runs
-    simpl_phases = CoreDoPasses [ simpl_phase phase ["main"] max_iter
+    simpl_phases = CoreDoPasses [ simpl_phase "main" phase max_iter 1.0
                                 | phase <- [phases, phases-1 .. 1] ]
 
 
@@ -177,7 +184,6 @@ getCoreToDo dflags
                        (base_mode { sm_phase = InitialPhase
                                   , sm_names = ["Gentle"]
                                   , sm_rules = rules_on   -- Note [RULEs enabled in SimplGently]
-                                  , sm_inline = False
                                   , sm_case_case = False })
                           -- Don't do case-of-case transformations.
                           -- This makes full laziness work better
@@ -185,7 +191,7 @@ getCoreToDo dflags
     core_todo =
      if opt_level == 0 then
        [vectorisation,
-        simpl_phase 0 ["final"] max_iter]
+        simpl_phase "final" 0 max_iter 1.0]
      else {- opt_level >= 1 -} [
 
     -- We want to do the static argument transform before full laziness as it
@@ -230,7 +236,7 @@ getCoreToDo dflags
 
         runWhen do_float_in CoreDoFloatInwards,
 
-        simpl_phases,
+        simpl_phases,	    -- Phase 2, 1
 
                 -- Phase 0: allow all Ids to be inlined now
                 -- This gets foldr inlined before strictness analysis
@@ -242,12 +248,12 @@ getCoreToDo dflags
                 -- ==>  let k = BIG in letrec go = \xs -> ...(k x).... in go xs
                 -- ==>  let k = BIG in letrec go = \xs -> ...(BIG x).... in go xs
                 -- Don't stop now!
-        simpl_phase 0 ["main"] (max max_iter 3),
+        simpl_phase "main" 0 (max max_iter 3) 1.5,
 
         runWhen strictness (CoreDoPasses [
                 CoreDoStrictness,
                 CoreDoWorkerWrapper,
-                simpl_phase 0 ["post-worker-wrapper"] max_iter
+                simpl_phase "post-worker-wrapper" 0 max_iter 1.5 
                 ]),
 
         runWhen full_laziness $
@@ -269,23 +275,19 @@ getCoreToDo dflags
 
         runWhen do_float_in CoreDoFloatInwards,
 
-        maybe_rule_check (Phase 0),
-
                 -- Case-liberation for -O2.  This should be after
                 -- strictness analysis and the simplification which follows it.
         runWhen liberate_case (CoreDoPasses [
             CoreLiberateCase,
-            simpl_phase 0 ["post-liberate-case"] max_iter
+            simpl_phase "post-liberate-case" 0 max_iter 1.0
             ]),         -- Run the simplifier after LiberateCase to vastly
                         -- reduce the possiblility of shadowing
                         -- Reason: see Note [Shadowing] in SpecConstr.lhs
 
         runWhen spec_constr CoreDoSpecConstr,
 
-        maybe_rule_check (Phase 0),
-
         -- Final clean-up simplification:
-        simpl_phase 0 ["final"] max_iter
+        simpl_phase "final" 0 max_iter 1.5
      ]
 \end{code}
 

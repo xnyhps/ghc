@@ -10,7 +10,7 @@ module SimplUtils (
 
 	-- Inlining,
 	preInlineUnconditionally, postInlineUnconditionally, 
-	activeUnfolding, activeRule, 
+	activeRule, 
 	getUnfoldingInRuleMatch, 
         simplEnvForGHCi, updModeForInlineRules,
 
@@ -465,33 +465,26 @@ interestingArgContext rules call_cont
 %*									*
 %************************************************************************
 
-The SimplifierMode controls several switches; see its definition in
-CoreMonad
-        sm_rules      :: Bool     -- Whether RULES are enabled
-        sm_inline     :: Bool     -- Whether inlining is enabled
-        sm_case_case  :: Bool     -- Whether case-of-case is enabled
-        sm_eta_expand :: Bool     -- Whether eta-expansion is enabled
-
 \begin{code}
 simplEnvForGHCi :: DynFlags -> SimplEnv
 simplEnvForGHCi dflags
-  = mkSimplEnv $ SimplMode { sm_names = ["GHCi"]
-                           , sm_phase = InitialPhase
-                           , sm_rules = rules_on
-                           , sm_inline = False
-                           , sm_eta_expand = eta_expand_on
-                           , sm_case_case = True }
+  = mkSimplEnv $ 
+    SimplMode { sm_names = ["GHCi"]
+              , sm_phase = InitialPhase
+              , sm_rules = rules_on
+              , sm_inline = Nothing	-- No inlining at all in GHCi, in case
+                                        -- we expose some unboxed tuple stuff 
+                                        -- that confuses the bytecode interpreter
+              , sm_eta_expand = eta_expand_on
+              , sm_case_case = True }
   where
     rules_on      = dopt Opt_EnableRewriteRules   dflags
     eta_expand_on = dopt Opt_DoLambdaEtaExpansion dflags
-   -- Do not do any inlining, in case we expose some unboxed
-   -- tuple stuff that confuses the bytecode interpreter
 
 updModeForInlineRules :: Activation -> SimplifierMode -> SimplifierMode
 -- See Note [Simplifying inside InlineRules]
 updModeForInlineRules inline_rule_act current_mode
   = current_mode { sm_phase = phaseFromActivation inline_rule_act
-                 , sm_inline = True
                  , sm_eta_expand = False }
 		 -- For sm_rules, just inherit; sm_rules might be "off"
 		 -- becuase of -fno-enable-rewrite-rules
@@ -617,15 +610,6 @@ mark it 'demanded', so when the RHS is simplified, it'll get an ArgOf
 continuation. 
 
 \begin{code}
-activeUnfolding :: SimplEnv -> Id -> Bool
-activeUnfolding env
-  | not (sm_inline mode) = active_unfolding_minimal
-  | otherwise            = case sm_phase mode of
-                             InitialPhase -> active_unfolding_gentle
-                             Phase n      -> active_unfolding n
-  where
-    mode = getMode env
-
 getUnfoldingInRuleMatch :: SimplEnv -> IdUnfoldingFun
 -- When matching in RULE, we want to "look through" an unfolding
 -- (to see a constructor) if *rules* are on, even if *inlinings* 
@@ -639,34 +623,8 @@ getUnfoldingInRuleMatch env id
   where
     mode = getMode env
     unf_is_active
-     | not (sm_rules mode) = active_unfolding_minimal id
+     | not (sm_rules mode) = isCompulsoryUnfolding (realIdUnfolding id)
      | otherwise           = isActive (sm_phase mode) (idInlineActivation id)
-
-active_unfolding_minimal :: Id -> Bool
--- Compuslory unfoldings only
--- Ignore SimplGently, because we want to inline regardless;
--- the Id has no top-level binding at all
---
--- NB: we used to have a second exception, for data con wrappers.
--- On the grounds that we use gentle mode for rule LHSs, and 
--- they match better when data con wrappers are inlined.
--- But that only really applies to the trivial wrappers (like (:)),
--- and they are now constructed as Compulsory unfoldings (in MkId)
--- so they'll happen anyway.
-active_unfolding_minimal id = isCompulsoryUnfolding (realIdUnfolding id)
-
-active_unfolding :: PhaseNum -> Id -> Bool
-active_unfolding n id = isActiveIn n (idInlineActivation id)
-
-active_unfolding_gentle :: Id -> Bool
--- Anything that is early-active
--- See Note [Gentle mode]
-active_unfolding_gentle id
-  =  isInlinePragma prag
-  && isEarlyActive (inlinePragmaActivation prag)
-       -- NB: wrappers are not early-active
-  where
-    prag = idInlinePragma id
 
 ----------------------
 activeRule :: SimplEnv -> Activation -> Bool

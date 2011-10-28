@@ -293,10 +293,11 @@ data SimplifierMode             -- See comments in SimplMonad
   = SimplMode
         { sm_names      :: [String] -- Name(s) of the phase
         , sm_phase      :: CompilerPhase
-        , sm_rules      :: Bool     -- Whether RULES are enabled
-        , sm_inline     :: Bool     -- Whether inlining is enabled
-        , sm_case_case  :: Bool     -- Whether case-of-case is enabled
-        , sm_eta_expand :: Bool     -- Whether eta-expansion is enabled
+        , sm_rules      :: Bool       -- Whether RULES are enabled
+        , sm_inline     :: Maybe Int  -- The unfolding use threshold
+	  		   	      -- Nothing => compulsory unfoldings only (GHCi)
+        , sm_case_case  :: Bool       -- Whether case-of-case is enabled
+        , sm_eta_expand :: Bool       -- Whether eta-expansion is enabled
         }
 
 instance Outputable SimplifierMode where
@@ -306,12 +307,14 @@ instance Outputable SimplifierMode where
        = ptext (sLit "SimplMode") <+> braces (
          sep [ ptext (sLit "Phase =") <+> ppr p <+>
                brackets (text (concat $ intersperse "," ss)) <> comma
-             , pp_flag i   (sLit "inline") <> comma
+             , pp_inline i <> comma
              , pp_flag r   (sLit "rules") <> comma
              , pp_flag eta (sLit "eta-expand") <> comma
              , pp_flag cc  (sLit "case-of-case") ])
 	 where
            pp_flag f s = ppUnless f (ptext (sLit "no")) <+> ptext s
+	   pp_inline Nothing  = ptext (sLit "no inline")
+ 	   pp_inline (Just i) = ptext (sLit "inline=") <> int i
 \end{code}
 
 
