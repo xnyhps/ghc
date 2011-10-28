@@ -153,25 +153,30 @@ runSolverPipeline :: [(String,SimplifierStage)] -- The pipeline
 -- Run this item down the pipeline, leaving behind new work and inerts
 runSolverPipeline pipeline workItem 
   = do { initial_is <- getTcSInerts 
-       ; traceTcS "Start solver pipeline" $ 
+       ; traceTcS "Start solver pipeline {" $ 
                   vcat [ ptext (sLit "work item = ") <+> ppr workItem 
                        , ptext (sLit "inerts    = ") <+> ppr initial_is]
 
        ; final_res  <- run_pipeline pipeline (ContinueWith workItem)
 
+       ; final_is <- getTcSInerts
        ; case final_res of 
-           Stop            -> return () 
-           ContinueWith ct -> updInertSetTcS ct
+           Stop            -> do { traceTcS "End solver pipeline (discharged) }" 
+                                       (ptext (sLit "inerts    = ") <+> ppr final_is)
+                                 ; return () }
+           ContinueWith ct -> do { traceTcS "End solver pipeline (not discharged) }" $
+                                       vcat [ ptext (sLit "final_item = ") <+> ppr ct
+                                            , ptext (sLit "inerts     = ") <+> ppr final_is]
+                                 ; updInertSetTcS ct }
        }
   where run_pipeline :: [(String,SimplifierStage)] -> StopOrContinue -> TcS StopOrContinue
         run_pipeline [] res = return res 
         run_pipeline _ Stop = return Stop 
         run_pipeline ((stg_name,stg):stgs) (ContinueWith ct)
-          = do { traceTcS "runSolverPipeline" $ 
-                 vcat [ text "Stage name = " <+> text stg_name
-                      , text "workitem   = " <+> ppr ct ] <+> text "{"
+          = do { traceTcS ("runStage " ++ stg_name ++ " {")
+                          (text "workitem   = " <+> ppr ct) 
                ; res <- stg ct 
-               ; traceTcS "runSolverPipeline" $  text "} End stage"
+               ; traceTcS ("end stage " ++ stg_name ++ " }") empty
                ; run_pipeline stgs res 
                }
 \end{code}
