@@ -654,8 +654,8 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
 -------------------------
 
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
-tcSynFamInstDecl fam_tc (decl@TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
-                                        , tcdSynRhs = rhs })
+tcSynFamInstDecl fam_tc (TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
+                                   , tcdSynRhs = rhs })
   = do { checkTc (isSynTyCon fam_tc) (wrongKindOfFamily fam_tc)
 
        ; let kc_rhs rhs kind = kcCheckLHsType rhs (EK kind EkUnk) 
@@ -894,7 +894,7 @@ tcResultType :: ([TyVar], Type)	-- Template for result type; e.g.
 		     [(TyVar,Type)],	-- Equality predicates
 		     Type)		-- Typechecked return type
 	-- We don't check that the TyCon given in the ResTy is
-	-- the same as the parent tycon, becuase we are in the middle
+	-- the same as the parent tycon, because we are in the middle
 	-- of a recursive knot; so it's postponed until checkValidDataCon
 
 tcResultType (tmpl_tvs, res_ty) dc_tvs ResTyH98
@@ -1685,12 +1685,12 @@ wrongATArgErr ty instTy =
       , ptext (sLit "Found") <+> quotes (ppr ty)
         <+> ptext (sLit "but expected") <+> quotes (ppr instTy)
       ]
-
+{-
 tooManyParmsErr :: Name -> SDoc
 tooManyParmsErr tc_name
   = ptext (sLit "Family instance has too many parameters:") <+>
     quotes (ppr tc_name)
-
+-}
 wrongNumberOfParmsErr :: Arity -> SDoc
 wrongNumberOfParmsErr exp_arity
   = ptext (sLit "Number of parameters must match family declaration; expected")

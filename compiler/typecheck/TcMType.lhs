@@ -590,7 +590,7 @@ zonkQuantifiedTyVars tyvars
              -- to *, and zonk the tyvars as usual.  Notice that this
              -- may make zonkQuantifiedTyVars return a shorter list
              -- than it was passed, but that's ok
-             do { defaultKindVarsToStar kvs
+             do { _ <- defaultKindVarsToStar kvs
                 ; mapM zonkQuantifiedTyVar tvs } }
   where
     (kvs, tvs) = partitionKiTyVars tyvars
@@ -949,7 +949,7 @@ checkValidType ctxt ty = do
 	-- Check that the thing has kind Type, and is lifted if necessary
 	-- Do this second, because we can't usefully take the kind of an 
 	-- ill-formed type such as (a~Int)
-    -- checkTc True (kindErr actual_kind)
+    traceTc "checkValidType kind_ok ctxt" (ppr kind_ok $$ pprUserTypeCtxt ctxt)
     checkTc kind_ok (kindErr actual_kind)
 
     traceTc "checkValidType done" (ppr ty)

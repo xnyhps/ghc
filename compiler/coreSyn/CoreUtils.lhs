@@ -63,7 +63,6 @@ import PrimOp
 import Id
 import IdInfo
 import Type
-import Kind
 import Coercion
 import TyCon
 import CostCentre

@@ -52,7 +52,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
     	-- Note [Typechecking rules]
        ; vars <- tcRuleBndrs hs_bndrs
        ; let (id_bndrs, tv_bndrs) = partition isId vars
-       ; (lhs', lhs_lie, rhs', rhs_lie, rule_ty)
+       ; (lhs', lhs_lie, rhs', rhs_lie, _rule_ty)
             <- tcExtendTyVarEnv tv_bndrs $
                tcExtendIdEnv id_bndrs $
                do { ((lhs', rule_ty), lhs_lie) <- captureConstraints (tcInferRho lhs)
