@@ -547,6 +547,15 @@ data Details
        -- of imported Ids for which we have local RULES, to their local-id sets
   }
 
+instance Outputable Details where
+   ppr nd = ptext (sLit "ND") <> braces 
+             (sep [ ptext (sLit "bndr =") <+> ppr (nd_bndr nd)
+                  , ptext (sLit "uds =") <+> ppr (nd_uds nd)
+                  , ptext (sLit "inl =") <+> ppr (nd_inl nd)
+                  , ptext (sLit "rule_fvs =") <+> ppr (nd_rule_fvs nd)
+                  , ptext (sLit "active_rule_fvs =") <+> ppr (nd_active_rule_fvs nd)
+	     ])
+
 makeNode :: OccEnv -> VarSet -> (Var, CoreExpr) -> Node Details
 makeNode env bndr_set (bndr, rhs)
   = (details, varUnique bndr, keysUFM (udFreeVars bndr_set rhs_usage3))
