@@ -506,12 +506,12 @@ hasEqualities :: [EvVar] -> Bool
 -- Has a bunch of canonical constraints (all givens) got any equalities in it?
 hasEqualities givens = any (has_eq . evVarPred) givens
   where
-    has_eq = has_eq' . predTypePredTree
+    has_eq = has_eq' . classifyPredType
 
     has_eq' (EqPred {})          = True
     has_eq' (IPPred {})          = False
     has_eq' (ClassPred cls _tys) = any has_eq (classSCTheta cls)
-    has_eq' (TuplePred ts)       = any has_eq' ts
+    has_eq' (TuplePred ts)       = any has_eq ts
     has_eq' (IrredPred _)        = True -- Might have equalities in it after reduction?
 
 ---------------- Getting free tyvars -------------------------

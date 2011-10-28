@@ -175,7 +175,7 @@ reportFlat ctxt flats origin
        ; unless (null ips)    $ reportIPErrs     ctxt ips    origin
        ; unless (null irreds) $ reportIrredsErrs ctxt irreds origin }
   where
-    (dicts, eqs, ips, irreds) = go_many (map predTypePredTree flats)
+    (dicts, eqs, ips, irreds) = go_many (map classifyPredType flats)
 
     go_many []     = ([], [], [], [])
     go_many (t:ts) = (as ++ as', bs ++ bs', cs ++ cs', ds ++ ds')

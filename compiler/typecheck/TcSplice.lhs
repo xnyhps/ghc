@@ -1360,7 +1360,7 @@ reify_tc_app tc tys
          | otherwise                = TH.ConT (reifyName tc)
 
 reifyPred :: TypeRep.PredType -> TcM TH.Pred
-reifyPred ty = case predTypePredTree ty of
+reifyPred ty = case classifyPredType ty of
   ClassPred cls tys -> do { tys' <- reifyTypes tys 
                           ; return $ TH.ClassP (reifyName cls) tys' }
   IPPred _ _        -> noTH (sLit "implicit parameters") (ppr ty)

@@ -156,7 +156,7 @@ newDict cls tys
        ; return (mkLocalId name (mkClassPred cls tys)) }
 
 predTypeOccName :: PredType -> OccName
-predTypeOccName ty = case predTypePredTree ty of
+predTypeOccName ty = case classifyPredType ty of
     ClassPred cls _ -> mkDictOcc (getOccName cls)
     IPPred ip _     -> mkVarOccFS (ipFastString ip)
     EqPred _ _      -> mkVarOccFS (fsLit "cobox")
@@ -1169,7 +1169,7 @@ check_pred_ty' _ _ctxt (IPPred _ ty) = checkValidMonoType ty
 check_pred_ty' dflags ctxt t@(TuplePred ts)
   = do { checkTc (xopt Opt_ConstraintKinds dflags)
                  (predTupleErr (predTreePredType t))
-       ; mapM_ (check_pred_ty' dflags ctxt) ts }
+       ; mapM_ (check_pred_ty dflags ctxt) ts }
     -- This case will not normally be executed because without -XConstraintKinds
     -- tuple types are only kind-checked as *
 
@@ -1305,7 +1305,7 @@ growPredTyVars :: TcPredType
                -> TyVarSet	-- The set to extend
 	       -> TyVarSet	-- TyVars of the predicate if it intersects
 	       	  		-- the set, or is implicit parameter
-growPredTyVars pred tvs = go (predTypePredTree pred)
+growPredTyVars pred tvs = go (classifyPredType pred)
   where
     grow pred_tvs | pred_tvs `intersectsVarSet` tvs = pred_tvs
                   | otherwise                       = emptyVarSet
@@ -1313,7 +1313,7 @@ growPredTyVars pred tvs = go (predTypePredTree pred)
     go (IPPred _ ty)     = tyVarsOfType ty -- See Note [Implicit parameters and ambiguity]
     go (ClassPred _ tys) = grow (tyVarsOfTypes tys)
     go (EqPred ty1 ty2)  = grow (tyVarsOfType ty1 `unionVarSet` tyVarsOfType ty2)
-    go (TuplePred ts)    = unionVarSets (map go ts)
+    go (TuplePred ts)    = unionVarSets (map (go . classifyPredType) ts)
     go (IrredPred ty)    = grow (tyVarsOfType ty)
 \end{code}
     
@@ -1645,12 +1645,12 @@ fvTypes tys                = concat (map fvType tys)
 sizePred :: PredType -> Int
 -- Size of a predicate: the number of variables and constructors
 -- See Note [Paterson conditions on PredTypes]
-sizePred ty = go (predTypePredTree ty)
+sizePred ty = go (classifyPredType ty)
   where
     go (ClassPred _ tys') = sizeTypes tys'
     go (IPPred {})        = 0
     go (EqPred {})        = 0
-    go (TuplePred ts)     = maximum (0:map go ts)
+    go (TuplePred ts)     = maximum (0:map sizePred ts)
     go (IrredPred ty)     = sizeType ty
 
 -------------------
