@@ -56,7 +56,6 @@ import BasicTypes
 import Type
 import PrelNames
 import Bag
-import Util
 import FastTypes
 import FastString
 import Outputable

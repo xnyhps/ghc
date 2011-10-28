@@ -448,7 +448,7 @@ pprExternal sty uniq mod occ name is_wired is_builtin
 	-- In code style, always qualify
 	-- ToDo: maybe we could print all wired-in things unqualified
 	-- 	 in code style, to reduce symbol table bloat?
-  | debugStyle sty = ppr mod <> dot <> ppr_occ_name occ
+  | debugStyle sty = pp_mod <> ppr_occ_name occ
 		     <> (ppUnless opt_SuppressAll $
                          braces (hsep [if is_wired then ptext (sLit "(w)") else empty,
 				      pprNameSpaceBrief (occNameSpace occ), 

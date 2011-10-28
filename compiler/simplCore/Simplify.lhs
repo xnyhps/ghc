@@ -667,8 +667,7 @@ completeBind env top_lvl old_bndr new_bndr new_rhs
               -- than that of the strictness sig. This can happen: see Note [Arity decrease].
             info3 | isEvaldUnfolding new_unfolding
                     || (case strictnessInfo info2 of
-                          Just (StrictSig dmd_ty) -> new_arity < dmdTypeDepth dmd_ty
-                          Nothing                 -> False)
+                          StrictSig dmd_ty -> new_arity < dmdTypeDepth dmd_ty)
                   = zapDemandInfo info2 `orElse` info2
                   | otherwise
                   = info2

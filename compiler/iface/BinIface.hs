@@ -27,7 +27,6 @@ import IfaceSyn
 import Module
 import Name
 import Avail
-import VarEnv
 import DynFlags
 import UniqFM
 import UniqSupply
