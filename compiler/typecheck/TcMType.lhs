@@ -414,26 +414,23 @@ newFlexiTyVarTys n kind = mapM newFlexiTyVarTy (nOfThem n kind)
 
 tcInstTyVars :: [TyVar] -> TcM ([TcTyVar], [TcType], TvSubst)
 -- Instantiate with META type variables
-tcInstTyVars tyvars
-  = do	{ tc_kvs <- mapM (tcInstTyVar (mkTopTvSubst [])) kvs
-        ; tc_tvs <- mapM (tcInstTyVar (zipTopTvSubst kvs (mkTyVarTys tc_kvs))) tvs
-	; let tc_vs = tc_kvs ++ tc_tvs
-              kts = mkTyVarTys tc_vs
-	; return (tc_vs, kts, zipTopTvSubst (kvs ++ tvs) kts) }
-		-- Since the tyvars are freshly made,
-		-- they cannot possibly be captured by
-		-- any existing for-alls.  Hence zipTopTvSubst
-  where (kvs, tvs) = splitKiTyVars tyvars
+tcInstTyVars tyvars = tcInstTyVarsX emptyTvSubst tyvars
+    -- emptyTvSubst has an empty in-scope set, but that's fine here
+    -- Since the tyvars are freshly made, they cannot possibly be
+    -- captured by any existing for-alls.
 
-tcInstTyVar :: TvSubst -> TyVar -> TcM TcTyVar
+tcInstTyVarsX subst tyvars = mapAcuumLM tcInstTyVar subst tyvars
+
+tcInstTyVar :: TvSubst -> TyVar -> TcM (TvSubst, TcTyVar)
 -- Make a new unification variable tyvar whose Name and Kind come from
 -- an existing TyVar. We substitute kind variables in the kind.
 tcInstTyVar subst tyvar
   = do	{ uniq <- newMetaUnique
  	; ref <- newMutVar Flexi
-        ; let name = mkSystemName uniq (getOccName tyvar)
-	      kind = substTy subst (tyVarKind tyvar)
-	; return (mkTcTyVar name kind (MetaTv TauTv ref)) }
+        ; let name   = mkSystemName uniq (getOccName tyvar)
+	      kind   = substTy subst (tyVarKind tyvar)
+              new_tv = mkTcTyVar name kind (MetaTv TauTv ref)
+	; return (extendTvSubst subst tyvar new_tv, new_tv) }
 \end{code}
 
 
@@ -569,14 +566,24 @@ zonkTcPredType = zonkTcType
 
 \begin{code}
 zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
+-- Precondition: a kind variable occurs before a type
+--               variable mentioning it in its kind
 zonkQuantifiedTyVars tyvars
-  = do { let (kvs, tvs) = splitKiTyVars tyvars
-       ; z_kvs <- mapM zonkQuantifiedTyVar kvs
-       ; z_tvs <- mapM zonkQuantifiedTyVar tvs
-           -- By doing the kind variables first, we ensure that
-           -- any kind variables mentioned in the kinds of the
-           -- type variables refer to the now-quantified versions
-       ; return $ z_kvs ++ z_tvs }
+  = do { poly_kind <- doptM Opt_PolyKinds
+       ; if poly_kind then
+             mapM zonkQuantifiedTyVar tyvars 
+           -- Because of the precondition, any kind variables
+           -- mentioned in the kinds of the type variables refer to
+           -- the now-quantified versions
+         else
+             -- In the non-PolyKinds case, default the kind variables
+             -- to *, and zonk the tyvars as usual.  Notice that this
+             -- may make zonkQuantifiedTyVars return a shorter list
+             -- than it was passed, but that's ok
+             do { defaultKindVarsToStar kvs
+                ; mapM zonkQuantifiedTyVar tvs } }
+  where
+    (kvs, tvs) = partitionKiTyVars tyvars
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- The quantified type variables often include meta type variables
@@ -588,6 +595,9 @@ zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- the immutable version.
 --
 -- We leave skolem TyVars alone; they are immutable.
+--
+-- This function is called on both kind and type variables,
+-- but kind variables *only* if PolyKinds is on.
 zonkQuantifiedTyVar tv
   = ASSERT2( isTcTyVar tv, ppr tv ) 
     case tcTyVarDetails tv of

@@ -78,7 +78,8 @@ rnHsType is here because we call it from loadInstDecl, and I didn't
 want a gratuitous knot.
 
 \begin{code}
-rnLHsTyKi  :: Bool -> HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
+rnLHsTyKi  :: Bool --  True <=> renaming a type, False <=> a kind
+           -> HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
 rnLHsTyKi isType doc = wrapLocM (rnHsTyKi isType doc)
 
 rnLHsType  :: HsDocContext -> LHsType RdrName -> RnM (LHsType Name)
