@@ -660,7 +660,7 @@ doInteractWithInert (CIPCan { cc_id = id1, cc_flavor = ifl, cc_ip_nm = nm1, cc_i
            Derived {} -> pprPanic "Unexpected derived IP" (ppr workItem)
            Wanted  {} ->
                do { setEvBind (cc_id workItem) $ 
-                    EvCast id1 (mkSymCo (mkTyConAppCo (ipTyCon nm1) [mkEqVarLCo eqv]))
+                    mkEvCast id1 (mkSymCo (mkTyConAppCo (ipTyCon nm1) [mkEqVarLCo eqv]))
                     -- DV: Changing: used to be (mkSymCo (mkEqVarLCo eqv))
                   ; irWorkItemConsumed "IP/IP (solved by rewriting)" } }
 
@@ -1207,7 +1207,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                                 ; emitFDWorkAsWanted fd_work (cc_depth workItem) 
                                 ; dv' <- newDictVar cls xis'
                                 ; setDictBind dv' ev_term
-                                ; doSolveFromInstance wtvs (EvCast dv' dict_co) workItem }
+                                ; doSolveFromInstance wtvs (mkEvCast dv' dict_co) workItem }
                   } }
 
    where doSolveFromInstance :: [WantedEvVar] 
