@@ -11,13 +11,13 @@ module FamInstEnv (
 	famInstHead, mkLocalFamInst, mkImportedFamInst,
 
 	FamInstEnvs, FamInstEnv, emptyFamInstEnv, emptyFamInstEnvs, 
-	extendFamInstEnv, extendFamInstEnvList, 
+	extendFamInstEnv, overwriteFamInstEnv, extendFamInstEnvList, 
 	famInstEnvElts, familyInstances,
 
-	lookupFamInstEnv, lookupFamInstEnvConflicts,
+	lookupFamInstEnv, lookupFamInstEnvConflicts, lookupFamInstEnvConflicts',
 	
 	-- Normalisation
-	topNormaliseType
+	topNormaliseType, normaliseType, normaliseTcApp
     ) where
 
 #include "HsVersions.h"
@@ -85,7 +85,7 @@ pprFamInst :: FamInst -> SDoc
 pprFamInst famInst
   = hang (pprFamInstHdr famInst)
        2 (vcat [ ifPprDebug (ptext (sLit "Coercion axiom:") <+> pp_ax)
-               , ptext (sLit "--") <+> pprNameLoc (getName famInst)])
+               , ptext (sLit "--") <+> pprDefinedAt (getName famInst)])
   where
     pp_ax = case tyConFamilyCoercion_maybe (fi_tycon famInst) of
               Just ax -> ppr ax
@@ -225,6 +225,43 @@ extendFamInstEnv inst_env ins_item@(FamInst {fi_fam = cls_nm, fi_tcs = mb_tcs})
     add (FamIE items tyvar) _ = FamIE (ins_item:items)
 				      (ins_tyvar || tyvar)
     ins_tyvar = not (any isJust mb_tcs)
+
+overwriteFamInstEnv :: FamInstEnv -> FamInst -> FamInstEnv
+overwriteFamInstEnv inst_env ins_item@(FamInst {fi_fam = cls_nm, fi_tcs = mb_tcs})
+  = addToUFM_C add inst_env cls_nm (FamIE [ins_item] ins_tyvar)
+  where
+    add (FamIE items tyvar) _ = FamIE (replaceFInst items)
+				      (ins_tyvar || tyvar)
+    ins_tyvar = not (any isJust mb_tcs)
+    match _ tpl_tvs tpl_tys tys = tcMatchTys tpl_tvs tpl_tys tys
+    
+    inst_tycon = famInstTyCon ins_item
+    (fam, tys) = expectJust "FamInstEnv.lookuFamInstEnvConflicts"
+    	       	            (tyConFamInst_maybe inst_tycon)
+    arity = tyConArity fam
+    n_tys = length tys
+    match_tys 
+        | arity > n_tys = take arity tys
+        | otherwise     = tys
+    rough_tcs = roughMatchTcs match_tys
+    
+    replaceFInst [] = [ins_item]
+    replaceFInst (item@(FamInst { fi_tcs = mb_tcs, fi_tvs = tpl_tvs, 
+                                  fi_tys = tpl_tys }) : rest)
+	-- Fast check for no match, uses the "rough match" fields
+      | instanceCantMatch rough_tcs mb_tcs
+      = item : replaceFInst rest
+
+        -- Proper check
+      | Just _ <- match item tpl_tvs tpl_tys match_tys
+      = ins_item : rest
+
+        -- No match => try next
+      | otherwise
+      = item : replaceFInst rest
+
+
+
 \end{code}
 
 %************************************************************************
@@ -264,6 +301,58 @@ lookupFamInstEnv
    = lookup_fam_inst_env match True
    where
      match _ tpl_tvs tpl_tys tys = tcMatchTys tpl_tvs tpl_tys tys
+
+lookupFamInstEnvConflicts'
+    :: FamInstEnv
+    -> FamInst		-- Putative new instance
+    -> [TyVar]		-- Unique tyvars, matching arity of FamInst
+    -> [FamInstMatch] 	-- Conflicting matches
+-- E.g. when we are about to add
+--    f : type instance F [a] = a->a
+-- we do (lookupFamInstConflicts f [b])
+-- to find conflicting matches
+-- The skolem tyvars are needed because we don't have a 
+-- unique supply to hand
+--
+-- Precondition: the tycon is saturated (or over-saturated)
+
+lookupFamInstEnvConflicts' env fam_inst skol_tvs
+  = lookup_fam_inst_env' my_unify False env fam tys'
+  where
+    inst_tycon = famInstTyCon fam_inst
+    (fam, tys) = expectJust "FamInstEnv.lookuFamInstEnvConflicts"
+    	       	            (tyConFamInst_maybe inst_tycon)
+    skol_tys = mkTyVarTys skol_tvs
+    tys'     = substTys (zipTopTvSubst (tyConTyVars inst_tycon) skol_tys) tys
+        -- In example above,   fam tys' = F [b]   
+
+    my_unify old_fam_inst tpl_tvs tpl_tys match_tys
+       = ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tvs,
+		  (ppr fam <+> ppr tys) $$
+		  (ppr tpl_tvs <+> ppr tpl_tys) )
+		-- Unification will break badly if the variables overlap
+		-- They shouldn't because we allocate separate uniques for them
+         case tcUnifyTys instanceBindFun tpl_tys match_tys of
+	      Just subst | conflicting old_fam_inst subst -> Just subst
+	      _other	   	              	          -> Nothing
+
+      -- - In the case of data family instances, any overlap is fundamentally a
+      --   conflict (as these instances imply injective type mappings).
+      -- - In the case of type family instances, overlap is admitted as long as
+      --   the right-hand sides of the overlapping rules coincide under the
+      --   overlap substitution.  We require that they are syntactically equal;
+      --   anything else would be difficult to test for at this stage.
+    conflicting old_fam_inst subst 
+      | isAlgTyCon fam = True
+      | otherwise      = not (old_rhs `eqType` new_rhs)
+      where
+        old_tycon = famInstTyCon old_fam_inst
+        old_tvs   = tyConTyVars old_tycon
+        old_rhs   = mkTyConApp old_tycon  (substTyVars subst old_tvs)
+        new_rhs   = mkTyConApp inst_tycon (substTyVars subst skol_tvs)
+
+
+
 
 lookupFamInstEnvConflicts
     :: FamInstEnvs
@@ -336,25 +425,19 @@ type MatchFun =  FamInst		-- The FamInst template
 type OneSidedMatch = Bool     -- Are optimisations that are only valid for
                               -- one sided matches allowed?
 
-lookup_fam_inst_env 	      -- The worker, local to this module
+lookup_fam_inst_env' 	      -- The worker, local to this module
     :: MatchFun
     -> OneSidedMatch
-    -> FamInstEnvs
+    -> FamInstEnv
     -> TyCon -> [Type]		-- What we are looking for
     -> [FamInstMatch] 	        -- Successful matches
-
--- Precondition: the tycon is saturated (or over-saturated)
-
-lookup_fam_inst_env match_fun one_sided (pkg_ie, home_ie) fam tys
+lookup_fam_inst_env' match_fun one_sided ie fam tys
   | not (isFamilyTyCon fam) 
   = []
   | otherwise
   = ASSERT2( n_tys >= arity, ppr fam <+> ppr tys )	-- Family type applications must be saturated
-    home_matches ++ pkg_matches
+    lookup ie
   where
-    home_matches = lookup home_ie 
-    pkg_matches  = lookup pkg_ie  
-
     -- See Note [Over-saturated matches]
     arity = tyConArity fam
     n_tys = length tys
@@ -394,6 +477,21 @@ lookup_fam_inst_env match_fun one_sided (pkg_ie, home_ie) fam tys
         -- No match => try next
       | otherwise
       = find rest
+-- Precondition: the tycon is saturated (or over-saturated)
+
+lookup_fam_inst_env 	      -- The worker, local to this module
+    :: MatchFun
+    -> OneSidedMatch
+    -> FamInstEnvs
+    -> TyCon -> [Type]		-- What we are looking for
+    -> [FamInstMatch] 	        -- Successful matches
+
+-- Precondition: the tycon is saturated (or over-saturated)
+
+lookup_fam_inst_env match_fun one_sided (pkg_ie, home_ie) fam tys = 
+    lookup_fam_inst_env' match_fun one_sided home_ie fam tys ++
+    lookup_fam_inst_env' match_fun one_sided pkg_ie  fam tys
+
 \end{code}
 
 Note [Over-saturated matches]
@@ -452,8 +550,10 @@ topNormaliseType env ty
 
 	| isFamilyTyCon tc		-- Expand open tycons
 	, (co, ty) <- normaliseTcApp env tc tys
-		-- Note that normaliseType fully normalises, 
-		-- but it has do to so to be sure that 
+		-- Note that normaliseType fully normalises 'tys', 
+		-- It has do to so to be sure that nested calls like
+		--    F (G Int)
+		-- are correctly top-normalised
         , not (isReflCo co)
         = add_co co rec_nts ty
         where
@@ -520,19 +620,4 @@ normaliseType env (ForAllTy tyvar ty1)
     in  (mkForAllCo tyvar coi, ForAllTy tyvar nty1)
 normaliseType _   ty@(TyVarTy _)
   = (Refl ty,ty)
-normaliseType env (PredTy predty)
-  = normalisePred env predty
-
----------------
-normalisePred :: FamInstEnvs -> PredType -> (Coercion,Type)
-normalisePred env (ClassP cls tys)
-  = let (cos,tys') = mapAndUnzip (normaliseType env) tys
-    in  (mkPredCo $ ClassP cls cos, PredTy $ ClassP cls tys')
-normalisePred env (IParam ipn ty)
-  = let (co,ty') = normaliseType env ty
-    in  (mkPredCo $ (IParam ipn co), PredTy $ IParam ipn ty')
-normalisePred env (EqPred ty1 ty2)
-  = let (co1,ty1') = normaliseType env ty1
-        (co2,ty2') = normaliseType env ty2
-    in  (mkPredCo $ (EqPred co1 co2), PredTy $ EqPred ty1' ty2')
 \end{code}

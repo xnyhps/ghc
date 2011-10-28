@@ -29,7 +29,7 @@ module HsUtils(
   mkLHsTupleExpr, mkLHsVarTuple, missingTupArg,
 
   -- Bindings
-  mkFunBind, mkVarBind, mkHsVarBind, mk_easy_FunBind, 
+  mkFunBind, mkVarBind, mkHsVarBind, mk_easy_FunBind, mkTopFunBind,
 
   -- Literals
   mkHsIntegral, mkHsFractional, mkHsIsString, mkHsString, 
@@ -89,6 +89,7 @@ import Util
 import Bag
 
 import Data.Either
+import Data.Maybe
 \end{code}
 
 
@@ -172,15 +173,15 @@ mkHsWrap :: HsWrapper -> HsExpr id -> HsExpr id
 mkHsWrap co_fn e | isIdHsWrapper co_fn = e
 		 | otherwise	       = HsWrap co_fn e
 
-mkHsWrapCo :: Coercion -> HsExpr id -> HsExpr id
+mkHsWrapCo :: LCoercion -> HsExpr id -> HsExpr id
 mkHsWrapCo (Refl _) e = e
 mkHsWrapCo co       e = mkHsWrap (WpCast co) e
 
-mkLHsWrapCo :: Coercion -> LHsExpr id -> LHsExpr id
+mkLHsWrapCo :: LCoercion -> LHsExpr id -> LHsExpr id
 mkLHsWrapCo (Refl _) e         = e
 mkLHsWrapCo co       (L loc e) = L loc (mkHsWrap (WpCast co) e)
 
-coToHsWrapper :: Coercion -> HsWrapper
+coToHsWrapper :: LCoercion -> HsWrapper
 coToHsWrapper (Refl _) = idHsWrapper
 coToHsWrapper co       = WpCast co
 
@@ -188,7 +189,7 @@ mkHsWrapPat :: HsWrapper -> Pat id -> Type -> Pat id
 mkHsWrapPat co_fn p ty | isIdHsWrapper co_fn = p
 		       | otherwise	     = CoPat co_fn p ty
 
-mkHsWrapPatCo :: Coercion -> Pat id -> Type -> Pat id
+mkHsWrapPatCo :: LCoercion -> Pat id -> Type -> Pat id
 mkHsWrapPatCo (Refl _) pat _  = pat
 mkHsWrapPatCo co       pat ty = CoPat (WpCast co) pat ty
 
@@ -406,14 +407,23 @@ missingTupArg = Missing placeHolderType
 %************************************************************************
 
 \begin{code}
-mkFunBind :: Located id -> [LMatch id] -> HsBind id
+mkFunBind :: Located RdrName -> [LMatch RdrName] -> HsBind RdrName
 -- Not infix, with place holders for coercion and free vars
-mkFunBind fn ms = FunBind { fun_id = fn, fun_infix = False, fun_matches = mkMatchGroup ms,
-			    fun_co_fn = idHsWrapper, bind_fvs = placeHolderNames,
-			    fun_tick = Nothing }
+mkFunBind fn ms = FunBind { fun_id = fn, fun_infix = False
+                          , fun_matches = mkMatchGroup ms
+			  , fun_co_fn = idHsWrapper
+                          , bind_fvs = placeHolderNames
+			  , fun_tick = Nothing }
 
+mkTopFunBind :: Located Name -> [LMatch Name] -> HsBind Name
+-- In Name-land, with empty bind_fvs
+mkTopFunBind fn ms = FunBind { fun_id = fn, fun_infix = False
+                             , fun_matches = mkMatchGroup ms
+			     , fun_co_fn = idHsWrapper
+                             , bind_fvs = emptyNameSet	-- NB: closed binding
+			     , fun_tick = Nothing }
 
-mkHsVarBind :: SrcSpan -> id -> LHsExpr id -> LHsBind id
+mkHsVarBind :: SrcSpan -> RdrName -> LHsExpr RdrName -> LHsBind RdrName
 mkHsVarBind loc var rhs = mk_easy_FunBind loc var [] rhs
 
 mkVarBind :: id -> LHsExpr id -> LHsBind id
@@ -421,9 +431,8 @@ mkVarBind var rhs = L (getLoc rhs) $
 		    VarBind { var_id = var, var_rhs = rhs, var_inline = False }
 
 ------------
-mk_easy_FunBind :: SrcSpan -> id -> [LPat id]
-		-> LHsExpr id -> LHsBind id
-
+mk_easy_FunBind :: SrcSpan -> RdrName -> [LPat RdrName]
+		-> LHsExpr RdrName -> LHsBind RdrName
 mk_easy_FunBind loc fun pats expr
   = L loc $ mkFunBind (L loc fun) [mkMatch pats expr emptyLocalBinds]
 
@@ -482,7 +491,7 @@ collect_bind (PatBind { pat_lhs = p })    acc = collect_lpat p acc
 collect_bind (FunBind { fun_id = L _ f }) acc = f : acc
 collect_bind (VarBind { var_id = f })     acc = f : acc
 collect_bind (AbsBinds { abs_exports = dbinds, abs_binds = _binds }) acc
-  = [dp | (_,dp,_,_) <- dbinds] ++ acc 
+  = map abe_poly dbinds ++ acc 
 	-- ++ foldr collect_bind acc binds
 	-- I don't think we want the binders from the nested binds
 	-- The only time we collect binders from a typechecked 
@@ -601,7 +610,7 @@ hsGroupBinders (HsGroup { hs_valds = val_decls, hs_tyclds = tycl_decls,
 
 hsForeignDeclsBinders :: [LForeignDecl Name] -> [Name]
 hsForeignDeclsBinders foreign_decls
-  = [n | L _ (ForeignImport (L _ n) _ _) <- foreign_decls]
+  = [n | L _ (ForeignImport (L _ n) _ _ _) <- foreign_decls]
 
 hsTyClDeclsBinders :: [[LTyClDecl Name]] -> [Located (InstDecl Name)] -> [Name]
 hsTyClDeclsBinders tycl_decls inst_decls
@@ -615,15 +624,21 @@ hsTyClDeclBinders :: Eq name => Located (TyClDecl name) -> [Located name]
 -- occurence.  We use the equality to filter out duplicate field names
 
 hsTyClDeclBinders (L _ (TyFamily    {tcdLName = name})) = [name]
-hsTyClDeclBinders (L _ (TySynonym   {tcdLName = name})) = [name]
 hsTyClDeclBinders (L _ (ForeignType {tcdLName = name})) = [name]
 
 hsTyClDeclBinders (L _ (ClassDecl {tcdLName = cls_name, tcdSigs = sigs, tcdATs = ats}))
   = cls_name : 
     concatMap hsTyClDeclBinders ats ++ [n | L _ (TypeSig ns _) <- sigs, n <- ns]
 
-hsTyClDeclBinders (L _ (TyData {tcdLName = tc_name, tcdCons = cons}))
-  = tc_name : hsConDeclsBinders cons
+hsTyClDeclBinders (L _ (TySynonym   {tcdLName = name, tcdTyPats = mb_pats })) 
+  | isJust mb_pats = []
+  | otherwise      = [name]
+  -- See Note [Binders in family instances]
+
+hsTyClDeclBinders (L _ (TyData {tcdLName = tc_name, tcdCons = cons, tcdTyPats = mb_pats }))
+  | isJust mb_pats = hsConDeclsBinders cons
+  | otherwise      = tc_name : hsConDeclsBinders cons
+  -- See Note [Binders in family instances]
 
 hsConDeclsBinders :: (Eq name) => [LConDecl name] -> [Located name]
   -- See hsTyClDeclBinders for what this does
@@ -641,6 +656,13 @@ hsConDeclsBinders cons
     do_one (flds_seen, acc) (L _ (ConDecl { con_name = lname }))
 	= (flds_seen, lname:acc)
 \end{code}
+
+Note [Binders in family instances]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In a type or data family instance declaration, the type 
+constructor is an *occurrence* not a binding site
+    type instance T Int = Int -> Int   -- No binders
+    data instance S Bool = S1 | S2     -- Binders are S1,S2
 
 
 %************************************************************************

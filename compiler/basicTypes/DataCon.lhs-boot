@@ -11,4 +11,6 @@ instance Outputable DataCon
 
 dataConName      :: DataCon -> Name
 isVanillaDataCon :: DataCon -> Bool
+instance Eq DataCon
+instance Ord DataCon
 \end{code}

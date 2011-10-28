@@ -15,19 +15,20 @@ import RdrHsSyn
 import HsSyn
 import RdrName
 import OccName
+import TypeRep ( TyThing(..) )
 import Type ( Kind,
               liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
               argTypeKindTyCon, ubxTupleKindTyCon, mkTyConApp
             )
 import Coercion( mkArrowKind )
-import Name( Name, nameOccName, nameModule, mkExternalName )
+import Name( Name, nameOccName, nameModule, mkExternalName, wiredInNameTyThing_maybe )
 import Module
 import ParserCoreUtils
 import LexCore
 import Literal
 import SrcLoc
-import TysPrim( wordPrimTyCon, intPrimTyCon, charPrimTyCon, 
-		floatPrimTyCon, doublePrimTyCon, addrPrimTyCon )
+import PrelNames
+import TysPrim
 import TyCon ( TyCon, tyConName )
 import FastString
 import Outputable
@@ -246,7 +247,6 @@ akind	:: { IfaceKind }
 kind 	:: { IfaceKind }
 	: akind 	   { $1 }
 	| akind '->' kind  { ifaceArrow $1 $3 }
-        | ty ':=:' ty      { ifaceEq $1 $3 }
 
 -----------------------------------------
 --             Expressions
@@ -363,22 +363,16 @@ toKind (IfaceTyConApp ifKc []) = mkTyConApp (toKindTc ifKc) []
 toKind other                   = pprPanic "toKind" (ppr other)
 
 toKindTc :: IfaceTyCon -> TyCon
-toKindTc IfaceLiftedTypeKindTc   = liftedTypeKindTyCon
-toKindTc IfaceOpenTypeKindTc     = openTypeKindTyCon
-toKindTc IfaceUnliftedTypeKindTc = unliftedTypeKindTyCon
-toKindTc IfaceUbxTupleKindTc     = ubxTupleKindTyCon
-toKindTc IfaceArgTypeKindTc      = argTypeKindTyCon
-toKindTc other                   = pprPanic "toKindTc" (ppr other)
+toKindTc (IfaceTc n) | Just (ATyCon tc) <- wiredInNameTyThing_maybe n = tc
+toKindTc other = pprPanic "toKindTc" (ppr other)
 
 ifaceTcType ifTc = IfaceTyConApp ifTc []
 
-ifaceLiftedTypeKind   = ifaceTcType IfaceLiftedTypeKindTc
-ifaceOpenTypeKind     = ifaceTcType IfaceOpenTypeKindTc
-ifaceUnliftedTypeKind = ifaceTcType IfaceUnliftedTypeKindTc
+ifaceLiftedTypeKind   = ifaceTcType (IfaceTc liftedTypeKindTyConName)
+ifaceOpenTypeKind     = ifaceTcType (IfaceTc openTypeKindTyConName)
+ifaceUnliftedTypeKind = ifaceTcType (IfaceTc unliftedTypeKindTyConName)
 
 ifaceArrow ifT1 ifT2 = IfaceFunTy ifT1 ifT2
-
-ifaceEq ifT1 ifT2 = IfacePredTy (IfaceEqPred ifT1 ifT2)
 
 toHsTvBndr :: IfaceTvBndr -> LHsTyVarBndr RdrName
 toHsTvBndr (tv,k) = noLoc $ KindedTyVar (mkRdrUnqual (mkTyVarOccFS tv)) (toKind k)

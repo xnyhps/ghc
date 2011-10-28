@@ -64,8 +64,8 @@ module TcRnTypes(
 import HsSyn
 import HscTypes
 import Type
-import Id	( evVarPred )
 import Class    ( Class )
+import TyCon    ( TyCon )
 import DataCon  ( DataCon, dataConUserType )
 import TcType
 import Annotations
@@ -76,6 +76,7 @@ import RdrName
 import Name
 import NameEnv
 import NameSet
+import Avail
 import Var
 import VarEnv
 import Module
@@ -267,6 +268,8 @@ data TcGblEnv
         tcg_imp_specs :: [LTcSpecPrag],     -- ...SPECIALISE prags for imported Ids
 	tcg_warns     :: Warnings,	    -- ...Warnings and deprecations
 	tcg_anns      :: [Annotation],      -- ...Annotations
+        tcg_tcs       :: [TyCon],           -- ...TyCons
+        tcg_clss      :: [Class],           -- ...Classes
 	tcg_insts     :: [Instance],	    -- ...Instances
         tcg_fam_insts :: [FamInst],         -- ...Family instances
         tcg_rules     :: [LRuleDecl Id],    -- ...Rules
@@ -517,8 +520,9 @@ data TcTyThing
   = AGlobal TyThing		-- Used only in the return type of a lookup
 
   | ATcId   {		-- Ids defined in this module; may not be fully zonked
-	tct_id    :: TcId,		
-	tct_level :: ThLevel }
+	tct_id     :: TcId,		
+	tct_closed :: TopLevelFlag,   -- See Note [Bindings with closed types]
+	tct_level  :: ThLevel }
 
   | ATyVar  Name TcType		-- The type to which the lexically scoped type vaiable
 				-- is currently refined. We only need the Name
@@ -533,6 +537,7 @@ instance Outputable TcTyThing where	-- Debugging only
    ppr elt@(ATcId {})   = text "Identifier" <> 
 			  brackets (ppr (tct_id elt) <> dcolon 
                                  <> ppr (varType (tct_id elt)) <> comma
+				 <+> ppr (tct_closed elt) <> comma
 				 <+> ppr (tct_level elt))
    ppr (ATyVar tv _)    = text "Type variable" <+> quotes (ppr tv)
    ppr (AThing k)       = text "AThing" <+> ppr k
@@ -543,6 +548,44 @@ pprTcTyThingCategory (ATyVar {})     = ptext (sLit "Type variable")
 pprTcTyThingCategory (ATcId {})      = ptext (sLit "Local identifier")
 pprTcTyThingCategory (AThing {})     = ptext (sLit "Kinded thing")
 \end{code}
+
+Note [Bindings with closed types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+
+  f x = let g ys = map not ys
+        in ...
+
+Can we generalise 'g' under the OutsideIn algorithm?  Yes, 
+becuase all g's free variables are top-level; that is they themselves
+have no free type variables, and it is the type variables in the
+environment that makes things tricky for OutsideIn generalisation.
+
+Definition:
+
+   A variable is "closed", and has tct_closed set to TopLevel,
+      iff 
+   a) all its free variables are imported, or are themselves closed
+   b) generalisation is not restricted by the monomorphism restriction
+
+Under OutsideIn we are free to generalise a closed let-binding.
+This is an extension compared to the JFP paper on OutsideIn, which
+used "top-level" as a proxy for "closed".  (It's not a good proxy 
+anyway -- the MR can make a top-level binding with a free type
+variable.)
+
+Note that:
+  * A top-level binding may not be closed, if it suffer from the MR
+
+  * A nested binding may be closed (eg 'g' in the example we started with)
+    Indeed, that's the point; whether a function is defined at top level
+    or nested is orthogonal to the question of whether or not it is closed 
+
+  * A binding may be non-closed because it mentions a lexically scoped
+    *type variable*  Eg
+        f :: forall a. blah
+        f x = let g y = ...(y::a)...
+
 
 \begin{code}
 type ErrCtxt = (Bool, TidyEnv -> TcM (TidyEnv, Message))
@@ -938,7 +981,7 @@ pprEvVarTheta :: [EvVar] -> SDoc
 pprEvVarTheta ev_vars = pprTheta (map evVarPred ev_vars)
                               
 pprEvVarWithType :: EvVar -> SDoc
-pprEvVarWithType v = ppr v <+> dcolon <+> pprPredTy (evVarPred v)
+pprEvVarWithType v = ppr v <+> dcolon <+> pprType (evVarPred v)
 
 pprWantedsWithLocs :: WantedConstraints -> SDoc
 pprWantedsWithLocs wcs
@@ -1140,6 +1183,7 @@ data CtOrigin
   | PArrSeqOrigin  (ArithSeqInfo Name) -- [:x..y:] and [:x,y..z:]
   | SectionOrigin
   | TupleOrigin			       -- (..,..)
+  | AmbigOrigin Name	-- f :: ty
   | ExprSigOrigin	-- e :: ty
   | PatSigOrigin	-- p :: ty
   | PatOrigin	        -- Instantiating a polytyped pattern at a constructor
@@ -1171,6 +1215,7 @@ pprO AppOrigin             = ptext (sLit "an application")
 pprO (SpecPragOrigin name) = hsep [ptext (sLit "a specialisation pragma for"), quotes (ppr name)]
 pprO (IPOccOrigin name)    = hsep [ptext (sLit "a use of implicit parameter"), quotes (ppr name)]
 pprO RecordUpdOrigin       = ptext (sLit "a record update")
+pprO (AmbigOrigin name)    = ptext (sLit "the ambiguity check for") <+> quotes (ppr name)
 pprO ExprSigOrigin         = ptext (sLit "an expression type signature")
 pprO PatSigOrigin          = ptext (sLit "a pattern type signature")
 pprO PatOrigin             = ptext (sLit "a pattern")

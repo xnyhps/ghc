@@ -30,6 +30,7 @@ import TcUnify
 import BasicTypes
 import Inst
 import TcBinds
+import FamInst( tcLookupFamInst )
 import TcEnv
 import TcArrows
 import TcMatches
@@ -281,12 +282,20 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
   , op_name `hasKey` dollarIdKey	-- Note [Typing rule for ($)]
   = do { traceTc "Application rule" (ppr op)
        ; (arg1', arg1_ty) <- tcInferRho arg1
+
        ; let doc = ptext (sLit "The first argument of ($) takes")
        ; (co_arg1, [arg2_ty], op_res_ty) <- matchExpectedFunTys doc 1 arg1_ty
        	 -- arg2_ty maybe polymorphic; that's the point
+
+       -- Make sure that the argument and result types have kind '*'
+       -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
+       ; unifyKind (typeKind arg2_ty) liftedTypeKind
+       ; unifyKind (typeKind res_ty)  liftedTypeKind
+
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
        ; co_res <- unifyType op_res_ty res_ty
        ; op_id <- tcLookupId op_name
+
        ; let op' = L loc (HsWrap (mkWpTyApps [arg2_ty, op_res_ty]) (HsVar op_id))
        ; return $ mkHsWrapCo co_res $
          OpApp (mkLHsWrapCo co_arg1 arg1') op' fix arg2' }
@@ -294,7 +303,7 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
   | otherwise
   = do { traceTc "Non Application rule" (ppr op)
        ; (op', op_ty) <- tcInferFun op
-       ; (co_fn, arg_tys, op_res_ty) <- unifyOpFunTys op 2 op_ty
+       ; (co_fn, arg_tys, op_res_ty) <- unifyOpFunTysWrap op 2 op_ty
        ; co_res <- unifyType op_res_ty res_ty
        ; [arg1', arg2'] <- tcArgs op [arg1, arg2] arg_tys
        ; return $ mkHsWrapCo co_res $
@@ -305,7 +314,7 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
  
 tcExpr (SectionR op arg2) res_ty
   = do { (op', op_ty) <- tcInferFun op
-       ; (co_fn, [arg1_ty, arg2_ty], op_res_ty) <- unifyOpFunTys op 2 op_ty
+       ; (co_fn, [arg1_ty, arg2_ty], op_res_ty) <- unifyOpFunTysWrap op 2 op_ty
        ; co_res <- unifyType (mkFunTy arg1_ty op_res_ty) res_ty
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
        ; return $ mkHsWrapCo co_res $
@@ -317,7 +326,7 @@ tcExpr (SectionL arg1 op) res_ty
        ; let n_reqd_args | xopt Opt_PostfixOperators dflags = 1
                          | otherwise                        = 2
 
-       ; (co_fn, (arg1_ty:arg_tys), op_res_ty) <- unifyOpFunTys op n_reqd_args op_ty
+       ; (co_fn, (arg1_ty:arg_tys), op_res_ty) <- unifyOpFunTysWrap op n_reqd_args op_ty
        ; co_res <- unifyType (mkFunTys arg_tys op_res_ty) res_ty
        ; arg1' <- tcArg op (arg1, arg1_ty, 1)
        ; return $ mkHsWrapCo co_res $
@@ -325,7 +334,7 @@ tcExpr (SectionL arg1 op) res_ty
 
 tcExpr (ExplicitTuple tup_args boxity) res_ty
   | all tupArgPresent tup_args
-  = do { let tup_tc = tupleTyCon boxity (length tup_args)
+  = do { let tup_tc = tupleTyCon (boxityNormalTupleSort boxity) (length tup_args)
        ; (coi, arg_tys) <- matchExpectedTyConApp tup_tc res_ty
        ; tup_args1 <- tcTupArgs tup_args arg_tys
        ; return $ mkHsWrapCo coi (ExplicitTuple tup_args1 boxity) }
@@ -335,7 +344,7 @@ tcExpr (ExplicitTuple tup_args boxity) res_ty
     do { let kind = case boxity of { Boxed   -> liftedTypeKind
                                    ; Unboxed -> argTypeKind }
              arity = length tup_args 
-             tup_tc = tupleTyCon boxity arity
+             tup_tc = tupleTyCon (boxityNormalTupleSort boxity) arity
 
        ; arg_tys <- newFlexiTyVarTys (tyConArity tup_tc) kind
        ; let actual_res_ty
@@ -661,7 +670,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
 
 	-- Step 7: make a cast for the scrutinee, in the case that it's from a type family
 	; let scrut_co | Just co_con <- tyConFamilyCoercion_maybe tycon 
-		       = WpCast $ mkAxInstCo co_con scrut_inst_tys
+		       = WpCast (mkAxInstCo co_con scrut_inst_tys)
 		       | otherwise
 		       = idHsWrapper
 	-- Phew!
@@ -679,7 +688,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
 		      	    flds = dataConFieldLabels con
     			    fixed_tvs = exactTyVarsOfTypes fixed_tys
 			    	    -- fixed_tys: See Note [Type of a record update]
-			    	        `unionVarSet` tyVarsOfTheta theta 
+			    	        `unionVarSet` tyVarsOfTypes theta 
 				    -- Universally-quantified tyvars that
 				    -- appear in any of the *implicit*
 				    -- arguments to the constructor are fixed
@@ -900,10 +909,10 @@ tcTupArgs args tys
 			           ; return (Present expr') }
 
 ----------------
-unifyOpFunTys :: LHsExpr Name -> Arity -> TcRhoType
-              -> TcM (Coercion, [TcSigmaType], TcRhoType)	 		
+unifyOpFunTysWrap :: LHsExpr Name -> Arity -> TcRhoType
+                  -> TcM (LCoercion, [TcSigmaType], TcRhoType)	 		
 -- A wrapper for matchExpectedFunTys
-unifyOpFunTys op arity ty = matchExpectedFunTys herald arity ty
+unifyOpFunTysWrap op arity ty = matchExpectedFunTys herald arity ty
   where
     herald = ptext (sLit "The operator") <+> quotes (ppr op) <+> ptext (sLit "takes")
 
@@ -1128,7 +1137,7 @@ tcTagToEnum loc fun_name arg res_ty
     doc3 = ptext (sLit "No family instance for this type")
 
     get_rep_ty :: TcType -> TyCon -> [TcType]
-               -> TcM (Coercion, TyCon, [TcType])
+               -> TcM (LCoercion, TyCon, [TcType])
     	-- Converts a family type (eg F [a]) to its rep type (eg FList a)
 	-- and returns a coercion between the two
     get_rep_ty ty tc tc_args

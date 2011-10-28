@@ -75,6 +75,7 @@ import VarEnv
 import VarSet
 import Var
 import Name
+import Avail
 import RdrName
 import NameEnv
 import NameSet
@@ -548,12 +549,13 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
    --   - export list
    --   - orphans
    --   - deprecations
-   --   - XXX vect info?
+   --   - vect info
    mod_hash <- computeFingerprint putNameLiterally
                       (map fst sorted_decls,
                        export_hash,
                        orphan_hash,
-                       mi_warns iface0)
+                       mi_warns iface0,
+                       mi_vect_info iface0)
 
    -- The interface hash depends on:
    --    - the ABI hash, plus
@@ -574,7 +576,8 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
                 mi_iface_hash  = iface_hash,
                 mi_exp_hash    = export_hash,
                 mi_orphan_hash = orphan_hash,
-                mi_orphan      = not (null orph_rules && null orph_insts),
+                mi_orphan      = not (null orph_rules && null orph_insts
+                                      && null (ifaceVectInfoVar (mi_vect_info iface0))),
                 mi_finsts      = not . null $ mi_fam_insts iface0,
                 mi_decls       = sorted_decls,
                 mi_hash_fn     = lookupOccEnv local_env }
@@ -650,9 +653,22 @@ type IfaceDeclABI = (Module, IfaceDecl, IfaceDeclExtras)
 
 data IfaceDeclExtras 
   = IfaceIdExtras    Fixity [IfaceRule]
-  | IfaceDataExtras  Fixity [IfaceInstABI] [(Fixity,[IfaceRule])]
-  | IfaceClassExtras Fixity [IfaceInstABI] [(Fixity,[IfaceRule])]
+
+  | IfaceDataExtras  
+       Fixity			-- Fixity of the tycon itself
+       [IfaceInstABI]		-- Local instances of this tycon
+       				-- See Note [Orphans] in IfaceSyn
+       [(Fixity,[IfaceRule])]	-- For each construcotr, fixity and RULES
+
+  | IfaceClassExtras 
+       Fixity			-- Fixity of the class itself
+       [IfaceInstABI] 		-- Local instances of this class *or*
+       				--   of its associated data types
+       				-- See Note [Orphans] in IfaceSyn
+       [(Fixity,[IfaceRule])]	-- For each class method, fixity and RULES
+
   | IfaceSynExtras   Fixity
+
   | IfaceOtherDeclExtras
 
 abiDecl :: IfaceDeclABI -> IfaceDecl
@@ -727,15 +743,19 @@ declExtras fix_fn rule_env inst_env decl
                      IfaceDataExtras (fix_fn n)
                         (map ifDFun $ lookupOccEnvL inst_env n)
                         (map (id_extras . ifConOcc) (visibleIfConDecls cons))
-      IfaceClass{ifSigs=sigs} -> 
+      IfaceClass{ifSigs=sigs, ifATs=ats} -> 
                      IfaceClassExtras (fix_fn n)
-                        (map ifDFun $ lookupOccEnvL inst_env n)
+                        (map ifDFun $ (concatMap at_extras ats)
+                                    ++ lookupOccEnvL inst_env n)
+		           -- Include instances of the associated types
+			   -- as well as instances of the class (Trac #5147)
                         [id_extras op | IfaceClassOp op _ _ <- sigs]
       IfaceSyn{} -> IfaceSynExtras (fix_fn n)
       _other -> IfaceOtherDeclExtras
   where
         n = ifName decl
         id_extras occ = (fix_fn occ, lookupOccEnvL rule_env occ)
+        at_extras (IfaceAT decl _) = lookupOccEnvL inst_env (ifName decl)
 
 --
 -- When hashing an instance, we hash only the DFunId, because that
@@ -839,7 +859,7 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
     this_pkg = thisPackage dflags
 
     used_mods    = moduleEnvKeys ent_map
-    dir_imp_mods = (moduleEnvKeys direct_imports)
+    dir_imp_mods = moduleEnvKeys direct_imports
     all_mods     = used_mods ++ filter (`notElem` used_mods) dir_imp_mods
     usage_mods   = sortBy stableModuleCmp all_mods
                         -- canonical order is imported, to avoid interface-file
@@ -854,12 +874,14 @@ mk_usage_info pit hsc_env this_mod direct_imports used_names
         | isWiredInName name = mv_map  -- ignore wired-in names
         | otherwise
         = case nameModule_maybe name of
-             Nothing  -> pprPanic "mkUsageInfo: internal name?" (ppr name)
+             Nothing  -> ASSERT2( isSystemName name, ppr name ) mv_map
+	     	-- See Note [Internal used_names]
+
              Just mod -> -- This lambda function is really just a
                          -- specialised (++); originally came about to
                          -- avoid quadratic behaviour (trac #2680)
                          extendModuleEnvWith (\_ xs -> occ:xs) mv_map mod [occ]
-    		   where occ = nameOccName name
+    	        where occ = nameOccName name
     
     -- We want to create a Usage for a home module if 
     --	a) we used something from it; has something in used_names
@@ -959,54 +981,17 @@ mkIfaceAnnotation (Annotation { ann_target = target, ann_value = serialized }) =
 \end{code}
 
 \begin{code}
-mkIfaceExports :: [AvailInfo]
-               -> [(Module, [GenAvailInfo OccName])]
-                  -- Group by module and sort by occurrence
+mkIfaceExports :: [AvailInfo] -> [IfaceExport]  -- Sort to make canonical
 mkIfaceExports exports
-  = [ (mod, Map.elems avails)
-    | (mod, avails) <- sortBy (stableModuleCmp `on` fst)
-                              (moduleEnvToList groupFM)
-                       -- NB. the Map.toList is in a random order,
-                       -- because Ord Module is not a predictable
-                       -- ordering.  Hence we perform a final sort
-                       -- using the stable Module ordering.
-    ]
+  = sortBy stableAvailCmp (map sort_subs exports)
   where
-	-- Group by the module where the exported entities are defined
-	-- (which may not be the same for all Names in an Avail)
-	-- Deliberately use Map rather than UniqFM so we
-	-- get a canonical ordering
-    groupFM :: ModuleEnv (Map FastString (GenAvailInfo OccName))
-    groupFM = foldl add emptyModuleEnv exports
-
-    add_one :: ModuleEnv (Map FastString (GenAvailInfo OccName))
-	    -> Module -> GenAvailInfo OccName
-	    -> ModuleEnv (Map FastString (GenAvailInfo OccName))
-    add_one env mod avail 
-      -- XXX Is there a need to flip Map.union here?
-      =  extendModuleEnvWith (flip Map.union) env mod 
-		(Map.singleton (occNameFS (availName avail)) avail)
-
-	-- NB: we should not get T(X) and T(Y) in the export list
-	--     else the Map.union will simply discard one!  They
-	--     should have been combined by now.
-    add env (Avail n)
-      = ASSERT( isExternalName n ) 
-        add_one env (nameModule n) (Avail (nameOccName n))
-
-    add env (AvailTC tc ns)
-      = ASSERT( all isExternalName ns ) 
-	foldl add_for_mod env mods
-      where
-	tc_occ = nameOccName tc
-	mods   = nub (map nameModule ns)
-		-- Usually just one, but see Note [Original module]
-
-	add_for_mod env mod
-	    = add_one env mod (AvailTC tc_occ (sort names_from_mod))
-              -- NB. sort the children, we need a canonical order
-	    where
-	      names_from_mod = [nameOccName n | n <- ns, nameModule n == mod]
+    sort_subs :: AvailInfo -> AvailInfo
+    sort_subs (Avail n) = Avail n
+    sort_subs (AvailTC n []) = AvailTC n []
+    sort_subs (AvailTC n (m:ms)) 
+       | n==m      = AvailTC n (m:sortBy stableNameCmp ms)
+       | otherwise = AvailTC n (sortBy stableNameCmp (m:ms))
+       -- Maintain the AvailTC Invariant
 \end{code}
 
 Note [Orignal module]
@@ -1023,6 +1008,15 @@ That is, in Y,
 
 In the result of MkIfaceExports, the names are grouped by defining module,
 so we may need to split up a single Avail into multiple ones.
+
+Note [Internal used_names]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+Most of the used_names are External Names, but we can have Internal
+Names too: see Note [Binders in Template Haskell] in Convert, and
+Trac #5362 for an example.  Such Names are always
+  - Such Names are always for locally-defined things, for which we
+    don't gather usage info, so we can just ignore them in ent_map
+  - They are always System Names, hence the assert, just as a double check.
 
 
 %************************************************************************
@@ -1173,7 +1167,7 @@ checkDependencies hsc_env summary iface
    orM = foldr f (return False)
     where f m rest = do b <- m; if b then return True else rest
 
-   dep_missing (L _ (ImportDecl (L _ mod) pkg _ _ _ _ _)) = do
+   dep_missing (L _ (ImportDecl { ideclName = L _ mod, ideclPkgQual = pkg })) = do
      find_res <- liftIO $ findImportedModule hsc_env mod pkg
      case find_res of
         Found _ mod
@@ -1333,38 +1327,10 @@ tyThingToIfaceDecl (AnId id)
 	      ifIdDetails = toIfaceIdDetails (idDetails id),
 	      ifIdInfo    = toIfaceIdInfo (idInfo id) }
 
-tyThingToIfaceDecl (AClass clas)
-  = IfaceClass { ifCtxt	  = toIfaceContext sc_theta,
-		 ifName	  = getOccName clas,
-		 ifTyVars = toIfaceTvBndrs clas_tyvars,
-		 ifFDs    = map toIfaceFD clas_fds,
-		 ifATs	  = map (tyThingToIfaceDecl . ATyCon) clas_ats,
-		 ifSigs	  = map toIfaceClassOp op_stuff,
-	  	 ifRec    = boolToRecFlag (isRecursiveTyCon tycon) }
-  where
-    (clas_tyvars, clas_fds, sc_theta, _, clas_ats, op_stuff) 
-      = classExtraBigSig clas
-    tycon = classTyCon clas
-
-    toIfaceClassOp (sel_id, def_meth)
-	= ASSERT(sel_tyvars == clas_tyvars)
-	  IfaceClassOp (getOccName sel_id) (toDmSpec def_meth) (toIfaceType op_ty)
-	where
-		-- Be careful when splitting the type, because of things
-		-- like  	class Foo a where
-		--		  op :: (?x :: String) => a -> a
-		-- and  	class Baz a where
-		--		  op :: (Ord a) => a -> a
-	  (sel_tyvars, rho_ty) = splitForAllTys (idType sel_id)
-	  op_ty		       = funResultTy rho_ty
-
-    toDmSpec NoDefMeth      = NoDM
-    toDmSpec (GenDefMeth _) = GenericDM
-    toDmSpec (DefMeth _)    = VanillaDM
-
-    toIfaceFD (tvs1, tvs2) = (map getFS tvs1, map getFS tvs2)
-
 tyThingToIfaceDecl (ATyCon tycon)
+  | Just clas <- tyConClass_maybe tycon
+  = classToIfaceDecl clas
+
   | isSynTyCon tycon
   = IfaceSyn {	ifName    = getOccName tycon,
 		ifTyVars  = toIfaceTvBndrs tyvars,
@@ -1399,7 +1365,7 @@ tyThingToIfaceDecl (ATyCon tycon)
     ifaceConDecls (DataTyCon { data_cons = cons })  = 
       IfDataTyCon (map ifaceConDecl cons)
     ifaceConDecls DataFamilyTyCon {}                = IfOpenDataTyCon
-    ifaceConDecls AbstractTyCon			    = IfAbstractTyCon
+    ifaceConDecls (AbstractTyCon distinct)	    = IfAbstractTyCon distinct
 	-- The last case happens when a TyCon has been trimmed during tidying
 	-- Furthermore, tyThingToIfaceDecl is also used
 	-- in TcRnDriver for GHCi, when browsing a module, in which case the
@@ -1430,6 +1396,47 @@ tyThingToIfaceDecl c@(ACoAxiom _) = pprPanic "tyThingToIfaceDecl (ACoCon _)" (pp
 
 tyThingToIfaceDecl (ADataCon dc)
  = pprPanic "toIfaceDecl" (ppr dc)	-- Should be trimmed out earlier
+
+
+classToIfaceDecl :: Class -> IfaceDecl
+classToIfaceDecl clas
+  = IfaceClass { ifCtxt   = toIfaceContext sc_theta,
+                 ifName   = getOccName (classTyCon clas),
+                 ifTyVars = toIfaceTvBndrs clas_tyvars,
+                 ifFDs    = map toIfaceFD clas_fds,
+                 ifATs    = map toIfaceAT clas_ats,
+                 ifSigs   = map toIfaceClassOp op_stuff,
+                 ifRec    = boolToRecFlag (isRecursiveTyCon tycon) }
+  where
+    (clas_tyvars, clas_fds, sc_theta, _, clas_ats, op_stuff) 
+      = classExtraBigSig clas
+    tycon = classTyCon clas
+
+    toIfaceAT :: ClassATItem -> IfaceAT
+    toIfaceAT (tc, defs)
+      = IfaceAT (tyThingToIfaceDecl (ATyCon tc))
+                (map to_if_at_def defs)
+      where
+        to_if_at_def (ATD tvs pat_tys ty)
+          = IfaceATD (toIfaceTvBndrs tvs) (map toIfaceType pat_tys) (toIfaceType ty)
+
+    toIfaceClassOp (sel_id, def_meth)
+        = ASSERT(sel_tyvars == clas_tyvars)
+          IfaceClassOp (getOccName sel_id) (toDmSpec def_meth) (toIfaceType op_ty)
+        where
+                -- Be careful when splitting the type, because of things
+                -- like         class Foo a where
+                --                op :: (?x :: String) => a -> a
+                -- and          class Baz a where
+                --                op :: (Ord a) => a -> a
+          (sel_tyvars, rho_ty) = splitForAllTys (idType sel_id)
+          op_ty                = funResultTy rho_ty
+
+    toDmSpec NoDefMeth      = NoDM
+    toDmSpec (GenDefMeth _) = GenericDM
+    toDmSpec (DefMeth _)    = VanillaDM
+
+    toIfaceFD (tvs1, tvs2) = (map getFS tvs1, map getFS tvs2)
 
 
 getFS :: NamedThing a => a -> FastString
@@ -1664,13 +1671,9 @@ toIfaceAlt (c,bs,r) = (toIfaceCon c, map getFS bs, toIfaceExpr r)
 
 ---------------------
 toIfaceCon :: AltCon -> IfaceConAlt
-toIfaceCon (DataAlt dc) | isTupleTyCon tc = IfaceTupleAlt (tupleTyConBoxity tc)
-	   		| otherwise       = IfaceDataAlt (getName dc)
-	   		where
-	   		  tc = dataConTyCon dc
-	   
-toIfaceCon (LitAlt l) = IfaceLitAlt l
-toIfaceCon DEFAULT    = IfaceDefault
+toIfaceCon (DataAlt dc) = IfaceDataAlt (getName dc)
+toIfaceCon (LitAlt l)   = IfaceLitAlt l
+toIfaceCon DEFAULT      = IfaceDefault
 
 ---------------------
 toIfaceApp :: Expr CoreBndr -> [Arg CoreBndr] -> IfaceExpr
@@ -1679,7 +1682,7 @@ toIfaceApp (Var v) as
   = case isDataConWorkId_maybe v of
 	-- We convert the *worker* for tuples into IfaceTuples
 	Just dc |  isTupleTyCon tc && saturated 
-		-> IfaceTuple (tupleTyConBoxity tc) tup_args
+		-> IfaceTuple (tupleTyConSort tc) tup_args
 	  where
 	    val_args  = dropWhile isTypeArg as
 	    saturated = val_args `lengthIs` idArity v
@@ -1695,13 +1698,11 @@ mkIfaceApps f as = foldl (\f a -> IfaceApp f (toIfaceExpr a)) f as
 
 ---------------------
 toIfaceVar :: Id -> IfaceExpr
-toIfaceVar v 
-  | Just fcall <- isFCallId_maybe v = IfaceFCall fcall (toIfaceType (idType v))
-	  -- Foreign calls have special syntax
-  | isExternalName name		    = IfaceExt name
-  | Just (TickBox m ix) <- isTickBoxOp_maybe v
-				    = IfaceTick m ix
-  | otherwise			    = IfaceLcl (getFS name)
-  where
-    name = idName v
+toIfaceVar v
+    | Just fcall <- isFCallId_maybe v            = IfaceFCall fcall (toIfaceType (idType v))
+       -- Foreign calls have special syntax
+    | isExternalName name		         = IfaceExt name
+    | Just (TickBox m ix) <- isTickBoxOp_maybe v = IfaceTick m ix
+    | otherwise		                         = IfaceLcl (getFS name)
+  where name = idName v
 \end{code}

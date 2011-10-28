@@ -51,10 +51,10 @@ module OccName (
 	mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, mkGenDefMethodOcc,
 	mkDerivedTyConOcc, mkNewTyCoOcc, mkClassOpAuxOcc,
         mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc,
-  	mkClassTyConOcc, mkClassDataConOcc, mkDictOcc, mkIPOcc, 
+  	mkClassDataConOcc, mkDictOcc, mkIPOcc, 
  	mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
  	mkGenD, mkGenR, mkGenRCo, mkGenC, mkGenS,
-	mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc,
+        mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc,
 	mkSuperDictSelOcc, mkLocalOcc, mkMethodOcc, mkInstTyTcOcc,
 	mkInstTyCoOcc, mkEqPredCoOcc,
         mkVectOcc, mkVectTyConOcc, mkVectDataConOcc, mkVectIsoOcc,
@@ -543,14 +543,12 @@ isDerivedOccName occ =
 
 \begin{code}
 mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, mkGenDefMethodOcc,
-  	mkDerivedTyConOcc, mkClassTyConOcc, mkClassDataConOcc, mkDictOcc,
+  	mkDerivedTyConOcc, mkClassDataConOcc, mkDictOcc,
  	mkIPOcc, mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
  	mkGenD, mkGenR, mkGenRCo,
 	mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc, mkNewTyCoOcc,
 	mkInstTyCoOcc, mkEqPredCoOcc, mkClassOpAuxOcc,
-        mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc,
-	mkVectOcc, mkVectTyConOcc, mkVectDataConOcc, mkVectIsoOcc,
-	mkPDataTyConOcc, mkPDataDataConOcc, mkPReprTyConOcc, mkPADFunOcc
+        mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc
    :: OccName -> OccName
 
 -- These derived variables have a prefix that no Haskell value could have
@@ -559,8 +557,7 @@ mkWorkerOcc         = mk_simple_deriv varName  "$w"
 mkDefaultMethodOcc  = mk_simple_deriv varName  "$dm"
 mkGenDefMethodOcc   = mk_simple_deriv varName  "$gdm"
 mkClassOpAuxOcc     = mk_simple_deriv varName  "$c"
-mkDerivedTyConOcc   = mk_simple_deriv tcName   ":"	-- The : prefix makes sure it classifies
-mkClassTyConOcc     = mk_simple_deriv tcName   "T:"	-- as a tycon/datacon
+mkDerivedTyConOcc   = mk_simple_deriv tcName   ":"	-- The : prefix makes sure it classifies as a tycon/datacon
 mkClassDataConOcc   = mk_simple_deriv dataName "D:"	-- We go straight to the "real" data con
 							-- for datacons from classes
 mkDictOcc	    = mk_simple_deriv varName  "$d"
@@ -600,17 +597,23 @@ mkDataTOcc = mk_simple_deriv varName  "$t"
 mkDataCOcc = mk_simple_deriv varName  "$c"
 
 -- Vectorisation
-mkVectOcc          = mk_simple_deriv varName  "$v_"
-mkVectTyConOcc     = mk_simple_deriv tcName   ":V_"
-mkVectDataConOcc   = mk_simple_deriv dataName ":VD_"
-mkVectIsoOcc       = mk_simple_deriv varName  "$VI_"
-mkPDataTyConOcc    = mk_simple_deriv tcName   ":VP_"
-mkPDataDataConOcc  = mk_simple_deriv dataName ":VPD_"
-mkPReprTyConOcc    = mk_simple_deriv tcName   ":VR_"
-mkPADFunOcc        = mk_simple_deriv varName  "$PA_"
+mkVectOcc, mkVectTyConOcc, mkVectDataConOcc, mkVectIsoOcc, mkPADFunOcc, mkPReprTyConOcc,
+  mkPDataTyConOcc, mkPDataDataConOcc :: Maybe String -> OccName -> OccName
+mkVectOcc         = mk_simple_deriv_with varName  "$v_"
+mkVectTyConOcc    = mk_simple_deriv_with tcName   ":V_"
+mkVectDataConOcc  = mk_simple_deriv_with dataName ":VD_"
+mkVectIsoOcc      = mk_simple_deriv_with varName  "$VI_"
+mkPADFunOcc       = mk_simple_deriv_with varName  "$PA_"
+mkPReprTyConOcc   = mk_simple_deriv_with tcName   ":VR_"
+mkPDataTyConOcc   = mk_simple_deriv_with tcName   ":VP_"
+mkPDataDataConOcc = mk_simple_deriv_with dataName ":VPD_"
 
 mk_simple_deriv :: NameSpace -> String -> OccName -> OccName
 mk_simple_deriv sp px occ = mk_deriv sp px (occNameString occ)
+
+mk_simple_deriv_with :: NameSpace -> String -> Maybe String -> OccName -> OccName
+mk_simple_deriv_with sp px Nothing     occ = mk_deriv sp px                  (occNameString occ)
+mk_simple_deriv_with sp px (Just with) occ = mk_deriv sp (px ++ with ++ "_") (occNameString occ)
 
 -- Data constructor workers are made by setting the name space
 -- of the data constructor OccName (which should be a DataName)
@@ -622,8 +625,8 @@ mkDataConWorkerOcc datacon_occ = setOccNameSpace varName datacon_occ
 mkSuperDictSelOcc :: Int 	-- ^ Index of superclass, e.g. 3
 		  -> OccName 	-- ^ Class, e.g. @Ord@
 		  -> OccName	-- ^ Derived 'Occname', e.g. @$p3Ord@
-mkSuperDictSelOcc index cls_occ
-  = mk_deriv varName "$p" (show index ++ occNameString cls_occ)
+mkSuperDictSelOcc index cls_tc_occ
+  = mk_deriv varName "$p" (show index ++ occNameString cls_tc_occ)
 
 mkLocalOcc :: Unique 		-- ^ Unique to combine with the 'OccName'
 	   -> OccName		-- ^ Local name, e.g. @sat@
@@ -749,24 +752,43 @@ tidyOccName in_scope occ@(OccName occ_sp fs)
 %************************************************************************
 
 \begin{code}
-mkTupleOcc :: NameSpace -> Boxity -> Arity -> OccName
-mkTupleOcc ns bx ar = OccName ns (mkFastString str)
+mkTupleOcc :: NameSpace -> TupleSort -> Arity -> OccName
+mkTupleOcc ns sort ar = OccName ns (mkFastString str)
   where
  	-- no need to cache these, the caching is done in the caller
 	-- (TysWiredIn.mk_tuple)
-    str = case bx of
-		Boxed   -> '(' : commas ++ ")"
-		Unboxed -> '(' : '#' : commas ++ "#)"
+    str = case sort of
+		UnboxedTuple    -> '(' : '#' : commas ++ "#)"
+		BoxedTuple      -> '(' : commas ++ ")"
+                ConstraintTuple -> '(' : commas ++ ")"
+                  -- Cute hack: reuse the standard tuple OccNames (and hence code)
+                  -- for fact tuples, but give them different Uniques so they are not equal.
+                  --
+                  -- You might think that this will go wrong because isTupleOcc_maybe won't
+                  -- be able to tell the difference between boxed tuples and fact tuples. BUT:
+                  --  1. Fact tuples never occur directly in user code, so it doesn't matter
+                  --     that we can't detect them in Orig OccNames originating from the user
+                  --     programs (or those built by setRdrNameSpace used on an Exact tuple Name)
+                  --  2. Interface files have a special representation for tuple *occurrences*
+                  --     in IfaceTyCons, their workers (in IfaceSyn) and their DataCons (in case
+                  --     alternatives). Thus we don't rely on the OccName to figure out what kind
+                  --     of tuple an occurrence was trying to use in these situations.
+                  --  3. We *don't* represent tuple data type declarations specially, so those
+                  --     are still turned into wired-in names via isTupleOcc_maybe. But that's OK
+                  --     because we don't actually need to declare fact tuples thanks to this hack.
+                  --
+                  -- So basically any OccName like (,,) flowing to isTupleOcc_maybe will always
+                  -- refer to the standard boxed tuple. Cool :-)
 
     commas = take (ar-1) (repeat ',')
 
-isTupleOcc_maybe :: OccName -> Maybe (NameSpace, Boxity, Arity)
+isTupleOcc_maybe :: OccName -> Maybe (NameSpace, TupleSort, Arity)
 -- Tuples are special, because there are so many of them!
 isTupleOcc_maybe (OccName ns fs)
   = case unpackFS fs of
-	'(':'#':',':rest -> Just (ns, Unboxed, 2 + count_commas rest)
-	'(':',':rest     -> Just (ns, Boxed,   2 + count_commas rest)
-	_other           -> Nothing
+	'(':'#':',':rest     -> Just (ns, UnboxedTuple, 2 + count_commas rest)
+	'(':',':rest         -> Just (ns, BoxedTuple,   2 + count_commas rest)
+	_other               -> Nothing
   where
     count_commas (',':rest) = 1 + count_commas rest
     count_commas _          = 0

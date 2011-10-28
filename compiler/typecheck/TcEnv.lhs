@@ -12,18 +12,17 @@ module TcEnv(
 	InstBindings(..),
 
 	-- Global environment
-	tcExtendGlobalEnv, setGlobalTypeEnv,
+        tcExtendGlobalEnv, tcExtendGlobalEnvImplicit, setGlobalTypeEnv,
 	tcExtendGlobalValEnv,
 	tcLookupLocatedGlobal,	tcLookupGlobal, 
 	tcLookupField, tcLookupTyCon, tcLookupClass, tcLookupDataCon,
 	tcLookupLocatedGlobalId, tcLookupLocatedTyCon,
 	tcLookupLocatedClass, 
-	tcLookupFamInst, tcLookupDataFamInst,
 	
 	-- Local environment
 	tcExtendKindEnv, tcExtendKindEnvTvs,
 	tcExtendTyVarEnv, tcExtendTyVarEnv2, 
-	tcExtendGhciEnv,
+	tcExtendGhciEnv, tcExtendLetEnv,
 	tcExtendIdEnv, tcExtendIdEnv1, tcExtendIdEnv2, 
 	tcLookup, tcLookupLocated, tcLookupLocalIds, 
 	tcLookupId, tcLookupTyVar, getScopedTyVarBinds,
@@ -66,7 +65,6 @@ import Var
 import VarSet
 import RdrName
 import InstEnv
-import FamInstEnv
 import DataCon
 import TyCon
 import TypeRep
@@ -76,6 +74,7 @@ import NameEnv
 import HscTypes
 import DynFlags
 import SrcLoc
+import BasicTypes
 import Outputable
 import Unique
 import FastString
@@ -154,8 +153,8 @@ tcLookupClass :: Name -> TcM Class
 tcLookupClass name = do
     thing <- tcLookupGlobal name
     case thing of
-	AClass cls -> return cls
-	_          -> wrongThingErr "class" (AGlobal thing) name
+	ATyCon tc | Just cls <- tyConClass_maybe tc -> return cls
+	_                                           -> wrongThingErr "class" (AGlobal thing) name
 
 tcLookupTyCon :: Name -> TcM TyCon
 tcLookupTyCon name = do
@@ -172,84 +171,7 @@ tcLookupLocatedClass = addLocM tcLookupClass
 
 tcLookupLocatedTyCon :: Located Name -> TcM TyCon
 tcLookupLocatedTyCon = addLocM tcLookupTyCon
-
--- Look up the instance tycon of a family instance.
---
--- The match may be ambiguous (as we know that overlapping instances have
--- identical right-hand sides under overlapping substitutions - see
--- 'FamInstEnv.lookupFamInstEnvConflicts').  However, the type arguments used
--- for matching must be equal to or be more specific than those of the family
--- instance declaration.  We pick one of the matches in case of ambiguity; as
--- the right-hand sides are identical under the match substitution, the choice
--- does not matter.
---
--- Return the instance tycon and its type instance.  For example, if we have
---
---  tcLookupFamInst 'T' '[Int]' yields (':R42T', 'Int')
---
--- then we have a coercion (ie, type instance of family instance coercion)
---
---  :Co:R42T Int :: T [Int] ~ :R42T Int
---
--- which implies that :R42T was declared as 'data instance T [a]'.
---
-tcLookupFamInst :: TyCon -> [Type] -> TcM (Maybe (TyCon, [Type]))
-tcLookupFamInst tycon tys
-  | not (isFamilyTyCon tycon)
-  = return Nothing
-  | otherwise
-  = do { env <- getGblEnv
-       ; eps <- getEps
-       ; let instEnv = (eps_fam_inst_env eps, tcg_fam_inst_env env)
-       ; traceTc "lookupFamInst" ((ppr tycon <+> ppr tys) $$ ppr instEnv)
-       ; case lookupFamInstEnv instEnv tycon tys of
-	   []                      -> return Nothing
-	   ((fam_inst, rep_tys):_) 
-             -> return $ Just (famInstTyCon fam_inst, rep_tys)
-       }
-
-tcLookupDataFamInst :: TyCon -> [Type] -> TcM (TyCon, [Type])
--- Find the instance of a data family
--- Note [Looking up family instances for deriving]
-tcLookupDataFamInst tycon tys
-  | not (isFamilyTyCon tycon)
-  = return (tycon, tys)
-  | otherwise
-  = ASSERT( isAlgTyCon tycon )
-    do { maybeFamInst <- tcLookupFamInst tycon tys
-       ; case maybeFamInst of
-           Nothing      -> famInstNotFound tycon tys
-           Just famInst -> return famInst }
-
-famInstNotFound :: TyCon -> [Type] -> TcM a
-famInstNotFound tycon tys 
-  = failWithTc (ptext (sLit "No family instance for")
-			<+> quotes (pprTypeApp tycon tys))
 \end{code}
-
-Note [Looking up family instances for deriving]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tcLookupFamInstExact is an auxiliary lookup wrapper which requires
-that looked-up family instances exist.  If called with a vanilla
-tycon, the old type application is simply returned.
-
-If we have
-  data instance F () = ... deriving Eq
-  data instance F () = ... deriving Eq
-then tcLookupFamInstExact will be confused by the two matches;
-but that can't happen because tcInstDecls1 doesn't call tcDeriving
-if there are any overlaps.
-
-There are two other things that might go wrong with the lookup.
-First, we might see a standalone deriving clause
-	deriving Eq (F ())
-when there is no data instance F () in scope. 
-
-Note that it's OK to have
-  data instance F [a] = ...
-  deriving Eq (F [(a,b)])
-where the match is not exact; the same holds for ordinary data types
-with standalone deriving declrations.
 
 \begin{code}
 instance MonadThings (IOEnv (Env TcGblEnv TcLclEnv)) where
@@ -273,10 +195,28 @@ setGlobalTypeEnv tcg_env new_type_env
     	   writeMutVar (tcg_type_env_var tcg_env) new_type_env
 	 ; return (tcg_env { tcg_type_env = new_type_env }) }
 
+
 tcExtendGlobalEnv :: [TyThing] -> TcM r -> TcM r
-  -- Given a mixture of Ids, TyCons, Classes, all from the
+  -- Given a mixture of Ids, TyCons, Classes, all defined in the
   -- module being compiled, extend the global environment
 tcExtendGlobalEnv things thing_inside
+  = do { env <- getGblEnv
+       ; let env' = env { tcg_tcs  = [ tc | ATyCon tc <- things,
+                                            not (isClassTyCon tc)]
+                                      ++ tcg_tcs env
+                        , tcg_clss = [ cl | ATyCon tc <- things,
+                                            Just cl <- [tyConClass_maybe tc]]
+                                      ++ tcg_clss env }
+       ; setGblEnv env' $
+            tcExtendGlobalEnvImplicit things thing_inside
+       }
+
+tcExtendGlobalEnvImplicit :: [TyThing] -> TcM r -> TcM r
+  -- Extend the global environment with some TyThings that can be obtained
+  -- via implicitTyThings from other entities in the environment.  Examples
+  -- are dfuns, famInstTyCons, data cons, etc.
+  -- These TyThings are not added to tcg_tcs or tcg_clss.
+tcExtendGlobalEnvImplicit things thing_inside
    = do	{ tcg_env <- getGblEnv
 	; let ge'  = extendTypeEnvList (tcg_type_env tcg_env) things
 	; tcg_env' <- setGlobalTypeEnv tcg_env ge'
@@ -371,23 +311,8 @@ tcExtendTyVarEnv tvs thing_inside
   = tcExtendTyVarEnv2 [(tyVarName tv, mkTyVarTy tv) | tv <- tvs] thing_inside
 
 tcExtendTyVarEnv2 :: [(Name,TcType)] -> TcM r -> TcM r
-tcExtendTyVarEnv2 binds thing_inside = do
-    env@(TcLclEnv {tcl_env = le,
-                   tcl_tyvars = gtvs,
-                   tcl_rdr = rdr_env}) <- getLclEnv
-    let
-	rdr_env'   = extendLocalRdrEnvList rdr_env (map fst binds)
-	new_tv_set = tcTyVarsOfTypes (map snd binds)
- 	le'        = extendNameEnvList le [(name, ATyVar name ty) | (name, ty) <- binds]
-
-	-- It's important to add the in-scope tyvars to the global tyvar set
-	-- as well.  Consider
-	--	f (_::r) = let g y = y::r in ...
-	-- Here, g mustn't be generalised.  This is also important during
-	-- class and instance decls, when we mustn't generalise the class tyvars
-	-- when typechecking the methods.
-    gtvs' <- tcExtendGlobalTyVars gtvs new_tv_set
-    setLclEnv (env {tcl_env = le', tcl_tyvars = gtvs', tcl_rdr = rdr_env'}) thing_inside
+tcExtendTyVarEnv2 binds thing_inside 
+  = tc_extend_local_env [(name, ATyVar name ty) | (name, ty) <- binds] thing_inside
 
 getScopedTyVarBinds :: TcM [(Name, TcType)]
 getScopedTyVarBinds
@@ -397,32 +322,54 @@ getScopedTyVarBinds
 
 
 \begin{code}
+tcExtendLetEnv :: TopLevelFlag -> [TcId] -> TcM a -> TcM a
+tcExtendLetEnv closed ids thing_inside 
+  = do	{ stage <- getStage
+	; tc_extend_local_env [ (idName id, ATcId { tct_id = id 
+    	         	                          , tct_closed = closed
+    	       		                          , tct_level = thLevel stage })
+                 	         | id <- ids]
+          thing_inside }
+
 tcExtendIdEnv :: [TcId] -> TcM a -> TcM a
-tcExtendIdEnv ids thing_inside = tcExtendIdEnv2 [(idName id, id) | id <- ids] thing_inside
+tcExtendIdEnv ids thing_inside 
+  = tcExtendIdEnv2 [(idName id, id) | id <- ids] thing_inside
 
 tcExtendIdEnv1 :: Name -> TcId -> TcM a -> TcM a
-tcExtendIdEnv1 name id thing_inside = tcExtendIdEnv2 [(name,id)] thing_inside
+tcExtendIdEnv1 name id thing_inside 
+  = tcExtendIdEnv2 [(name,id)] thing_inside
 
 tcExtendIdEnv2 :: [(Name,TcId)] -> TcM a -> TcM a
 -- Invariant: the TcIds are fully zonked (see tcExtendIdEnv above)
 tcExtendIdEnv2 names_w_ids thing_inside
-  = do	{ env <- getLclEnv
-	; tc_extend_local_id_env env (thLevel (tcl_th_ctxt env)) names_w_ids thing_inside }
+  = do	{ stage <- getStage
+	; tc_extend_local_env [ (name, ATcId { tct_id = id 
+    	         	                     , tct_closed = NotTopLevel
+    	       		                     , tct_level = thLevel stage })
+                 	         | (name,id) <- names_w_ids]
+          thing_inside }
 
 tcExtendGhciEnv :: [TcId] -> TcM a -> TcM a
 -- Used to bind Ids for GHCi identifiers bound earlier in the user interaction
--- Note especially that we bind them at TH level 'impLevel'.  That's because it's
--- OK to use a variable bound earlier in the interaction in a splice, becuase
--- GHCi has already compiled it to bytecode
-tcExtendGhciEnv ids thing_inside
-  = do	{ env <- getLclEnv
-	; tc_extend_local_id_env env impLevel [(idName id, id) | id <- ids] thing_inside }
+-- Note especially that we bind them at 
+--  * TH level 'impLevel'.  That's because it's OK to use a variable bound
+--    earlier in the interaction in a splice, because
+--    GHCi has already compiled it to bytecode
+--  * Closedness flag is TopLevel.  The thing's type is closed
 
-tc_extend_local_id_env		-- This is the guy who does the work
-	:: TcLclEnv
-	-> ThLevel
-	-> [(Name,TcId)]
-	-> TcM a -> TcM a
+tcExtendGhciEnv ids thing_inside
+  = tc_extend_local_env [ (idName id, ATcId { tct_id     = id 
+    	         	     	            , tct_closed = is_top id
+    	       		     	  	    , tct_level  = impLevel })
+                        | id <- ids]
+    thing_inside
+  where
+    is_top id | isEmptyVarSet (tcTyVarsOfType (idType id)) = TopLevel
+              | otherwise                                  = NotTopLevel
+
+
+tc_extend_local_env :: [(Name, TcTyThing)] -> TcM a -> TcM a
+-- This is the guy who does the work
 -- Invariant: the TcIds are fully zonked. Reasons:
 --	(a) The kinds of the forall'd type variables are defaulted
 --	    (see Kind.defaultKind, done in zonkQuantifiedTyVar)
@@ -430,18 +377,41 @@ tc_extend_local_id_env		-- This is the guy who does the work
 --	    in the types, because instantiation does not look through such things
 --	(c) The call to tyVarsOfTypes is ok without looking through refs
 
-tc_extend_local_id_env env th_lvl names_w_ids thing_inside
+tc_extend_local_env extra_env thing_inside
   = do	{ traceTc "env2" (ppr extra_env)
-	; gtvs' <- tcExtendGlobalTyVars (tcl_tyvars env) extra_global_tyvars
-	; let env' = env {tcl_env = le', tcl_tyvars = gtvs', tcl_rdr = rdr_env'}
-	; setLclEnv env' thing_inside }
+        ; env1 <- getLclEnv
+        ; let le'      = extendNameEnvList     (tcl_env env1) extra_env
+              rdr_env' = extendLocalRdrEnvList (tcl_rdr env1) (map fst extra_env)
+	      env2     = env1 {tcl_env = le', tcl_rdr = rdr_env'}
+	; env3 <- extend_gtvs env2
+	; setLclEnv env3 thing_inside }
   where
-    extra_global_tyvars = tcTyVarsOfTypes [idType id | (_,id) <- names_w_ids]
-    extra_env	    = [ (name, ATcId { tct_id = id, 
-    				       tct_level = th_lvl })
-    		      | (name,id) <- names_w_ids]
-    le'		    = extendNameEnvList (tcl_env env) extra_env
-    rdr_env'	    = extendLocalRdrEnvList (tcl_rdr env) [name | (name,_) <- names_w_ids]
+    extend_gtvs env 
+      | isEmptyVarSet extra_tvs 
+      = return env
+      | otherwise               
+      = do { g_var <- tcExtendGlobalTyVars (tcl_tyvars env) extra_tvs
+           ; return (env { tcl_tyvars = g_var }) }
+
+    extra_tvs = foldr (unionVarSet . get_tvs) emptyVarSet extra_env
+
+    get_tvs (_, ATcId { tct_id = id, tct_closed = closed })
+      = case closed of
+          TopLevel    -> ASSERT2( isEmptyVarSet id_tvs, ppr id $$ ppr (idType id) ) 
+                         emptyVarSet
+          NotTopLevel -> id_tvs
+      where
+        id_tvs = tcTyVarsOfType (idType id)
+    get_tvs (_, ATyVar _ ty) = tcTyVarsOfType ty	-- See Note [Global TyVars]
+    get_tvs other = pprPanic "get_tvs" (ppr other)
+        
+	-- Note [Global TyVars]
+	-- It's important to add the in-scope tyvars to the global tyvar set
+	-- as well.  Consider
+	--	f (_::r) = let g y = y::r in ...
+	-- Here, g mustn't be generalised.  This is also important during
+	-- class and instance decls, when we mustn't generalise the class tyvars
+	-- when typechecking the methods.
 
 tcExtendGlobalTyVars :: IORef VarSet -> VarSet -> TcM (IORef VarSet)
 tcExtendGlobalTyVars gtv_var extra_global_tvs
@@ -683,8 +653,8 @@ Make a name for the representation tycon of a family instance.  It's an
 newGlobalBinder.
 
 \begin{code}
-newFamInstTyConName :: Name -> [Type] -> SrcSpan -> TcM Name
-newFamInstTyConName tc_name tys loc
+newFamInstTyConName :: Located Name -> [Type] -> TcM Name
+newFamInstTyConName (L loc tc_name) tys
   = do	{ mod   <- getModule
 	; let info_string = occNameString (getOccName tc_name) ++ 
 			    concatMap (occNameString.getDFunTyKey) tys

@@ -19,7 +19,8 @@ module CoreMonad (
 
     -- * Counting
     SimplCount, doSimplTick, doFreeSimplTick, simplCountN,
-    pprSimplCount, plusSimplCount, zeroSimplCount, isZeroSimplCount, Tick(..),
+    pprSimplCount, plusSimplCount, zeroSimplCount, 
+    isZeroSimplCount, hasDetailedCounts, Tick(..),
 
     -- * The monad
     CoreM, runCoreM,
@@ -34,6 +35,9 @@ module CoreMonad (
     -- ** Lifting into the monad
     liftIO, liftIOWithCount,
     liftIO1, liftIO2, liftIO3, liftIO4,
+    
+    -- ** Global initialization
+    reinitializeGlobals,
     
     -- ** Dealing with annotations
     getAnnotations, getFirstAnnotations,
@@ -84,7 +88,8 @@ import UniqSupply
 import UniqFM       ( UniqFM, mapUFM, filterUFM )
 import MonadUtils
 
-import Util		( split )
+import Util		( split, sortLe )
+import ListSetOps	( runs )
 import Data.List	( intersperse )
 import Data.Dynamic
 import Data.IORef
@@ -96,8 +101,16 @@ import Control.Monad
 import Prelude hiding   ( read )
 
 #ifdef GHCI
+import Control.Concurrent.MVar (MVar)
+import Linker ( PersistentLinkerState, saveLinkerGlobals, restoreLinkerGlobals )
 import {-# SOURCE #-} TcSplice ( lookupThName_maybe )
 import qualified Language.Haskell.TH as TH
+#else
+saveLinkerGlobals :: IO ()
+saveLinkerGlobals = return ()
+
+restoreLinkerGlobals :: () -> IO ()
+restoreLinkerGlobals () = return ()
 #endif
 \end{code}
 
@@ -115,7 +128,7 @@ stuff before and after core passes, and do Core Lint when necessary.
 showPass :: DynFlags -> CoreToDo -> IO ()
 showPass dflags pass = Err.showPass dflags (showSDoc (ppr pass))
 
-endPass :: DynFlags -> CoreToDo -> [CoreBind] -> [CoreRule] -> IO ()
+endPass :: DynFlags -> CoreToDo -> CoreProgram -> [CoreRule] -> IO ()
 endPass dflags pass binds rules
   = do { dumpPassResult dflags mb_flag (ppr pass) empty binds rules
        ; lintPassResult dflags pass binds }      
@@ -134,7 +147,7 @@ dumpPassResult :: DynFlags
 	       	  			--            name is specified by df
                -> SDoc 			-- Header
                -> SDoc 			-- Extra info to appear after header
-               -> [CoreBind] -> [CoreRule] 
+               -> CoreProgram -> [CoreRule] 
                -> IO ()
 dumpPassResult dflags mb_flag hdr extra_info binds rules
   | Just dflag <- mb_flag
@@ -156,7 +169,7 @@ dumpPassResult dflags mb_flag hdr extra_info binds rules
                     , ptext (sLit "------ Local rules for imported ids --------")
                     , pprRules rules ]
 
-lintPassResult :: DynFlags -> CoreToDo -> [CoreBind] -> IO ()
+lintPassResult :: DynFlags -> CoreToDo -> CoreProgram -> IO ()
 lintPassResult dflags pass binds
   = when (dopt Opt_DoCoreLinting dflags) $
     do { let (warns, errs) = lintCoreBindings binds
@@ -164,7 +177,7 @@ lintPassResult dflags pass binds
        ; displayLintResults dflags pass warns errs binds  }
 
 displayLintResults :: DynFlags -> CoreToDo
-                   -> Bag Err.Message -> Bag Err.Message -> [CoreBind]
+                   -> Bag Err.Message -> Bag Err.Message -> CoreProgram
                    -> IO ()
 displayLintResults dflags pass warns errs binds
   | not (isEmptyBag errs)
@@ -434,7 +447,7 @@ defaultPlugin = Plugin {
 -- | A description of the plugin pass itself
 type PluginPass = ModGuts -> CoreM ModGuts
 
-bindsOnlyPass :: ([CoreBind] -> CoreM [CoreBind]) -> ModGuts -> CoreM ModGuts
+bindsOnlyPass :: (CoreProgram -> CoreM CoreProgram) -> ModGuts -> CoreM ModGuts
 bindsOnlyPass pass guts
   = do { binds' <- pass (mg_binds guts)
        ; return (guts { mg_binds = binds' }) }
@@ -453,6 +466,7 @@ verboseSimplStats = opt_PprStyle_Debug		-- For now, anyway
 
 zeroSimplCount	   :: DynFlags -> SimplCount
 isZeroSimplCount   :: SimplCount -> Bool
+hasDetailedCounts  :: SimplCount -> Bool
 pprSimplCount	   :: SimplCount -> SDoc
 doSimplTick, doFreeSimplTick :: Tick -> SimplCount -> SimplCount
 plusSimplCount     :: SimplCount -> SimplCount -> SimplCount
@@ -491,6 +505,9 @@ zeroSimplCount dflags
 
 isZeroSimplCount (VerySimplCount n)    	    = n==0
 isZeroSimplCount (SimplCount { ticks = n }) = n==0
+
+hasDetailedCounts (VerySimplCount {}) = False
+hasDetailedCounts (SimplCount {})     = True
 
 doFreeSimplTick tick sc@SimplCount { details = dts } 
   = sc { details = dts `addTick` tick }
@@ -532,7 +549,7 @@ pprSimplCount (VerySimplCount n) = ptext (sLit "Total ticks:") <+> int n
 pprSimplCount (SimplCount { ticks = tks, details = dts, log1 = l1, log2 = l2 })
   = vcat [ptext (sLit "Total ticks:    ") <+> int tks,
 	  blankLine,
-	  pprTickCounts (Map.toList dts),
+	  pprTickCounts dts,
 	  if verboseSimplStats then
 		vcat [blankLine,
 		      ptext (sLit "Log (most recent first)"),
@@ -540,23 +557,23 @@ pprSimplCount (SimplCount { ticks = tks, details = dts, log1 = l1, log2 = l2 })
 	  else empty
     ]
 
-pprTickCounts :: [(Tick,Int)] -> SDoc
-pprTickCounts [] = empty
-pprTickCounts ((tick1,n1):ticks)
-  = vcat [int tot_n <+> text (tickString tick1),
-	  pprTCDetails real_these,
-	  pprTickCounts others
-    ]
+pprTickCounts :: Map Tick Int -> SDoc
+pprTickCounts counts
+  = vcat (map pprTickGroup groups)
   where
-    tick1_tag		= tickToTag tick1
-    (these, others)	= span same_tick ticks
-    real_these		= (tick1,n1):these
-    same_tick (tick2,_) = tickToTag tick2 == tick1_tag
-    tot_n		= sum [n | (_,n) <- real_these]
+    groups :: [[(Tick,Int)]]	-- Each group shares a comon tag
+    	      			-- toList returns common tags adjacent
+    groups = runs same_tag (Map.toList counts)
+    same_tag (tick1,_) (tick2,_) = tickToTag tick1 == tickToTag tick2
 
-pprTCDetails :: [(Tick, Int)] -> SDoc
-pprTCDetails ticks
-  = nest 4 (vcat [int n <+> pprTickCts tick | (tick,n) <- ticks])
+pprTickGroup :: [(Tick, Int)] -> SDoc
+pprTickGroup group@((tick1,_):_)
+  = hang (int (sum [n | (_,n) <- group]) <+> text (tickString tick1))
+       2 (vcat [ int n <+> pprTickCts tick  
+               | (tick,n) <- sortLe le group])
+  where
+    le (_,n1) (_,n2) = n2 <= n1   -- We want largest first
+pprTickGroup [] = panic "pprTickGroup"
 \end{code}
 
 
@@ -691,7 +708,13 @@ newtype CoreState = CoreState {
 data CoreReader = CoreReader {
         cr_hsc_env :: HscEnv,
         cr_rule_base :: RuleBase,
-        cr_module :: Module
+        cr_module :: Module,
+        cr_globals :: ((Bool, [String], [Way]),
+#ifdef GHCI
+                       (MVar PersistentLinkerState, Bool))
+#else
+                       ())
+#endif
 }
 
 data CoreWriter = CoreWriter {
@@ -749,13 +772,15 @@ runCoreM :: HscEnv
          -> Module
          -> CoreM a
          -> IO (a, SimplCount)
-runCoreM hsc_env rule_base us mod m =
-        liftM extract $ runIOEnv reader $ unCoreM m state
+runCoreM hsc_env rule_base us mod m = do
+        glbls <- liftM2 (,) saveStaticFlagGlobals saveLinkerGlobals
+        liftM extract $ runIOEnv (reader glbls) $ unCoreM m state
   where
-    reader = CoreReader {
+    reader glbls = CoreReader {
             cr_hsc_env = hsc_env,
             cr_rule_base = rule_base,
-            cr_module = mod
+            cr_module = mod,
+            cr_globals = glbls
         }
     state = CoreState { 
             cs_uniq_supply = us
@@ -844,6 +869,49 @@ getOrigNameCache = do
     liftIO $ fmap nsNames $ readIORef nameCacheRef
 \end{code}
 
+%************************************************************************
+%*									*
+             Initializing globals
+%*									*
+%************************************************************************
+
+This is a rather annoying function. When a plugin is loaded, it currently
+gets linked against a *newly loaded* copy of the GHC package. This would
+not be a problem, except that the new copy has its own mutable state
+that is not shared with that state that has already been initialized by
+the original GHC package.
+
+This leads to loaded plugins calling GHC code which pokes the static flags,
+and then dying with a panic because the static flags *it* sees are uninitialized.
+
+There are two possible solutions:
+  1. Export the symbols from the GHC executable from the GHC library and link
+     against this existing copy rather than a new copy of the GHC library
+  2. Carefully ensure that the global state in the two copies of the GHC
+     library matches
+
+I tried 1. and it *almost* works (and speeds up plugin load times!) except
+on Windows. On Windows the GHC library tends to export more than 65536 symbols
+(see #5292) which overflows the limit of what we can export from the EXE and
+causes breakage.
+
+(Note that if the GHC exeecutable was dynamically linked this wouldn't be a problem,
+because we could share the GHC library it links to.)
+
+We are going to try 2. instead. Unfortunately, this means that every plugin
+will have to say `reinitializeGlobals` before it does anything, but never mind.
+
+I've threaded the cr_globals through CoreM rather than giving them as an
+argument to the plugin function so that we can turn this function into
+(return ()) without breaking any plugins when we eventually get 1. working.
+
+\begin{code}
+reinitializeGlobals :: CoreM ()
+reinitializeGlobals = do
+    (sf_globals, linker_globals) <- read cr_globals
+    liftIO $ restoreStaticFlagGlobals sf_globals
+    liftIO $ restoreLinkerGlobals linker_globals
+\end{code}
 
 %************************************************************************
 %*									*

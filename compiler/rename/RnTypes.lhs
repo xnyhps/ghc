@@ -7,7 +7,8 @@
 module RnTypes ( 
 	-- Type related stuff
 	rnHsType, rnLHsType, rnLHsTypes, rnContext,
-	rnHsSigType, rnHsTypeFVs, rnConDeclFields, rnLPred,
+	rnHsSigType, rnLHsInstType, rnHsTypeFVs, rnConDeclFields,
+        rnIPName,
 
 	-- Precence related stuff
 	mkOpAppRn, mkNegAppRn, mkOpFormRn, mkConOpPatRn,
@@ -29,6 +30,7 @@ import RnHsSyn		( extractHsTyNames )
 import RnHsDoc          ( rnLHsDoc, rnMbLHsDoc )
 import RnEnv
 import TcRnMonad
+import IfaceEnv         ( newIPName )
 import RdrName
 import PrelNames
 import TysPrim          ( funTyConName )
@@ -37,7 +39,7 @@ import SrcLoc
 import NameSet
 
 import Util		( filterOut )
-import BasicTypes	( compareFixity, funTyFixity, negateFixity, 
+import BasicTypes	( IPName(..), ipNameName, compareFixity, funTyFixity, negateFixity, 
 			  Fixity(..), FixityDirection(..) )
 import Outputable
 import FastString
@@ -66,6 +68,21 @@ rnHsSigType :: SDoc -> LHsType RdrName -> RnM (LHsType Name)
 	-- which use *implicit* universal quantification.
 rnHsSigType doc_str ty
   = rnLHsType (text "In the type signature for" <+> doc_str) ty
+
+rnLHsInstType :: SDoc -> LHsType RdrName -> RnM (LHsType Name)
+-- Rename the type in an instance or standalone deriving decl
+rnLHsInstType doc_str ty 
+  = do { ty' <- rnLHsType doc_str ty
+       ; unless good_inst_ty (addErrAt (getLoc ty) (badInstTy ty))
+       ; return ty' }
+  where
+    good_inst_ty
+      | Just (_, _, L _ cls, _) <- splitLHsInstDeclTy_maybe ty
+      , isTcOcc (rdrNameOcc cls) = True
+      | otherwise                = False
+
+badInstTy :: LHsType RdrName -> SDoc
+badInstTy ty = ptext (sLit "Malformed instance:") <+> ppr ty 
 \end{code}
 
 rnHsType is here because we call it from loadInstDecl, and I didn't
@@ -172,9 +189,15 @@ rnHsType doc (HsAppTy ty1 ty2) = do
     ty2' <- rnLHsType doc ty2
     return (HsAppTy ty1' ty2')
 
-rnHsType doc (HsPredTy pred) = do
-    pred' <- rnPred doc pred
-    return (HsPredTy pred')
+rnHsType doc (HsIParamTy n ty) = do
+    ty' <- rnLHsType doc ty
+    n' <- rnIPName n
+    return (HsIParamTy n' ty')
+
+rnHsType doc (HsEqTy ty1 ty2) = do
+    ty1' <- rnLHsType doc ty1
+    ty2' <- rnLHsType doc ty2
+    return (HsEqTy ty1' ty2')
 
 rnHsType _ (HsSpliceTy sp _ k)
   = do { (sp', fvs) <- rnSplice sp	-- ToDo: deal with fvs
@@ -243,28 +266,10 @@ rnContext :: SDoc -> LHsContext RdrName -> RnM (LHsContext Name)
 rnContext doc = wrapLocM (rnContext' doc)
 
 rnContext' :: SDoc -> HsContext RdrName -> RnM (HsContext Name)
-rnContext' doc ctxt = mapM (rnLPred doc) ctxt
+rnContext' doc ctxt = mapM (rnLHsType doc) ctxt
 
-rnLPred :: SDoc -> LHsPred RdrName -> RnM (LHsPred Name)
-rnLPred doc  = wrapLocM (rnPred doc)
-
-rnPred :: SDoc -> HsPred RdrName
-       -> IOEnv (Env TcGblEnv TcLclEnv) (HsPred Name)
-rnPred doc (HsClassP clas tys)
-  = do { clas_name <- lookupOccRn clas
-       ; tys' <- rnLHsTypes doc tys
-       ; return (HsClassP clas_name tys')
-       }
-rnPred doc (HsEqualP ty1 ty2)
-  = do { ty1' <- rnLHsType doc ty1
-       ; ty2' <- rnLHsType doc ty2
-       ; return (HsEqualP ty1' ty2')
-       }
-rnPred doc (HsIParam n ty)
-  = do { name <- newIPNameRn n
-       ; ty' <- rnLHsType doc ty
-       ; return (HsIParam name ty')
-       }
+rnIPName :: IPName RdrName -> RnM (IPName Name)
+rnIPName n = newIPName (occNameFS (rdrNameOcc (ipNameName n)))
 \end{code}
 
 

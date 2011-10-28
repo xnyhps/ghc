@@ -119,11 +119,10 @@ data HsBindLR idL idR
 				-- type 	Int -> forall a'. a' -> a'
 				-- Notice that the coercion captures the free a'.
 
-	bind_fvs :: NameSet,	-- ^ After the renamer, this contains a superset of the
-				-- Names of the other binders in this binding group that 
-				-- are free in the RHS of the defn
-				-- Before renaming, and after typechecking, 
-				-- the field is unused; it's just an error thunk
+	bind_fvs :: NameSet,	-- ^ After the renamer, this contains the locally-bound
+		    		-- free variables of this defn.
+				-- See Note [Bind free vars]
+
 
         fun_tick :: Maybe (Int,[Id])   -- ^ This is the (optional) module-local tick number.
     }
@@ -133,7 +132,7 @@ data HsBindLR idL idR
 	pat_lhs    :: LPat idL,
 	pat_rhs    :: GRHSs idR,
 	pat_rhs_ty :: PostTcType,	-- Type of the GRHSs
-	bind_fvs   :: NameSet		-- Same as for FunBind
+	bind_fvs   :: NameSet		-- See Note [Bind free vars]
     }
 
   | VarBind {	-- Dictionary binding and suchlike 
@@ -150,7 +149,7 @@ data HsBindLR idL idR
        -- AbsBinds only gets used when idL = idR after renaming,
        -- but these need to be idL's for the collect... code in HsUtil 
        -- to have the right type
-	abs_exports :: [([TyVar], idL, idL, TcSpecPrags)],	-- (tvs, poly_id, mono_id, prags)
+	abs_exports :: [ABExport idL],
 
         abs_ev_binds :: TcEvBinds,     -- Evidence bindings
 	abs_binds    :: LHsBinds idL   -- Typechecked user bindings
@@ -171,11 +170,58 @@ data HsBindLR idL idR
 	-- (You can get a PhD for explaining the True Meaning
 	--  of this last construct.)
 
+data ABExport id 
+  = ABE { abe_poly  :: id 
+        , abe_mono  :: id 
+        , abe_wrap  :: HsWrapper  -- See Note [AbsBinds wrappers]
+             -- Shape: (forall abs_tvs. abs_ev_vars => abe_mono) ~ abe_poly
+        , abe_prags :: TcSpecPrags }
+  deriving (Data, Typeable)
+
 placeHolderNames :: NameSet
 -- Used for the NameSet in FunBind and PatBind prior to the renamer
 placeHolderNames = panic "placeHolderNames"
+\end{code}
 
-------------
+Note [AbsBinds wrappers]
+~~~~~~~~~~~~~~~~~~~~~~~~
+Consdider
+   (f,g) = (\x.x, \y.y)
+This ultimately desugars to something like this:
+   tup :: forall a b. (a->a, b->b)
+   tup = /\a b. (\x:a.x, \y:b.y)
+   f :: forall a. a -> a
+   f = /\a. case tup a Any of 
+               (fm::a->a,gm:Any->Any) -> fm
+   ...similarly for g...
+
+The abe_wrap field deals with impedence-matching between
+    (/\a b. case tup a b of { (f,g) -> f })
+and the thing we really want, which may have fewer type
+variables.  The action happens in TcBinds.mkExport.
+
+Note [Bind free vars]
+~~~~~~~~~~~~~~~~~~~~~
+The bind_fvs field of FunBind and PatBind records the free variables
+of the definition.  It is used for two purposes
+
+a) Dependency analysis prior to type checking
+    (see TcBinds.tc_group)
+
+b) Deciding whether we can do generalisation of the binding
+    (see TcBinds.decideGeneralisationPlan)
+
+Specifically, 
+
+  * bind_fvs includes all free vars that are defined in this module
+    (including top-level things and lexically scoped type variables)
+
+  * bind_fvs excludes imported vars; this is just to keep the set smaller
+
+  * Before renaming, and after typechecking, the field is unused;
+    it's just an error thunk
+
+\begin{code}
 instance (OutputableBndr idL, OutputableBndr idR) => Outputable (HsLocalBindsLR idL idR) where
   ppr (HsValBinds bs) = ppr bs
   ppr (HsIPBinds bs)  = ppr bs
@@ -183,39 +229,52 @@ instance (OutputableBndr idL, OutputableBndr idR) => Outputable (HsLocalBindsLR 
 
 instance (OutputableBndr idL, OutputableBndr idR) => Outputable (HsValBindsLR idL idR) where
   ppr (ValBindsIn binds sigs)
-   = pprValBindsForUser binds sigs
+   = pprDeclList (pprLHsBindsForUser binds sigs)
 
   ppr (ValBindsOut sccs sigs) 
     = getPprStyle $ \ sty ->
       if debugStyle sty then	-- Print with sccs showing
 	vcat (map ppr sigs) $$ vcat (map ppr_scc sccs)
      else
-	pprValBindsForUser (unionManyBags (map snd sccs)) sigs
+	pprDeclList (pprLHsBindsForUser (unionManyBags (map snd sccs)) sigs)
    where
      ppr_scc (rec_flag, binds) = pp_rec rec_flag <+> pprLHsBinds binds
      pp_rec Recursive    = ptext (sLit "rec")
      pp_rec NonRecursive = ptext (sLit "nonrec")
 
---  *not* pprLHsBinds because we don't want braces; 'let' and
--- 'where' include a list of HsBindGroups and we don't want
--- several groups of bindings each with braces around.
--- Sort by location before printing
-pprValBindsForUser :: (OutputableBndr idL, OutputableBndr idR, OutputableBndr id2)
-		   => LHsBindsLR idL idR -> [LSig id2] -> SDoc
-pprValBindsForUser binds sigs
-  = pprDeeperList vcat (map snd (sort_by_loc decls))
+pprLHsBinds :: (OutputableBndr idL, OutputableBndr idR) => LHsBindsLR idL idR -> SDoc
+pprLHsBinds binds 
+  | isEmptyLHsBinds binds = empty
+  | otherwise = pprDeclList (map ppr (bagToList binds))
+
+pprLHsBindsForUser :: (OutputableBndr idL, OutputableBndr idR, OutputableBndr id2)
+		   => LHsBindsLR idL idR -> [LSig id2] -> [SDoc]
+--  pprLHsBindsForUser is different to pprLHsBinds because 
+--  a) No braces: 'let' and 'where' include a list of HsBindGroups
+--     and we don't want several groups of bindings each 
+--     with braces around
+--  b) Sort by location before printing
+--  c) Include signatures
+pprLHsBindsForUser binds sigs
+  = map snd (sort_by_loc decls)
   where
 
     decls :: [(SrcSpan, SDoc)]
     decls = [(loc, ppr sig)  | L loc sig <- sigs] ++
-    	     [(loc, ppr bind) | L loc bind <- bagToList binds]
+    	    [(loc, ppr bind) | L loc bind <- bagToList binds]
 
     sort_by_loc decls = sortLe (\(l1,_) (l2,_) -> l1 <= l2) decls
 
-pprLHsBinds :: (OutputableBndr idL, OutputableBndr idR) => LHsBindsLR idL idR -> SDoc
-pprLHsBinds binds 
-  | isEmptyLHsBinds binds = empty
-  | otherwise = lbrace <+> pprDeeperList vcat (map ppr (bagToList binds)) <+> rbrace
+pprDeclList :: [SDoc] -> SDoc   -- Braces with a space
+-- Print a bunch of declarations
+-- One could choose  { d1; d2; ... }, using 'sep'
+-- or      d1
+--         d2
+--	   ..
+--    using vcat
+-- At the moment we chose the latter
+-- Also we do the 'pprDeeperList' thing.
+pprDeclList ds = pprDeeperList vcat ds
 
 ------------
 emptyLocalBinds :: HsLocalBindsLR a b
@@ -306,17 +365,19 @@ ppr_monobind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dictvars
   = sep [ptext (sLit "AbsBinds"),
   	 brackets (interpp'SP tyvars),
   	 brackets (interpp'SP dictvars),
-  	 brackets (sep (punctuate comma (map ppr_exp exports)))]
+  	 brackets (sep (punctuate comma (map ppr exports)))]
     $$
-    nest 2 ( vcat [pprBndr LetBind x | (_,x,_,_) <- exports]
+    nest 2 ( vcat [pprBndr LetBind (abe_poly ex) | ex <- exports]
   			-- Print type signatures
   	     $$ pprLHsBinds val_binds )
     $$
     ifPprDebug (ppr ev_binds)
-  where
-    ppr_exp (tvs, gbl, lcl, prags)
-	= vcat [ppr gbl <+> ptext (sLit "<=") <+> ppr tvs <+> ppr lcl,
-	  	nest 2 (pprTcSpecPrags prags)]
+
+instance (OutputableBndr id) => Outputable (ABExport id) where
+  ppr (ABE { abe_wrap = wrap, abe_poly = gbl, abe_mono = lcl, abe_prags = prags })
+    = vcat [ ppr gbl <+> ptext (sLit "<=") <+> ppr lcl
+	   , nest 2 (pprTcSpecPrags prags)
+           , nest 2 (ppr wrap)]
 \end{code}
 
 
@@ -371,9 +432,6 @@ instance (OutputableBndr id) => Outputable (IPBind id) where
 %************************************************************************
 
 \begin{code}
--- A HsWrapper is an expression with a hole in it
--- We need coercions to have concrete form so that we can zonk them
-
 data HsWrapper
   = WpHole			-- The identity coercion
 
@@ -383,8 +441,8 @@ data HsWrapper
        -- Hence  (\a. []) `WpCompose` (\b. []) = (\a b. [])
        -- But    ([] a)   `WpCompose` ([] b)   = ([] b a)
 
-  | WpCast Coercion		-- A cast:  [] `cast` co
-				-- Guaranteed not the identity coercion
+  | WpCast LCoercion          -- A cast:  [] `cast` co
+                              -- Guaranteed not the identity coercion
 
 	-- Evidence abstraction and application
         -- (both dictionaries and coercions)
@@ -441,24 +499,24 @@ data EvBind = EvBind EvVar EvTerm
 
 data EvTerm
   = EvId EvId                  -- Term-level variable-to-variable bindings 
-                               -- (no coercion variables! they come via EvCoercion)
+                               -- (no coercion variables! they come via EvCoercionBox)
 
-  | EvCoercion Coercion        -- Coercion bindings
+  | EvCoercionBox LCoercion    -- (Boxed) coercion bindings
 
-  | EvCast EvVar Coercion      -- d |> co
+  | EvCast EvVar LCoercion     -- d |> co
 
   | EvDFunApp DFunId           -- Dictionary instance application
-       [Type] [EvVar] 
+       [Type] [EvVar]
+
+  | EvTupleSel EvId  Int       -- n'th component of the tuple
+
+  | EvTupleMk [EvId]           -- tuple built from this stuff
 
   | EvSuperClass DictId Int    -- n'th superclass. Used for both equalities and
                                -- dictionaries, even though the former have no
 			       -- selector Id.  We count up from _0_ 
 			       
   deriving( Data, Typeable)
-
-evVarTerm :: EvVar -> EvTerm
-evVarTerm v | isCoVar v = EvCoercion (mkCoVarCo v)
-            | otherwise = EvId v
 \end{code}
 
 Note [EvBinds/EvTerm]
@@ -499,7 +557,7 @@ mkWpEvApps :: [EvTerm] -> HsWrapper
 mkWpEvApps args = mk_co_app_fn WpEvApp args
 
 mkWpEvVarApps :: [EvVar] -> HsWrapper
-mkWpEvVarApps vs = mkWpEvApps (map evVarTerm vs)
+mkWpEvVarApps vs = mkWpEvApps (map EvId vs)
 
 mkWpTyLams :: [TyVar] -> HsWrapper
 mkWpTyLams ids = mk_co_lam_fn WpTyLam ids
@@ -513,12 +571,12 @@ mkWpLet (EvBinds b) | isEmptyBag b = WpHole
 mkWpLet ev_binds                   = WpLet ev_binds
 
 mk_co_lam_fn :: (a -> HsWrapper) -> [a] -> HsWrapper
-mk_co_lam_fn f as = foldr (\x wrap -> f x `WpCompose` wrap) WpHole as
+mk_co_lam_fn f as = foldr (\x wrap -> f x <.> wrap) WpHole as
 
 mk_co_app_fn :: (a -> HsWrapper) -> [a] -> HsWrapper
 -- For applications, the *first* argument must
 -- come *last* in the composition sequence
-mk_co_app_fn f as = foldr (\x wrap -> wrap `WpCompose` f x) WpHole as
+mk_co_app_fn f as = foldr (\x wrap -> wrap <.> f x) WpHole as
 
 idHsWrapper :: HsWrapper
 idHsWrapper = WpHole
@@ -569,11 +627,14 @@ instance Outputable EvBindsVar where
 
 instance Outputable EvBind where
   ppr (EvBind v e)   = ppr v <+> equals <+> ppr e
+   -- We cheat a bit and pretend EqVars are CoVars for the purposes of pretty printing
 
 instance Outputable EvTerm where
   ppr (EvId v)        	 = ppr v
   ppr (EvCast v co)      = ppr v <+> (ptext (sLit "`cast`")) <+> pprParendCo co
-  ppr (EvCoercion co)    = ptext (sLit "CO") <+> ppr co
+  ppr (EvCoercionBox co) = ptext (sLit "CO") <+> ppr co
+  ppr (EvTupleSel v n)   = ptext (sLit "tupsel") <> parens (ppr (v,n))
+  ppr (EvTupleMk vs)     = ptext (sLit "tupmk") <+> ppr vs
   ppr (EvSuperClass d n) = ptext (sLit "sc") <> parens (ppr (d,n))
   ppr (EvDFunApp df tys ts) = ppr df <+> sep [ char '@' <> ppr tys, ppr ts ]
 \end{code}
@@ -666,25 +727,6 @@ isDefaultMethod (SpecPrags {})  = False
 \end{code}
 
 \begin{code}
-okBindSig :: Sig a -> Bool
-okBindSig _ = True
-
-okHsBootSig :: Sig a -> Bool
-okHsBootSig (TypeSig  _ _)    = True
-okHsBootSig (GenericSig  _ _) = False
-okHsBootSig (FixSig _) 	      = True
-okHsBootSig _                 = False
-
-okClsDclSig :: Sig a -> Bool
-okClsDclSig (SpecInstSig _) = False
-okClsDclSig _               = True        -- All others OK
-
-okInstDclSig :: Sig a -> Bool
-okInstDclSig (TypeSig _ _)    = False
-okInstDclSig (GenericSig _ _) = False
-okInstDclSig (FixSig _)       = False
-okInstDclSig _ 	              = True
-
 isFixityLSig :: LSig name -> Bool
 isFixityLSig (L _ (FixSig {})) = True
 isFixityLSig _	               = False

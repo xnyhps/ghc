@@ -20,6 +20,7 @@ import Bag
 import Literal
 import DataCon
 import TysWiredIn
+import TysPrim
 import Var
 import VarEnv
 import VarSet
@@ -27,13 +28,13 @@ import Name
 import Id
 import PprCore
 import ErrUtils
+import Coercion
 import SrcLoc
 import Kind
 import Type
 import TypeRep
-import Coercion
 import TyCon
-import Class
+import TcType
 import BasicTypes
 import StaticFlags
 import ListSetOps
@@ -98,7 +99,7 @@ find an occurence of an Id, we fetch it from the in-scope set.
 
 
 \begin{code}
-lintCoreBindings :: [CoreBind] -> (Bag Message, Bag Message)
+lintCoreBindings :: CoreProgram -> (Bag Message, Bag Message)
 --   Returns (warnings, errors)
 lintCoreBindings binds
   = initL $ 
@@ -279,10 +280,24 @@ lintCoreExpr (Let (Rec pairs) body)
     bndrs = map fst pairs
     (_, dups) = removeDups compare bndrs
 
-lintCoreExpr e@(App fun arg)
-  = do	{ fun_ty <- lintCoreExpr fun
-	; addLoc (AnExpr e) $
-          lintCoreArg fun_ty arg }
+lintCoreExpr e@(App _ _)
+    | Var x <- fun -- Greivous hack for Eq# construction: Eq# may have type arguments
+                   -- of kind (* -> *) but its type insists on *. When we have polymorphic kinds,
+                   -- we should do this properly
+    , Just dc <- isDataConWorkId_maybe x
+    , dc == eqBoxDataCon
+    , [Type arg_ty1, Type arg_ty2, co_e] <- args
+    = do arg_kind1 <- lintType arg_ty1
+         arg_kind2 <- lintType arg_ty2
+         unless (arg_kind1 `eqKind` arg_kind2)
+                (addErrL (mkEqBoxKindErrMsg arg_ty1 arg_ty2))
+         
+         lintCoreArg (mkCoercionType arg_ty1 arg_ty2 `mkFunTy` mkEqPred (arg_ty1, arg_ty2)) co_e
+    | otherwise
+    = do { fun_ty <- lintCoreExpr fun
+         ; addLoc (AnExpr e) $ foldM lintCoreArg fun_ty args }
+  where
+    (fun, args) = collectArgs e
 
 lintCoreExpr (Lam var expr)
   = addLoc (LambdaBodyOf var) $
@@ -302,9 +317,8 @@ lintCoreExpr e@(Case scrut var alt_ty alts) =
      ; alt_ty   <- lintInTy alt_ty  
      ; var_ty   <- lintInTy (idType var)	
 
-     ; let mb_tc_app = splitTyConApp_maybe (idType var)
-     ; case mb_tc_app of 
-         Just (tycon, _)
+     ; case tyConAppTyCon_maybe (idType var) of 
+         Just tycon
               | debugIsOn &&
                 isAlgTyCon tycon && 
 		not (isFamilyTyCon tycon || isAbstractTyCon tycon) &&
@@ -338,7 +352,7 @@ lintCoreExpr (Type ty)
 lintCoreExpr (Coercion co)
   = do { co' <- lintInCo co
        ; let Pair ty1 ty2 = coercionKind co'
-       ; return (mkPredTy $ EqPred ty1 ty2) }
+       ; return (mkCoercionType ty1 ty2) }
 \end{code}
 
 %************************************************************************
@@ -476,9 +490,9 @@ checkCaseAlts e ty alts =
     non_deflt (DEFAULT, _, _) = False
     non_deflt _               = True
 
-    is_infinite_ty = case splitTyConApp_maybe ty of
-                        Nothing         -> False
-                        Just (tycon, _) -> isPrimTyCon tycon
+    is_infinite_ty = case tyConAppTyCon_maybe ty of
+                        Nothing    -> False
+                        Just tycon -> isPrimTyCon tycon
 \end{code}
 
 \begin{code}
@@ -496,10 +510,13 @@ lintCoreAlt _ alt_ty (DEFAULT, args, rhs) =
   do { checkL (null args) (mkDefaultArgsMsg args)
      ; checkAltExpr rhs alt_ty }
 
-lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs) = 
-  do { checkL (null args) (mkDefaultArgsMsg args)
-     ; checkTys lit_ty scrut_ty (mkBadPatMsg lit_ty scrut_ty)	
-     ; checkAltExpr rhs alt_ty } 
+lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
+  | isIntegerTy scrut_ty
+    = failWithL integerScrutinisedMsg
+  | otherwise
+    = do { checkL (null args) (mkDefaultArgsMsg args)
+         ; checkTys lit_ty scrut_ty (mkBadPatMsg lit_ty scrut_ty)
+         ; checkAltExpr rhs alt_ty }
   where
     lit_ty = literalType lit
 
@@ -610,7 +627,7 @@ lintInCo co
 lintKind :: Kind -> LintM ()
 -- Check well-formedness of kinds: *, *->*, etc
 lintKind (TyConApp tc []) 
-  | getUnique tc `elem` kindKeys
+  | tyConKind tc `eqKind` tySuperKind
   = return ()
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
@@ -645,6 +662,10 @@ lintCoercion (ForAllCo v co)
        ; return (ForAllTy v s, ForAllTy v t) }
 
 lintCoercion (CoVarCo cv)
+  | not (isCoVar cv)
+  = failWithL (hang (ptext (sLit "Bad CoVarCo:") <+> ppr cv)
+                  2 (ptext (sLit "With offending type:") <+> ppr (varType cv)))
+  | otherwise
   = do { checkTyCoVarInScope cv
        ; return (coVarKind cv) }
 
@@ -694,7 +715,7 @@ lintCoercion (InstCo co arg_ty)
 ----------
 checkTcApp :: Coercion -> Int -> Type -> LintM Type
 checkTcApp co n ty
-  | Just (_, tys) <- splitTyConApp_maybe ty
+  | Just tys <- tyConAppArgs_maybe ty
   , n < length tys
   = return (tys !! n)
   | otherwise
@@ -715,7 +736,9 @@ lintType ty@(FunTy t1 t2)
   = lint_ty_app ty (tyConKind funTyCon) [t1,t2]
 
 lintType ty@(TyConApp tc tys)
-  | tc `hasKey` eqPredPrimTyConKey	-- See Note [The (~) TyCon] in TysPrim
+  | tc `hasKey` eqPrimTyConKey	-- See Note [The ~# TyCon] in TysPrim
+  = lint_prim_eq_pred ty tys
+  | tc `hasKey` eqTyConKey
   = lint_eq_pred ty tys
   | tyConHasKind tc
   = lint_ty_app ty (tyConKind tc) tys
@@ -726,20 +749,6 @@ lintType (ForAllTy tv ty)
   = do { lintTyBndrKind tv
        ; addInScopeVar tv (lintType ty) }
 
-lintType ty@(PredTy (ClassP cls tys))
-  = lint_ty_app ty (tyConKind (classTyCon cls)) tys
-
-lintType (PredTy (IParam _ p_ty))
-  = lintType p_ty
-
-lintType ty@(PredTy (EqPred t1 t2))
-  = do { k1 <- lintType t1
-       ; k2 <- lintType t2
-       ; unless (k1 `eqKind` k2) 
-                (addErrL (sep [ ptext (sLit "Kind mis-match in equality predicate:")
-                              , nest 2 (ppr ty) ]))
-       ; return unliftedTypeKind }
-
 ----------------
 lint_ty_app :: Type -> Kind -> [OutType] -> LintM Kind
 lint_ty_app ty k tys 
@@ -747,7 +756,21 @@ lint_ty_app ty k tys
        ; lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k ks }
 
 lint_eq_pred :: Type -> [OutType] -> LintM Kind
-lint_eq_pred ty arg_tys
+lint_eq_pred ty arg_tys = case arg_tys of
+  [ty1, ty2] ->  do { k1 <- lintType ty1
+                    ; k2 <- lintType ty2
+                    ; unless (k1 `eqKind` k2) 
+                             (addErrL (sep [ ptext (sLit "Kind mis-match in equality predicate:")
+                                           , nest 2 (ppr ty) ]))
+                    ; return constraintKind }
+  [ty1] -> do { k1 <- lintType ty1;
+                return (k1 `mkFunTy` constraintKind) }
+  []    -> do { return (typeKind ty) }
+  _     -> failWithL (ptext (sLit "Oversaturated (~) type") <+> ppr ty)
+
+
+lint_prim_eq_pred :: Type -> [OutType] -> LintM Kind
+lint_prim_eq_pred ty arg_tys
   | [ty1,ty2] <- arg_tys
   = do { k1 <- lintType ty1
        ; k2 <- lintType ty2
@@ -755,7 +778,7 @@ lint_eq_pred ty arg_tys
                 (ptext (sLit "Mismatched arg kinds:") <+> ppr ty)
        ; return unliftedTypeKind }
   | otherwise
-  = failWithL (ptext (sLit "Unsaturated (~) type") <+> ppr ty)
+  = failWithL (ptext (sLit "Unsaturated ~# type") <+> ppr ty)
 
 ----------------
 check_co_app :: Coercion -> Kind -> [OutType] -> LintM ()
@@ -925,7 +948,7 @@ lookupIdInScope id
 
 
 oneTupleDataConId :: Id	-- Should not happen
-oneTupleDataConId = dataConWorkId (tupleCon Boxed 1)
+oneTupleDataConId = dataConWorkId (tupleCon BoxedTuple 1)
 
 checkBndrIdInScope :: Var -> Var -> LintM ()
 checkBndrIdInScope binder id 
@@ -1049,6 +1072,10 @@ mkBadPatMsg con_result_ty scrut_ty
 	text "Scrutinee type:" <+> ppr scrut_ty
     ]
 
+integerScrutinisedMsg :: Message
+integerScrutinisedMsg
+  = text "In a case alternative, scrutinee type is Integer"
+
 mkBadAltMsg :: Type -> CoreAlt -> Message
 mkBadAltMsg scrut_ty alt
   = vcat [ text "Data alternative when scrutinee is not a tycon application",
@@ -1125,6 +1152,14 @@ mkStrictMsg binder
 	      hsep [ptext (sLit "Binder's demand info:"), ppr (idDemandInfo binder)]
 	     ]
 
+
+mkEqBoxKindErrMsg :: Type -> Type -> Message
+mkEqBoxKindErrMsg ty1 ty2
+  = vcat [ptext (sLit "Kinds don't match in type arguments of Eq#:"),
+          hang (ptext (sLit "Arg type 1:"))   
+                 4 (ppr ty1 <+> dcolon <+> ppr (typeKind ty1)),
+          hang (ptext (sLit "Arg type 2:"))   
+                 4 (ppr ty2 <+> dcolon <+> ppr (typeKind ty2))]
 
 mkKindErrMsg :: TyVar -> Type -> Message
 mkKindErrMsg tyvar arg_ty

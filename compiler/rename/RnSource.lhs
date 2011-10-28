@@ -16,31 +16,25 @@ import {-# SOURCE #-} TcSplice ( runQuasiQuoteDecl )
 #endif 	/* GHCI */
 
 import HsSyn
-import RdrName		( RdrName, isRdrDataCon, elemLocalRdrEnv, rdrNameOcc )
+import RdrName	
 import RdrHsSyn		( extractHsRhoRdrTyVars )
 import RnHsSyn
 import RnTypes
-import RnBinds		( rnTopBindsLHS, rnTopBindsRHS, rnMethodBinds, renameSigs, mkSigTvFn,
-                                makeMiniFixityEnv)
-import RnEnv		( lookupLocalDataTcNames, lookupLocatedOccRn,
-			  lookupTopBndrRn, lookupLocatedTopBndrRn,
-			  lookupOccRn, bindLocalNamesFV,
-			  bindLocatedLocalsFV, bindPatSigTyVarsFV,
-			  bindTyVarsRn, bindTyVarsFV, extendTyVarEnvFVRn,
-			  bindLocalNames, checkDupRdrNames, mapFvRn
-			)
-import RnNames       	( getLocalNonValBinders, extendGlobalRdrEnvRn )
-import HscTypes      	( GenAvailInfo(..), availsToNameSet )
+import RnBinds
+import RnEnv
+import RnNames
 import RnHsDoc          ( rnHsDoc, rnMbLHsDoc )
 import TcRnMonad
+import Kind             ( liftedTypeKind )
 
 import ForeignCall	( CCallTarget(..) )
 import Module
 import HscTypes		( Warnings(..), plusWarns )
 import Class		( FunDep )
-import Name		( Name, nameOccName )
+import Name
 import NameSet
 import NameEnv
+import Avail
 import Outputable
 import Bag
 import FastString
@@ -48,22 +42,12 @@ import Util		( filterOut )
 import SrcLoc
 import DynFlags
 import HscTypes		( HscEnv, hsc_dflags )
-import BasicTypes       ( Boxity(..) )
 import ListSetOps       ( findDupsEq )
 import Digraph		( SCC, flattenSCC, stronglyConnCompFromEdgedVertices )
 
 import Control.Monad
 import Maybes( orElse )
-import Data.Maybe
-\end{code}
-
-\begin{code}
--- XXX
-thenM :: Monad a => a b -> (b -> a c) -> a c
-thenM = (>>=)
-
-thenM_ :: Monad a => a b -> a c -> a c
-thenM_ = (>>)
+import Data.Maybe( isNothing )
 \end{code}
 
 @rnSourceDecl@ `renames' declarations.
@@ -103,14 +87,13 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
    -- (A) Process the fixity declarations, creating a mapping from
    --     FastStrings to FixItems.
    --     Also checks for duplcates.
-   local_fix_env <- makeMiniFixityEnv fix_decls;
+   local_fix_env <- makeMiniFixityEnv fix_decls ;
 
    -- (B) Bring top level binders (and their fixities) into scope,
    --     *except* for the value bindings, which get brought in below.
    --     However *do* include class ops, data constructors
    --     And for hs-boot files *do* include the value signatures
-   tc_avails <- getLocalNonValBinders group ;
-   tc_envs <- extendGlobalRdrEnvRn tc_avails local_fix_env ;
+   (tc_envs, tc_bndrs) <- getLocalNonValBinders local_fix_env group ;
    setEnvs tc_envs $ do {
 
    failIfErrsM ; -- No point in continuing if (say) we have duplicate declarations
@@ -127,12 +110,11 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
    --     It uses the fixity env from (A) to bind fixities for view patterns.
    new_lhs <- rnTopBindsLHS local_fix_env val_decls ;
    -- bind the LHSes (and their fixities) in the global rdr environment
-   let { val_binders = collectHsValBinders new_lhs ;
-	 val_bndr_set = mkNameSet val_binders ;
-	 all_bndr_set = val_bndr_set `unionNameSets` availsToNameSet tc_avails ;
-         val_avails = map Avail val_binders 
-       } ;
+   let { val_binders  = collectHsValBinders new_lhs ;
+         all_bndr_set = addListToNameSet tc_bndrs val_binders ;
+         val_avails   = map Avail val_binders  } ;
    (tcg_env, tcl_env) <- extendGlobalRdrEnvRn val_avails local_fix_env ;
+   traceRn (ptext (sLit "Val binders") <+> (ppr val_binders)) ;
    setEnvs (tcg_env, tcl_env) $ do {
 
    --  Now everything is in scope, as the remaining renaming assumes.
@@ -180,6 +162,7 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
       -- Haddock docs; no free vars
    rn_docs <- mapM (wrapLocM rnDocDecl) docs ;
 
+    last_tcg_env <- getGblEnv ;
    -- (I) Compute the results and return
    let {rn_group = HsGroup { hs_valds  	= rn_val_decls,
 			     hs_tyclds 	= rn_tycl_decls,
@@ -206,7 +189,7 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
 		-- Instance decls may have occurrences of things bound in bind_dus
 		-- so we must put other_fvs last
 
-        final_tcg_env = let tcg_env' = (tcg_env `addTcgDUs` src_dus)
+        final_tcg_env = let tcg_env' = (last_tcg_env `addTcgDUs` src_dus)
                         in -- we return the deprecs in the env, not in the HsGroup above
                         tcg_env' { tcg_warns = tcg_warns tcg_env' `plusWarns` rn_warns };
        } ;
@@ -269,7 +252,7 @@ rnSrcFixityDecls :: NameSet -> [LFixitySig RdrName] -> RnM [LFixitySig Name]
 --
 -- The returned FixitySigs are not actually used for anything,
 -- except perhaps the GHCi API
-rnSrcFixityDecls bound_names fix_decls
+rnSrcFixityDecls bndr_set fix_decls
   = do fix_decls <- mapM rn_decl fix_decls
        return (concat fix_decls)
   where
@@ -281,7 +264,7 @@ rnSrcFixityDecls bound_names fix_decls
     rn_decl (L loc (FixitySig (L name_loc rdr_name) fixity))
       = setSrcSpan name_loc $
                     -- this lookup will fail if the definition isn't local
-        do names <- lookupLocalDataTcNames bound_names what rdr_name
+        do names <- lookupLocalDataTcNames bndr_set what rdr_name
            return [ L loc (FixitySig (L name_loc name) fixity)
                   | name <- names ]
     what = ptext (sLit "fixity signature")
@@ -303,10 +286,10 @@ gather them together.
 \begin{code}
 -- checks that the deprecations are defined locally, and that there are no duplicates
 rnSrcWarnDecls :: NameSet -> [LWarnDecl RdrName] -> RnM Warnings
-rnSrcWarnDecls _bound_names [] 
+rnSrcWarnDecls _ [] 
   = return NoWarnings
 
-rnSrcWarnDecls bound_names decls 
+rnSrcWarnDecls bndr_set decls 
   = do { -- check for duplicates
        ; mapM_ (\ dups -> let (L loc rdr:lrdr':_) = dups
                           in addErrAt loc (dupWarnDecl lrdr' rdr)) 
@@ -316,16 +299,19 @@ rnSrcWarnDecls bound_names decls
  where
    rn_deprec (Warning rdr_name txt)
        -- ensures that the names are defined locally
-     = lookupLocalDataTcNames bound_names what rdr_name	`thenM` \ names ->
-       return [(nameOccName name, txt) | name <- names]
+     = do { names <- lookupLocalDataTcNames bndr_set what rdr_name
+          ; return [(nameOccName name, txt) | name <- names] }
    
    what = ptext (sLit "deprecation")
 
-   -- look for duplicates among the OccNames;
-   -- we check that the names are defined above
-   -- invt: the lists returned by findDupsEq always have at least two elements
-   warn_rdr_dups = findDupsEq (\ x -> \ y -> rdrNameOcc (unLoc x) == rdrNameOcc (unLoc y))
-                     (map (\ (L loc (Warning rdr_name _)) -> L loc rdr_name) decls)
+   warn_rdr_dups = findDupRdrNames (map (\ (L loc (Warning rdr_name _)) -> L loc rdr_name) decls)
+
+findDupRdrNames :: [Located RdrName] -> [[Located RdrName]]
+findDupRdrNames = findDupsEq (\ x -> \ y -> rdrNameOcc (unLoc x) == rdrNameOcc (unLoc y))
+
+-- look for duplicates among the OccNames;
+-- we check that the names are defined above
+-- invt: the lists returned by findDupsEq always have at least two elements
                
 dupWarnDecl :: Located RdrName -> RdrName -> SDoc
 -- Located RdrName -> DeprecDecl RdrName -> SDoc
@@ -363,8 +349,8 @@ rnAnnProvenance provenance = do
 \begin{code}
 rnDefaultDecl :: DefaultDecl RdrName -> RnM (DefaultDecl Name, FreeVars)
 rnDefaultDecl (DefaultDecl tys)
-  = mapFvRn (rnHsTypeFVs doc_str) tys	`thenM` \ (tys', fvs) ->
-    return (DefaultDecl tys', fvs)
+  = do { (tys', fvs) <- mapFvRn (rnHsTypeFVs doc_str) tys
+       ; return (DefaultDecl tys', fvs) }
   where
     doc_str = text "In a `default' declaration"
 \end{code}
@@ -377,21 +363,21 @@ rnDefaultDecl (DefaultDecl tys)
 
 \begin{code}
 rnHsForeignDecl :: ForeignDecl RdrName -> RnM (ForeignDecl Name, FreeVars)
-rnHsForeignDecl (ForeignImport name ty spec)
-  = getTopEnv                           `thenM` \ (topEnv :: HscEnv) ->
-    lookupLocatedTopBndrRn name	        `thenM` \ name' ->
-    rnHsTypeFVs (fo_decl_msg name) ty	`thenM` \ (ty', fvs) ->
+rnHsForeignDecl (ForeignImport name ty _ spec)
+  = do { topEnv :: HscEnv <- getTopEnv
+       ; name' <- lookupLocatedTopBndrRn name
+       ; (ty', fvs) <- rnHsTypeFVs (fo_decl_msg name) ty
 
-    -- Mark any PackageTarget style imports as coming from the current package
-    let packageId	= thisPackage $ hsc_dflags topEnv
-	spec'		= patchForeignImport packageId spec
+        -- Mark any PackageTarget style imports as coming from the current package
+       ; let packageId = thisPackage $ hsc_dflags topEnv
+	     spec'     = patchForeignImport packageId spec
 
-    in	return (ForeignImport name' ty' spec', fvs)
+       ; return (ForeignImport name' ty' noForeignImportCoercionYet spec', fvs) }
 
-rnHsForeignDecl (ForeignExport name ty spec)
-  = lookupLocatedOccRn name	        `thenM` \ name' ->
-    rnHsTypeFVs (fo_decl_msg name) ty  	`thenM` \ (ty', fvs) ->
-    return (ForeignExport name' ty' spec, fvs `addOneFV` unLoc name')
+rnHsForeignDecl (ForeignExport name ty _ spec)
+  = do { name' <- lookupLocatedOccRn name
+       ; (ty', fvs) <- rnHsTypeFVs (fo_decl_msg name) ty
+       ; return (ForeignExport name' ty' noForeignExportCoercionYet spec, fvs `addOneFV` unLoc name') }
 	-- NB: a foreign export is an *occurrence site* for name, so 
 	--     we add it to the free-variable list.  It might, for example,
 	--     be imported from another module
@@ -437,30 +423,23 @@ patchCCallTarget packageId callTarget
 rnSrcInstDecl :: InstDecl RdrName -> RnM (InstDecl Name, FreeVars)
 rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	-- Used for both source and interface file decls
-  = rnHsSigType (text "an instance decl") inst_ty	`thenM` \ inst_ty' ->
+  = do { inst_ty' <- rnLHsInstType (text "In an instance declaration") inst_ty
+       ; let Just (inst_tyvars, _, L _ cls,_) = splitLHsInstDeclTy_maybe inst_ty'
 
 	-- Rename the bindings
 	-- The typechecker (not the renamer) checks that all 
 	-- the bindings are for the right class
-    let
-	(inst_tyvars, _, cls,_) = splitHsInstDeclTy (unLoc inst_ty')
-    in
-    extendTyVarEnvForMethodBinds inst_tyvars (		
-	-- (Slightly strangely) the forall-d tyvars scope over
-	-- the method bindings too
-	rnMethodBinds cls (\_ -> []) 	-- No scoped tyvars
-		      mbinds
-    )						`thenM` \ (mbinds', meth_fvs) ->
-	-- Rename the associated types
-	-- The typechecker (not the renamer) checks that all 
-	-- the declarations are for the right class
-    let
-	at_names = map (head . hsTyClDeclBinders) ats
-    in
-    checkDupRdrNames at_names		`thenM_`
-	-- See notes with checkDupRdrNames for methods, above
+	-- (Slightly strangely) when scoped type variables are on, the 
+        -- forall-d tyvars scope over the method bindings too
+       ; (mbinds', meth_fvs) <- extendTyVarEnvForMethodBinds inst_tyvars $
+                                rnMethodBinds cls (\_ -> [])	-- No scoped tyvars
+					          mbinds    
 
-    rnATInsts ats				`thenM` \ (ats', at_fvs) ->
+       -- Rename the associated types
+       -- NB: We allow duplicate associated-type decls; 
+       --     See Note [Associated type instances] in TcInstDcls
+       ; (ats', at_fvs) <- extendTyVarEnvFVRn (map hsLTyVarName inst_tyvars) $
+                           rnATInsts cls ats
 
 	-- Rename the prags and signatures.
 	-- Note that the type variables are not in scope here,
@@ -469,17 +448,14 @@ rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	-- works OK. 
 	--
 	-- But the (unqualified) method names are in scope
-    let 
-	binders = collectHsBindsBinders mbinds'
-	bndr_set = mkNameSet binders
-    in
-    bindLocalNames binders 
-	(renameSigs (Just bndr_set) okInstDclSig uprags)	`thenM` \ uprags' ->
+       ; let binders = collectHsBindsBinders mbinds'
+       ; uprags' <- bindLocalNames binders $
+	            renameSigs (InstDeclCtxt cls) uprags
 
-    return (InstDecl inst_ty' mbinds' uprags' ats',
-	     meth_fvs `plusFV` at_fvs
-		      `plusFV` hsSigsFVs uprags'
-		      `plusFV` extractHsTyNames inst_ty')
+       ; return (InstDecl inst_ty' mbinds' uprags' ats',
+	         meth_fvs `plusFV` at_fvs
+                          `plusFV` hsSigsFVs uprags'
+		      	  `plusFV` extractHsTyNames inst_ty') }
              -- We return the renamed associated data type declarations so
              -- that they can be entered into the list of type declarations
              -- for the binding group, but we also keep a copy in the instance.
@@ -495,14 +471,13 @@ rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 Renaming of the associated types in instances.  
 
 \begin{code}
-rnATInsts :: [LTyClDecl RdrName] -> RnM ([LTyClDecl Name], FreeVars)
-rnATInsts atDecls = rnList rnATInst atDecls
+rnATInsts :: Name -> [LTyClDecl RdrName] -> RnM ([LTyClDecl Name], FreeVars)
+rnATInsts cls atDecls = rnList rnATInst atDecls
   where
-    rnATInst tydecl@TyData     {} = rnTyClDecl tydecl
-    rnATInst tydecl@TySynonym  {} = rnTyClDecl tydecl
-    rnATInst tydecl               =
-      pprPanic "RnSource.rnATInsts: invalid AT instance" 
-	       (ppr (tcdName tydecl))
+    rnATInst tydecl@TyData     {} = rnTyClDecl (Just cls) tydecl
+    rnATInst tydecl@TySynonym  {} = rnTyClDecl (Just cls) tydecl
+    rnATInst tydecl               = pprPanic "RnSource.rnATInsts: invalid AT instance" 
+                                             (ppr (tcdName tydecl))
 \end{code}
 
 For the method bindings in class and instance decls, we extend the 
@@ -531,7 +506,7 @@ rnSrcDerivDecl :: DerivDecl RdrName -> RnM (DerivDecl Name, FreeVars)
 rnSrcDerivDecl (DerivDecl ty)
   = do { standalone_deriv_ok <- xoptM Opt_StandaloneDeriving
        ; unless standalone_deriv_ok (addErr standaloneDerivErr)
-       ; ty' <- rnLHsType (text "In a deriving declaration") ty
+       ; ty' <- rnLHsInstType (text "In a deriving declaration") ty
        ; let fvs = extractHsTyNames ty'
        ; return (DerivDecl ty', fvs) }
 
@@ -572,8 +547,8 @@ rnHsRuleDecl (HsRule rule_name act vars lhs _fv_lhs rhs _fv_rhs)
     rn_var (RuleBndr (L loc _), id)
 	= return (RuleBndr (L loc id), emptyFVs)
     rn_var (RuleBndrSig (L loc _) t, id)
-	= rnHsTypeFVs doc t	`thenM` \ (t', fvs) ->
-	  return (RuleBndrSig (L loc id) t', fvs)
+	= do { (t', fvs) <- rnHsTypeFVs doc t
+	     ; return (RuleBndrSig (L loc id) t', fvs) }
 
 badRuleVar :: FastString -> Name -> SDoc
 badRuleVar name var
@@ -658,24 +633,43 @@ badRuleLhsErr name lhs bad_e
 \begin{code}
 rnHsVectDecl :: VectDecl RdrName -> RnM (VectDecl Name, FreeVars)
 rnHsVectDecl (HsVect var Nothing)
-  = do { var' <- wrapLocM lookupTopBndrRn var
+  = do { var' <- lookupLocatedOccRn var
        ; return (HsVect var' Nothing, unitFV (unLoc var'))
        }
-rnHsVectDecl (HsVect var (Just rhs))
-  = do { var' <- wrapLocM lookupTopBndrRn var
+-- FIXME: For the moment, the right-hand side is restricted to be a variable as we cannot properly
+--        typecheck a complex right-hand side without invoking 'vectType' from the vectoriser.
+rnHsVectDecl (HsVect var (Just rhs@(L _ (HsVar _))))
+  = do { var' <- lookupLocatedOccRn var
        ; (rhs', fv_rhs) <- rnLExpr rhs
        ; return (HsVect var' (Just rhs'), fv_rhs `addOneFV` unLoc var')
        }
+rnHsVectDecl (HsVect _var (Just _rhs))
+  = failWith $ vcat 
+               [ ptext (sLit "IMPLEMENTATION RESTRICTION: right-hand side of a VECTORISE pragma")
+               , ptext (sLit "must be an identifier")
+               ]
 rnHsVectDecl (HsNoVect var)
-  = do { var' <- wrapLocM lookupTopBndrRn var
+  = do { var' <- lookupLocatedTopBndrRn var           -- only applies to local (not imported) names
        ; return (HsNoVect var', unitFV (unLoc var'))
        }
+rnHsVectDecl (HsVectTypeIn isScalar tycon Nothing)
+  = do { tycon' <- lookupLocatedOccRn tycon
+       ; return (HsVectTypeIn isScalar tycon' Nothing, unitFV (unLoc tycon'))
+       }
+rnHsVectDecl (HsVectTypeIn isScalar tycon (Just rhs_tycon))
+  = do { tycon'     <- lookupLocatedOccRn tycon
+       ; rhs_tycon' <- lookupLocatedOccRn rhs_tycon
+       ; return ( HsVectTypeIn isScalar tycon' (Just rhs_tycon')
+                , mkFVs [unLoc tycon', unLoc rhs_tycon'])
+       }
+rnHsVectDecl (HsVectTypeOut _ _ _)
+  = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectTypeOut'"
 \end{code}
 
 %*********************************************************
-%*							*
+%*                                                      *
 \subsection{Type, class and iface sig declarations}
-%*							*
+%*                                                      *
 %*********************************************************
 
 @rnTyDecl@ uses the `global name function' to create a new type
@@ -695,7 +689,7 @@ However, we can also do some scoping checks at the same time.
 rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
 -- Renamed the declarations and do depedency analysis on them
 rnTyClDecls tycl_ds
-  = do { ds_w_fvs <- mapM (wrapLocFstM rnTyClDecl) (concat tycl_ds)
+  = do { ds_w_fvs <- mapM (wrapLocFstM (rnTyClDecl Nothing)) (concat tycl_ds)
 
        ; let sccs :: [SCC (LTyClDecl Name)]
              sccs = depAnalTyClDecls ds_w_fvs
@@ -704,28 +698,39 @@ rnTyClDecls tycl_ds
 
        ; return (map flattenSCC sccs, all_fvs) }
 
-rnTyClDecl :: TyClDecl RdrName -> RnM (TyClDecl Name, FreeVars)
-rnTyClDecl (ForeignType {tcdLName = name, tcdExtName = ext_name})
-  = lookupLocatedTopBndrRn name		`thenM` \ name' ->
-    return (ForeignType {tcdLName = name', tcdExtName = ext_name},
-	     emptyFVs)
+rnTyClDecl :: Maybe Name  -- Just cls => this TyClDecl is nested 
+	      	    	  --             inside an *instance decl* for cls
+			  --             used for associated types
+           -> TyClDecl RdrName 
+           -> RnM (TyClDecl Name, FreeVars)
+rnTyClDecl _ (ForeignType {tcdLName = name, tcdExtName = ext_name})
+  = do { name' <- lookupLocatedTopBndrRn name
+       ; return (ForeignType {tcdLName = name', tcdExtName = ext_name},
+	         emptyFVs) }
 
--- all flavours of type family declarations ("type family", "newtype fanily",
--- and "data family")
-rnTyClDecl tydecl@TyFamily {} = rnFamily tydecl bindTyVarsFV
+-- All flavours of type family declarations ("type family", "newtype family",
+-- and "data family"), both top level and (for an associated type) 
+-- in a class decl
+rnTyClDecl mb_cls (TyFamily { tcdLName = tycon, tcdTyVars = tyvars
+                            , tcdFlavour = flav, tcdKind = kind }) 
+  = bindQTvs mb_cls tyvars $ \tyvars' ->
+    do { tycon' <- lookupLocatedTopBndrRn tycon
+       ; return ( TyFamily { tcdLName = tycon', tcdTyVars = tyvars'
+                           , tcdFlavour = flav, tcdKind = kind }
+                , emptyFVs)  }
 
 -- "data", "newtype", "data instance, and "newtype instance" declarations
-rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context, 
-			   tcdLName = tycon, tcdTyVars = tyvars, 
-			   tcdTyPats = typats, tcdCons = condecls, 
-			   tcdKindSig = sig, tcdDerivs = derivs}
-  = do	{ tycon' <- if isFamInstDecl tydecl
-		    then lookupLocatedOccRn     tycon -- may be imported family
-		    else lookupLocatedTopBndrRn tycon
+-- both top level and (for an associated type) in an instance decl
+rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context, 
+			   	 tcdLName = tycon, tcdTyVars = tyvars, 
+			   	 tcdTyPats = typats, tcdCons = condecls, 
+			   	 tcdKindSig = sig, tcdDerivs = derivs}
+  = do	{ tycon' <- lookupTcdName mb_cls tydecl
 	; checkTc (h98_style || null (unLoc context)) 
                   (badGadtStupidTheta tycon)
+
     	; ((tyvars', context', typats', derivs'), stuff_fvs)
-		<- bindTyVarsFV tyvars $ \ tyvars' -> do
+		<- bindQTvs mb_cls tyvars $ \ tyvars' -> do
 		         	 -- Checks for distinct tyvars
 		   { context' <- rnContext data_doc context
                    ; (typats', fvs1) <- rnTyPats data_doc tycon' typats
@@ -760,17 +765,15 @@ rnTyClDecl tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
     data_doc = text "In the data type declaration for" <+> quotes (ppr tycon)
 
     rn_derivs Nothing   = return (Nothing, emptyFVs)
-    rn_derivs (Just ds) = rnLHsTypes data_doc ds	`thenM` \ ds' -> 
-			  return (Just ds', extractHsTyNames_s ds')
+    rn_derivs (Just ds) = do { ds' <- rnLHsTypes data_doc ds
+			     ; return (Just ds', extractHsTyNames_s ds') }
 
 -- "type" and "type instance" declarations
-rnTyClDecl tydecl@(TySynonym {tcdLName = name, tcdTyVars = tyvars,
-			      tcdTyPats = typats, tcdSynRhs = ty})
-  = bindTyVarsFV tyvars $ \ tyvars' -> do
+rnTyClDecl mb_cls tydecl@(TySynonym { tcdTyVars = tyvars, tcdLName = name,
+		  	              tcdTyPats = typats, tcdSynRhs = ty})
+  = bindQTvs mb_cls tyvars $ \ tyvars' -> do
     {    	 -- Checks for distinct tyvars
-      name' <- if isFamInstDecl tydecl
-    		  then lookupLocatedOccRn     name -- may be imported family
-    		  else lookupLocatedTopBndrRn name
+      name' <- lookupTcdName mb_cls tydecl
     ; (typats',fvs1) <- rnTyPats syn_doc name' typats
     ; (ty', fvs2)    <- rnHsTypeFVs syn_doc ty
     ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars' 
@@ -779,24 +782,29 @@ rnTyClDecl tydecl@(TySynonym {tcdLName = name, tcdTyVars = tyvars,
   where
     syn_doc = text "In the declaration for type synonym" <+> quotes (ppr name)
 
-rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname, 
-		       tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
-		       tcdMeths = mbinds, tcdATs = ats, tcdDocs = docs})
-  = do	{ cname' <- lookupLocatedTopBndrRn cname
+rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls, 
+		         tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
+		         tcdMeths = mbinds, tcdATs = ats, tcdATDefs = at_defs,
+                         tcdDocs = docs})
+  = do	{ lcls' <- lookupLocatedTopBndrRn lcls
+        ; let cls' = unLoc lcls'
 
 	-- Tyvars scope over superclass context and method signatures
-	; ((tyvars', context', fds', ats', sigs'), stuff_fvs)
+	; ((tyvars', context', fds', ats', at_defs', sigs'), stuff_fvs)
 	    <- bindTyVarsFV tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
-	     ; fds' <- rnFds cls_doc fds
-	     ; (ats', at_fvs) <- rnATs ats
-	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
-	     ; let fvs = at_fvs `plusFV` 
-                         extractHsCtxtTyNames context'	`plusFV`
-	                 hsSigsFVs sigs'
+	     ; fds'  <- rnFds cls_doc fds
+             ; let rn_at = rnTyClDecl (Just cls')
+             ; (ats', fv_ats) <- mapAndUnzipM (wrapLocFstM rn_at) ats
+	     ; sigs' <- renameSigs (ClsDeclCtxt cls') sigs
+             ; (at_defs', fv_at_defs) <- mapAndUnzipM (wrapLocFstM rn_at) at_defs
+	     ; let fvs = extractHsCtxtTyNames context'	`plusFV`
+	                 hsSigsFVs sigs'                `plusFV`
+                         plusFVs fv_ats                 `plusFV`
+                         plusFVs fv_at_defs
 			 -- The fundeps have no free variables
-	     ; return ((tyvars', context', fds', ats', sigs'), fvs) }
+	     ; return ((tyvars', context', fds', ats', at_defs', sigs'), fvs) }
 
 	-- No need to check for duplicate associated type decls
 	-- since that is done by RnNames.extendGlobalRdrEnvRn
@@ -823,17 +831,72 @@ rnTyClDecl (ClassDecl {tcdCtxt = context, tcdLName = cname,
 		-- No need to check for duplicate method signatures
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
 		-- and the methods are already in scope
-	         rnMethodBinds (unLoc cname') (mkSigTvFn sigs') mbinds
+	         rnMethodBinds cls' (mkSigTvFn sigs') mbinds
 
   -- Haddock docs 
 	; docs' <- mapM (wrapLocM rnDocDecl) docs
 
-	; return (ClassDecl { tcdCtxt = context', tcdLName = cname', 
+	; return (ClassDecl { tcdCtxt = context', tcdLName = lcls', 
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
-			      tcdMeths = mbinds', tcdATs = ats', tcdDocs = docs'},
+			      tcdMeths = mbinds', tcdATs = ats', tcdATDefs = at_defs',
+                              tcdDocs = docs'},
 	     	  meth_fvs `plusFV` stuff_fvs) }
   where
-    cls_doc  = text "In the declaration for class" 	<+> ppr cname
+    cls_doc  = text "In the declaration for class" <+> ppr lcls
+
+
+bindQTvs :: Maybe Name -> [LHsTyVarBndr RdrName]
+         -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
+         -> RnM (a, FreeVars)
+-- For *associated* type/data family instances (in an instance decl)
+-- don't quantify over the already-in-scope type variables
+bindQTvs mb_cls tyvars thing_inside
+  | isNothing mb_cls    -- Not associated
+  = bindTyVarsFV tyvars thing_inside
+  | otherwise 	 	-- Associated
+  = do { let tv_rdr_names = map hsLTyVarLocName tyvars
+
+       -- Check for duplicated bindings
+       -- This test is irrelevant for data/type *instances*, where the tyvars
+       -- are the free tyvars of the patterns, and hence have no duplicates
+       -- But it's needed for data/type *family* decls
+       ; mapM_ dupBoundTyVar (findDupRdrNames tv_rdr_names)
+
+       ; rdr_env <- getLocalRdrEnv
+       ; tv_ns <- mapM (mk_tv_name rdr_env) tv_rdr_names
+       ; (thing, fvs) <- bindLocalNamesFV tv_ns $
+                         thing_inside (zipWith replaceLTyVarName tyvars tv_ns)
+
+	-- Check that the RHS of the decl mentions only type variables
+	-- bound on the LHS.  For example, this is not ok
+	-- 	 class C a b where
+	--         type F a x :: *
+	--	 instance C (p,q) r where
+        --	   type F (p,q) x = (x, r)	-- BAD: mentions 'r'
+	-- c.f. Trac #5515
+       ; let bad_tvs = filterNameSet (isTvOcc . nameOccName) fvs
+       ; unless (isEmptyNameSet bad_tvs) (badAssocRhs (nameSetToList bad_tvs))
+
+       ; return (thing, fvs) }
+  where
+    mk_tv_name :: LocalRdrEnv -> Located RdrName -> RnM Name
+    mk_tv_name rdr_env (L l tv_rdr)
+      = case lookupLocalRdrEnv rdr_env tv_rdr of 
+          Just n  -> return n
+          Nothing -> newLocalBndrRn (L l tv_rdr)
+
+badAssocRhs :: [Name] -> RnM ()
+badAssocRhs ns
+  = addErr (hang (ptext (sLit "The RHS of an associated type declaration mentions type variable") 
+                  <> plural ns 
+                  <+> pprWithCommas (quotes . ppr) ns)
+               2 (ptext (sLit "All such variables must be bound on the LHS")))
+
+dupBoundTyVar :: [Located RdrName] -> RnM ()
+dupBoundTyVar (L loc tv : _) 
+  = setSrcSpan loc $
+    addErr (ptext (sLit "Illegal repeated type variable") <+> quotes (ppr tv))
+dupBoundTyVar [] = panic "dupBoundTyVar"
 
 badGadtStupidTheta :: Located RdrName -> SDoc
 badGadtStupidTheta _
@@ -940,7 +1003,7 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
                        , con_details = new_details', con_res = new_res_ty, con_doc = mb_doc' }) }}
  where
     doc = text "In the definition of data constructor" <+> quotes (ppr name)
-    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy Boxed tys))
+    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy (HsBoxyTuple liftedTypeKind) tys))
 
 rnConResult :: SDoc
             -> HsConDetails (LHsType Name) [ConDeclField Name]
@@ -969,13 +1032,13 @@ rnConDeclDetails :: SDoc
                  -> HsConDetails (LHsType RdrName) [ConDeclField RdrName]
                  -> RnM (HsConDetails (LHsType Name) [ConDeclField Name])
 rnConDeclDetails doc (PrefixCon tys)
-  = mapM (rnLHsType doc) tys	`thenM` \ new_tys  ->
-    return (PrefixCon new_tys)
+  = do { new_tys <- mapM (rnLHsType doc) tys
+       ; return (PrefixCon new_tys) }
 
 rnConDeclDetails doc (InfixCon ty1 ty2)
-  = rnLHsType doc ty1  		`thenM` \ new_ty1 ->
-    rnLHsType doc ty2  		`thenM` \ new_ty2 ->
-    return (InfixCon new_ty1 new_ty2)
+  = do { new_ty1 <- rnLHsType doc ty1
+       ; new_ty2 <- rnLHsType doc ty2
+       ; return (InfixCon new_ty1 new_ty2) }
 
 rnConDeclDetails doc (RecCon fields)
   = do	{ new_fields <- rnConDeclFields doc fields
@@ -983,70 +1046,7 @@ rnConDeclDetails doc (RecCon fields)
 		-- since that is done by RnNames.extendGlobalRdrEnvRn
 	; return (RecCon new_fields) }
 
--- Rename family declarations
---
--- * This function is parametrised by the routine handling the index
---   variables.  On the toplevel, these are defining occurences, whereas they
---   are usage occurences for associated types.
---
-rnFamily :: TyClDecl RdrName 
-         -> ([LHsTyVarBndr RdrName] -> 
-	     ([LHsTyVarBndr Name] -> RnM (TyClDecl Name, FreeVars)) ->
-	     RnM (TyClDecl Name, FreeVars))
-         -> RnM (TyClDecl Name, FreeVars)
-
-rnFamily (tydecl@TyFamily {tcdFlavour = flavour, 
-			   tcdLName = tycon, tcdTyVars = tyvars}) 
-        bindIdxVars =
-      do { bindIdxVars tyvars $ \tyvars' -> do {
-	 ; tycon' <- lookupLocatedTopBndrRn tycon
-	 ; return (TyFamily {tcdFlavour = flavour, tcdLName = tycon', 
-			      tcdTyVars = tyvars', tcdKind = tcdKind tydecl}, 
-		    emptyFVs) 
-         } }
-rnFamily d _ = pprPanic "rnFamily" (ppr d)
-
--- Rename associated type declarations (in classes)
---
--- * This can be family declarations and (default) type instances
---
-rnATs :: [LTyClDecl RdrName] -> RnM ([LTyClDecl Name], FreeVars)
-rnATs ats = mapFvRn (wrapLocFstM rn_at) ats
-  where
-    rn_at (tydecl@TyFamily  {}) = rnFamily tydecl lookupIdxVars
-    rn_at (tydecl@TySynonym {}) = 
-      do
-        unless (isNothing (tcdTyPats tydecl)) $ addErr noPatterns
-        rnTyClDecl tydecl
-    rn_at _                      = panic "RnSource.rnATs: invalid TyClDecl"
-
-    lookupIdxVars tyvars cont = 
-      do { checkForDups tyvars
-	 ; tyvars' <- mapM lookupIdxVar tyvars
-	 ; cont tyvars'
-	 }
-    -- Type index variables must be class parameters, which are the only
-    -- type variables in scope at this point.
-    lookupIdxVar (L l tyvar) =
-      do
-	name' <- lookupOccRn (hsTyVarName tyvar)
-	return $ L l (replaceTyVarName tyvar name')
-
-    -- Type variable may only occur once.
-    --
-    checkForDups [] = return ()
-    checkForDups (L loc tv:ltvs) = 
-      do { setSrcSpan loc $
-	     when (hsTyVarName tv `ltvElem` ltvs) $
-	       addErr (repeatedTyVar tv)
-	 ; checkForDups ltvs
-	 }
-
-    _       `ltvElem` [] = False
-    rdrName `ltvElem` (L _ tv:ltvs)
-      | rdrName == hsTyVarName tv = True
-      | otherwise		  = rdrName `ltvElem` ltvs
-
+-------------------------------------------------
 deprecRecSyntax :: ConDecl RdrName -> SDoc
 deprecRecSyntax decl 
   = vcat [ ptext (sLit "Declaration of") <+> quotes (ppr (con_name decl))
@@ -1056,14 +1056,6 @@ deprecRecSyntax decl
 
 badRecResTy :: SDoc -> SDoc
 badRecResTy doc = ptext (sLit "Malformed constructor signature") $$ doc
-
-noPatterns :: SDoc
-noPatterns = text "Default definition for an associated synonym cannot have"
-	     <+> text "type pattern"
-
-repeatedTyVar :: HsTyVarBndr RdrName -> SDoc
-repeatedTyVar tv = ptext (sLit "Illegal repeated type variable") <+>
-		   quotes (ppr tv)
 
 -- This data decl will parse OK
 --	data T = a Int
@@ -1137,9 +1129,9 @@ rnFds doc fds
   = mapM (wrapLocM rn_fds) fds
   where
     rn_fds (tys1, tys2)
-      =	rnHsTyVars doc tys1		`thenM` \ tys1' ->
-	rnHsTyVars doc tys2		`thenM` \ tys2' ->
-	return (tys1', tys2')
+      =	do { tys1' <- rnHsTyVars doc tys1
+	   ; tys2' <- rnHsTyVars doc tys2
+	   ; return (tys1', tys2') }
 
 rnHsTyVars :: SDoc -> [RdrName] -> RnM [Name]
 rnHsTyVars doc tvs  = mapM (rnHsTyVar doc) tvs

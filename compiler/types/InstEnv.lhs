@@ -13,8 +13,8 @@ module InstEnv (
 	instanceHead, mkLocalInstance, mkImportedInstance,
 	instanceDFunId, setInstanceDFunId, instanceRoughTcs,
 
-	InstEnv, emptyInstEnv, extendInstEnv, 
-	extendInstEnvList, lookupInstEnv, instEnvElts,
+	InstEnv, emptyInstEnv, extendInstEnv, overwriteInstEnv, 
+	extendInstEnvList, lookupInstEnv', lookupInstEnv, instEnvElts,
 	classInstances, instanceBindFun,
 	instanceCantMatch, roughMatchTcs
     ) where
@@ -145,7 +145,7 @@ pprInstance :: Instance -> SDoc
 -- Prints the Instance as an instance declaration
 pprInstance ispec
   = hang (pprInstanceHdr ispec)
-	2 (ptext (sLit "--") <+> pprNameLoc (getName ispec))
+	2 (ptext (sLit "--") <+> pprDefinedAt (getName ispec))
 
 -- * pprInstanceHdr is used in VStudio to populate the ClassView tree
 pprInstanceHdr :: Instance -> SDoc
@@ -350,14 +350,11 @@ or, to put it another way, we have
 ---------------------------------------------------
 type InstEnv = UniqFM ClsInstEnv	-- Maps Class to instances for that class
 
-data ClsInstEnv 
+newtype ClsInstEnv 
   = ClsIE [Instance]	-- The instances for a particular class, in any order
-  	  Bool 		-- True <=> there is an instance of form C a b c
-			-- 	If *not* then the common case of looking up
-			--	(C a b c) can fail immediately
 
 instance Outputable ClsInstEnv where
-  ppr (ClsIE is b) = ptext (sLit "ClsIE") <+> ppr b <+> pprInstances is
+  ppr (ClsIE is) = pprInstances is
 
 -- INVARIANTS:
 --  * The is_tvs are distinct in each Instance
@@ -372,26 +369,47 @@ emptyInstEnv :: InstEnv
 emptyInstEnv = emptyUFM
 
 instEnvElts :: InstEnv -> [Instance]
-instEnvElts ie = [elt | ClsIE elts _ <- eltsUFM ie, elt <- elts]
+instEnvElts ie = [elt | ClsIE elts <- eltsUFM ie, elt <- elts]
 
 classInstances :: (InstEnv,InstEnv) -> Class -> [Instance]
 classInstances (pkg_ie, home_ie) cls 
   = get home_ie ++ get pkg_ie
   where
     get env = case lookupUFM env cls of
-		Just (ClsIE insts _) -> insts
-		Nothing		     -> []
+		Just (ClsIE insts) -> insts
+		Nothing		   -> []
 
 extendInstEnvList :: InstEnv -> [Instance] -> InstEnv
 extendInstEnvList inst_env ispecs = foldl extendInstEnv inst_env ispecs
 
 extendInstEnv :: InstEnv -> Instance -> InstEnv
-extendInstEnv inst_env ins_item@(Instance { is_cls = cls_nm, is_tcs = mb_tcs })
-  = addToUFM_C add inst_env cls_nm (ClsIE [ins_item] ins_tyvar)
+extendInstEnv inst_env ins_item@(Instance { is_cls = cls_nm })
+  = addToUFM_C add inst_env cls_nm (ClsIE [ins_item])
   where
-    add (ClsIE cur_insts cur_tyvar) _ = ClsIE (ins_item : cur_insts)
-					      (ins_tyvar || cur_tyvar)
-    ins_tyvar = not (any isJust mb_tcs)
+    add (ClsIE cur_insts) _ = ClsIE (ins_item : cur_insts)
+
+overwriteInstEnv :: InstEnv -> Instance -> InstEnv
+overwriteInstEnv inst_env ins_item@(Instance { is_cls = cls_nm, is_tys = tys })
+  = addToUFM_C add inst_env cls_nm (ClsIE [ins_item])
+  where
+    add (ClsIE cur_insts) _ = ClsIE (replaceInst cur_insts)
+    
+    rough_tcs  = roughMatchTcs tys
+    replaceInst [] = [ins_item]
+    replaceInst (item@(Instance { is_tcs = mb_tcs,  is_tvs = tpl_tvs, 
+                                  is_tys = tpl_tys,
+                                  is_dfun = dfun }) : rest)
+    -- Fast check for no match, uses the "rough match" fields
+      | instanceCantMatch rough_tcs mb_tcs
+      = item : replaceInst rest
+
+      | Just _ <- tcMatchTys tpl_tvs tpl_tys tys
+      = let (dfun_tvs, _) = tcSplitForAllTys (idType dfun)
+        in ASSERT( all (`elemVarSet` tpl_tvs) dfun_tvs )	-- Check invariant
+           ins_item : rest
+
+      | otherwise
+      = item : replaceInst rest
 \end{code}
 
 
@@ -423,17 +441,15 @@ might have some tyvars that *only* appear in arguments
 When we match this against D [ty], we return the instantiating types
 	[Right ty, Left b]
 where the Nothing indicates that 'b' can be freely instantiated.  
-(The caller instantiates it to a flexi type variable, which will presumably
+(The caller instantiates it to a flexi type variable, which will 
  presumably later become fixed via functional dependencies.)
 
 \begin{code}
-lookupInstEnv :: (InstEnv, InstEnv) 	-- External and home package inst-env
-	      -> Class -> [Type]	-- What we are looking for
-	      -> ([InstMatch], 		-- Successful matches
-		  [Instance],		-- These don't match but do unify
-                  Bool)                 -- True if error condition caused by
-                                        -- Safe Haskell condition.
 
+lookupInstEnv' :: InstEnv    -- InstEnv to look in
+                    -> Class -> [Type]  -- What we are looking for
+                    -> ([InstMatch],    -- Successful matches
+                        [Instance])     -- These don't match but do unify
 -- The second component of the result pair happens when we look up
 --	Foo [a]
 -- in an InstEnv that has entries for
@@ -442,74 +458,19 @@ lookupInstEnv :: (InstEnv, InstEnv) 	-- External and home package inst-env
 -- Then which we choose would depend on the way in which 'a'
 -- is instantiated.  So we report that Foo [b] is a match (mapping b->a)
 -- but Foo [Int] is a unifier.  This gives the caller a better chance of
--- giving a suitable error messagen
+-- giving a suitable error message
 
-lookupInstEnv (pkg_ie, home_ie) cls tys
-  = (safe_matches, all_unifs, safe_fail)
+lookupInstEnv' ie cls tys
+  = lookup ie
   where
     rough_tcs  = roughMatchTcs tys
     all_tvs    = all isNothing rough_tcs
-    (home_matches, home_unifs) = lookup home_ie 
-    (pkg_matches,  pkg_unifs)  = lookup pkg_ie  
-    all_matches = home_matches ++ pkg_matches
-    all_unifs   = home_unifs   ++ pkg_unifs
-    pruned_matches = foldr insert_overlapping [] all_matches
-    (safe_matches, safe_fail) = if length pruned_matches == 1 
-                        then check_safe (head pruned_matches) all_matches
-                        else (pruned_matches, False)
-	-- Even if the unifs is non-empty (an error situation)
-	-- we still prune the matches, so that the error message isn't
-	-- misleading (complaining of multiple matches when some should be
-	-- overlapped away)
-
-    -- Safe Haskell: We restrict code compiled in 'Safe' mode from 
-    -- overriding code compiled in any other mode. The rational is
-    -- that code compiled in 'Safe' mode is code that is untrusted
-    -- by the ghc user. So we shouldn't let that code change the
-    -- behaviour of code the user didn't compile in 'Safe' mode
-    -- since thats the code they trust. So 'Safe' instances can only
-    -- overlap instances from the same module. A same instance origin
-    -- policy for safe compiled instances.
-    check_safe match@(inst,_) others
-        = case isSafeOverlap (is_flag inst) of
-                -- most specific isn't from a Safe module so OK
-                False -> ([match], False)
-                -- otherwise we make sure it only overlaps instances from
-                -- the same module
-                True -> (go [] others, True)
-        where
-            go bad [] = match:bad
-            go bad (i@(x,_):unchecked) =
-                if inSameMod x
-                    then go bad unchecked
-                    else go (i:bad) unchecked
-            
-            inSameMod b =
-                let na = getName $ getName inst
-                    la = isInternalName na
-                    nb = getName $ getName b
-                    lb = isInternalName nb
-                in (la && lb) || (nameModule na == nameModule nb)
-
     --------------
     lookup env = case lookupUFM env cls of
 		   Nothing -> ([],[])	-- No instances for this class
-		   Just (ClsIE insts has_tv_insts)
-			| all_tvs && not has_tv_insts
-			-> ([],[])	-- Short cut for common case
-			-- The thing we are looking up is of form (C a b c), and
-			-- the ClsIE has no instances of that form, so don't bother to search
-	
-			| otherwise
-			-> find [] [] insts
+		   Just (ClsIE insts) -> find [] [] insts
 
     --------------
-    lookup_tv :: TvSubst -> TyVar -> Either TyVar Type	
-	-- See Note [InstTypes: instantiating types]
-    lookup_tv subst tv = case lookupTyVar subst tv of
-				Just ty -> Right ty
-				Nothing -> Left tv
-
     find ms us [] = (ms, us)
     find ms us (item@(Instance { is_tcs = mb_tcs, is_tvs = tpl_tvs, 
 				 is_tys = tpl_tys, is_flag = oflag,
@@ -540,6 +501,67 @@ lookupInstEnv (pkg_ie, home_ie) cls tys
         case tcUnifyTys instanceBindFun tpl_tys tys of
 	    Just _   -> find ms (item:us) rest
 	    Nothing  -> find ms us	  rest
+
+    ----------------
+    lookup_tv :: TvSubst -> TyVar -> Either TyVar Type	
+	-- See Note [InstTypes: instantiating types]
+    lookup_tv subst tv = case lookupTyVar subst tv of
+				Just ty -> Right ty
+				Nothing -> Left tv
+
+---------------
+-- This is the common way to call this function.
+lookupInstEnv :: (InstEnv, InstEnv)     -- External and home package inst-env
+                   -> Class -> [Type]   -- What we are looking for
+                   -> ([InstMatch],     -- Successful matches
+                       [Instance],      -- These don't match but do unify
+                       Bool)            -- True if error condition caused by
+                                        -- SafeHaskell condition.
+
+lookupInstEnv (pkg_ie, home_ie) cls tys
+  = (safe_matches, all_unifs, safe_fail)
+  where
+    (home_matches, home_unifs) = lookupInstEnv' home_ie cls tys
+    (pkg_matches,  pkg_unifs)  = lookupInstEnv' pkg_ie  cls tys
+    all_matches = home_matches ++ pkg_matches
+    all_unifs   = home_unifs   ++ pkg_unifs
+    pruned_matches = foldr insert_overlapping [] all_matches
+    (safe_matches, safe_fail) = if length pruned_matches == 1 
+                        then check_safe (head pruned_matches) all_matches
+                        else (pruned_matches, False)
+	-- Even if the unifs is non-empty (an error situation)
+	-- we still prune the matches, so that the error message isn't
+	-- misleading (complaining of multiple matches when some should be
+	-- overlapped away)
+
+    -- Safe Haskell: We restrict code compiled in 'Safe' mode from 
+    -- overriding code compiled in any other mode. The rational is
+    -- that code compiled in 'Safe' mode is code that is untrusted
+    -- by the ghc user. So we shouldn't let that code change the
+    -- behaviour of code the user didn't compile in 'Safe' mode
+    -- since that's the code they trust. So 'Safe' instances can only
+    -- overlap instances from the same module. A same instance origin
+    -- policy for safe compiled instances.
+    check_safe match@(inst,_) others
+        = case isSafeOverlap (is_flag inst) of
+                -- most specific isn't from a Safe module so OK
+                False -> ([match], False)
+                -- otherwise we make sure it only overlaps instances from
+                -- the same module
+                True -> (go [] others, True)
+        where
+            go bad [] = match:bad
+            go bad (i@(x,_):unchecked) =
+                if inSameMod x
+                    then go bad unchecked
+                    else go (i:bad) unchecked
+            
+            inSameMod b =
+                let na = getName $ getName inst
+                    la = isInternalName na
+                    nb = getName $ getName b
+                    lb = isInternalName nb
+                in (la && lb) || (nameModule na == nameModule nb)
 
 ---------------
 ---------------

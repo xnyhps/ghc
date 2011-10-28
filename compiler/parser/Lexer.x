@@ -55,6 +55,7 @@ module Lexer (
    activeContext, nextIsEOF,
    getLexState, popLexState, pushLexState,
    extension, bangPatEnabled, datatypeContextsEnabled,
+   traditionalRecordSyntaxEnabled,
    addWarning,
    lexTokenStream
   ) where
@@ -80,6 +81,7 @@ import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Ratio
+import Data.Word
 }
 
 $unispace    = \x05 -- Trick Alex into handling Unicode. See alexGetChar.
@@ -494,6 +496,7 @@ data Token
   | ITrarrow
   | ITat
   | ITtilde
+  | ITtildehsh
   | ITdarrow
   | ITminus
   | ITbang
@@ -581,9 +584,7 @@ data Token
   | ITlineComment     String     -- comment starting by "--"
   | ITblockComment    String     -- comment in {- -}
 
-#ifdef DEBUG
-  deriving Show -- debugging
-#endif
+  deriving Show
 
 -- the bitmap provided as the third component indicates whether the
 -- corresponding extension keyword is valid under the extension options
@@ -660,6 +661,7 @@ reservedSymsFM = listToUFM $
        ,("->",  ITrarrow,   always)
        ,("@",   ITat,       always)
        ,("~",   ITtilde,    always)
+       ,("~#",  ITtildehsh, always)
        ,("=>",  ITdarrow,   always)
        ,("-",   ITminus,    always)
        ,("!",   ITbang,     always)
@@ -1202,7 +1204,7 @@ lex_string s = do
         | Just ('&',i) <- next -> do
                 setInput i; lex_string s
         | Just (c,i) <- next, c <= '\x7f' && is_space c -> do
-                           -- is_space only works for <= '\x7f' (#3751)
+                           -- is_space only works for <= '\x7f' (#3751, #5425)
                 setInput i; lex_stringgap s
         where next = alexGetChar' i
 
@@ -1218,7 +1220,8 @@ lex_stringgap s = do
   c <- getCharOrFail i
   case c of
     '\\' -> lex_string s
-    c | is_space c -> lex_stringgap s
+    c | c <= '\x7f' && is_space c -> lex_stringgap s
+                           -- is_space only works for <= '\x7f' (#3751, #5425)
     _other -> lit_error i
 
 
@@ -1414,33 +1417,34 @@ lex_quasiquote_tok span buf len = do
                 -- 'tail' drops the initial '[',
                 -- while the -1 drops the trailing '|'
   quoteStart <- getSrcLoc
-  quote <- lex_quasiquote ""
+  quote <- lex_quasiquote quoteStart ""
   end <- getSrcLoc
   return (L (mkRealSrcSpan (realSrcSpanStart span) end)
            (ITquasiQuote (mkFastString quoter,
                           mkFastString (reverse quote),
                           mkRealSrcSpan quoteStart end)))
 
-lex_quasiquote :: String -> P String
-lex_quasiquote s = do
+lex_quasiquote :: RealSrcLoc -> String -> P String
+lex_quasiquote start s = do
   i <- getInput
   case alexGetChar' i of
-    Nothing -> lit_error i
+    Nothing -> quasiquote_error start
 
-    Just ('\\',i)
-        | Just ('|',i) <- next -> do
-                setInput i; lex_quasiquote ('|' : s)
-        | Just (']',i) <- next -> do
-                setInput i; lex_quasiquote (']' : s)
-        where next = alexGetChar' i
-
+    -- NB: The string "|]" terminates the quasiquote,
+    -- with absolutely no escaping. See the extensive
+    -- discussion on Trac #5348 for why there is no
+    -- escape handling.
     Just ('|',i)
-        | Just (']',i) <- next -> do
-                setInput i; return s
-        where next = alexGetChar' i
+        | Just (']',i) <- alexGetChar' i
+        -> do { setInput i; return s }
 
     Just (c, i) -> do
-         setInput i; lex_quasiquote (c : s)
+         setInput i; lex_quasiquote start (c : s)
+
+quasiquote_error :: RealSrcLoc -> P a
+quasiquote_error start = do
+  (AI end buf) <- getInput
+  reportLexError start end buf "unterminated quasiquotation"
 
 -- -----------------------------------------------------------------------------
 -- Warnings
@@ -1580,14 +1584,22 @@ data AlexInput = AI RealSrcLoc StringBuffer
 alexInputPrevChar :: AlexInput -> Char
 alexInputPrevChar (AI _ buf) = prevChar buf '\n'
 
+-- backwards compatibility for Alex 2.x
 alexGetChar :: AlexInput -> Maybe (Char,AlexInput)
-alexGetChar (AI loc s)
+alexGetChar inp = case alexGetByte inp of
+                    Nothing    -> Nothing
+                    Just (b,i) -> c `seq` Just (c,i)
+                       where c = chr $ fromIntegral b
+
+alexGetByte :: AlexInput -> Maybe (Word8,AlexInput)
+alexGetByte (AI loc s)
   | atEnd s   = Nothing
-  | otherwise = adj_c `seq` loc' `seq` s' `seq`
+  | otherwise = byte `seq` loc' `seq` s' `seq`
                 --trace (show (ord c)) $
-                Just (adj_c, (AI loc' s'))
+                Just (byte, (AI loc' s'))
   where (c,s') = nextChar s
         loc'   = advanceSrcLoc loc c
+        byte   = fromIntegral $ ord adj_c
 
         non_graphic     = '\x0'
         upper           = '\x1'
@@ -1776,6 +1788,8 @@ nondecreasingIndentationBit :: Int
 nondecreasingIndentationBit = 25
 safeHaskellBit :: Int
 safeHaskellBit = 26
+traditionalRecordSyntaxBit :: Int
+traditionalRecordSyntaxBit = 27
 
 always :: Int -> Bool
 always           _     = True
@@ -1817,6 +1831,8 @@ relaxedLayout :: Int -> Bool
 relaxedLayout flags = testBit flags relaxedLayoutBit
 nondecreasingIndentation :: Int -> Bool
 nondecreasingIndentation flags = testBit flags nondecreasingIndentationBit
+traditionalRecordSyntaxEnabled :: Int -> Bool
+traditionalRecordSyntaxEnabled flags = testBit flags traditionalRecordSyntaxBit
 
 -- PState for parsing options pragmas
 --
@@ -1872,7 +1888,8 @@ mkPState flags buf loc =
                .|. alternativeLayoutRuleBit    `setBitIf` xopt Opt_AlternativeLayoutRule    flags
                .|. relaxedLayoutBit            `setBitIf` xopt Opt_RelaxedLayout            flags
                .|. nondecreasingIndentationBit `setBitIf` xopt Opt_NondecreasingIndentation flags
-               .|. safeHaskellBit              `setBitIf` safeHaskellOn                     flags
+               .|. safeHaskellBit              `setBitIf` safeImportsOn                     flags
+               .|. traditionalRecordSyntaxBit  `setBitIf` xopt Opt_TraditionalRecordSyntax  flags
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b

@@ -27,7 +27,7 @@ import HsSyn
 import TcRnMonad
 import TcEnv		( thRnBrack )
 import RnEnv
-import RnTypes		( rnHsTypeFVs, rnSplice, checkTH,
+import RnTypes		( rnHsTypeFVs, rnSplice, rnIPName, checkTH,
 			  mkOpFormRn, mkOpAppRn, mkNegAppRn, checkSectionPrec)
 import RnPat
 import DynFlags
@@ -105,8 +105,8 @@ rnExpr (HsVar v)
        finishHsVar name
 
 rnExpr (HsIPVar v)
-  = newIPNameRn v		`thenM` \ name ->
-    return (HsIPVar name, emptyFVs)
+  = do v' <- rnIPName v
+       return (HsIPVar v', emptyFVs)
 
 rnExpr (HsLit lit@(HsString s))
   = do {
@@ -147,7 +147,7 @@ rnExpr (OpApp e1 (L op_loc (HsVar op_rdr)) _ e2)
 	; final_e <- mkOpAppRn e1' (L op_loc op') fixity e2'
 	; return (final_e, fv_e1 `plusFV` fv_op `plusFV` fv_e2) }
 rnExpr (OpApp _ other_op _ _)
-  = failWith (vcat [ hang (ptext (sLit "Operator application with a non-variable operator:"))
+  = failWith (vcat [ hang (ptext (sLit "Infix application with a non-variable operator:"))
                         2 (ppr other_op)
                    , ptext (sLit "(Probably resulting from a Template Haskell splice)") ])
 

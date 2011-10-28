@@ -7,7 +7,7 @@ This module converts Template Haskell syntax into HsSyn
 
 \begin{code}
 module Convert( convertToHsExpr, convertToPat, convertToHsDecls,
-                convertToHsType, convertToHsPred,
+                convertToHsType,
                 thRdrNameGuesses ) where
 
 import HsSyn as Hs
@@ -59,10 +59,6 @@ convertToHsType :: SrcSpan -> TH.Type -> Either Message (LHsType RdrName)
 convertToHsType loc t
   = initCvt loc $ wrapMsg "type" t $ cvtType t
 
-convertToHsPred :: SrcSpan -> TH.Pred -> Either Message (LHsPred RdrName)
-convertToHsPred loc t
-  = initCvt loc $ wrapMsg "type" t $ cvtPred t
-
 -------------------------------------------------------------------
 newtype CvtM a = CvtM { unCvtM :: SrcSpan -> Either Message a }
 	-- Push down the source location;
@@ -91,6 +87,9 @@ force a = a `seq` return ()
 
 failWith :: Message -> CvtM a
 failWith m = CvtM (\_ -> Left m)
+
+getL :: CvtM SrcSpan
+getL = CvtM (\loc -> Right loc)
 
 returnL :: a -> CvtM (Located a)
 returnL x = CvtM (\loc -> Right (L loc x))
@@ -180,15 +179,15 @@ cvtDec (ClassD ctxt cl tvs fds decs)
 	; returnL $ 
             TyClD $ ClassDecl { tcdCtxt = cxt', tcdLName = tc', tcdTyVars = tvs'
 	    	              , tcdFDs = fds', tcdSigs = sigs', tcdMeths = binds'
-			      , tcdATs = ats', tcdDocs = [] }
+			      , tcdATs = ats', tcdATDefs = [], tcdDocs = [] }
                                         -- no docs in TH ^^
 	}
 	
 cvtDec (InstanceD ctxt ty decs)
   = do 	{ (binds', sigs', ats') <- cvt_ci_decs (ptext (sLit "an instance declaration")) decs
 	; ctxt' <- cvtContext ctxt
-	; L loc pred' <- cvtPredTy ty
-	; let inst_ty' = L loc $ mkImplicitHsForAllTy ctxt' $ L loc $ HsPredTy pred'
+	; L loc ty' <- cvtType ty
+	; let inst_ty' = L loc $ mkImplicitHsForAllTy ctxt' $ L loc ty'
 	; returnL $ InstD (InstDecl inst_ty' binds' sigs' ats') }
 
 cvtDec (ForeignD ford) 
@@ -353,7 +352,7 @@ cvtDerivs cs = do { cs' <- mapM cvt_one cs
 		  ; return (Just cs') }
 	where
 	  cvt_one c = do { c' <- tconName c
-			 ; returnL $ HsPredTy $ HsClassP c' [] }
+			 ; returnL $ HsTyVar c' }
 
 cvt_fundep :: FunDep -> CvtM (Located (Class.FunDep RdrName))
 cvt_fundep (FunDep xs ys) = do { xs' <- mapM tName xs; ys' <- mapM tName ys; returnL (xs', ys') }
@@ -371,7 +370,7 @@ cvtForD (ImportF callconv safety from nm ty)
                                  (mkFastString (TH.nameBase nm)) from
   = do { nm' <- vNameL nm
        ; ty' <- cvtType ty
-       ; return (ForeignImport nm' ty' impspec)
+       ; return (ForeignImport nm' ty' noForeignImportCoercionYet impspec)
        }
   | otherwise
   = failWith $ text (show from) <+> ptext (sLit "is not a valid ccall impent")
@@ -385,7 +384,7 @@ cvtForD (ExportF callconv as nm ty)
   = do	{ nm' <- vNameL nm
 	; ty' <- cvtType ty
 	; let e = CExport (CExportStatic (mkFastString as) (cvt_conv callconv))
- 	; return $ ForeignExport nm' ty' e }
+ 	; return $ ForeignExport nm' ty' noForeignExportCoercionYet e }
 
 cvt_conv :: TH.Callconv -> CCallConv
 cvt_conv TH.CCall   = CCallConv
@@ -505,7 +504,11 @@ cvtl e = wrapL (cvt e)
                                        -- Can I indicate this is an infix thing?
                                        -- Note [Dropping constructors]
 
-    cvt (UInfixE x s y)  = do { x' <- cvtl x; cvtOpApp x' s y } --  Note [Converting UInfix]
+    cvt (UInfixE x s y)  = do { x' <- cvtl x
+                              ; let x'' = case x' of 
+                                            L _ (OpApp {}) -> x'
+                                            _ -> mkLHsPar x'
+                              ; cvtOpApp x'' s y } --  Note [Converting UInfix]
 
     cvt (ParensE e)      = do { e' <- cvtl e; return $ HsPar e' }
     cvt (SigE e t)	 = do { e' <- cvtl e; t' <- cvtType t
@@ -780,26 +783,17 @@ cvt_tv (TH.KindedTV nm ki)
 cvtContext :: TH.Cxt -> CvtM (LHsContext RdrName)
 cvtContext tys = do { preds' <- mapM cvtPred tys; returnL preds' }
 
-cvtPred :: TH.Pred -> CvtM (LHsPred RdrName)
+cvtPred :: TH.Pred -> CvtM (LHsType RdrName)
 cvtPred (TH.ClassP cla tys)
   = do { cla' <- if isVarName cla then tName cla else tconName cla
        ; tys' <- mapM cvtType tys
-       ; returnL $ HsClassP cla' tys'
+       ; mk_apps (HsTyVar cla') tys'
        }
 cvtPred (TH.EqualP ty1 ty2)
   = do { ty1' <- cvtType ty1
        ; ty2' <- cvtType ty2
-       ; returnL $ HsEqualP ty1' ty2'
+       ; returnL $ HsEqTy ty1' ty2'
        }
-
-cvtPredTy :: TH.Type -> CvtM (LHsPred RdrName)
-cvtPredTy ty 
-  = do	{ (head, tys') <- split_ty_app ty
-	; case head of
-	    ConT tc -> do { tc' <- tconName tc; returnL $ HsClassP tc' tys' }
-	    VarT tv -> do { tv' <- tName tv;    returnL $ HsClassP tv' tys' }
-	    _       -> failWith (ptext (sLit "Malformed predicate") <+> 
-                       text (TH.pprint ty)) }
 
 cvtType :: TH.Type -> CvtM (LHsType RdrName)
 cvtType ty 
@@ -809,18 +803,18 @@ cvtType ty
              | length tys' == n 	-- Saturated
              -> if n==1 then return (head tys')	-- Singleton tuples treated 
                                                 -- like nothing (ie just parens)
-                        else returnL (HsTupleTy Boxed tys')
+                        else returnL (HsTupleTy (HsBoxyTuple liftedTypeKind) tys')
              | n == 1    
              -> failWith (ptext (sLit "Illegal 1-tuple type constructor"))
              | otherwise 
-             -> mk_apps (HsTyVar (getRdrName (tupleTyCon Boxed n))) tys'
+             -> mk_apps (HsTyVar (getRdrName (tupleTyCon BoxedTuple n))) tys'
            UnboxedTupleT n
              | length tys' == n 	-- Saturated
              -> if n==1 then return (head tys')	-- Singleton tuples treated
                                                 -- like nothing (ie just parens)
-                        else returnL (HsTupleTy Unboxed tys')
+                        else returnL (HsTupleTy HsUnboxedTuple tys')
              | otherwise
-             -> mk_apps (HsTyVar (getRdrName (tupleTyCon Unboxed n))) tys'
+             -> mk_apps (HsTyVar (getRdrName (tupleTyCon UnboxedTuple n))) tys'
            ArrowT 
              | [x',y'] <- tys' -> returnL (HsFunTy x' y')
              | otherwise       -> mk_apps (HsTyVar (getRdrName funTyCon)) tys'
@@ -845,10 +839,11 @@ cvtType ty
 
            _ -> failWith (ptext (sLit "Malformed type") <+> text (show ty))
     }
-  where
-    mk_apps head_ty []       = returnL head_ty
-    mk_apps head_ty (ty:tys) = do { head_ty' <- returnL head_ty
-				  ; mk_apps (HsAppTy head_ty' ty) tys }
+
+mk_apps :: HsType RdrName -> [LHsType RdrName] -> CvtM (LHsType RdrName)
+mk_apps head_ty []       = returnL head_ty
+mk_apps head_ty (ty:tys) = do { head_ty' <- returnL head_ty
+                              ; mk_apps (HsAppTy head_ty' ty) tys }
 
 split_ty_app :: TH.Type -> CvtM (TH.Type, [LHsType RdrName])
 split_ty_app ty = go ty []
@@ -903,10 +898,13 @@ tconName n = cvtName OccName.tcClsName n
 cvtName :: OccName.NameSpace -> TH.Name -> CvtM RdrName
 cvtName ctxt_ns (TH.Name occ flavour)
   | not (okOcc ctxt_ns occ_str) = failWith (badOcc ctxt_ns occ_str)
-  | otherwise 		        = force rdr_name >> return rdr_name
+  | otherwise 		        
+  = do { loc <- getL
+       ; let rdr_name = thRdrName loc ctxt_ns occ_str flavour 
+       ; force rdr_name 
+       ; return rdr_name }
   where
     occ_str = TH.occString occ
-    rdr_name = thRdrName ctxt_ns occ_str flavour
 
 okOcc :: OccName.NameSpace -> String -> Bool
 okOcc _  []      = False
@@ -927,23 +925,28 @@ badOcc ctxt_ns occ
   = ptext (sLit "Illegal") <+> pprNameSpace ctxt_ns
 	<+> ptext (sLit "name:") <+> quotes (text occ)
 
-thRdrName :: OccName.NameSpace -> String -> TH.NameFlavour -> RdrName
--- This turns a Name into a RdrName
+thRdrName :: SrcSpan -> OccName.NameSpace -> String -> TH.NameFlavour -> RdrName
+-- This turns a TH Name into a RdrName; used for both binders and occurrences
+-- See Note [Binders in Template Haskell]
 -- The passed-in name space tells what the context is expecting;
 --	use it unless the TH name knows what name-space it comes
 -- 	from, in which case use the latter
+--
+-- We pass in a SrcSpan (gotten from the monad) because this function
+-- is used for *binders* and if we make an Exact Name we want it
+-- to have a binding site inside it.  (cf Trac #5434)
 --
 -- ToDo: we may generate silly RdrNames, by passing a name space
 --       that doesn't match the string, like VarName ":+", 
 -- 	 which will give confusing error messages later
 -- 
 -- The strict applications ensure that any buried exceptions get forced
-thRdrName ctxt_ns th_occ th_name
+thRdrName loc ctxt_ns th_occ th_name
   = case th_name of
      TH.NameG th_ns pkg mod -> thOrigRdrName th_occ th_ns pkg mod
      TH.NameQ mod  -> (mkRdrQual  $! mk_mod mod) $! occ
-     TH.NameL uniq -> nameRdrName $! (((Name.mkInternalName $! mk_uniq uniq) $! occ) noSrcSpan)
-     TH.NameU uniq -> nameRdrName $! (((Name.mkSystemName $! mk_uniq uniq) $! occ))
+     TH.NameL uniq -> nameRdrName $! (((Name.mkInternalName $! mk_uniq uniq) $! occ) loc)
+     TH.NameU uniq -> nameRdrName $! (((Name.mkSystemNameAt $! mk_uniq uniq) $! occ) loc)
      TH.NameS | Just name <- isBuiltInOcc ctxt_ns th_occ -> nameRdrName $! name
               | otherwise			         -> mkRdrUnqual $! occ
   where
@@ -956,8 +959,8 @@ thOrigRdrName occ th_ns pkg mod = (mkOrig $! (mkModule (mk_pkg pkg) (mk_mod mod)
 thRdrNameGuesses :: TH.Name -> [RdrName]
 thRdrNameGuesses (TH.Name occ flavour)
   -- This special case for NameG ensures that we don't generate duplicates in the output list
-  | TH.NameG th_ns pkg mod <- flavour = [thOrigRdrName occ_str th_ns pkg mod]
-  | otherwise                         = [ thRdrName gns occ_str flavour
+  | TH.NameG th_ns pkg mod <- flavour = [ thOrigRdrName occ_str th_ns pkg mod]
+  | otherwise                         = [ thRdrName noSrcSpan gns occ_str flavour
 			                | gns <- guessed_nss]
   where
     -- guessed_ns are the name spaces guessed from looking at the TH name
@@ -981,8 +984,8 @@ isBuiltInOcc ctxt_ns occ
     go_tuple _ _            = Nothing
 
     tup_name n 
-	| OccName.isTcClsNameSpace ctxt_ns = Name.getName (tupleTyCon Boxed n)
-	| otherwise 		           = Name.getName (tupleCon Boxed n)
+	| OccName.isTcClsNameSpace ctxt_ns = Name.getName (tupleTyCon BoxedTuple n)
+	| otherwise 		           = Name.getName (tupleCon BoxedTuple n)
 
 -- The packing and unpacking is rather turgid :-(
 mk_occ :: OccName.NameSpace -> String -> OccName.OccName
@@ -1023,7 +1026,7 @@ a) We don't want to complain about "x" being bound twice in
    the pattern [x1,x2]
 b) We don't want x3 to shadow the x1,x2
 c) We *do* want 'x' (dynamically bound with mkName) to bind 
-   to the innermost binding of "x", namely x3.. (In this
+   to the innermost binding of "x", namely x3.
 d) When pretty printing, we want to print a unique with x1,x2 
    etc, else they'll all print as "x" which isn't very helpful
 
@@ -1038,7 +1041,7 @@ Achieving (a) is a bit awkward, because
      RdrNames arising from TH and the Unqual RdrNames that would
      come from a user writing \[x,x] -> blah
 
-So in Convert (here) we translate
+So in Convert.thRdrName we translate
    TH Name		            RdrName
    --------------------------------------------------------
    NameU (arising from newName) --> Exact (Name{ System })
@@ -1053,14 +1056,5 @@ temporary variables "a". Since there are lots of things called "a" we
 usually want to print the name with the unique, and that is indeed
 the way System Names are printed.
 
-There's a small complication of course.  For data types and
-classes we'll now have system Names in the binding positions
-for constructors, TyCons etc.  For example
-    [d| data T = MkT Int |]
-when we splice in and Convert to HsSyn RdrName, we'll get
-    data (Exact (system Name "T")) = (Exact (system Name "MkT")) ...
-So RnEnv.newGlobalBinder we spot Exact RdrNames that wrap a
-non-External Name, and make an External name for.  (Remember, 
-constructors and the like need External Names.)  Oddly, the 
-*occurrences* will continue to be that (non-External) System Name, 
-but that will come out in the wash.
+There's a small complication of course; see Note [Looking up Exact
+RdrNames] in RnEnv.

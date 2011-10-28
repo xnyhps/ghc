@@ -53,7 +53,7 @@ info for exported values).
 \end{enumerate}
 
 \begin{code}
-wwTopBinds :: UniqSupply -> [CoreBind] -> [CoreBind]
+wwTopBinds :: UniqSupply -> CoreProgram -> CoreProgram
 
 wwTopBinds us top_binds
   = initUs_ us $ do

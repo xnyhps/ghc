@@ -6,7 +6,7 @@
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
 
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
-#if __GLASGOW_HASKELL__ >= 701
+#if __GLASGOW_HASKELL__ >= 703
 -- GHC 7.0.1 improved incomplete pattern warnings with GADTs
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 #endif
@@ -22,7 +22,7 @@ import Prelude hiding (succ, zip, unzip, last)
 
 import BlockId
 import Cmm
-import CmmExpr
+import CmmUtils
 import CmmProcPoint
 import Maybes
 import MkGraph (stackStubExpr)

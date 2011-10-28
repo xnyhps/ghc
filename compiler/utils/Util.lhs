@@ -32,6 +32,8 @@ module Util (
 
         -- * Tuples
         fstOf3, sndOf3, thirdOf3,
+        firstM, first3M,
+        uncurry3,
 
         -- * List operations controlled by another list
         takeList, dropList, splitAtList, split,
@@ -41,10 +43,10 @@ module Util (
         nTimes,
 
         -- * Sorting
-        sortLe, sortWith, minWith, on,
+        sortLe, sortWith, minWith, on, 
 
         -- * Comparisons
-        isEqual, eqListBy,
+        isEqual, eqListBy, eqMaybeBy,
         thenCmp, cmpList,
         removeSpaces,
         
@@ -67,14 +69,14 @@ module Util (
         readRational,
 
         -- * read helpers
-        maybeReadFuzzy,
+        maybeRead, maybeReadFuzzy,
 
         -- * IO-ish utilities
         createDirectoryHierarchy,
         doesDirNameExist,
         modificationTimeIfExists,
 
-        global, consIORef, globalMVar, globalEmptyMVar,
+        global, consIORef, globalM,
 
         -- * Filenames and paths
         Suffix,
@@ -99,13 +101,12 @@ import Data.Data
 import Data.IORef       ( IORef, newIORef, atomicModifyIORef )
 import System.IO.Unsafe ( unsafePerformIO )
 import Data.List        hiding (group)
-import Control.Concurrent.MVar ( MVar, newMVar, newEmptyMVar )
 
 #ifdef DEBUG
 import FastTypes
 #endif
 
-import Control.Monad    ( unless )
+import Control.Monad    ( unless, liftM )
 import System.IO.Error as IO ( isDoesNotExistError )
 import System.Directory ( doesDirectoryExist, createDirectory,
                           getModificationTime )
@@ -209,6 +210,17 @@ thirdOf3 :: (a,b,c) -> c
 fstOf3      (a,_,_) =  a
 sndOf3      (_,b,_) =  b
 thirdOf3    (_,_,c) =  c
+
+uncurry3 :: (a -> b -> c -> d) -> (a, b, c) -> d
+uncurry3 f (a, b, c) = f a b c
+\end{code}
+
+\begin{code}
+firstM :: Monad m => (a -> m c) -> (a, b) -> m (c, b)
+firstM f (x, y) = liftM (\x' -> (x', y)) (f x)
+
+first3M :: Monad m => (a -> m d) -> (a, b, c) -> m (d, b, c)
+first3M f (x, y, z) = liftM (\x' -> (x', y, z)) (f x)
 \end{code}
 
 %************************************************************************
@@ -453,7 +465,7 @@ To: partain@dcs.gla.ac.uk
 Subject: natural merge sort beats quick sort [ and it is prettier ]
 
 Here is a piece of Haskell code that I'm rather fond of. See it as an
-attempt to get rid of the ridiculous quick-sort routine. group is
+attempt to get rid of the ridiculous quick-sort routine. groupUpdown is
 quite useful by itself I think it was John's idea originally though I
 believe the lazy version is due to me [surprisingly complicated].
 gamma [used to be called] is called gamma because I got inspired by
@@ -475,24 +487,24 @@ rising subsequences = approx 2 ] mergesort still wins and natural
 merge sort is marginally beaten by Lennart's soqs. The space
 consumption of merge sort is a bit worse than Lennart's quick sort
 approx a factor of 2. And a lot worse if Sparud's bug-fix [see his
-fpca article ] isn't used because of group.
+fpca article ] isn't used because of groupUpdown.
 
 have fun
 Carsten
 \end{display}
 
 \begin{code}
-group :: (a -> a -> Bool) -> [a] -> [[a]]
--- Given a <= function, group finds maximal contiguous up-runs
+groupUpdown :: (a -> a -> Bool) -> [a] -> [[a]]
+-- Given a <= function, groupUpdown finds maximal contiguous up-runs
 -- or down-runs in the input list.
 -- It's stable, in the sense that it never re-orders equal elements
 --
 -- Date: Mon, 12 Feb 1996 15:09:41 +0000
 -- From: Andy Gill <andy@dcs.gla.ac.uk>
--- Here is a `better' definition of group.
+-- Here is a `better' definition of groupUpdown.
 
-group _ []     = []
-group p (x:xs) = group' xs x x (x :)
+groupUpdown _ []     = []
+groupUpdown p (x:xs) = group' xs x x (x :)
   where
     group' []     _     _     s  = [s []]
     group' (x:xs) x_min x_max s
@@ -521,7 +533,7 @@ balancedFold' _ xs = xs
 
 generalNaturalMergeSort :: (a -> a -> Bool) -> [a] -> [a]
 generalNaturalMergeSort _ [] = []
-generalNaturalMergeSort p xs = (balancedFold (generalMerge p) . group p) xs
+generalNaturalMergeSort p xs = (balancedFold (generalMerge p) . groupUpdown p) xs
 
 #if NOT_USED
 generalMergeSort p [] = []
@@ -677,6 +689,11 @@ eqListBy :: (a->a->Bool) -> [a] -> [a] -> Bool
 eqListBy _  []     []     = True
 eqListBy eq (x:xs) (y:ys) = eq x y && eqListBy eq xs ys
 eqListBy _  _      _      = False
+
+eqMaybeBy :: (a ->a->Bool) -> Maybe a -> Maybe a -> Bool
+eqMaybeBy _  Nothing  Nothing  = True
+eqMaybeBy eq (Just x) (Just y) = eq x y
+eqMaybeBy _  _        _        = False
 
 cmpList :: (a -> a -> Ordering) -> [a] -> [a] -> Ordering
     -- `cmpList' uses a user-specified comparer
@@ -857,11 +874,8 @@ consIORef var x = do
 \end{code}
 
 \begin{code}
-globalMVar :: a -> MVar a
-globalMVar a = unsafePerformIO (newMVar a)
-
-globalEmptyMVar :: MVar a
-globalEmptyMVar = unsafePerformIO newEmptyMVar
+globalM :: IO a -> IORef a
+globalM ma = unsafePerformIO (ma >>= newIORef)
 \end{code}
 
 Module names:
@@ -974,6 +988,11 @@ readRational top_s
 
 -----------------------------------------------------------------------------
 -- read helpers
+
+maybeRead :: Read a => String -> Maybe a
+maybeRead str = case reads str of
+                [(x, "")] -> Just x
+                _         -> Nothing
 
 maybeReadFuzzy :: Read a => String -> Maybe a
 maybeReadFuzzy str = case reads str of

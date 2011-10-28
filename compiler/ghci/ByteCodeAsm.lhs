@@ -30,6 +30,7 @@ import PrimOp
 import Constants
 import FastString
 import SMRep
+import ClosureInfo -- CgRep stuff
 import DynFlags
 import Outputable
 import Platform
@@ -40,7 +41,8 @@ import Control.Monad.ST ( runST )
 import Data.Array.MArray
 import Data.Array.Unboxed ( listArray )
 import Data.Array.Base  ( UArray(..) )
-import Data.Array.ST    ( castSTUArray )
+import Data.Array.Unsafe( castSTUArray )
+
 import Foreign
 import Data.Char        ( ord )
 import Data.List

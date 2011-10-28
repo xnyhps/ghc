@@ -25,6 +25,7 @@ module RtClosureInspect(
 
 #include "HsVersions.h"
 
+import DebuggerUtils
 import ByteCodeItbls    ( StgInfoTable )
 import qualified ByteCodeItbls as BCI( StgInfoTable(..) )
 import HscTypes
@@ -33,7 +34,6 @@ import Linker
 import DataCon
 import Type
 import qualified Unify as U
-import TypeRep         -- I know I know, this is cheating
 import Var
 import TcRnMonad
 import TcType
@@ -336,7 +336,8 @@ pprTermM y p t = pprDeeper `liftM` ppr_termM y p t
 
 ppr_termM y p Term{dc=Left dc_tag, subTerms=tt} = do
   tt_docs <- mapM (y app_prec) tt
-  return$ cparen (not(null tt) && p >= app_prec) (text dc_tag <+> pprDeeperList fsep tt_docs)
+  return $ cparen (not (null tt) && p >= app_prec)
+                  (text dc_tag <+> pprDeeperList fsep tt_docs)
   
 ppr_termM y p Term{dc=Right dc, subTerms=tt} 
 {-  | dataConIsInfix dc, (t1:t2:tt') <- tt  --TODO fixity
@@ -1136,14 +1137,6 @@ zonkRttiType = zonkType (mkZonkTcTyVar zonk_unbound_meta)
 --------------------------------------------------------------------------------
 -- Restore Class predicates out of a representation type
 dictsView :: Type -> Type
--- dictsView ty = ty
-dictsView (FunTy (TyConApp tc_dict args) ty)
-  | Just c <- tyConClass_maybe tc_dict
-  = FunTy (PredTy (ClassP c args)) (dictsView ty)
-dictsView ty
-  | Just (tc_fun, [TyConApp tc_dict args, ty2]) <- tcSplitTyConApp_maybe ty
-  , Just c <- tyConClass_maybe tc_dict
-  = mkTyConApp tc_fun [PredTy (ClassP c args), dictsView ty2]
 dictsView ty = ty
 
 

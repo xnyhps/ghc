@@ -44,7 +44,6 @@ import Util
 import BasicTypes
 import StaticFlags
 import DynFlags
-import Constants
 import Outputable
 import FastString
 
@@ -394,9 +393,8 @@ thunkWrapper closure_info thunk_code = do
         -- Stack and/or heap checks
   ; thunkEntryChecks closure_info $ do
       	{
-          dflags <- getDynFlags
           -- Overwrite with black hole if necessary
-	; whenC (blackHoleOnEntry dflags closure_info && node_points)
+        ; whenC (blackHoleOnEntry closure_info && node_points)
  	        (blackHoleIt closure_info)
 	; setupUpdate closure_info thunk_code }
 		-- setupUpdate *encloses* the thunk_code
@@ -449,38 +447,40 @@ blackHoleIt closure_info = emitBlackHoleCode (closureSingleEntry closure_info)
 
 emitBlackHoleCode :: Bool -> Code
 emitBlackHoleCode is_single_entry = do
-
   dflags <- getDynFlags
 
-	-- If we wanted to do eager blackholing with slop filling,
-	-- we'd need to do it at the *end* of a basic block, otherwise
-	-- we overwrite the free variables in the thunk that we still
-	-- need.  We have a patch for this from Andy Cheadle, but not
-	-- incorporated yet. --SDM [6/2004]
-	--
-	-- Profiling needs slop filling (to support LDV profiling), so
-	-- currently eager blackholing doesn't work with profiling.
-	--
-        -- Previously, eager blackholing was enabled when ticky-ticky
-        -- was on. But it didn't work, and it wasn't strictly necessary 
-        -- to bring back minimal ticky-ticky, so now EAGER_BLACKHOLING 
-        -- is unconditionally disabled. -- krc 1/2007
+  -- Eager blackholing is normally disabled, but can be turned on with
+  -- -feager-blackholing.  When it is on, we replace the info pointer
+  -- of the thunk with stg_EAGER_BLACKHOLE_info on entry.
+  
+  -- If we wanted to do eager blackholing with slop filling, we'd need
+  -- to do it at the *end* of a basic block, otherwise we overwrite
+  -- the free variables in the thunk that we still need.  We have a
+  -- patch for this from Andy Cheadle, but not incorporated yet. --SDM
+  -- [6/2004]
+  --
+  -- Previously, eager blackholing was enabled when ticky-ticky was
+  -- on. But it didn't work, and it wasn't strictly necessary to bring
+  -- back minimal ticky-ticky, so now EAGER_BLACKHOLING is
+  -- unconditionally disabled. -- krc 1/2007
+  
+  -- Note the eager-blackholing check is here rather than in blackHoleOnEntry,
+  -- because emitBlackHoleCode is called from CmmParse.
 
-  let eager_blackholing =  not opt_SccProfilingOn
-                        && dopt Opt_EagerBlackHoling dflags
+  let  eager_blackholing =  not opt_SccProfilingOn
+                         && dopt Opt_EagerBlackHoling dflags
+             -- Profiling needs slop filling (to support LDV
+             -- profiling), so currently eager blackholing doesn't
+             -- work with profiling.
 
-  if eager_blackholing
-     then do
-          tickyBlackHole (not is_single_entry)
-          let bh_info = CmmReg (CmmGlobal EagerBlackholeInfo)
-	  stmtsC [
-              CmmStore (cmmOffsetW (CmmReg nodeReg) fixedHdrSize)
-                       (CmmReg (CmmGlobal CurrentTSO)),
-              CmmCall (CmmPrim MO_WriteBarrier) [] [] CmmUnsafe CmmMayReturn,
-	      CmmStore (CmmReg nodeReg) bh_info
-            ]
-     else
-          nopC
+  whenC eager_blackholing $ do
+    tickyBlackHole (not is_single_entry)
+    stmtsC [
+       CmmStore (cmmOffsetW (CmmReg nodeReg) fixedHdrSize)
+                (CmmReg (CmmGlobal CurrentTSO)),
+       CmmCall (CmmPrim MO_WriteBarrier) [] [] CmmUnsafe CmmMayReturn,
+       CmmStore (CmmReg nodeReg) (CmmReg (CmmGlobal EagerBlackholeInfo))
+     ]
 \end{code}
 
 \begin{code}
@@ -571,27 +571,26 @@ link_caf cl_info _is_upd = do
 	-- so that the garbage collector can find them
 	-- This must be done *before* the info table pointer is overwritten, 
 	-- because the old info table ptr is needed for reversion
-  ; emitRtsCallWithVols rtsPackageId (fsLit "newCAF")
+  ; ret <- newTemp bWord
+  ; emitRtsCallGen [CmmHinted ret NoHint] rtsPackageId (fsLit "newCAF")
       [ CmmHinted (CmmReg (CmmGlobal BaseReg)) AddrHint,
-        CmmHinted (CmmReg nodeReg) AddrHint ]
-      [node] False
+        CmmHinted (CmmReg nodeReg) AddrHint,
+        CmmHinted hp_rel AddrHint ]
+      (Just [node]) False
 	-- node is live, so save it.
 
-	-- Overwrite the closure with a (static) indirection 
-	-- to the newly-allocated black hole
-  ; stmtsC [ CmmStore (cmmRegOffW nodeReg off_indirectee) hp_rel
-	   , CmmStore (CmmReg nodeReg) ind_static_info ]
+  -- see Note [atomic CAF entry] in rts/sm/Storage.c
+  ; emitIf (CmmMachOp mo_wordEq [ CmmReg (CmmLocal ret), CmmLit zeroCLit]) $
+        -- re-enter R1.  Doing this directly is slightly dodgy; we're
+        -- assuming lots of things, like the stack pointer hasn't
+        -- moved since we entered the CAF.
+        let target = entryCode (closureInfoPtr (CmmReg nodeReg)) in
+        stmtC (CmmJump target [])
 
   ; returnFC hp_rel }
   where
     bh_cl_info :: ClosureInfo
     bh_cl_info = cafBlackHoleClosureInfo cl_info
-
-    ind_static_info :: CmmExpr
-    ind_static_info = mkLblExpr mkIndStaticInfoLabel
-
-    off_indirectee :: WordOff
-    off_indirectee = fixedHdrSize + oFFSET_StgInd_indirectee*wORD_SIZE
 \end{code}
 
 

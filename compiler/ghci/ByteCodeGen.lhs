@@ -39,6 +39,7 @@ import Unique
 import FastString
 import Panic
 import SMRep
+import ClosureInfo
 import Bitmap
 import OrdList
 import Constants
@@ -64,7 +65,7 @@ import qualified FiniteMap as Map
 -- Generating byte code for a complete module
 
 byteCodeGen :: DynFlags
-            -> [CoreBind]
+            -> CoreProgram
             -> [TyCon]
             -> ModBreaks
             -> IO CompiledByteCode
@@ -631,7 +632,7 @@ schemeT d s p app
       -- Detect and extract relevant info for the tagToEnum kludge.
       maybe_is_tagToEnum_call
          = let extract_constr_Names ty
-                 | Just (tyc, _) <- splitTyConApp_maybe (repType ty),
+                 | Just tyc <- tyConAppTyCon_maybe (repType ty),
                    isDataTyCon tyc
                    = map (getName . dataConWorkId) (tyConDataCons tyc)
                    -- NOTE: use the worker name, not the source name of
@@ -929,10 +930,10 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
          pargs d (a:az)
             = let arg_ty = repType (exprType (deAnnotate' a))
 
-              in case splitTyConApp_maybe arg_ty of
+              in case tyConAppTyCon_maybe arg_ty of
                     -- Don't push the FO; instead push the Addr# it
                     -- contains.
-                    Just (t, _)
+                    Just t
                      | t == arrayPrimTyCon || t == mutableArrayPrimTyCon
                        -> do rest <- pargs (d + addr_sizeW) az
                              code <- parg_ArrayishRep (fromIntegral arrPtrsHdrSize) d p a
@@ -1240,6 +1241,10 @@ pushAtom _ _ (AnnLit lit)
         MachChar _    -> code NonPtrArg
         MachNullAddr  -> code NonPtrArg
         MachStr s     -> pushStr s
+        -- No LitInteger's should be left by the time this is called.
+        -- CorePrep should have converted them all to a real core
+        -- representation.
+        LitInteger {} -> panic "pushAtom: LitInteger"
      where
         code rep
            = let size_host_words = fromIntegral (cgRepSizeW rep)

@@ -39,8 +39,7 @@ import StgCmmMonad
 import SMRep
 
 import MkGraph
-import CmmExpr
-import CmmDecl
+import Cmm
 import CmmUtils
 import CLabel
 
@@ -157,10 +156,10 @@ restoreCurrentCostCentre (Just local_cc)
 
 -- | Record the allocation of a closure.  The CmmExpr is the cost
 -- centre stack to which to attribute the allocation.
-profDynAlloc :: ClosureInfo -> CmmExpr -> FCode ()
-profDynAlloc cl_info ccs
+profDynAlloc :: SMRep -> CmmExpr -> FCode ()
+profDynAlloc rep ccs
   = ifProfiling $
-    profAlloc (CmmLit (mkIntCLit (closureSize cl_info))) ccs
+    profAlloc (CmmLit (mkIntCLit (heapClosureSize rep))) ccs
 
 -- | Record the allocation of a closure (size is given by a CmmExpr)
 -- The size must be in words, because the allocation counter in a CCS counts
@@ -358,8 +357,8 @@ initCostCentres (local_CCs, ___extern_CCs, singleton_CCSs)
 
 emitCostCentreDecl :: CostCentre -> FCode ()
 emitCostCentreDecl cc = do 
-  { label <- mkStringCLit (costCentreUserName cc)
-  ; modl  <- mkStringCLit (Module.moduleNameString 
+  { label <- newStringCLit (costCentreUserName cc)
+  ; modl  <- newStringCLit (Module.moduleNameString 
                	               (Module.moduleName (cc_mod cc)))
                 -- All cost centres will be in the main package, since we
                 -- don't normally use -auto-all or add SCCs to other packages.

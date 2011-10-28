@@ -126,10 +126,10 @@ tcMatchPreds
 	-> [PredType] -> [PredType]
    	-> Maybe TvSubstEnv
 tcMatchPreds tmpls ps1 ps2
-  = matchList (match_pred menv) emptyTvSubstEnv ps1 ps2
+  = matchList (match menv) emptyTvSubstEnv ps1 ps2
   where
     menv = ME { me_tmpls = mkVarSet tmpls, me_env = mkRnEnv2 in_scope_tyvars }
-    in_scope_tyvars = mkInScopeSet (tyVarsOfTheta ps1 `unionVarSet` tyVarsOfTheta ps2)
+    in_scope_tyvars = mkInScopeSet (tyVarsOfTypes ps1 `unionVarSet` tyVarsOfTypes ps2)
 
 -- This one is called from the expression matcher, which already has a MatchEnv in hand
 ruleMatchTyX :: MatchEnv 
@@ -185,8 +185,6 @@ match menv subst (ForAllTy tv1 ty1) (ForAllTy tv2 ty2)
   where		-- Use the magic of rnBndr2 to go under the binders
     menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
 
-match menv subst (PredTy p1) (PredTy p2) 
-  = match_pred menv subst p1 p2
 match menv subst (TyConApp tc1 tys1) (TyConApp tc2 tys2) 
   | tc1 == tc2 = match_tys menv subst tys1 tys2
 match menv subst (FunTy ty1a ty1b) (FunTy ty2a ty2b) 
@@ -233,14 +231,6 @@ matchList _  subst []     []     = Just subst
 matchList fn subst (a:as) (b:bs) = do { subst' <- fn subst a b
 				      ; matchList fn subst' as bs }
 matchList _  _     _      _      = Nothing
-
---------------
-match_pred :: MatchEnv -> TvSubstEnv -> PredType -> PredType -> Maybe TvSubstEnv
-match_pred menv subst (ClassP c1 tys1) (ClassP c2 tys2)
-  | c1 == c2 = match_tys menv subst tys1 tys2
-match_pred menv subst (IParam n1 t1) (IParam n2 t2)
-  | n1 == n2 = match menv subst t1 t2
-match_pred _    _     _ _ = Nothing
 \end{code}
 
 
@@ -268,7 +258,7 @@ The question before the house is this: if I know something about the type
 of x, can I prune away the T1 alternative?
 
 Suppose x::T Char.  It's impossible to construct a (T Char) using T1, 
-	Answer = YES (clearly)
+	Answer = YES we can prune the T1 branch (clearly)
 
 Suppose x::T (F a), where 'a' is in scope.  Then 'a' might be instantiated
 to 'Bool', in which case x::T Int, so
@@ -280,7 +270,7 @@ gives a coercion
 	CoX :: X ~ Int
 So (T CoX) :: T X ~ T Int; hence (T1 `cast` sym (T CoX)) is a non-bottom value
 of type (T X) constructed with T1.  Hence
-	ANSWER = NO (surprisingly)
+	ANSWER = NO we can't prune the T1 branch (surprisingly)
 
 Furthermore, this can even happen; see Trac #1251.  GHC's newtype-deriving
 mechanism uses a cast, just as above, to move from one dictionary to another,
@@ -328,11 +318,11 @@ typesCantMatch prs = any (\(s,t) -> cant_match s t) prs
 	= cant_match a1 a2 || cant_match r1 r2
 
     cant_match (TyConApp tc1 tys1) (TyConApp tc2 tys2)
-	| isDataTyCon tc1 && isDataTyCon tc2
+	| isDistinctTyCon tc1 && isDistinctTyCon tc2
 	= tc1 /= tc2 || typesCantMatch (zipEqual "typesCantMatch" tys1 tys2)
 
-    cant_match (FunTy {}) (TyConApp tc _) = isDataTyCon tc
-    cant_match (TyConApp tc _) (FunTy {}) = isDataTyCon tc
+    cant_match (FunTy {}) (TyConApp tc _) = isDistinctTyCon tc
+    cant_match (TyConApp tc _) (FunTy {}) = isDistinctTyCon tc
 	-- tc can't be FunTyCon by invariant
 
     cant_match (AppTy f1 a1) ty2
@@ -435,8 +425,6 @@ unify subst ty1 (TyVarTy tv2)  = uVar subst tv2 ty1
 unify subst ty1 ty2 | Just ty1' <- tcView ty1 = unify subst ty1' ty2
 unify subst ty1 ty2 | Just ty2' <- tcView ty2 = unify subst ty1 ty2'
 
-unify subst (PredTy p1) (PredTy p2) = unify_pred subst p1 p2
-
 unify subst (TyConApp tyc1 tys1) (TyConApp tyc2 tys2) 
   | tyc1 == tyc2 = unify_tys subst tys1 tys2
 
@@ -461,14 +449,6 @@ unify subst ty1 (AppTy ty2a ty2b)
 unify _ ty1 ty2 = failWith (misMatch ty1 ty2)
 	-- ForAlls??
 
-------------------------------
-unify_pred :: TvSubstEnv -> PredType -> PredType -> UM TvSubstEnv
-unify_pred subst (ClassP c1 tys1) (ClassP c2 tys2)
-  | c1 == c2 = unify_tys subst tys1 tys2
-unify_pred subst (IParam n1 t1) (IParam n2 t2)
-  | n1 == n2 = unify subst t1 t2
-unify_pred _ p1 p2 = failWith (misMatch (PredTy p1) (PredTy p2))
- 
 ------------------------------
 unify_tys :: TvSubstEnv -> [Type] -> [Type] -> UM TvSubstEnv
 unify_tys subst xs ys = unifyList subst xs ys

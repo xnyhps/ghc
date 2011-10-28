@@ -1,4 +1,4 @@
-1%
+%
 % (c) The University of Glasgow 2006
 % (c) The AQUA Project, Glasgow University, 1996-1998
 %
@@ -425,15 +425,17 @@ zonk_bind env sig_warn (AbsBinds { abs_tvs = tyvars, abs_ev_vars = evs
     	    ; new_val_binds <- zonkMonoBinds env3 noSigWarn val_binds
     	    ; new_exports   <- mapM (zonkExport env3) exports
     	    ; return (new_val_binds, new_exports) } 
-       ; sig_warn True [b | (_,b,_,_) <- new_exports]
+       ; sig_warn True (map abe_poly new_exports)
        ; return (AbsBinds { abs_tvs = tyvars, abs_ev_vars = new_evs, abs_ev_binds = new_ev_binds
 			  , abs_exports = new_exports, abs_binds = new_val_bind }) }
   where
-    zonkExport env (tyvars, global, local, prags)
-	-- The tyvars are already zonked
-	= zonkIdBndr env global			`thenM` \ new_global ->
-	  zonkSpecPrags env prags		`thenM` \ new_prags -> 
-	  returnM (tyvars, new_global, zonkIdOcc env local, new_prags)
+    zonkExport env (ABE{ abe_wrap = wrap, abe_poly = poly_id
+                       , abe_mono = mono_id, abe_prags = prags })
+	= zonkIdBndr env poly_id		`thenM` \ new_poly_id ->
+	  zonkCoFn env wrap                     `thenM` \ (_, new_wrap) ->
+          zonkSpecPrags env prags		`thenM` \ new_prags -> 
+	  returnM (ABE{ abe_wrap = new_wrap, abe_poly = new_poly_id
+                      , abe_mono = zonkIdOcc env mono_id, abe_prags = new_prags })
 
 zonkSpecPrags :: ZonkEnv -> TcSpecPrags -> TcM TcSpecPrags
 zonkSpecPrags _   IsDefaultMethod = return IsDefaultMethod
@@ -679,8 +681,8 @@ zonkCoFn env WpHole   = return (env, WpHole)
 zonkCoFn env (WpCompose c1 c2) = do { (env1, c1') <- zonkCoFn env c1
 				    ; (env2, c2') <- zonkCoFn env1 c2
 				    ; return (env2, WpCompose c1' c2') }
-zonkCoFn env (WpCast co)    = do { co' <- zonkTcCoToCo env co
-				 ; return (env, WpCast co') }
+zonkCoFn env (WpCast co) = do { co' <- zonkTcLCoToLCo env co
+			      ; return (env, WpCast co') }
 zonkCoFn env (WpEvLam ev)   = do { (env', ev') <- zonkEvBndrX env ev
 				 ; return (env', WpEvLam ev') }
 zonkCoFn env (WpEvApp arg)  = do { arg' <- zonkEvTerm env arg 
@@ -962,8 +964,8 @@ zonkForeignExports :: ZonkEnv -> [LForeignDecl TcId] -> TcM [LForeignDecl Id]
 zonkForeignExports env ls = mappM (wrapLocM (zonkForeignExport env)) ls
 
 zonkForeignExport :: ZonkEnv -> ForeignDecl TcId -> TcM (ForeignDecl Id)
-zonkForeignExport env (ForeignExport i _hs_ty spec) =
-   returnM (ForeignExport (fmap (zonkIdOcc env) i) undefined spec)
+zonkForeignExport env (ForeignExport i _hs_ty co spec) =
+   returnM (ForeignExport (fmap (zonkIdOcc env) i) undefined co spec)
 zonkForeignExport _ for_imp 
   = returnM for_imp	-- Foreign imports don't need zonking
 \end{code}
@@ -1020,19 +1022,18 @@ zonkVects :: ZonkEnv -> [LVectDecl TcId] -> TcM [LVectDecl Id]
 zonkVects env = mappM (wrapLocM (zonkVect env))
 
 zonkVect :: ZonkEnv -> VectDecl TcId -> TcM (VectDecl Id)
-zonkVect env (HsVect v Nothing)
+zonkVect env (HsVect v e)
   = do { v' <- wrapLocM (zonkIdBndr env) v
-       ; return $ HsVect v' Nothing
-       }
-zonkVect env (HsVect v (Just e))
-  = do { v' <- wrapLocM (zonkIdBndr env) v
-       ; e' <- zonkLExpr env e
-       ; return $ HsVect v' (Just e')
+       ; e' <- fmapMaybeM (zonkLExpr env) e
+       ; return $ HsVect v' e'
        }
 zonkVect env (HsNoVect v)
   = do { v' <- wrapLocM (zonkIdBndr env) v
        ; return $ HsNoVect v'
        }
+zonkVect _env (HsVectTypeOut s t rt)
+  = return $ HsVectTypeOut s t rt
+zonkVect _ (HsVectTypeIn _ _ _) = panic "TcHsSyn.zonkVect: HsVectTypeIn"
 \end{code}
 
 %************************************************************************
@@ -1045,11 +1046,13 @@ zonkVect env (HsNoVect v)
 zonkEvTerm :: ZonkEnv -> EvTerm -> TcM EvTerm
 zonkEvTerm env (EvId v)           = ASSERT2( isId v, ppr v ) 
                                     return (EvId (zonkIdOcc env v))
-zonkEvTerm env (EvCoercion co)    = do { co' <- zonkTcCoToCo env co
-                                       ; return (EvCoercion co') }
+zonkEvTerm env (EvCoercionBox co) = do { co' <- zonkTcLCoToLCo env co
+                                       ; return (EvCoercionBox co') }
 zonkEvTerm env (EvCast v co)      = ASSERT( isId v) 
-                                    do { co' <- zonkTcCoToCo env co
+                                    do { co' <- zonkTcLCoToLCo env co
                                        ; return (EvCast (zonkIdOcc env v) co') }
+zonkEvTerm env (EvTupleSel v n)   = return (EvTupleSel (zonkIdOcc env v) n)
+zonkEvTerm env (EvTupleMk vs)     = return (EvTupleMk (map (zonkIdOcc env) vs))
 zonkEvTerm env (EvSuperClass d n) = return (EvSuperClass (zonkIdOcc env d) n)
 zonkEvTerm env (EvDFunApp df tys tms)
   = do { tys' <- zonkTcTypeToTypes env tys
@@ -1124,8 +1127,8 @@ zonkTypeZapping ty
 			       ; writeMetaTyVar tv ty
 			       ; return ty }
 
-zonkTcCoToCo :: ZonkEnv -> Coercion -> TcM Coercion
-zonkTcCoToCo env co
+zonkTcLCoToLCo :: ZonkEnv -> LCoercion -> TcM LCoercion
+zonkTcLCoToLCo env co
   = go co
   where
     go (CoVarCo cv)         = return (CoVarCo (zonkEvVarOcc env cv))

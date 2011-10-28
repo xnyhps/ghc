@@ -1,6 +1,6 @@
 \begin{code}
 module TcSimplify( 
-       simplifyInfer,
+       simplifyInfer, simplifyAmbiguityCheck,
        simplifyDefault, simplifyDeriv, 
        simplifyRule, simplifyTop, simplifyInteractive
   ) where
@@ -15,7 +15,6 @@ import TcType
 import TcSMonad 
 import TcInteract
 import Inst
-import Id	( evVarPred )
 import Unify	( niFixTvSubst, niSubstTvSet )
 import Var
 import VarSet
@@ -31,7 +30,7 @@ import Util
 import PrelInfo
 import PrelNames
 import Class		( classKey )
-import BasicTypes       ( RuleName, TopLevelFlag, isTopLevel )
+import BasicTypes       ( RuleName )
 import Control.Monad    ( when )
 import Outputable
 import FastString
@@ -52,6 +51,11 @@ simplifyTop :: WantedConstraints -> TcM (Bag EvBind)
 -- in a degenerate implication, so we do that here instead
 simplifyTop wanteds 
   = simplifyCheck (SimplCheck (ptext (sLit "top level"))) wanteds
+
+------------------
+simplifyAmbiguityCheck :: Name -> WantedConstraints -> TcM (Bag EvBind)
+simplifyAmbiguityCheck name wanteds
+  = simplifyCheck (SimplCheck (ptext (sLit "ambiguity check for") <+> ppr name)) wanteds
 
 ------------------
 simplifyInteractive :: WantedConstraints -> TcM (Bag EvBind)
@@ -200,21 +204,24 @@ Allow constraints which consist only of type variables, with no repeats.
 ***********************************************************************************
 
 \begin{code}
-simplifyInfer :: TopLevelFlag
+simplifyInfer :: Bool
               -> Bool                  -- Apply monomorphism restriction
               -> [(Name, TcTauType)]   -- Variables to be generalised,
                                        -- and their tau-types
               -> WantedConstraints
               -> TcM ([TcTyVar],    -- Quantify over these type variables
                       [EvVar],      -- ... and these constraints
+		      Bool,	    -- The monomorphism restriction did something
+		      		    --   so the results type is not as general as
+				    --   it could be
                       TcEvBinds)    -- ... binding these evidence variables
-simplifyInfer top_lvl apply_mr name_taus wanteds
+simplifyInfer _top_lvl apply_mr name_taus wanteds
   | isEmptyWC wanteds
   = do { gbl_tvs     <- tcGetGlobalTyVars            -- Already zonked
        ; zonked_taus <- zonkTcTypes (map snd name_taus)
        ; let tvs_to_quantify = get_tau_tvs zonked_taus `minusVarSet` gbl_tvs
        ; qtvs <- zonkQuantifiedTyVars (varSetElems tvs_to_quantify)
-       ; return (qtvs, [], emptyTcEvBinds) }
+       ; return (qtvs, [], False, emptyTcEvBinds) }
 
   | otherwise
   = do { zonked_wanteds <- zonkWC wanteds
@@ -222,8 +229,11 @@ simplifyInfer top_lvl apply_mr name_taus wanteds
        ; gbl_tvs        <- tcGetGlobalTyVars
 
        ; traceTc "simplifyInfer {"  $ vcat
-             [ ptext (sLit "apply_mr =") <+> ppr apply_mr
-             , ptext (sLit "zonked_taus =") <+> ppr zonked_taus
+             [ ptext (sLit "names =") <+> ppr (map fst name_taus)
+             , ptext (sLit "taus (zonked) =") <+> ppr zonked_taus
+             , ptext (sLit "gbl_tvs =") <+> ppr gbl_tvs
+             , ptext (sLit "closed =") <+> ppr _top_lvl
+             , ptext (sLit "apply_mr =") <+> ppr apply_mr
              , ptext (sLit "wanted =") <+> ppr zonked_wanteds
              ]
 
@@ -266,32 +276,36 @@ simplifyInfer top_lvl apply_mr name_taus wanteds
        ; zonked_tau_tvs <- zonkTcTyVarsAndFV zonked_tau_tvs
        ; zonked_simples <- zonkWantedEvVars (wc_flat simpl_results)
        ; let init_tvs 	     = zonked_tau_tvs `minusVarSet` gbl_tvs
+             poly_qtvs       = growWantedEVs gbl_tvs zonked_simples init_tvs
+	     (pbound, pfree) = partitionBag (quantifyMe poly_qtvs) zonked_simples
+
+	     -- Monomorphism restriction
              mr_qtvs  	     = init_tvs `minusVarSet` constrained_tvs
              constrained_tvs = tyVarsOfEvVarXs zonked_simples
-             qtvs            = growWantedEVs gbl_tvs zonked_simples init_tvs
-             (final_qtvs, (bound, free))
-                | apply_mr  = (mr_qtvs, (emptyBag, zonked_simples))
-                | otherwise = (qtvs,    partitionBag (quantifyMe qtvs) zonked_simples)
+	     mr_bites        = apply_mr && not (isEmptyBag pbound)
+
+             (qtvs, (bound, free))
+                | mr_bites  = (mr_qtvs,   (emptyBag, zonked_simples))
+                | otherwise = (poly_qtvs, (pbound,   pfree))
        ; emitFlats free
 
-       ; if isEmptyVarSet final_qtvs && isEmptyBag bound
+       ; if isEmptyVarSet qtvs && isEmptyBag bound
          then ASSERT( isEmptyBag (wc_insol simpl_results) )
               do { traceTc "} simplifyInfer/no quantification" empty
                  ; emitImplications (wc_impl simpl_results)
-                 ; return ([], [], EvBinds tc_binds0) }
+                 ; return ([], [], mr_bites, EvBinds tc_binds0) }
          else do
 
             -- Step 4, zonk quantified variables 
        { let minimal_flat_preds = mkMinimalBySCs $ map evVarOfPred $ bagToList bound
-       ; let poly_ids = [ (name, mkSigmaTy [] minimal_flat_preds ty)
-                        | (name, ty) <- name_taus ]
+             skol_info = InferSkol [ (name, mkSigmaTy [] minimal_flat_preds ty)
+                                   | (name, ty) <- name_taus ]
                         -- Don't add the quantified variables here, because
                         -- they are also bound in ic_skols and we want them to be
                         -- tidied uniformly
-             skol_info = InferSkol poly_ids
 
        ; gloc <- getCtLoc skol_info
-       ; qtvs_to_return <- zonkQuantifiedTyVars (varSetElems final_qtvs)
+       ; qtvs_to_return <- zonkQuantifiedTyVars (varSetElems qtvs)
 
             -- Step 5
             -- Minimize `bound' and emit an implication
@@ -311,17 +325,21 @@ simplifyInfer top_lvl apply_mr name_taus wanteds
        ; traceTc "} simplifyInfer/produced residual implication for quantification" $
              vcat [ ptext (sLit "implic =") <+> ppr implic
                        -- ic_skols, ic_given give rest of result
-                  , ptext (sLit "qtvs =") <+> ppr final_qtvs
+                  , ptext (sLit "qtvs =") <+> ppr qtvs_to_return
                   , ptext (sLit "spb =") <+> ppr zonked_simples
                   , ptext (sLit "bound =") <+> ppr bound ]
 
 
 
-       ; return (qtvs_to_return, minimal_bound_ev_vars, TcEvBinds ev_binds_var) } }
+       ; return ( qtvs_to_return, minimal_bound_ev_vars
+                , mr_bites,  TcEvBinds ev_binds_var) } }
   where
+    get_tau_tvs = tyVarsOfTypes	-- I think this stuff is out of date
+{-
     get_tau_tvs | isTopLevel top_lvl = tyVarsOfTypes
                 | otherwise          = exactTyVarsOfTypes
      -- See Note [Silly type synonym] in TcType
+-}
 \end{code}
 
 
@@ -426,7 +444,7 @@ quantifyMe :: TyVarSet      -- Quantifying over these
 	   -> Bool	    -- True <=> quantify over this wanted
 quantifyMe qtvs wev
   | isIPPred pred = True  -- Note [Inheriting implicit parameters]
-  | otherwise	  = tyVarsOfPred pred `intersectsVarSet` qtvs
+  | otherwise	  = tyVarsOfType pred `intersectsVarSet` qtvs
   where
     pred = evVarOfPred wev
 \end{code}
@@ -867,8 +885,8 @@ floatEqualities skols can_given wantders
   
 
   where is_floatable :: FlavoredEvVar -> Bool
-        is_floatable (EvVarX cv _fl)
-          | isCoVar cv = skols `disjointVarSet` predTvs_under_fsks (coVarPred cv)
+        is_floatable (EvVarX eqv _fl)
+          | isEqPred (evVarPred eqv) = skols `disjointVarSet` tvs_under_fsks (evVarPred eqv)
         is_floatable _flev = False
 
         tvs_under_fsks :: Type -> TyVarSet
@@ -878,7 +896,6 @@ floatEqualities skols can_given wantders
           | FlatSkol ty <- tcTyVarDetails tv = tvs_under_fsks ty
           | otherwise                        = unitVarSet tv
         tvs_under_fsks (TyConApp _ tys) = unionVarSets (map tvs_under_fsks tys)
-        tvs_under_fsks (PredTy sty)     = predTvs_under_fsks sty
         tvs_under_fsks (FunTy arg res)  = tvs_under_fsks arg `unionVarSet` tvs_under_fsks res
         tvs_under_fsks (AppTy fun arg)  = tvs_under_fsks fun `unionVarSet` tvs_under_fsks arg
         tvs_under_fsks (ForAllTy tv ty) -- The kind of a coercion binder 
@@ -888,11 +905,6 @@ floatEqualities skols can_given wantders
                                         inner_tvs `unionVarSet` tvs_under_fsks (tyVarKind tv)
           where
             inner_tvs = tvs_under_fsks ty
-
-        predTvs_under_fsks :: PredType -> TyVarSet
-        predTvs_under_fsks (IParam _ ty)    = tvs_under_fsks ty
-        predTvs_under_fsks (ClassP _ tys)   = unionVarSets (map tvs_under_fsks tys)
-        predTvs_under_fsks (EqPred ty1 ty2) = tvs_under_fsks ty1 `unionVarSet` tvs_under_fsks ty2
 \end{code}
 
 Note [Preparing inert set for implications]
@@ -1033,7 +1045,7 @@ solveCTyFunEqs cts
       ; return (niFixTvSubst ni_subst, unsolved_can_cts) }
   where
     solve_one (cv,tv,ty) = do { setWantedTyBind tv ty
-                              ; setCoBind cv (mkReflCo ty) }
+                              ; setEqBind cv (mkReflCo ty) }
 
 ------------
 type FunEqBinds = (TvSubstEnv, [(CoVar, TcTyVar, TcType)])
@@ -1183,9 +1195,9 @@ defaultTyVar :: TcsUntouchables -> TcTyVar -> TcS (Bag FlavoredEvVar)
 defaultTyVar untch the_tv 
   | isTouchableMetaTyVar_InRange untch the_tv
   , not (k `eqKind` default_k)
-  = do { ev <- TcSMonad.newKindConstraint the_tv default_k
+  = do { eqv <- TcSMonad.newKindConstraint the_tv default_k
        ; let loc = CtLoc DefaultOrigin (getSrcSpan the_tv) [] -- Yuk
-       ; return (unitBag (mkEvVarX ev (Wanted loc))) }
+       ; return (unitBag (mkEvVarX eqv (Wanted loc))) }
   | otherwise            
   = return emptyBag	 -- The common case
   where
@@ -1256,9 +1268,9 @@ disambigGroup [] _inert _grp
   = return emptyBag
 disambigGroup (default_ty:default_tys) inert group
   = do { traceTcS "disambigGroup" (ppr group $$ ppr default_ty)
-       ; ev <- TcSMonad.newCoVar (mkTyVarTy the_tv) default_ty
+       ; eqv <- TcSMonad.newEqVar (mkTyVarTy the_tv) default_ty
        ; let der_flav = mk_derived_flavor (cc_flavor the_ct)
-             derived_eq = mkEvVarX ev der_flav
+             derived_eq = mkEvVarX eqv der_flav
 
        ; success <- tryTcS $
                     do { (_,final_inert) <- solveInteract inert $ listToBag $

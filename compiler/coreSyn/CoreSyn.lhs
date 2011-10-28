@@ -10,7 +10,7 @@
 module CoreSyn (
 	-- * Main data types
 	Expr(..), Alt, Bind(..), AltCon(..), Arg, Note(..),
-	CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
+	CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
 	TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
 
         -- ** 'Expr' construction
@@ -87,12 +87,13 @@ import Coercion
 import Name
 import Literal
 import DataCon
+import TyCon
 import BasicTypes
 import FastString
 import Outputable
 import Util
 
-import Data.Data
+import Data.Data hiding (TyCon)
 import Data.Word
 
 infixl 4 `mkApps`, `mkTyApps`, `mkVarApps`, `App`, `mkCoApps`
@@ -208,29 +209,31 @@ These data types are the heart of the compiler
 --    This is one of the more complicated elements of the Core language, 
 --    and comes with a number of restrictions:
 --    
---    The 'DEFAULT' case alternative must be first in the list, 
---    if it occurs at all.
+--    1. The list of alternatives is non-empty
+--
+--    2. The 'DEFAULT' case alternative must be first in the list, 
+--       if it occurs at all.
 --    
---    The remaining cases are in order of increasing 
+--    3. The remaining cases are in order of increasing 
 --         tag	(for 'DataAlts') or
 --         lit	(for 'LitAlts').
---    This makes finding the relevant constructor easy, 
---    and makes comparison easier too.
+--       This makes finding the relevant constructor easy, 
+--       and makes comparison easier too.
 --    
---    The list of alternatives must be exhaustive. An /exhaustive/ case 
---    does not necessarily mention all constructors:
+--    4. The list of alternatives must be exhaustive. An /exhaustive/ case 
+--       does not necessarily mention all constructors:
 --    
---    @
---         data Foo = Red | Green | Blue
---    ... case x of 
---         Red   -> True
---         other -> f (case x of 
---                         Green -> ...
---                         Blue  -> ... ) ...
---    @
+--    	 @
+--    	      data Foo = Red | Green | Blue
+--    	 ... case x of 
+--    	      Red   -> True
+--    	      other -> f (case x of 
+--    	                      Green -> ...
+--    	                      Blue  -> ... ) ...
+--    	 @
 --    
---    The inner case does not need a @Red@ alternative, because @x@ 
---    can't be @Red@ at that program point.
+--    	 The inner case does not need a @Red@ alternative, because @x@ 
+--    	 can't be @Red@ at that program point.
 --
 -- *  Cast an expression to a particular type. 
 --    This is used to implement @newtype@s (a @newtype@ constructor or 
@@ -248,7 +251,7 @@ data Expr b
   | App   (Expr b) (Arg b)
   | Lam   b (Expr b)
   | Let   (Bind b) (Expr b)
-  | Case  (Expr b) b Type [Alt b]
+  | Case  (Expr b) b Type [Alt b]	-- See #case_invariant#
   | Cast  (Expr b) Coercion
   | Note  Note (Expr b)
   | Type  Type
@@ -428,9 +431,9 @@ Representation of desugared vectorisation declarations that are fed to the vecto
 'ModGuts').
 
 \begin{code}
-data CoreVect = Vect   Id (Maybe CoreExpr)
-              | NoVect Id
-
+data CoreVect = Vect     Id    (Maybe CoreExpr)
+              | NoVect   Id
+              | VectType Bool TyCon (Maybe TyCon)
 \end{code}
 
 
@@ -828,7 +831,29 @@ cmpAltCon con1 con2 = WARN( True, text "Comparing incomparable AltCons" <+>
 %*									*
 %************************************************************************
 
+Note [CoreProgram]
+~~~~~~~~~~~~~~~~~~
+The top level bindings of a program, a CoreProgram, are represented as
+a list of CoreBind
+
+ * Later bindings in the list can refer to earlier ones, but not vice
+   versa.  So this is OK
+      NonRec { x = 4 }
+      Rec { p = ...q...x...
+          ; q = ...p...x }
+      Rec { f = ...p..x..f.. }
+      NonRec { g = ..f..q...x.. }
+   But it would NOT be ok for 'f' to refer to 'g'.
+
+ * The occurrence analyser does strongly-connected component analysis
+   on each Rec binding, and splits it into a sequence of smaller
+   bindings where possible.  So the program typically starts life as a
+   single giant Rec, which is then dependency-analysed into smaller
+   chunks.  
+
 \begin{code}
+type CoreProgram = [CoreBind]	-- See Note [CoreProgram]
+
 -- | The common case for the type of binders and variables when
 -- we are manipulating the Core language within GHC
 type CoreBndr = Var

@@ -114,7 +114,7 @@ Well, maybe.  We don't do this at the moment.
 floatOutwards :: FloatOutSwitches
 	      -> DynFlags
 	      -> UniqSupply 
-	      -> [CoreBind] -> IO [CoreBind]
+	      -> CoreProgram -> IO CoreProgram
 
 floatOutwards float_sws dflags us pgm
   = do {
@@ -440,7 +440,10 @@ partitionByMajorLevel.
 \begin{code}
 data FloatBind 
   = FloatLet FloatLet  
-  | FloatCase CoreExpr Id DataCon [Var]       -- case e of y { C ys -> ... }
+
+  | FloatCase CoreExpr Id DataCon [Var]       
+      -- case e of y { C ys -> ... }
+      -- See Note [Floating cases] in SetLevels
 
 type FloatLet = CoreBind	-- INVARIANT: a FloatLet is always lifted
 type MajorEnv = M.IntMap MinorEnv	  -- Keyed by major level

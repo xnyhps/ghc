@@ -81,7 +81,7 @@ Library
     if flag(ghci)
         Build-Depends: template-haskell
         CPP-Options: -DGHCI
-        Include-Dirs: ../libffi/build/include
+        Include-Dirs: ../rts/dist/build
 
     Build-Depends: bin-package-db
     Build-Depends: hoopl
@@ -146,6 +146,7 @@ Library
         vectorise
 
     Exposed-Modules:
+        Avail
         BasicTypes
         DataCon
         Demand
@@ -187,7 +188,6 @@ Library
         CmmCommonBlockElim
         CmmContFlowOpt
         CmmCvt
-        CmmDecl
         CmmExpr
         CmmInfo
         CmmLex
@@ -259,6 +259,7 @@ Library
         CorePrep
         CoreSubst
         CoreSyn
+        TrieMap
         CoreTidy
         CoreUnfold
         CoreUtils
@@ -393,6 +394,7 @@ Library
         TcExpr
         TcForeign
         TcGenDeriv
+        TcGenGenerics
         TcHsSyn
         TcHsType
         TcInstDcls
@@ -413,10 +415,10 @@ Library
         TcCanonical
         TcSMonad
         Class
+        IParam
         Coercion
         FamInstEnv
         FunDeps
-        Generics
         InstEnv
         TyCon
         Kind
@@ -457,7 +459,6 @@ Library
         Util
         Vectorise.Builtins.Base
         Vectorise.Builtins.Initialise
-        Vectorise.Builtins.Modules
         Vectorise.Builtins
         Vectorise.Monad.Base
         Vectorise.Monad.Naming
@@ -496,6 +497,7 @@ Library
             RegClass
             PIC
             Platform
+            CPrim
             X86.Regs
             X86.RegInfo
             X86.Instr
@@ -563,4 +565,4 @@ Library
             Linker
             ObjLink
             RtClosureInspect
-
+            DebuggerUtils

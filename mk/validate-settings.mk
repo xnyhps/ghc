@@ -54,6 +54,11 @@ endif
 ######################################################################
 # Disable some warnings in packages we use
 
+# Cabal doesn't promise to be warning-free
+utils/ghc-cabal_dist_EXTRA_HC_OPTS += -w
+libraries/Cabal/Cabal_dist-boot_EXTRA_HC_OPTS += -w
+libraries/Cabal/Cabal_dist-install_EXTRA_HC_OPTS += -w
+
 # Temporarily turn off incomplete-pattern warnings for containers
 libraries/containers_dist-install_EXTRA_HC_OPTS += -fno-warn-incomplete-patterns
 
@@ -100,6 +105,8 @@ libraries/dph/dph-par_dist-install_EXTRA_HC_OPTS += -Wwarn
 # We need to turn of deprecated warnings for SafeHaskell transition
 libraries/array_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
 libraries/binary_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
+libraries/binary/src/Data/Binary/Builder/Base_HC_OPTS += -fno-warn-warnings-deprecations
+libraries/binary/src/Data/Binary/Get_HC_OPTS += -fno-warn-warnings-deprecations
 
 # We need -fno-warn-deprecated-flags to avoid failure with -Werror
 GhcLibHcOpts += -fno-warn-deprecated-flags

@@ -1,12 +1,11 @@
-
 module Vectorise.Utils.PADict (
-	paDictArgType,
-	paDictOfType,
-	paMethod,
-        prDictOfReprType,
-        prDictOfPReprInstTyCon
-)
-where
+  paDictArgType,
+  paDictOfType,
+  paMethod,
+  prDictOfReprType,
+  prDictOfPReprInstTyCon
+) where
+
 import Vectorise.Monad
 import Vectorise.Builtins
 import Vectorise.Utils.Base
@@ -23,7 +22,7 @@ import FastString
 import Control.Monad
 
 
--- | Construct the PA argument type for the tyvar. For the tyvar (v :: *) it's
+-- |Construct the PA argument type for the tyvar. For the tyvar (v :: *) it's
 -- just PA v. For (v :: (* -> *) -> *) it's
 --
 -- > forall (a :: * -> *). (forall (b :: *). PA b -> PA (a b)) -> PA (v a)
@@ -45,12 +44,12 @@ paDictArgType tv = go (TyVarTy tv) (tyVarKind tv)
       | isLiftedTypeKind k
       = do
           pa_cls <- builtin paClass
-          return $ Just $ PredTy $ ClassP pa_cls [ty]
+          return $ Just $ mkClassPred pa_cls [ty]
 
     go _ _ = return Nothing
 
 
--- | Get the PA dictionary for some type
+-- |Get the PA dictionary for some type
 --
 paDictOfType :: Type -> VM CoreExpr
 paDictOfType ty 
@@ -86,13 +85,12 @@ paDictOfType ty
 
     failure = cantVectorise "Can't construct PA dictionary for type" (ppr ty)
 
-paMethod :: (Builtins -> Var) -> String -> Type -> VM CoreExpr
-paMethod _ name ty
-  | Just tycon <- splitPrimTyCon ty
-  = liftM Var
-  . maybeCantVectoriseM "No PA method" (text name <+> text "for" <+> ppr tycon)
-  $ lookupPrimMethod tycon name
-
+-- |Produce code that refers to a method of the 'PA' class.
+--
+paMethod :: (Builtins -> Var) -> (TyCon -> Builtins -> Var) -> Type -> VM CoreExpr
+paMethod _ query ty
+  | Just tycon <- splitPrimTyCon ty             -- Is 'ty' from 'GHC.Prim' (e.g., 'Int#')?
+  = liftM Var $ builtin (query tycon)
 paMethod method _ ty
   = do
       fn   <- builtin method
@@ -128,8 +126,9 @@ prDictOfPReprInstTyCon ty prepr_tc prepr_args
 
   | otherwise = cantVectorise "Invalid PRepr type instance" (ppr ty)
 
--- | Get the PR dictionary for a type. The argument must be a representation
+-- |Get the PR dictionary for a type. The argument must be a representation
 -- type.
+--
 prDictOfReprType :: Type -> VM CoreExpr
 prDictOfReprType ty
   | Just (tycon, tyargs) <- splitTyConApp_maybe ty
@@ -143,7 +142,8 @@ prDictOfReprType ty
                  return $ Var sel `App` Type ty' `App` pa
           else do 
                  -- a representation tycon must have a PR instance
-                 dfun <- maybeV $ lookupTyConPR tycon
+                 dfun <- maybeV (text "look up PR dictionary for" <+> ppr tycon) $ 
+                           lookupTyConPR tycon
                  prDFunApply dfun tyargs
 
   | otherwise

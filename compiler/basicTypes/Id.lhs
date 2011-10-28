@@ -58,7 +58,7 @@ module Id (
 	hasNoBinding, 
 
 	-- ** Evidence variables
-	DictId, isDictId, isEvVar, evVarPred,
+	DictId, isDictId, isEvVar,
 
 	-- ** Inline pragma stuff
 	idInlinePragma, setInlinePragma, modifyInlinePragma,
@@ -97,7 +97,7 @@ import IdInfo
 import BasicTypes
 
 -- Imported and re-exported 
-import Var( Var, Id, DictId, EvVar,
+import Var( Var, Id, DictId,
             idInfo, idDetails, globaliseId, varType,
             isId, isLocalId, isGlobalId, isExportedId )
 import qualified Var
@@ -451,12 +451,6 @@ isEvVar var = isPredTy (varType var)
 
 isDictId :: Id -> Bool
 isDictId id = isDictTy (idType id)
-
-evVarPred :: EvVar -> PredType
-evVarPred var
-  = case splitPredTy_maybe (varType var) of
-      Just pred -> pred
-      Nothing   -> pprPanic "evVarPred" (ppr var <+> ppr (varType var))
 \end{code}
 
 %************************************************************************
@@ -612,9 +606,9 @@ isStateHackType ty
   | opt_NoStateHack 
   = False
   | otherwise
-  = case splitTyConApp_maybe ty of
-	Just (tycon,_) -> tycon == statePrimTyCon
-        _              -> False
+  = case tyConAppTyCon_maybe ty of
+	Just tycon -> tycon == statePrimTyCon
+        _          -> False
 	-- This is a gross hack.  It claims that 
 	-- every function over realWorldStatePrimTy is a one-shot
 	-- function.  This is pretty true in practice, and makes a big

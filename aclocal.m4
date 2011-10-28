@@ -100,6 +100,246 @@ AC_DEFUN([FPTOOLS_SET_PLATFORM_VARS],
         soext='.dylib'
         ;;
     esac
+
+    BuildPlatform="$BuildArch-$BuildVendor-$BuildOS"
+    BuildPlatform_CPP=`echo "$BuildPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
+    BuildArch_CPP=`    echo "$BuildArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
+    BuildVendor_CPP=`  echo "$BuildVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
+    BuildOS_CPP=`      echo "$BuildOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
+
+    HostPlatform="$HostArch-$HostVendor-$HostOS"
+    HostPlatform_CPP=`echo "$HostPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
+    HostArch_CPP=`    echo "$HostArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
+    HostVendor_CPP=`  echo "$HostVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
+    HostOS_CPP=`      echo "$HostOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
+
+    TargetPlatform="$TargetArch-$TargetVendor-$TargetOS"
+    TargetPlatform_CPP=`echo "$TargetPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
+    TargetArch_CPP=`    echo "$TargetArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
+    TargetVendor_CPP=`  echo "$TargetVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
+    TargetOS_CPP=`      echo "$TargetOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
+
+    echo "GHC build  : $BuildPlatform"
+    echo "GHC host   : $HostPlatform"
+    echo "GHC target : $TargetPlatform"
+
+    AC_SUBST(BuildPlatform)
+    AC_SUBST(HostPlatform)
+    AC_SUBST(TargetPlatform)
+    AC_SUBST(HostPlatform_CPP)
+    AC_SUBST(BuildPlatform_CPP)
+    AC_SUBST(TargetPlatform_CPP)
+
+    AC_SUBST(HostArch_CPP)
+    AC_SUBST(BuildArch_CPP)
+    AC_SUBST(TargetArch_CPP)
+
+    AC_SUBST(HostOS_CPP)
+    AC_SUBST(BuildOS_CPP)
+    AC_SUBST(TargetOS_CPP)
+
+    AC_SUBST(HostVendor_CPP)
+    AC_SUBST(BuildVendor_CPP)
+    AC_SUBST(TargetVendor_CPP)
+
+    AC_SUBST(exeext)
+    AC_SUBST(soext)
+])
+
+
+# FPTOOLS_SET_HASKELL_PLATFORM_VARS
+# ----------------------------------
+# Set the Haskell platform variables
+AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
+[
+    checkArch() {
+        case [$]1 in
+        i386)
+            test -z "[$]2" || eval "[$]2=ArchX86"
+            ;;
+        x86_64)
+            GET_ARM_ISA()
+            test -z "[$]2" || eval "[$]2=ArchX86_64"
+            ;;
+        powerpc)
+            test -z "[$]2" || eval "[$]2=ArchPPC"
+            ;;
+        powerpc64)
+            test -z "[$]2" || eval "[$]2=ArchPPC_64"
+            ;;
+        sparc)
+            test -z "[$]2" || eval "[$]2=ArchSPARC"
+            ;;
+        arm)
+            GET_ARM_ISA()
+            test -z "[$]2" || eval "[$]2=\"ArchARM \$ARM_ISA \$ARM_ISA_EXT\""
+            ;;
+        alpha)
+            test -z "[$]2" || eval "[$]2=ArchAlpha"
+            ;;
+        mips|mipseb)
+            test -z "[$]2" || eval "[$]2=ArchMipseb"
+            ;;
+        mipsel)
+            test -z "[$]2" || eval "[$]2=ArchMipsel"
+            ;;
+        hppa|hppa1_1|ia64|m68k|rs6000|s390|s390x|sparc64|vax)
+            test -z "[$]2" || eval "[$]2=ArchUnknown"
+            ;;
+        *)
+            echo "Unknown arch [$]1"
+            exit 1
+            ;;
+        esac
+    }
+
+    checkVendor() {
+        case [$]1 in
+        dec|unknown|hp|apple|next|sun|sgi|ibm)
+            ;;
+        *)
+            echo "Unknown vendor [$]1"
+            exit 1
+            ;;
+        esac
+    }
+
+    checkOS() {
+        case [$]1 in
+        linux)
+            test -z "[$]2" || eval "[$]2=OSLinux"
+            ;;
+        darwin)
+            test -z "[$]2" || eval "[$]2=OSDarwin"
+            ;;
+        solaris2)
+            test -z "[$]2" || eval "[$]2=OSSolaris2"
+            ;;
+        mingw32)
+            test -z "[$]2" || eval "[$]2=OSMinGW32"
+            ;;
+        freebsd)
+            test -z "[$]2" || eval "[$]2=OSFreeBSD"
+            ;;
+        openbsd)
+            test -z "[$]2" || eval "[$]2=OSOpenBSD"
+            ;;
+        netbsd|dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
+            test -z "[$]2" || eval "[$]2=OSUnknown"
+            ;;
+        *)
+            echo "Unknown OS '[$]1'"
+            exit 1
+            ;;
+        esac
+    }
+
+    dnl ** check for Apple-style dead-stripping support
+    dnl    (.subsections-via-symbols assembler directive)
+
+    AC_MSG_CHECKING(for .subsections_via_symbols)
+    AC_COMPILE_IFELSE(
+        [AC_LANG_PROGRAM([], [__asm__ (".subsections_via_symbols");])],
+        [AC_MSG_RESULT(yes)
+         HaskellHaveSubsectionsViaSymbols=True
+         AC_DEFINE([HAVE_SUBSECTIONS_VIA_SYMBOLS],[1],
+                   [Define to 1 if Apple-style dead-stripping is supported.])
+        ],
+        [HaskellHaveSubsectionsViaSymbols=False
+         AC_MSG_RESULT(no)])
+
+    dnl *** check for GNU non-executable stack note support (ELF only)
+    dnl     (.section .note.GNU-stack,"",@progbits)
+
+    dnl This test doesn't work with "gcc -g" in gcc 4.4 (GHC trac #3889:
+    dnl     Error: can't resolve `.note.GNU-stack' {.note.GNU-stack section} - `.Ltext0' {.text section}
+    dnl so we empty CFLAGS while running this test
+    CFLAGS2="$CFLAGS"
+    CFLAGS=
+    AC_MSG_CHECKING(for GNU non-executable stack support)
+    AC_COMPILE_IFELSE(
+        [AC_LANG_PROGRAM([__asm__ (".section .note.GNU-stack,\"\",@progbits");], [0])],
+        [AC_MSG_RESULT(yes)
+         HaskellHaveGnuNonexecStack=True],
+        [AC_MSG_RESULT(no)
+         HaskellHaveGnuNonexecStack=False])
+    CFLAGS="$CFLAGS2"
+
+    checkArch "$BuildArch" ""
+    checkVendor "$BuildVendor"
+    checkOS "$BuildOS" ""
+
+    checkArch "$HostArch" ""
+    checkVendor "$HostVendor"
+    checkOS "$HostOS" ""
+
+    checkArch "$TargetArch" "HaskellTargetArch"
+    checkVendor "$TargetVendor"
+    checkOS "$TargetOS" "HaskellTargetOs"
+
+    AC_SUBST(HaskellTargetArch)
+    AC_SUBST(HaskellTargetOs)
+    AC_SUBST(HaskellHaveSubsectionsViaSymbols)
+    AC_SUBST(HaskellHaveGnuNonexecStack)
+])
+
+
+# GET_ARM_ISA
+# ----------------------------------
+# Get info about the ISA on the Arm arch
+AC_DEFUN([GET_ARM_ISA],
+[
+    AC_COMPILE_IFELSE([
+        AC_LANG_PROGRAM(
+            [],
+            [#if defined(__ARM_ARCH_2__)  || \
+                 defined(__ARM_ARCH_3__)  || \
+                 defined(__ARM_ARCH_3M__) || \
+                 defined(__ARM_ARCH_4__)  || \
+                 defined(__ARM_ARCH_4T__) || \
+                 defined(__ARM_ARCH_5__)  || \
+                 defined(__ARM_ARCH_5T__) || \
+                 defined(__ARM_ARCH_5E__) || \
+                 defined(__ARM_ARCH_5TE__)
+                 return 0;
+             #else
+                 not pre arm v6
+             #endif]
+        )],
+        [AC_DEFINE(arm_HOST_ARCH_PRE_ARMv6, 1, [ARM pre v6])
+         AC_DEFINE(arm_HOST_ARCH_PRE_ARMv7, 1, [ARM pre v7])
+         changequote(, )dnl
+         ARM_ISA=ARMv5
+         ARM_ISA_EXT="[]"
+         changequote([, ])dnl
+        ],
+        [
+            AC_COMPILE_IFELSE([
+                AC_LANG_PROGRAM(
+                    [],
+                    [#if defined(__ARM_ARCH_6__)   || \
+                         defined(__ARM_ARCH_6J__)  || \
+                         defined(__ARM_ARCH_6T2__) || \
+                         defined(__ARM_ARCH_6Z__)  || \
+                         defined(__ARM_ARCH_6ZK__) || \
+                         defined(__ARM_ARCH_6M__)
+                         return 0;
+                     #else
+                         not pre arm v7
+                     #endif]
+                )],
+                [AC_DEFINE(arm_HOST_ARCH_PRE_ARMv7, 1, [ARM pre v7])
+                 changequote(, )dnl
+                 ARM_ISA=ARMv6
+                 ARM_ISA_EXT="[]"
+                 changequote([, ])dnl
+                ],
+                [changequote(, )dnl
+                 ARM_ISA=ARMv7
+                 ARM_ISA_EXT="[VFPv3, NEON]"
+                 changequote([, ])dnl
+                ])
+        ])
 ])
 
 
@@ -517,9 +757,12 @@ if test ! -f compiler/cmm/CmmLex.hs || test ! -f compiler/parser/Lexer.hs
 then
     FP_COMPARE_VERSIONS([$fptools_cv_alex_version],[-lt],[2.1.0],
       [AC_MSG_ERROR([Alex version 2.1.0 or later is required to compile GHC.])])[]
+    FP_COMPARE_VERSIONS([$fptools_cv_alex_version],[-ge],[3.0],
+      [Alex3=YES],[Alex3=NO])
 fi
 AlexVersion=$fptools_cv_alex_version;
 AC_SUBST(AlexVersion)
+AC_SUBST(Alex3)
 ])
 
 
@@ -586,6 +829,31 @@ else
 fi])
 AC_SUBST([LdIsGNULd], [`echo $fp_cv_gnu_ld | sed 'y/yesno/YESNO/'`])
 ])# FP_PROG_LD_IS_GNU
+
+
+# FP_PROG_LD_NO_COMPACT_UNWIND
+# ----------------------------
+
+# Sets the output variable LdHasNoCompactUnwind to YES if ld supports
+# -no_compact_unwind, or NO otherwise.
+AC_DEFUN([FP_PROG_LD_NO_COMPACT_UNWIND],
+[
+AC_CACHE_CHECK([whether ld understands -no_compact_unwind], [fp_cv_ld_no_compact_unwind],
+[echo 'foo() {}' > conftest.c
+${CC-cc} -c conftest.c
+if ${LdCmd} -r -no_compact_unwind -o conftest2.o conftest.o > /dev/null 2>&1; then
+   fp_cv_ld_no_compact_unwind=yes
+else
+   fp_cv_ld_no_compact_unwind=no
+fi
+rm -rf conftest*])
+if test "$fp_cv_ld_no_compact_unwind" = yes; then
+  LdHasNoCompactUnwind=YES
+else
+  LdHasNoCompactUnwind=NO
+fi
+AC_SUBST([LdHasNoCompactUnwind])
+])# FP_PROG_LD_NO_COMPACT_UNWIND
 
 
 # FP_PROG_AR
@@ -1493,6 +1761,9 @@ case "$1" in
   rs6000)
     $2="rs6000"
     ;;
+  s390x*)
+    $2="s390x"
+    ;;
   s390*)
     $2="s390"
     ;;
@@ -1570,13 +1841,59 @@ fi
 AC_SUBST($1)
 ])
 
-# LIBRARY_VERSION(lib)
+# LIBRARY_VERSION(lib, [dir])
 # --------------------------------
 # Gets the version number of a library.
 # If $1 is ghc-prim, then we define LIBRARY_ghc_prim_VERSION as 1.2.3
+# $2 points to the directory under libraries/
 AC_DEFUN([LIBRARY_VERSION],[
-LIBRARY_[]translit([$1], [-], [_])[]_VERSION=`grep -i "^version:" libraries/$1/$1.cabal | sed "s/.* //"`
+dir=m4_default([$2],[$1])
+LIBRARY_[]translit([$1], [-], [_])[]_VERSION=`grep -i "^version:" libraries/${dir}/$1.cabal | sed "s/.* //"`
 AC_SUBST(LIBRARY_[]translit([$1], [-], [_])[]_VERSION)
+])
+
+# XCODE_VERSION()
+# --------------------------------
+# Gets the version number of XCode, if on a Mac
+AC_DEFUN([XCODE_VERSION],[
+    if test "$TargetOS_CPP" = "darwin"
+    then
+        AC_MSG_CHECKING(XCode version)
+        XCodeVersion=`xcodebuild -version | grep Xcode | sed "s/Xcode //"`
+        # Old XCode versions don't actually give the XCode version
+        if test "$XCodeVersion" = ""
+        then
+            AC_MSG_RESULT(not found (too old?))
+            XCodeVersion1=0
+            XCodeVersion2=0
+        else
+            AC_MSG_RESULT($XCodeVersion)
+            XCodeVersion1=`echo "$XCodeVersion" | sed 's/\..*//'`
+            changequote(, )dnl
+            XCodeVersion2=`echo "$XCodeVersion" | sed 's/[^.]*\.\([^.]*\).*/\1/'`
+            changequote([, ])dnl
+            AC_MSG_NOTICE(XCode version component 1: $XCodeVersion1)
+            AC_MSG_NOTICE(XCode version component 2: $XCodeVersion2)
+        fi
+    fi
+])
+
+# FIND_GCC()
+# --------------------------------
+# Finds where gcc is
+AC_DEFUN([FIND_GCC],[
+    if test "$TargetOS_CPP" = "darwin" &&
+        test "$XCodeVersion1" -ge 4
+    then
+        # From Xcode 4, use 'gcc-4.2' to force the use of the gcc legacy
+        # backend (instead of the LLVM backend)
+        FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc-4.2])
+    else
+        FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc])
+    fi
+    export CC
+    WhatGccIsCalled="$CC"
+    AC_SUBST(WhatGccIsCalled)
 ])
 
 # LocalWords:  fi

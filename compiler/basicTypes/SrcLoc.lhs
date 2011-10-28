@@ -31,9 +31,6 @@ module SrcLoc (
 	srcLocLine,		-- return the line part
 	srcLocCol,		-- return the column part
 	
-	-- ** Misc. operations on SrcLoc
-	pprDefnLoc,
-
         -- * SrcSpan
 	RealSrcSpan,		-- Abstract
 	SrcSpan(..),
@@ -101,6 +98,7 @@ data RealSrcLoc
   = SrcLoc	FastString	-- A precise location (file name)
 		{-# UNPACK #-} !Int		-- line number, begins at 1
 		{-# UNPACK #-} !Int		-- column number, begins at 1
+  deriving Show
 
 data SrcLoc
   = RealSrcLoc {-# UNPACK #-}!RealSrcLoc
@@ -253,24 +251,16 @@ data RealSrcSpan
 	  srcSpanLine	  :: {-# UNPACK #-} !Int,
 	  srcSpanCol      :: {-# UNPACK #-} !Int
 	}
-#ifdef DEBUG
   deriving (Eq, Typeable, Show) -- Show is used by Lexer.x, becuase we
                                 -- derive Show for Token
-#else
-  deriving (Eq, Typeable)
-#endif
 
 data SrcSpan =
     RealSrcSpan !RealSrcSpan
   | UnhelpfulSpan !FastString	-- Just a general indication
 				-- also used to indicate an empty span
 
-#ifdef DEBUG
   deriving (Eq, Typeable, Show) -- Show is used by Lexer.x, becuase we
                                 -- derive Show for Token
-#else
-  deriving (Eq, Typeable)
-#endif
 
 -- | Built-in "bad" 'SrcSpan's for common sources of location uncertainty
 noSrcSpan, wiredInSrcSpan :: SrcSpan
@@ -481,10 +471,6 @@ pprUserRealSpan show_path (SrcSpanMultiLine src_path sline scol eline ecol)
 pprUserRealSpan show_path (SrcSpanPoint src_path line col)
   = hcat [ ppWhen show_path $ (pprFastFilePath src_path <> colon)
          , int line, char ':', int col ]
-
-pprDefnLoc :: RealSrcSpan -> SDoc
--- ^ Pretty prints information about the 'SrcSpan' in the style "defined at ..."
-pprDefnLoc loc = ptext (sLit "Defined at") <+> ppr loc
 \end{code}
 
 %************************************************************************

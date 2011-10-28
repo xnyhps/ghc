@@ -10,6 +10,7 @@
 module Coercion (
         -- * Main data type
         Coercion(..), Var, CoVar,
+        LCoercion,
 
         -- ** Deconstructing Kinds 
         kindFunResult, kindAppResult, synTyConResKind,
@@ -18,26 +19,25 @@ module Coercion (
         -- ** Predicates on Kinds
         isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
         isUbxTupleKind, isArgTypeKind, isKind, isTySuperKind, 
-        isSuperKind, isCoercionKind, 
+        isSuperKind, 
 	mkArrowKind, mkArrowKinds,
 
         isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind, eqKind,
         isSubKindCon,
 
-        mkCoType, coVarKind, coVarKind_maybe,
+        coVarKind, coVarKind_maybe,
         coercionType, coercionKind, coercionKinds, isReflCo,
+        mkCoercionType,
 
 	-- ** Constructing coercions
-        mkReflCo, mkCoVarCo,
+        mkReflCo, mkCoVarCo, mkEqVarLCo,
         mkAxInstCo, mkPiCo, mkPiCos,
         mkSymCo, mkTransCo, mkNthCo,
 	mkInstCo, mkAppCo, mkTyConAppCo, mkFunCo,
         mkForAllCo, mkUnsafeCo,
-        mkNewTypeCo, mkFamInstCo, 
-        mkPredCo,
+        mkNewTypeCo, mkFamInstCo,
 
         -- ** Decomposition
-        splitCoPredTy_maybe,
         splitNewTypeRepCo_maybe, instNewTyCon_maybe, decomposeCo,
         getCoVar_maybe,
 
@@ -74,8 +74,7 @@ module Coercion (
         pprCo, pprParendCo, pprCoAxiom,
 
         -- * Other
-        applyCo, coVarPred
-        
+        applyCo
        ) where 
 
 #include "HsVersions.h"
@@ -85,21 +84,19 @@ import TypeRep
 import qualified Type
 import Type hiding( substTy, substTyVarBndr, extendTvSubst )
 import Kind
-import Class	( classTyCon )
 import TyCon
 import Var
 import VarEnv
 import VarSet
 import Maybes	( orElse )
 import Name	( Name, NamedThing(..), nameUnique )
-import OccName 	( isSymOcc )
+import OccName 	( parenSymOcc )
 import Util
 import BasicTypes
 import Outputable
 import Unique
 import Pair
-import TysPrim		( eqPredPrimTyCon )
-import PrelNames	( funTyConKey )
+import PrelNames	( funTyConKey, eqPrimTyConKey )
 import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import Control.Arrow (second)
@@ -155,6 +152,24 @@ data Coercion
   | NthCo Int Coercion          -- Zero-indexed
   | InstCo Coercion Type
   deriving (Data.Data, Data.Typeable)
+\end{code}
+
+\begin{code}
+-- Note [LCoercions]
+-- ~~~~~~~~~~~~~~~~~
+-- | LCoercions are a hack used by the typechecker. Normally,
+-- Coercions have free variables of type (a ~# b): we call these
+-- CoVars. However, the type checker passes around equality evidence
+-- (boxed up) at type (a ~ b).
+--
+-- An LCoercion is simply a Coercion whose free variables have the
+-- boxed type (a ~ b). After we are done with typechecking the
+-- desugarer finds the free variables, unboxes them, and creates a
+-- resulting real Coercion with kosher free variables.
+--
+-- We can use most of the Coercion "smart constructors" to build LCoercions. However,
+-- mkCoVarCo will not work! The equivalent is mkEqVarLCo.
+type LCoercion = Coercion
 \end{code}
 
 Note [Refl invariant]
@@ -279,7 +294,9 @@ isCoVar :: Var -> Bool
 isCoVar v = isCoVarType (varType v)
 
 isCoVarType :: Type -> Bool
-isCoVarType = isEqPredTy
+isCoVarType ty 	    -- Tests for t1 ~# t2, the unboxed equality
+  | Just tc <- tyConAppTyCon_maybe ty = tc `hasKey` eqPrimTyConKey
+  | otherwise                         = False
 \end{code}
 
 
@@ -364,9 +381,7 @@ ppr_co p (AppCo co1 co2)    = maybeParen p TyConPrec $
 
 ppr_co p co@(ForAllCo {}) = ppr_forall_co p co
 
-ppr_co _ (CoVarCo cv)
-  | isSymOcc (getOccName cv) = parens (ppr cv)
-  | otherwise                = ppr cv
+ppr_co _ (CoVarCo cv)     = parenSymOcc (getOccName cv) (ppr cv)
 
 ppr_co p (AxiomInstCo con cos) = pprTypeNameApp p ppr_co (getName con) cos
 
@@ -458,13 +473,6 @@ splitForAllCo_maybe _                = Nothing
 -------------------------------------------------------
 -- and some coercion kind stuff
 
-coVarPred :: CoVar -> PredType
-coVarPred cv
-  = ASSERT( isCoVar cv )
-    case splitPredTy_maybe (varType cv) of
-	Just pred -> pred
-	other	  -> pprPanic "coVarPred" (ppr cv $$ ppr other)
-
 coVarKind :: CoVar -> (Type,Type) 
 -- c :: t1 ~ t2
 coVarKind cv = case coVarKind_maybe cv of
@@ -472,21 +480,14 @@ coVarKind cv = case coVarKind_maybe cv of
                  Nothing -> pprPanic "coVarKind" (ppr cv $$ ppr (tyVarKind cv))
 
 coVarKind_maybe :: CoVar -> Maybe (Type,Type) 
-coVarKind_maybe cv = splitEqPredTy_maybe (varType cv)
+coVarKind_maybe cv = case splitTyConApp_maybe (varType cv) of
+  Just (tc, [ty1, ty2]) | tc `hasKey` eqPrimTyConKey -> Just (ty1, ty2)
+  _ -> Nothing
 
 -- | Makes a coercion type from two types: the types whose equality 
 -- is proven by the relevant 'Coercion'
-mkCoType :: Type -> Type -> Type
-mkCoType ty1 ty2 = PredTy (EqPred ty1 ty2)
-
-splitCoPredTy_maybe :: Type -> Maybe (Type, Type, Type)
-splitCoPredTy_maybe ty
-  | Just (cv,r) <- splitForAllTy_maybe ty
-  , isCoVar cv
-  , Just (s,t) <- coVarKind_maybe cv
-  = Just (s,t,r)
-  | otherwise
-  = Nothing
+mkCoercionType :: Type -> Type -> Type
+mkCoercionType = curry mkPrimEqType
 
 isReflCo :: Coercion -> Bool
 isReflCo (Refl {}) = True
@@ -510,6 +511,15 @@ mkCoVarCo cv
   | otherwise        = CoVarCo cv
   where
     (ty1, ty2) = ASSERT( isCoVar cv ) coVarKind cv
+
+mkEqVarLCo :: EqVar -> LCoercion
+mkEqVarLCo ipv
+  | ty1 `eqType` ty2 = Refl ty1
+  | otherwise        = CoVarCo ipv
+  where
+    (ty1, ty2) = case getEqPredTys_maybe (varType ipv) of
+        Nothing  -> pprPanic "mkCoVarLCo" (ppr ipv)
+        Just tys -> tys
 
 mkReflCo :: Type -> Coercion
 mkReflCo = Refl
@@ -561,12 +571,6 @@ mkForAllCo :: Var -> Coercion -> Coercion
 -- note that a TyVar should be used here, not a CoVar (nor a TcTyVar)
 mkForAllCo tv (Refl ty) = ASSERT( isTyVar tv ) Refl (mkForAllTy tv ty)
 mkForAllCo tv  co       = ASSERT ( isTyVar tv ) ForAllCo tv co
-
-mkPredCo :: Pred Coercion -> Coercion
--- See Note [Predicate coercions]
-mkPredCo (EqPred co1 co2) = mkTyConAppCo eqPredPrimTyCon [co1,co2]
-mkPredCo (ClassP cls cos) = mkTyConAppCo (classTyCon cls) cos
-mkPredCo (IParam _ co)    = co
 
 -------------------------------
 
@@ -916,7 +920,6 @@ ty_co_subst subst ty
     go (ForAllTy v ty)   = mkForAllCo v' $! (ty_co_subst subst' ty)
                          where
                            (subst', v') = liftCoSubstTyVarBndr subst v
-    go (PredTy p)        = mkPredCo (go <$> p)
 
 liftCoSubstTyVar :: LiftCoSubst -> TyVar -> Maybe Coercion
 liftCoSubstTyVar (LCS _ cenv) tv = lookupVarEnv cenv tv 
@@ -1043,7 +1046,7 @@ seqCos (co:cos) = seqCo co `seq` seqCos cos
 \begin{code}
 coercionType :: Coercion -> Type
 coercionType co = case coercionKind co of
-                    Pair ty1 ty2 -> mkCoType ty1 ty2
+                    Pair ty1 ty2 -> mkCoercionType ty1 ty2
 
 ------------------
 -- | If it is the case that
@@ -1073,7 +1076,7 @@ coercionKinds :: [Coercion] -> Pair [Type]
 coercionKinds tys = sequenceA $ map coercionKind tys
 
 getNth :: Int -> Type -> Type
-getNth n ty | Just (_, tys) <- splitTyConApp_maybe ty
+getNth n ty | Just tys <- tyConAppArgs_maybe ty
             = ASSERT2( n < length tys, ppr n <+> ppr tys ) tys !! n
 getNth n ty = pprPanic "getNth" (ppr n <+> ppr ty)
 \end{code}

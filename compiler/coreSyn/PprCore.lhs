@@ -14,6 +14,7 @@ module PprCore (
 
 import CoreSyn
 import CostCentre
+import Literal( pprLiteral )
 import Var
 import Id
 import IdInfo
@@ -93,8 +94,8 @@ ppr_binding (val_bdr, expr)
 \end{code}
 
 \begin{code}
-pprParendExpr   expr = ppr_expr parens expr
-pprCoreExpr expr = ppr_expr noParens expr
+pprParendExpr expr = ppr_expr parens expr
+pprCoreExpr   expr = ppr_expr noParens expr
 
 noParens :: SDoc -> SDoc
 noParens pp = pp
@@ -105,12 +106,10 @@ ppr_expr :: OutputableBndr b => (SDoc -> SDoc) -> Expr b -> SDoc
 	-- The function adds parens in context that need
 	-- an atomic value (e.g. function args)
 
-ppr_expr add_par (Type ty) = add_par (ptext (sLit "TYPE") <+> ppr ty)	-- Wierd
-
+ppr_expr _       (Var name)    = ppr name
+ppr_expr add_par (Type ty)     = add_par (ptext (sLit "TYPE") <+> ppr ty)	-- Wierd
 ppr_expr add_par (Coercion co) = add_par (ptext (sLit "CO") <+> ppr co)
-	           
-ppr_expr _       (Var name) = ppr name
-ppr_expr _       (Lit lit)  = ppr lit
+ppr_expr add_par (Lit lit)     = pprLiteral add_par lit
 
 ppr_expr add_par (Cast expr co) 
   = add_par $
@@ -142,7 +141,7 @@ ppr_expr add_par expr@(App {})
 			-- Notice that we print the *worker*
 			-- for tuples in paren'd format.
 		   Just dc | saturated && isTupleTyCon tc
-			   -> tupleParens (tupleTyConBoxity tc) pp_tup_args
+			   -> tupleParens (tupleTyConSort tc) pp_tup_args
 			   where
 			     tc	       = dataConTyCon dc
 			     saturated = val_args `lengthIs` idArity f
@@ -241,7 +240,7 @@ pprCoreAlt (con, args, rhs)
 ppr_case_pat :: OutputableBndr a => AltCon -> [a] -> SDoc
 ppr_case_pat (DataAlt dc) args
   | isTupleTyCon tc
-  = tupleParens (tupleTyConBoxity tc) (fsep (punctuate comma (map ppr_bndr args)))
+  = tupleParens (tupleTyConSort tc) (fsep (punctuate comma (map ppr_bndr args)))
   where
     ppr_bndr = pprBndr CaseBind
     tc = dataConTyCon dc
@@ -473,8 +472,14 @@ pprRule (Rule { ru_name = name, ru_act = act, ru_fn = fn,
 
 \begin{code}
 instance Outputable CoreVect where
-  ppr (Vect   var Nothing)  = ptext (sLit "VECTORISE SCALAR") <+> ppr var
-  ppr (Vect   var (Just e)) = hang (ptext (sLit "VECTORISE") <+> ppr var <+> char '=')
-                                4 (pprCoreExpr e)
-  ppr (NoVect var)          = ptext (sLit "NOVECTORISE") <+> ppr var
+  ppr (Vect     var Nothing)         = ptext (sLit "VECTORISE SCALAR") <+> ppr var
+  ppr (Vect     var (Just e))        = hang (ptext (sLit "VECTORISE") <+> ppr var <+> char '=')
+                                         4 (pprCoreExpr e)
+  ppr (NoVect   var)                 = ptext (sLit "NOVECTORISE") <+> ppr var
+  ppr (VectType False var Nothing)   = ptext (sLit "VECTORISE type") <+> ppr var
+  ppr (VectType True  var Nothing)   = ptext (sLit "VECTORISE SCALAR type") <+> ppr var
+  ppr (VectType False var (Just tc)) = ptext (sLit "VECTORISE type") <+> ppr var <+> char '=' <+>
+                                       ppr tc
+  ppr (VectType True var (Just tc))  = ptext (sLit "VECTORISE SCALAR type") <+> ppr var <+>
+                                       char '=' <+> ppr tc
 \end{code}

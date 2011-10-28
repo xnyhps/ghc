@@ -43,17 +43,17 @@ import Control.Monad
 \begin{code}
 tcProc :: InPat Name -> LHsCmdTop Name		-- proc pat -> expr
        -> TcRhoType				-- Expected type of whole proc expression
-       -> TcM (OutPat TcId, LHsCmdTop TcId, Coercion)
+       -> TcM (OutPat TcId, LHsCmdTop TcId, LCoercion)
 
 tcProc pat cmd exp_ty
   = newArrowScope $
-    do	{ (coi, (exp_ty1, res_ty)) <- matchExpectedAppTy exp_ty 
-	; (coi1, (arr_ty, arg_ty)) <- matchExpectedAppTy exp_ty1
+    do	{ (co, (exp_ty1, res_ty)) <- matchExpectedAppTy exp_ty 
+	; (co1, (arr_ty, arg_ty)) <- matchExpectedAppTy exp_ty1
 	; let cmd_env = CmdEnv { cmd_arr = arr_ty }
         ; (pat', cmd') <- tcPat ProcExpr pat arg_ty $
 			  tcCmdTop cmd_env cmd [] res_ty
-        ; let res_coi = mkTransCo coi (mkAppCo coi1 (mkReflCo res_ty))
-        ; return (pat', cmd', res_coi) }
+        ; let res_co = mkTransCo co (mkAppCo co1 (mkReflCo res_ty))
+        ; return (pat', cmd', res_co) }
 \end{code}
 
 
@@ -119,17 +119,28 @@ tc_cmd env in_cmd@(HsCase scrut matches) (stk, res_ty)
                       mc_body = mc_body }
     mc_body body res_ty' = tcCmd env body (stk, res_ty')
 
-tc_cmd env (HsIf mb_fun pred b1 b2) (stack_ty,res_ty)
+tc_cmd env (HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
+  = do  { pred' <- tcMonoExpr pred boolTy
+        ; b1'   <- tcCmd env b1 res_ty
+        ; b2'   <- tcCmd env b2 res_ty
+        ; return (HsIf Nothing pred' b1' b2')
+    }
+
+tc_cmd env (HsIf (Just fun) pred b1 b2) res_ty -- Rebindable syntax for if
   = do 	{ pred_ty <- newFlexiTyVarTy openTypeKind
-	; b_ty <- newFlexiTyVarTy openTypeKind
-        ; let if_ty = mkFunTys [pred_ty, b_ty, b_ty] res_ty
-	; mb_fun' <- case mb_fun of 
-              Nothing  -> return Nothing
-              Just fun -> liftM Just (tcSyntaxOp IfOrigin fun if_ty)
+        -- For arrows, need ifThenElse :: forall r. T -> r -> r -> r
+        -- because we're going to apply it to the environment, not
+        -- the return value.
+        ; [r_tv] <- tcInstSkolTyVars [alphaTyVar]
+	; let r_ty = mkTyVarTy r_tv
+        ; let if_ty = mkFunTys [pred_ty, r_ty, r_ty] r_ty
+        ; checkTc (not (r_tv `elemVarSet` tyVarsOfType pred_ty))
+                  (ptext (sLit "Predicate type of `ifThenElse' depends on result type"))
+	; fun'  <- tcSyntaxOp IfOrigin fun if_ty
   	; pred' <- tcMonoExpr pred pred_ty
-	; b1'   <- tcCmd env b1 (stack_ty,b_ty)
-	; b2'   <- tcCmd env b2 (stack_ty,b_ty)
-	; return (HsIf mb_fun' pred' b1' b2')
+	; b1'   <- tcCmd env b1 res_ty
+	; b2'   <- tcCmd env b2 res_ty
+	; return (HsIf (Just fun') pred' b1' b2')
     }
 
 -------------------------------------------

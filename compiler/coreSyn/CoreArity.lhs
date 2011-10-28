@@ -283,6 +283,23 @@ should diverge, but it'll converge if we eta-expand f.  Nevertheless, we
 do so; it improves some programs significantly, and increasing convergence
 isn't a bad thing.  Hence the ABot/ATop in ArityType.
 
+However, this really isn't always the Right Thing, and we have several
+tickets reporting unexpected bahaviour resulting from this
+transformation.  So we try to limit it as much as possible:
+
+ * Do NOT move a lambda outside a known-bottom case expression
+      case undefined of { (a,b) -> \y -> e }
+   This showed up in Trac #5557
+
+ * Do NOT move a lambda outside a case if all the branches of 
+   the case are known to return bottom.
+      case x of { (a,b) -> \y -> error "urk" }
+   This case is less important, but the idea is that if the fn is 
+   going to diverge eventually anyway then getting the best arity 
+   isn't an issue, so we might as well play safe
+
+Of course both these are readily defeated by disguising the bottoms.
+
 4. Note [Newtype arity]
 ~~~~~~~~~~~~~~~~~~~~~~~~
 Non-recursive newtypes are transparent, and should not get in the way.
@@ -535,6 +552,16 @@ type CheapFun = CoreExpr -> Maybe Type -> Bool
 	-- of the expression; Nothing means "don't know"
 
 arityType :: CheapFun -> CoreExpr -> ArityType
+arityType cheap_fn (Note n e) 
+  | notSccNote n              = arityType cheap_fn e
+arityType cheap_fn (Cast e co) 
+  = arityType cheap_fn e
+    `andArityType` ATop (typeArity (pSnd (coercionKind co)))
+    -- See Note [exprArity invariant]; must be true of
+    -- arityType too, since that is how we compute the arity
+    -- of variables, and they in turn affect result of exprArity
+    -- Trac #5441 is a nice demo
+
 arityType _ (Var v)
   | isBotRes res = ABot arity
   | otherwise    = ATop (take arity one_shots)
@@ -563,9 +590,20 @@ arityType cheap_fn (App fun arg )
 	--  ===>
 	--	f x y = case x of { (a,b) -> e }
 	-- The difference is observable using 'seq'
-arityType cheap_fn (Case scrut bndr _ alts)
-  = floatIn (cheap_fn scrut (Just (idType bndr)))
-	    (foldr1 andArityType [arityType cheap_fn rhs | (_,_,rhs) <- alts])
+	--
+arityType cheap_fn (Case scrut _ _ alts)
+  | exprIsBottom scrut 
+  = ABot 0     -- Do not eta expand
+               -- See Note [Dealing with bottom]
+  | otherwise
+  = case alts_type of
+     ABot n  | n>0       -> ATop []    -- Don't eta expand 
+     	     | otherwise -> ABot 0     -- if RHS is bottomming
+    			               -- See Note [Dealing with bottom]
+     ATop as | exprIsTrivial scrut -> ATop as
+             | otherwise           -> ATop (takeWhile id as)	    
+  where
+    alts_type = foldr1 andArityType [arityType cheap_fn rhs | (_,_,rhs) <- alts]
 
 arityType cheap_fn (Let b e) 
   = floatIn (cheap_bind b) (arityType cheap_fn e)
@@ -574,9 +612,6 @@ arityType cheap_fn (Let b e)
     cheap_bind (Rec prs)    = all is_cheap prs
     is_cheap (b,e) = cheap_fn e (Just (idType b))
 
-arityType cheap_fn (Note n e) 
-  | notSccNote n              = arityType cheap_fn e
-arityType cheap_fn (Cast e _) = arityType cheap_fn e
 arityType _           _       = vanillaArityType
 \end{code}
   
@@ -614,7 +649,6 @@ We may have to sandwich some coerces between the lambdas
 to make the types work.   exprEtaExpandArity looks through coerces
 when computing arity; and etaExpand adds the coerces as necessary when
 actually computing the expansion.
-
 
 Note [No crap in eta-expanded code]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -35,6 +35,7 @@ module HsDecls (
   SpliceDecl(..),
   -- ** Foreign function interface declarations
   ForeignDecl(..), LForeignDecl, ForeignImport(..), ForeignExport(..),
+  noForeignImportCoercionYet, noForeignExportCoercionYet,
   CImportSpec(..),
   -- ** Data-constructor declarations
   ConDecl(..), LConDecl, ResType(..), 
@@ -59,9 +60,12 @@ import HsBinds
 import HsPat
 import HsTypes
 import HsDoc
+import TyCon
 import NameSet
+import Name
 import {- Kind parts of -} Type
 import BasicTypes
+import Coercion
 import ForeignCall
 
 -- others:
@@ -71,8 +75,9 @@ import Util
 import SrcLoc
 import FastString
 
+import Bag
 import Control.Monad    ( liftM )
-import Data.Data
+import Data.Data        hiding (TyCon)
 import Data.Maybe       ( isJust )
 \end{code}
 
@@ -452,13 +457,8 @@ data TyClDecl name
 		tcdLName  :: Located name,	 	-- ^ Type constructor
 
 		tcdTyVars :: [LHsTyVarBndr name], 	-- ^ Type variables
-			
-		tcdTyPats :: Maybe [LHsType name],
-                        -- ^ Type patterns.
-                        --
-			-- @Just [t1..tn]@ for @data instance T t1..tn = ...@
-			--	in this case @tcdTyVars = fv( tcdTyPats )@.
-			-- @Nothing@ for everything else.
+		tcdTyPats :: Maybe [LHsType name],      -- ^ Type patterns.
+                  -- See Note [tcdTyVars and tcdTyPats] 
 
 		tcdKindSig:: Maybe Kind,
                         -- ^ Optional kind signature.
@@ -489,8 +489,7 @@ data TyClDecl name
   | TySynonym {	tcdLName  :: Located name,	        -- ^ type constructor
 		tcdTyVars :: [LHsTyVarBndr name],	-- ^ type variables
 		tcdTyPats :: Maybe [LHsType name],	-- ^ Type patterns
-			-- See comments for tcdTyPats in TyData
-			-- 'Nothing' => vanilla type synonym
+                  -- See Note [tcdTyVars and tcdTyPats] 
 
 		tcdSynRhs :: LHsType name	        -- ^ synonym expansion
     }
@@ -502,9 +501,9 @@ data TyClDecl name
 		tcdSigs    :: [LSig name],		-- ^ Methods' signatures
 		tcdMeths   :: LHsBinds name,		-- ^ Default methods
 		tcdATs	   :: [LTyClDecl name],		-- ^ Associated types; ie
-							--   only 'TyFamily' and
-							--   'TySynonym'; the
-                                                        --   latter for defaults
+							--   only 'TyFamily'
+                tcdATDefs  :: [LTyClDecl name],         -- ^ Associated type defaults; ie
+                                                        --   only 'TySynonym'
 		tcdDocs    :: [LDocDecl]		-- ^ Haddock docs
     }
   deriving (Data, Typeable)
@@ -520,6 +519,31 @@ data FamilyFlavour
   deriving (Data, Typeable)
 \end{code}
 
+Note [tcdTyVars and tcdTyPats] 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We use TyData and TySynonym both for vanilla data/type declarations
+     type T a = Int
+AND for data/type family instance declarations
+     type instance F [a] = (a,Int)
+
+tcdTyPats = Nothing
+   This is a vanilla data type or type synonym
+   tcdTyVars are the quantified type variables
+
+tcdTyPats = Just tys
+   This is a data/type family instance declaration
+   tcdTyVars are fv(tys)
+
+   Eg   class C a b where
+          type F a x :: *
+        instance D p s => C (p,q) [r] where
+          type F (p,q) x = p -> x
+   The tcdTyVars of the F instance decl are {p,q,x},
+   i.e. not including s, nor r 
+        (and indeed neither s nor should be mentioned
+         on the RHS of the F instance decl; Trac #5515)
+
+------------------------------
 Simple classifiers
 
 \begin{code}
@@ -631,23 +655,21 @@ instance OutputableBndr name
 	ppr_sigx (Just kind) = dcolon <+> pprKind kind
 
     ppr (ClassDecl {tcdCtxt = context, tcdLName = lclas, tcdTyVars = tyvars, 
-		    tcdFDs  = fds, 
-		    tcdSigs = sigs, tcdMeths = methods, tcdATs = ats})
-      | null sigs && null ats  -- No "where" part
+		    tcdFDs  = fds,
+                    tcdSigs = sigs, tcdMeths = methods,
+                    tcdATs = ats, tcdATDefs = at_defs})
+      | null sigs && isEmptyBag methods && null ats && null at_defs -- No "where" part
       = top_matter
 
       | otherwise	-- Laid out
-      = sep [hsep [top_matter, ptext (sLit "where {")],
-	     nest 4 (sep [ sep (map ppr_semi ats)
-			 , sep (map ppr_semi sigs)
-			 , pprLHsBinds methods
-			 , char '}'])]
+      = vcat [ top_matter <+> ptext (sLit "where")
+	     , nest 2 $ pprDeclList (map ppr ats ++
+                                     map ppr at_defs ++
+			             pprLHsBindsForUser methods sigs) ]
       where
-        top_matter    =     ptext (sLit "class") 
-		        <+> pp_decl_head (unLoc context) lclas tyvars Nothing
-		        <+> pprFundeps (map unLoc fds)
-        ppr_semi :: Outputable a => a -> SDoc
-	ppr_semi decl = ppr decl <> semi
+        top_matter = ptext (sLit "class") 
+		     <+> pp_decl_head (unLoc context) lclas tyvars Nothing
+		     <+> pprFundeps (map unLoc fds)
 
 pp_decl_head :: OutputableBndr name
    => HsContext name
@@ -816,12 +838,16 @@ data InstDecl name
   deriving (Data, Typeable)
 
 instance (OutputableBndr name) => Outputable (InstDecl name) where
+    ppr (InstDecl inst_ty binds sigs ats)
+      | null sigs && null ats && isEmptyBag binds  -- No "where" part
+      = top_matter
 
-    ppr (InstDecl inst_ty binds uprags ats)
-      = vcat [hsep [ptext (sLit "instance"), ppr inst_ty, ptext (sLit "where")]
-             , nest 4 $ vcat (map ppr ats)
- 	     , nest 4 $ vcat (map ppr uprags)
-	     , nest 4 $ pprLHsBinds binds ]
+      | otherwise	-- Laid out
+      = vcat [ top_matter <+> ptext (sLit "where")
+             , nest 2 $ pprDeclList (map ppr ats ++
+	                             pprLHsBindsForUser binds sigs) ]
+      where
+        top_matter = ptext (sLit "instance") <+> ppr inst_ty
 
 -- Extract the declarations of associated types from an instance
 --
@@ -887,9 +913,31 @@ instance (OutputableBndr name)
 type LForeignDecl name = Located (ForeignDecl name)
 
 data ForeignDecl name
-  = ForeignImport (Located name) (LHsType name) ForeignImport  -- defines name
-  | ForeignExport (Located name) (LHsType name) ForeignExport  -- uses name
+  = ForeignImport (Located name) -- defines this name
+                  (LHsType name) -- sig_ty
+                  Coercion       -- rep_ty ~ sig_ty
+                  ForeignImport
+  | ForeignExport (Located name) -- uses this name
+                  (LHsType name) -- sig_ty
+                  Coercion       -- sig_ty ~ rep_ty
+                  ForeignExport
   deriving (Data, Typeable)
+{-
+    In both ForeignImport and ForeignExport:
+        sig_ty is the type given in the Haskell code
+        rep_ty is the representation for this type, i.e. with newtypes
+               coerced away and type functions evaluated.
+    Thus if the declaration is valid, then rep_ty will only use types
+    such as Int and IO that we know how to make foreign calls with.
+-}
+
+noForeignImportCoercionYet :: Coercion
+noForeignImportCoercionYet
+    = panic "ForeignImport coercion evaluated before typechecking"
+
+noForeignExportCoercionYet :: Coercion
+noForeignExportCoercionYet
+    = panic "ForeignExport coercion evaluated before typechecking"
 
 -- Specification Of an imported external entity in dependence on the calling
 -- convention 
@@ -932,10 +980,10 @@ data ForeignExport = CExport  CExportSpec    -- contains the calling convention
 --
 
 instance OutputableBndr name => Outputable (ForeignDecl name) where
-  ppr (ForeignImport n ty fimport) =
+  ppr (ForeignImport n ty _ fimport) =
     hang (ptext (sLit "foreign import") <+> ppr fimport <+> ppr n)
        2 (dcolon <+> ppr ty)
-  ppr (ForeignExport n ty fexport) =
+  ppr (ForeignExport n ty _ fexport) =
     hang (ptext (sLit "foreign export") <+> ppr fexport <+> ppr n)
        2 (dcolon <+> ppr ty)
 
@@ -1014,19 +1062,10 @@ A vectorisation pragma, one of
   {-# VECTORISE f = closure1 g (scalar_map g) #-}
   {-# VECTORISE SCALAR f #-}
   {-# NOVECTORISE f #-}
+
+  {-# VECTORISE type T = ty #-}
+  {-# VECTORISE SCALAR type T #-}
   
-Note [Typechecked vectorisation pragmas]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In case of the first variant of vectorisation pragmas (with an explicit expression),
-we need to infer the type of that expression during type checking and then keep that type
-around until vectorisation, so that it can be checked against the *vectorised* type of 'f'.
-(We cannot determine vectorised types during type checking due to internal information of
-the vectoriser being needed.)
-
-To this end, we annotate the 'Id' of 'f' (the variable mentioned in the PRAGMA) with the
-inferred type of the expression.  This is slightly dodgy, as this is really the type of
-'$v_f' (the name of the vectorised function).
-
 \begin{code}
 type LVectDecl name = Located (VectDecl name)
 
@@ -1036,11 +1075,21 @@ data VectDecl name
       (Maybe (LHsExpr name))    -- 'Nothing' => SCALAR declaration
   | HsNoVect
       (Located name)
+  | HsVectTypeIn                -- pre type-checking
+      Bool                      -- 'TRUE' => SCALAR declaration
+      (Located name)
+      (Maybe (Located name))    -- 'Nothing' => no right-hand side
+  | HsVectTypeOut               -- post type-checking
+      Bool                      -- 'TRUE' => SCALAR declaration
+      TyCon
+      (Maybe TyCon)             -- 'Nothing' => no right-hand side
   deriving (Data, Typeable)
 
-lvectDeclName :: LVectDecl name -> name
-lvectDeclName (L _ (HsVect   (L _ name) _)) = name
-lvectDeclName (L _ (HsNoVect (L _ name)))   = name
+lvectDeclName :: NamedThing name => LVectDecl name -> Name
+lvectDeclName (L _ (HsVect        (L _ name) _))   = getName name
+lvectDeclName (L _ (HsNoVect      (L _ name)))     = getName name
+lvectDeclName (L _ (HsVectTypeIn  _ (L _ name) _)) = getName name
+lvectDeclName (L _ (HsVectTypeOut _ tycon _))      = getName tycon
 
 instance OutputableBndr name => Outputable (VectDecl name) where
   ppr (HsVect v Nothing)
@@ -1051,6 +1100,22 @@ instance OutputableBndr name => Outputable (VectDecl name) where
              pprExpr (unLoc rhs) <+> text "#-}" ]
   ppr (HsNoVect v)
     = sep [text "{-# NOVECTORISE" <+> ppr v <+> text "#-}" ]
+  ppr (HsVectTypeIn False t Nothing)
+    = sep [text "{-# VECTORISE type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeIn False t (Just t'))
+    = sep [text "{-# VECTORISE type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeIn True t Nothing)
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeIn True t (Just t'))
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeOut False t Nothing)
+    = sep [text "{-# VECTORISE type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeOut False t (Just t'))
+    = sep [text "{-# VECTORISE type" <+> ppr t, text "=", ppr t', text "#-}" ]
+  ppr (HsVectTypeOut True t Nothing)
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t <+> text "#-}" ]
+  ppr (HsVectTypeOut True t (Just t'))
+    = sep [text "{-# VECTORISE SCALAR type" <+> ppr t, text "=", ppr t', text "#-}" ]
 \end{code}
 
 %************************************************************************

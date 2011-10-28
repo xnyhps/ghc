@@ -10,6 +10,7 @@ module Specialise ( specProgram ) where
 
 import Id
 import TcType
+import Type
 import CoreMonad
 import CoreSubst 
 import CoreUnfold
@@ -1577,7 +1578,7 @@ mkCallUDs f args
     _trace_doc = vcat [ppr f, ppr args, ppr n_tyvars, ppr n_dicts
                       , ppr (map interestingDict dicts)]
     (tyvars, theta, _) = tcSplitSigmaTy (idType f)
-    constrained_tyvars = tyVarsOfTheta theta 
+    constrained_tyvars = tyVarsOfTypes theta 
     n_tyvars	       = length tyvars
     n_dicts	       = length theta
 

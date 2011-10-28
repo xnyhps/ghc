@@ -32,9 +32,10 @@ import RdrHsSyn
 import HscTypes		( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
+import TysPrim		( eqPrimTyCon )
 import TysWiredIn	( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
 			  unboxedSingletonTyCon, unboxedSingletonDataCon,
-			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR )
+			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR, eqTyCon_RDR )
 import Type		( funTyCon )
 import ForeignCall	( Safety(..), CExportSpec(..), CLabelString,
 			  CCallConv(..), CCallTarget(..), defaultCCallConv
@@ -278,6 +279,7 @@ incorrect.
  '->'		{ L _ ITrarrow }
  '@'		{ L _ ITat }
  '~'		{ L _ ITtilde }
+ '~#'		{ L _ ITtildehsh }
  '=>'		{ L _ ITdarrow }
  '-'		{ L _ ITminus }
  '!'		{ L _ ITbang }
@@ -504,7 +506,11 @@ importdecls :: { [LImportDecl RdrName] }
 
 importdecl :: { LImportDecl RdrName }
 	: 'import' maybe_src maybe_safe optqualified maybe_pkg modid maybeas maybeimpspec 
-		{ L (comb4 $1 $6 $7 $8) (ImportDecl $6 $5 $2 $3 $4 (unLoc $7) (unLoc $8)) }
+		{ L (comb4 $1 $6 $7 $8) $
+                  ImportDecl { ideclName = $6, ideclPkgQual = $5
+                             , ideclSource = $2, ideclSafe = $3
+                             , ideclQualified = $4, ideclImplicit = False
+                             , ideclAs = unLoc $7, ideclHiding = unLoc $8 } }
 
 maybe_src :: { IsBootInterface }
 	: '{-# SOURCE' '#-}'			{ True }
@@ -559,8 +565,8 @@ topdecls :: { OrdList (LHsDecl RdrName) }
         | topdecl                               { $1 }
 
 topdecl :: { OrdList (LHsDecl RdrName) }
-        : cl_decl                       { unitOL (L1 (TyClD (unLoc $1))) }
-        | ty_decl                       { unitOL (L1 (TyClD (unLoc $1))) }
+        : cl_decl                               { unitOL (L1 (TyClD (unLoc $1))) }
+        | ty_decl                               { unitOL (L1 (TyClD (unLoc $1))) }
         | 'instance' inst_type where_inst
             { let (binds, sigs, ats, _) = cvBindsAndSigs (unLoc $3)
               in 
@@ -571,9 +577,18 @@ topdecl :: { OrdList (LHsDecl RdrName) }
         | '{-# DEPRECATED' deprecations '#-}'   { $2 }
         | '{-# WARNING' warnings '#-}'          { $2 }
         | '{-# RULES' rules '#-}'               { $2 }
-        | '{-# VECTORISE_SCALAR' qvar '#-}'     { unitOL $ LL $ VectD (HsVect   $2 Nothing) }
-        | '{-# VECTORISE' qvar '=' exp '#-}'    { unitOL $ LL $ VectD (HsVect   $2 (Just $4)) }
-        | '{-# NOVECTORISE' qvar '#-}'     			{ unitOL $ LL $ VectD (HsNoVect $2) }
+        | '{-# VECTORISE_SCALAR' qvar '#-}'     { unitOL $ LL $ VectD (HsVect       $2 Nothing) }
+        | '{-# VECTORISE' qvar '=' exp '#-}'    { unitOL $ LL $ VectD (HsVect       $2 (Just $4)) }
+        | '{-# NOVECTORISE' qvar '#-}'          { unitOL $ LL $ VectD (HsNoVect     $2) }
+        | '{-# VECTORISE' 'type' gtycon '#-}'     
+                                                { unitOL $ LL $ 
+                                                    VectD (HsVectTypeIn False $3 Nothing) }
+        | '{-# VECTORISE_SCALAR' 'type' gtycon '#-}'     
+                                                { unitOL $ LL $ 
+                                                    VectD (HsVectTypeIn True $3 Nothing) }
+        | '{-# VECTORISE' 'type' gtycon '=' gtycon '#-}'     
+                                                { unitOL $ LL $ 
+                                                    VectD (HsVectTypeIn False $3 (Just $5)) }
         | annotation { unitOL $1 }
         | decl                                  { unLoc $1 }
 
@@ -959,7 +974,7 @@ ctype	:: { LHsType RdrName }
 	: 'forall' tv_bndrs '.' ctype	{ LL $ mkExplicitHsForAllTy $2 (noLoc []) $4 }
 	| context '=>' ctype		{ LL $ mkImplicitHsForAllTy   $1 $3 }
 	-- A type of form (context => type) is an *implicit* HsForAllTy
-	| ipvar '::' type		{ LL (HsPredTy (HsIParam (unLoc $1) $3)) }
+	| ipvar '::' type		{ LL (HsIParamTy (unLoc $1) $3) }
 	| type  			{ $1 }
 
 ----------------------
@@ -977,7 +992,7 @@ ctypedoc :: { LHsType RdrName }
 	: 'forall' tv_bndrs '.' ctypedoc	{ LL $ mkExplicitHsForAllTy $2 (noLoc []) $4 }
 	| context '=>' ctypedoc		{ LL $ mkImplicitHsForAllTy   $1 $3 }
 	-- A type of form (context => type) is an *implicit* HsForAllTy
-	| ipvar '::' type		{ LL (HsPredTy (HsIParam (unLoc $1) $3)) }
+	| ipvar '::' type		{ LL (HsIParamTy (unLoc $1) $3) }
 	| typedoc			{ $1 }
 
 ----------------------
@@ -993,7 +1008,7 @@ ctypedoc :: { LHsType RdrName }
 -- but not 	                    f :: ?x::Int => blah
 context :: { LHsContext RdrName }
         : btype '~'      btype  	{% checkContext
-					     (LL $ HsPredTy (HsEqualP $1 $3)) }
+					     (LL $ HsEqTy $1 $3) }
 	| btype 			{% checkContext $1 }
 
 type :: { LHsType RdrName }
@@ -1001,7 +1016,7 @@ type :: { LHsType RdrName }
         | btype qtyconop type           { LL $ HsOpTy $1 $2 $3 }
         | btype tyvarop  type     	{ LL $ HsOpTy $1 $2 $3 }
  	| btype '->'     ctype		{ LL $ HsFunTy $1 $3 }
-        | btype '~'      btype  	{ LL $ HsPredTy (HsEqualP $1 $3) }
+        | btype '~'      btype  	{ LL $ HsEqTy $1 $3 }
 
 typedoc :: { LHsType RdrName }
         : btype                          { $1 }
@@ -1012,7 +1027,7 @@ typedoc :: { LHsType RdrName }
         | btype tyvarop  type docprev    { LL $ HsDocTy (L (comb3 $1 $2 $3) (HsOpTy $1 $2 $3)) $4 }
         | btype '->'     ctypedoc        { LL $ HsFunTy $1 $3 }
         | btype docprev '->' ctypedoc    { LL $ HsFunTy (L (comb2 $1 $2) (HsDocTy $1 $2)) $4 }
-        | btype '~'      btype           { LL $ HsPredTy (HsEqualP $1 $3) }
+        | btype '~'      btype           { LL $ HsEqTy $1 $3 }
 
 btype :: { LHsType RdrName }
 	: btype atype			{ LL $ HsAppTy $1 $2 }
@@ -1022,9 +1037,9 @@ atype :: { LHsType RdrName }
 	: gtycon			{ L1 (HsTyVar (unLoc $1)) }
 	| tyvar				{ L1 (HsTyVar (unLoc $1)) }
 	| strict_mark atype		{ LL (HsBangTy (unLoc $1) $2) }  -- Constructor sigs only
-	| '{' fielddecls '}'		{ LL $ HsRecTy $2 }              -- Constructor sigs only
-	| '(' ctype ',' comma_types1 ')'  { LL $ HsTupleTy Boxed  ($2:$4) }
-	| '(#' comma_types1 '#)'	{ LL $ HsTupleTy Unboxed $2     }
+	| '{' fielddecls '}'		{% checkRecordSyntax (LL $ HsRecTy $2) } -- Constructor sigs only
+	| '(' ctype ',' comma_types1 ')'  { LL $ HsTupleTy (HsBoxyTuple placeHolderKind)  ($2:$4) }
+	| '(#' comma_types1 '#)'	{ LL $ HsTupleTy HsUnboxedTuple $2     }
 	| '[' ctype ']'			{ LL $ HsListTy  $2 }
 	| '[:' ctype ':]'		{ LL $ HsPArrTy  $2 }
 	| '(' ctype ')'		        { LL $ HsParTy   $2 }
@@ -1039,7 +1054,7 @@ atype :: { LHsType RdrName }
 -- It's kept as a single type, with a MonoDictTy at the right
 -- hand corner, for convenience.
 inst_type :: { LHsType RdrName }
-	: sigtype			{% checkInstType $1 }
+	: sigtype			{ $1 }
 
 inst_types1 :: { [LHsType RdrName] }
 	: inst_type			{ [$1] }
@@ -1088,6 +1103,7 @@ kind	:: { Located Kind }
 akind	:: { Located Kind }
 	: '*'			{ L1 liftedTypeKind }
 	| '!'			{ L1 unliftedTypeKind }
+	| CONID         	{% checkKindName (L1 (getCONID $1)) }
 	| '(' kind ')'		{ LL (unLoc $2) }
 
 
@@ -1117,7 +1133,8 @@ gadt_constr :: { [LConDecl RdrName] }	-- Returns a list because of:   C,D :: ty
 		-- Deprecated syntax for GADT record declarations
 	| oqtycon '{' fielddecls '}' '::' sigtype
 		{% do { cd <- mkDeprecatedGadtRecordDecl (comb2 $1 $6) $1 $3 $6
-                      ; return [cd] } }
+                      ; cd' <- checkRecordSyntax cd
+                      ; return [cd'] } }
 
 constrs :: { Located [LConDecl RdrName] }
         : maybe_docnext '=' constrs1    { L (comb2 $2 $3) (addConDocs (unLoc $3) $1) }
@@ -1171,9 +1188,8 @@ fielddecl :: { [ConDeclField RdrName] }    -- A list because of   f,g :: Int
 -- We don't allow a context, but that's sorted out by the type checker.
 deriving :: { Located (Maybe [LHsType RdrName]) }
 	: {- empty -}				{ noLoc Nothing }
-	| 'deriving' qtycon	{% do { let { L loc tv = $2 }
-				      ; p <- checkInstType (L loc (HsTyVar tv))
-				      ; return (LL (Just [p])) } }
+	| 'deriving' qtycon			{ let { L loc tv = $2 }
+						  in LL (Just [L loc (HsTyVar tv)]) } 
 	| 'deriving' '(' ')'	 		{ LL (Just []) }
 	| 'deriving' '(' inst_types1 ')' 	{ LL (Just $3) }
              -- Glasgow extension: allow partial 
@@ -1346,7 +1362,7 @@ aexp	:: { LHsExpr RdrName }
 
 aexp1	:: { LHsExpr RdrName }
         : aexp1 '{' fbinds '}' 	{% do { r <- mkRecConstrOrUpdate $1 (comb2 $2 $4) $3
-				      ; return (LL r) }}
+				      ; checkRecordSyntax (LL r) }}
   	| aexp2			{ $1 }
 
 -- Here was the syntax for type applications that I was planning
@@ -1708,9 +1724,9 @@ con_list : con                  { L1 [$1] }
 
 sysdcon	:: { Located DataCon }	-- Wired in data constructors
 	: '(' ')'		{ LL unitDataCon }
-	| '(' commas ')'	{ LL $ tupleCon Boxed ($2 + 1) }
+	| '(' commas ')'	{ LL $ tupleCon BoxedTuple ($2 + 1) }
 	| '(#' '#)'		{ LL $ unboxedSingletonDataCon }
-	| '(#' commas '#)'	{ LL $ tupleCon Unboxed ($2 + 1) }
+	| '(#' commas '#)'	{ LL $ tupleCon UnboxedTuple ($2 + 1) }
 	| '[' ']'		{ LL nilDataCon }
 
 conop :: { Located RdrName }
@@ -1727,16 +1743,18 @@ qconop :: { Located RdrName }
 gtycon 	:: { Located RdrName }	-- A "general" qualified tycon
 	: oqtycon			{ $1 }
 	| '(' ')'			{ LL $ getRdrName unitTyCon }
-	| '(' commas ')'		{ LL $ getRdrName (tupleTyCon Boxed ($2 + 1)) }
+	| '(' commas ')'		{ LL $ getRdrName (tupleTyCon BoxedTuple ($2 + 1)) }
 	| '(#' '#)'			{ LL $ getRdrName unboxedSingletonTyCon }
-	| '(#' commas '#)'		{ LL $ getRdrName (tupleTyCon Unboxed ($2 + 1)) }
+	| '(#' commas '#)'		{ LL $ getRdrName (tupleTyCon UnboxedTuple ($2 + 1)) }
 	| '(' '->' ')'			{ LL $ getRdrName funTyCon }
 	| '[' ']'			{ LL $ listTyCon_RDR }
 	| '[:' ':]'			{ LL $ parrTyCon_RDR }
+	| '(' '~#' ')'   		{ LL $ getRdrName eqPrimTyCon }
 
 oqtycon :: { Located RdrName }	-- An "ordinary" qualified tycon
 	: qtycon			{ $1 }
  	| '(' qtyconsym ')'		{ LL (unLoc $2) }
+	| '(' '~' ')'			{ LL $ eqTyCon_RDR } -- In here rather than gtycon because I want to write it in the GHC.Types export list
 
 qtyconop :: { Located RdrName }	-- Qualified or unqualified
 	: qtyconsym			{ $1 }
