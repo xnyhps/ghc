@@ -626,7 +626,7 @@ tcAssocDecl clas mini_env (L loc decl)
                  (badATErr clas (tyConName at_tc))
 
        -- See Note [Checking consistent instantiation]
-       ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys -- JPM restore
+       ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
 
        ; return at_tc }
   where

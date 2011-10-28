@@ -453,7 +453,6 @@ zonk_bind env sig_warn (AbsBinds { abs_tvs = tyvars, abs_ev_vars = evs
     	    ; new_exports   <- mapM (zonkExport env3) exports
     	    ; return (new_val_binds, new_exports) } 
        ; sig_warn True (map abe_poly new_exports)
--- tyvars' <- mapM (updateTyVarKindM zonkTcKind) tyvars -- JPM
        ; return (AbsBinds { abs_tvs = new_tyvars, abs_ev_vars = new_evs
                           , abs_ev_binds = new_ev_binds
 			  , abs_exports = new_exports, abs_binds = new_val_bind }) }
@@ -1049,7 +1048,6 @@ zonkVect env (HsNoVect v)
        }
 zonkVect env (HsVectTypeOut t ty)
   = do { ty' <- fmapMaybeM (zonkTcTypeToType env) ty
---   = do { ty' <- fmapMaybeM (zonkTypeZapping env) ty -- JPM
        ; return $ HsVectTypeOut t ty'
        }
 zonkVect _ (HsVectTypeIn _ _) = panic "TcHsSyn.zonkVect: HsVectTypeIn"

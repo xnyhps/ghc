@@ -267,14 +267,12 @@ isKiVar v = isSuperKind (varType v)
 
 -- Returns the free kind variables in a kind
 kiVarsOfKind :: Kind -> VarSet
-kiVarsOfKind = tyVarsOfTypeStratified
+kiVarsOfKind = tyVarsOfType
 
 kiVarsOfKinds :: [Kind] -> VarSet
-kiVarsOfKinds = tyVarsOfTypesStratified
+kiVarsOfKinds = tyVarsOfTypes
 
-
--- About promoting a type to a kind
-
+-- Datatype promotion
 isPromotableType :: Type -> Bool
 isPromotableType = go emptyVarSet
   where
