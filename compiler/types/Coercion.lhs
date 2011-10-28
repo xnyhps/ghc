@@ -513,6 +513,7 @@ isReflCo_maybe _         = Nothing
 
 \begin{code}
 mkCoVarCo :: CoVar -> Coercion
+-- cv :: s ~# t
 mkCoVarCo cv
   | ty1 `eqType` ty2 = Refl ty1
   | otherwise        = CoVarCo cv
@@ -520,6 +521,7 @@ mkCoVarCo cv
     (ty1, ty2) = ASSERT( isCoVar cv ) coVarKind cv
 
 mkEqVarLCo :: EqVar -> LCoercion
+-- ipv :: s ~ t  (the boxed equality type)
 mkEqVarLCo ipv
   | ty1 `eqType` ty2 = Refl ty1
   | otherwise        = CoVarCo ipv
