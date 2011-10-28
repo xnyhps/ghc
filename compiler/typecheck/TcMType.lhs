@@ -54,7 +54,7 @@ module TcMType (
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
-  zonkTcKind, 
+  zonkTcKind, defaultKindVarToStar, defaultKindVarsToStar,
   zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
@@ -419,18 +419,21 @@ tcInstTyVars tyvars = tcInstTyVarsX emptyTvSubst tyvars
     -- Since the tyvars are freshly made, they cannot possibly be
     -- captured by any existing for-alls.
 
-tcInstTyVarsX subst tyvars = mapAcuumLM tcInstTyVar subst tyvars
+tcInstTyVarsX :: TvSubst -> [TyVar] -> TcM ([TcTyVar], [TcType], TvSubst)
+tcInstTyVarsX subst tyvars =
+  do { (subst', tyvars') <- mapAccumLM tcInstTyVar subst tyvars
+     ; return (tyvars', mkTyVarTys tyvars', subst') }
 
 tcInstTyVar :: TvSubst -> TyVar -> TcM (TvSubst, TcTyVar)
 -- Make a new unification variable tyvar whose Name and Kind come from
 -- an existing TyVar. We substitute kind variables in the kind.
 tcInstTyVar subst tyvar
-  = do	{ uniq <- newMetaUnique
- 	; ref <- newMutVar Flexi
+  = do  { uniq <- newMetaUnique
+        ; ref <- newMutVar Flexi
         ; let name   = mkSystemName uniq (getOccName tyvar)
-	      kind   = substTy subst (tyVarKind tyvar)
+              kind   = substTy subst (tyVarKind tyvar)
               new_tv = mkTcTyVar name kind (MetaTv TauTv ref)
-	; return (extendTvSubst subst tyvar new_tv, new_tv) }
+        ; return (extendTvSubst subst tyvar (mkTyVarTy new_tv), new_tv) }
 \end{code}
 
 
@@ -565,12 +568,19 @@ zonkTcPredType = zonkTcType
 		     are used at the end of type checking
 
 \begin{code}
+defaultKindVarToStar :: TcTyVar -> TcM TcTyVar
+defaultKindVarToStar kv = ASSERT ( isKiVar kv )
+                          zonkTyVarKind (setTyVarKind kv liftedTypeKind)
+
+defaultKindVarsToStar :: [TcTyVar] -> TcM [TcTyVar]
+defaultKindVarsToStar = mapM defaultKindVarToStar
+
 zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
 --               variable mentioning it in its kind
 zonkQuantifiedTyVars tyvars
-  = do { poly_kind <- doptM Opt_PolyKinds
-       ; if poly_kind then
+  = do { poly_kinds <- xoptM Opt_PolyKinds
+       ; if poly_kinds then
              mapM zonkQuantifiedTyVar tyvars 
            -- Because of the precondition, any kind variables
            -- mentioned in the kinds of the type variables refer to

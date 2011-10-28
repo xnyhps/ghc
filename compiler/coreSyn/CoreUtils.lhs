@@ -76,6 +76,7 @@ import Util
 import Pair
 import Data.Word
 import Data.Bits
+import Data.List ( mapAccumL )
 \end{code}
 
 
@@ -1005,11 +1006,12 @@ dataConInstPat fss uniqs con inst_tys
                                        (zip3 ex_tvs ex_fss ex_uniqs)
 
     mk_ex_var :: TvSubst -> (TyVar, FastString, Unique) -> (TvSubst, TyVar)
-    mk_ex_var subst (tv, fs, uniq) = (extendTvSubst subst tv new_tv, new_tv)
+    mk_ex_var subst (tv, fs, uniq) = (Type.extendTvSubst subst tv (mkTyVarTy new_tv)
+                                     , new_tv)
       where
         new_tv   = mkTyVar new_name kind
         new_name = mkSysTvName uniq fs
-        kind     = Type.substTy subst (tyVarKind var)
+        kind     = Type.substTy subst (tyVarKind tv)
 
       -- Make value vars, instantiating types
     arg_ids = zipWith3 mk_id_var id_uniqs id_fss arg_tys

@@ -126,7 +126,7 @@ module Type (
 	substTy, substTys, substTyWith, substTysWith, substTheta, 
         substTyVar, substTyVars, substTyVarBndr,
         cloneTyVarBndr, deShadowTy, lookupTyVar,
-        substKiWith,
+        substKiWith, substKisWith,
 
 	-- * Pretty-printing
 	pprType, pprParendType, pprTypeApp, pprTyThingCategory, pprTyThing, pprForAll,
@@ -1388,6 +1388,9 @@ substKiWith = substTyWith
 substTysWith :: [TyVar] -> [Type] -> [Type] -> [Type]
 substTysWith tvs tys = ASSERT( length tvs == length tys )
 		       substTys (zipOpenTvSubst tvs tys)
+
+substKisWith :: [KindVar] -> [Kind] -> [Kind] -> [Kind]
+substKisWith = substTysWith
 
 -- | Substitute within a 'Type'
 substTy :: TvSubst -> Type  -> Type

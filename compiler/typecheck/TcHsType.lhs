@@ -57,7 +57,7 @@ import NameSet
 import TysWiredIn
 import BasicTypes
 import SrcLoc
-import DynFlags ( ExtensionFlag( Opt_ConstraintKinds ) )
+import DynFlags ( ExtensionFlag( Opt_ConstraintKinds, Opt_PolyKinds ) )
 import Util
 import UniqSupply
 import Outputable
@@ -909,24 +909,26 @@ kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 -- INVARIANT: the returned kinds are zonked, and
 --            mention the returned kind variables
 kindGeneralizeKinds kinds 
-  = do { 	-- Quantify over kind variables free in
-		-- the kinds, and *not* in the environment
+  = do { -- Quantify over kind variables free in
+         -- the kinds, and *not* in the environment
        ; zonked_kinds <- mapM zonkTcKind kinds
        ; gbl_tvs <- tcGetGlobalTyVars -- Already zonked
-       ; let tvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds 
+       ; let kvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds 
                                             `minusVarSet` gbl_tvs)
-             kvs_to_quantify = fst (splitKiTyVars tvs_to_quantify)
 
-  -- JPM: improve this ASSERT
-       ; kvs <- ASSERT2 ( tvs_to_quantify == kvs_to_quantify, 
-                          ppr (varSetElems (tyVarsOfTypes zonked_kinds), 
-                               tvs_to_quantify, kvs_to_quantify) )
+       ; kvs <- ASSERT2 (and (map isKiVar kvs_to_quantify), ppr kvs_to_quantify)
                 zonkQuantifiedTyVars kvs_to_quantify
 
-       ; let final_kinds = map (substKiWith kvs_to_quantify (map mkTyVarTy kvs)) zonked_kinds
-       ; traceTc "generalizeKind" (    ppr kinds <+> ppr zonked_kinds 
-                            <+> ppr tvs_to_quantify <+> ppr kvs_to_quantify
-                            <+> ppr kvs   <+> ppr final_kinds)
+       -- If PolyKinds is off, zonkQuantifiedTyVars will return the empty list
+       ; poly_kinds <- xoptM Opt_PolyKinds
+       ; let new_kvs = if poly_kinds then mkTyVarTys kvs
+                         else ASSERT ( null kvs )
+                              -- In that case, we want to replace by kind *
+                              replicate (length kvs_to_quantify) liftedTypeKind
+       ; let final_kinds = substKisWith kvs_to_quantify new_kvs zonked_kinds
+
+       ; traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
+                                   <+> ppr kvs   <+> ppr final_kinds)
        ; return (kvs, final_kinds) }
 
 kindGeneralizeKind :: TcKind -> TcM ( [KindVar]  -- these were flexi kind vars

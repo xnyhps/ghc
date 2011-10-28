@@ -1192,15 +1192,15 @@ zonkTvCollecting :: TcRef TyVarSet -> UnboundTyVarZonker
 -- This variant collects unbound type variables in a mutable variable
 -- Works on both types and kinds
 zonkTvCollecting unbound_tv_set tv
-  = do { poly_kind <- doptM Opt_PolyKinds
-       ; if isKiVar tv && not poly_kind then
+  = do { poly_kinds <- xoptM Opt_PolyKinds
+       ; if isKiVar tv && not poly_kinds then
             do { defaultKindVarToStar tv
                ; return liftedTypeKind }
          else do
        { tv' <- zonkQuantifiedTyVar tv
        ; tv_set <- readMutVar unbound_tv_set
        ; writeMutVar unbound_tv_set (extendVarSet tv_set tv')
-       ; return (mkTyVarTy tv') }
+       ; return (mkTyVarTy tv') } }
 
 zonkTypeZapping :: UnboundTyVarZonker
 -- This variant is used for everything except the LHS of rules
