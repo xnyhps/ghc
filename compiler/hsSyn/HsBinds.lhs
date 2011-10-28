@@ -538,6 +538,11 @@ Conclusion: a new wanted coercion variable should be made mutable.
 
 
 \begin{code}
+mkEvCast :: EvVar -> LCoercion -> EvTerm
+mkEvCast ev lco
+  | isReflCo lco = EvId ev
+  | otherwise    = EvCast ev lco
+
 emptyTcEvBinds :: TcEvBinds
 emptyTcEvBinds = EvBinds emptyBag
 
