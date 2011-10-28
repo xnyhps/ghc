@@ -531,17 +531,17 @@ instance Binary ModIface where
 	orphan    <- get bh
 	hasFamInsts <- get bh
 	deps	  <- lazyGet bh
-	usages	  <- {-# SCC "bin_usages" #-} lazyGet bh
-	exports	  <- {-# SCC "bin_exports" #-} get bh
+	usages	  <- lazyGet bh
+	exports	  <- get bh
 	exp_hash  <- get bh
         used_th   <- get bh
-        fixities  <- {-# SCC "bin_fixities" #-} get bh
-	warns     <- {-# SCC "bin_warns" #-} lazyGet bh
-	anns      <- {-# SCC "bin_anns" #-} lazyGet bh
-        decls 	  <- {-# SCC "bin_tycldecls" #-} get bh
-	insts     <- {-# SCC "bin_insts" #-} get bh
-	fam_insts <- {-# SCC "bin_fam_insts" #-} get bh
-	rules	  <- {-# SCC "bin_rules" #-} lazyGet bh
+        fixities  <- get bh
+	warns     <- lazyGet bh
+	anns      <- lazyGet bh
+        decls 	  <- get bh
+	insts     <- get bh
+	fam_insts <- get bh
+	rules	  <- lazyGet bh
 	orphan_hash <- get bh
         vect_info <- get bh
         hpc_info  <- get bh
