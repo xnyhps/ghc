@@ -434,13 +434,10 @@ checkTyKind tyvar arg_ty
 checkTyCoKind :: TyVar -> OutCoercion -> LintM (OutType, OutType)
 checkTyCoKind tv co
   = do { (t1,t2) <- lintCoercion co
-       ; k1      <- lintType t1
-       ; k2      <- lintType t2
-       ; unless ((k1 `isSubKind` tyvar_kind) && (k2 `isSubKind` tyvar_kind))
+            -- t1,t2 have the same kind
+       ; unless (typeKind t1 `isSubKind` tyVarKind tv)
                 (addErrL (mkTyCoAppErrMsg tv co))
        ; return (t1,t2) }
-  where 
-    tyvar_kind = tyVarKind tv
 
 checkTyCoKinds :: [TyVar] -> [OutCoercion] -> LintM [(OutType, OutType)]
 checkTyCoKinds = zipWithM checkTyCoKind
@@ -641,7 +638,7 @@ lintTyBndrKind :: OutTyVar -> LintM ()
 lintTyBndrKind tv = lintKind (tyVarKind tv)
 
 -------------------
-lint_prim_eq_co :: TyCon -> Coercion -> [Coercion] -> LintM (OutType,OutType)
+lint_prim_eq_co :: TyCon -> OutCoercion -> [OutCoercion] -> LintM (OutType,OutType)
 lint_prim_eq_co tc co arg_cos = case arg_cos of 
   [co1,co2] -> do { (t1,s1) <- lintCoercion co1
                   ; (t2,s2) <- lintCoercion co2
@@ -650,7 +647,7 @@ lint_prim_eq_co tc co arg_cos = case arg_cos of
                   ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
   _ -> failWithL (ptext (sLit "Unsaturated or oversaturated ~# coercion") <+> ppr co)
 
-lint_eq_co :: TyCon -> Coercion -> [Coercion] -> LintM (OutType,OutType) 
+lint_eq_co :: TyCon -> OutCoercion -> [OutCoercion] -> LintM (OutType,OutType) 
 lint_eq_co tc co arg_cos = case arg_cos of 
   [co1,co2] -> do { (t1,s1) <- lintCoercion co1
                   ; (t2,s2) <- lintCoercion co2
@@ -658,16 +655,18 @@ lint_eq_co tc co arg_cos = case arg_cos of
                     ptext (sLit "Mismatched arg kinds in coercion application:") <+> ppr co
                   ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
   [co1] -> do { (t1,s1) <- lintCoercion co1
-                ; return (mkTyConApp tc [t1], mkTyConApp tc [s1]) }
+              ; return (mkTyConApp tc [t1], mkTyConApp tc [s1]) }
   [] -> return (mkTyConApp tc [], mkTyConApp tc [])
   _ -> failWithL (ptext (sLit "Oversaturated ~ coercion") <+> ppr co) 
 
 
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
+-- Post-condition: the returned OutTypes are lint-free
+--                 and have the same kind as each other
 lintCoercion (Refl ty)
-  = do { ty' <- lintInTy ty
-       ; return (ty', ty') }
+  = do { _ <- lintType ty
+       ; return (ty, ty) }
 
 lintCoercion co@(TyConAppCo tc cos)
   | tc `hasKey` eqPrimTyConKey      -- Just as in lintType, treat applications of (~) and (~#)
@@ -713,9 +712,9 @@ lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = tvs
                  substTyWith tvs tys2 rhs) }
 
 lintCoercion (UnsafeCo ty1 ty2)
-  = do { ty1' <- lintInTy ty1
-       ; ty2' <- lintInTy ty2
-       ; return (ty1', ty2') }
+  = do { _ <- lintType ty1
+       ; _ <- lintType ty2
+       ; return (ty1, ty2) }
 
 lintCoercion (SymCo co) 
   = do { (ty1, ty2) <- lintCoercion co
@@ -748,7 +747,7 @@ lintCoercion (InstCo co arg_ty)
 	  Nothing -> failWithL (ptext (sLit "Bad argument of inst")) }
 
 ----------
-checkTcApp :: Coercion -> Int -> Type -> LintM Type
+checkTcApp :: OutCoercion -> Int -> Type -> LintM OutType
 checkTcApp co n ty
   | Just tys <- tyConAppArgs_maybe ty
   , n < length tys
@@ -785,12 +784,12 @@ lintType (ForAllTy tv ty)
        ; addInScopeVar tv (lintType ty) }
 
 ----------------
-lint_ty_app :: Type -> Kind -> [OutType] -> LintM Kind
+lint_ty_app :: OutType -> Kind -> [OutType] -> LintM Kind
 lint_ty_app ty k tys 
   = do { ks <- mapM lintType tys
        ; lint_kind_app (ptext (sLit "type") <+> quotes (ppr ty)) k ks }
 
-lint_eq_pred :: Type -> [OutType] -> LintM Kind
+lint_eq_pred :: OutType -> [OutType] -> LintM Kind
 lint_eq_pred ty arg_tys = case arg_tys of
   [ty1, ty2] ->  do { k1 <- lintType ty1
                     ; k2 <- lintType ty2
@@ -807,7 +806,7 @@ lint_eq_pred ty arg_tys = case arg_tys of
   _     -> failWithL (ptext (sLit "Oversaturated (~) type") <+> ppr ty)
 
 
-lint_prim_eq_pred :: Type -> [OutType] -> LintM Kind
+lint_prim_eq_pred :: OutType -> [OutType] -> LintM Kind
 lint_prim_eq_pred ty arg_tys
   | [ty1,ty2] <- arg_tys
   = do { k1 <- lintType ty1
@@ -819,7 +818,7 @@ lint_prim_eq_pred ty arg_tys
   = failWithL (ptext (sLit "Unsaturated ~# type") <+> ppr ty)
 
 ----------------
-check_co_app :: Coercion -> Kind -> [OutType] -> LintM ()
+check_co_app :: OutCoercion -> Kind -> [OutType] -> LintM ()
 check_co_app ty k tys 
   = do { _ <- lint_kind_app (ptext (sLit "coercion") <+> quotes (ppr ty))  
                             k (map typeKind tys)
@@ -959,10 +958,10 @@ updateTvSubst subst' m =
 getTvSubst :: LintM TvSubst
 getTvSubst = LintM (\ _ subst errs -> (Just subst, errs))
 
-applySubstTy :: Type -> LintM Type
+applySubstTy :: InType -> LintM OutType
 applySubstTy ty = do { subst <- getTvSubst; return (Type.substTy subst ty) }
 
-applySubstCo :: Coercion -> LintM Coercion
+applySubstCo :: InCoercion -> LintM OutCoercion
 applySubstCo co = do { subst <- getTvSubst; return (substCo (tvCvSubst subst) co) }
 
 extendSubstL :: TyVar -> Type -> LintM a -> LintM a
