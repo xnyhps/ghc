@@ -19,7 +19,8 @@ module TcHsType (
 	scDsLHsKind, scDsLHsMaybeKind,
 
                 -- Typechecking kinded types
-	tcHsType, tcHsKindedContext, tcHsKindedType, tcHsBangType,
+	tcHsType, tcCheckHsType,
+        tcHsKindedContext, tcHsKindedType, tcHsBangType,
 	tcTyVarBndrs, tcTyVarBndrsKindGen, dsHsType,
 	tcDataKindSig, tcTyClTyVars,
 
@@ -38,6 +39,7 @@ import {-# SOURCE #-}	TcSplice( kcSpliceType )
 import HsSyn
 import RnHsSyn
 import TcRnMonad
+import TcHsSyn ( mkZonkTcTyVar )
 import TcEnv
 import TcMType
 import TcUnify
@@ -166,6 +168,13 @@ tcHsSigTypeNC ctxt hs_ty
 	; ty <- tcHsKindedType kinded_ty
 	; checkValidType ctxt ty	
 	; return ty }
+
+-- Like tcHsType, but takes an expected kind
+tcCheckHsType :: LHsType Name -> Kind -> TcM Type
+tcCheckHsType hs_ty exp_kind
+  = do { kinded_ty <- kcCheckLHsType hs_ty (EK exp_kind EkUnk) -- JPM add context
+       ; ty <- tcHsKindedType kinded_ty
+       ; return ty }
 
 tcHsType :: LHsType Name -> TcM Type
 -- kind check and desugar
@@ -627,6 +636,11 @@ Moreover
 	(b) a class used as a type
 
 \begin{code}
+
+zonkTcKindToKind :: TcKind -> TcM Kind
+-- When zonking a TcKind to a kind we instantiate kind variables to AnyK
+zonkTcKindToKind = zonkType (mkZonkTcTyVar (\ _ -> return anyKind) mkTyVarTy)
+
 dsHsType :: LHsType Name -> TcM Type
 -- All HsTyVarBndrs in the intput type are kind-annotated
 -- See Note [Desugaring types]
@@ -704,7 +718,7 @@ ds_type (HsDocTy ty _)  -- Remove the doc comment
   = dsHsType ty
 
 ds_type (HsSpliceTy _ _ kind) 
-  = do { kind' <- zonkTcKind kind
+  = do { kind' <- zonkTcKindToKind kind
        ; newFlexiTyVarTy kind' }
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
@@ -723,13 +737,13 @@ ds_type (HsExplicitListTy kind tys) = do
 
 ds_type (HsExplicitTupleTy kis tys) = do
   MASSERT( length kis == length tys )
-  kis' <- mapM zonkTcKind kis
+  kis' <- mapM zonkTcKindToKind kis
   tys' <- mapM dsHsType tys
   return $ mkTyConApp (buildPromotedDataTyCon (tupleCon BoxedTuple (length kis'))) (kis' ++ tys')
 
 ds_type (HsWrapTy (WpKiApps kappas) ty) = do
   tau <- ds_type ty
-  kappas' <- mapM zonkTcKind kappas
+  kappas' <- mapM zonkTcKindToKind kappas
   return (mkAppTys tau kappas')
 
 dsHsTypes :: [LHsType Name] -> TcM [Type]
