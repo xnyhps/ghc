@@ -211,11 +211,13 @@ lintSingleBinding top_lvl_flag rec_flag (binder,rhs)
 %************************************************************************
 
 \begin{code}
-type InType      = Type	-- Substitution not yet applied
+type InKind      = Kind	-- Substitution not yet applied
+type InType      = Type	
 type InCoercion  = Coercion
 type InVar       = Var
 type InTyVar     = TyVar
 
+type OutKind     = Kind	-- Substitution has been applied to this
 type OutType     = Type	-- Substitution has been applied to this
 type OutCoercion = Coercion
 type OutVar      = Var
@@ -648,7 +650,7 @@ lintInCo co
         ; return co' }
 
 -------------------
-lintKind :: Kind -> LintM ()
+lintKind :: OutKind -> LintM ()
 -- Check well-formedness of kinds: *, *->*, Either * (* -> *), etc
 lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
@@ -673,22 +675,21 @@ lintTyBndrKind tv =
   else lintKind ki  -- type forall
 
 -------------------
-lintKindCoercion :: Coercion -> LintM Kind
+lintKindCoercion :: OutCoercion -> LintM OutKind
 -- Kind coercions are only reflexivity because they mean kind
 -- instantiation.
 lintKindCoercion (Refl k)
-  = do { k' <- applySubstTy k
-               -- IA0_NOTE: I am not sure about the substitution
-               -- I mimicked what was done for Refl in lintCoercion
-       ; lintKind k'
-       ; return k' }
-lintKindCoercion _ = panic "lintKindCoercion"
-  -- we should never produce a non-refl kind coercion
+  = do { lintKind k
+       ; return k }
+lintKindCoercion co 
+  = failWithL (hang (ptext (sLit "Non-refl kind coercion"))
+                  2 (ppr co))
+  -- We should never produce a non-refl kind coercion
 
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
 lintCoercion (Refl ty)
-  = do { ty' <- lintInTy ty
+  = do { ty' <- lintType ty
        ; return (ty', ty') }
 
 lintCoercion co@(TyConAppCo tc cos)
@@ -745,8 +746,8 @@ lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
     (kcos, tcos) = splitAt (length kvs) cos
 
 lintCoercion (UnsafeCo ty1 ty2)
-  = do { ty1' <- lintInTy ty1
-       ; ty2' <- lintInTy ty2
+  = do { ty1' <- lintType ty1
+       ; ty2' <- lintType ty2
        ; return (ty1', ty2') }
 
 lintCoercion (SymCo co) 
