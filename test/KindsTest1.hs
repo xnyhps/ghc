@@ -1,4 +1,5 @@
 {-# LANGUAGE KindSignatures             #-}
+-- {-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE TypeFamilies               #-}
@@ -11,28 +12,31 @@
 {-# LANGUAGE MagicHash                  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Arrows                     #-}
 {-# OPTIONS_GHC -fenable-rewrite-rules  #-}
 
 module KindsTest1 where
 
---import GHC.Prim
+import GHC.Prim
+import Control.Arrow
 
 --------------------------------------------------------------------------------
 -- Type-level peano naturals
 --------------------------------------------------------------------------------
 
 data Nat = Ze | Su Nat
-{-
-
 data List a = Nil | Cons a (List a)
 
+data G1 :: [*] -> *
+
 data Vec :: * -> Nat -> * where
+{-
   VNil  :: Vec a Ze
   VCons :: a -> Vec a n -> Vec a (Su n)
 
 vec1 :: Vec Nat (Su Ze)
 vec1 = VCons Ze VNil
-
+-}
 -- Correctly fails to kind-check
 {-
 vec2 :: Vec Nat Nat
@@ -120,7 +124,7 @@ class MyTypeable t where
   myTypeOf :: Proxy t -> TypeRep
 
 instance MyTypeable Nat  where myTypeOf _ = TypeRep
-instance MyTypeable List where myTypeOf _ = TypeRep
+--instance MyTypeable List where myTypeOf _ = TypeRep
 
 --------------------------------------------------------------------------------
 -- T5481
@@ -155,10 +159,9 @@ data A s = A { unA :: Nat }
 
 runA1 :: (forall s. A s) -> Nat -- Uncomment for error
 runA1 a = unA a
--}
 
 --------------------------------------------------------------------------------
--- ContT
+-- ContT (fails with -O)
 --------------------------------------------------------------------------------
 
 newtype ContT r m a = ContT { runContT :: (a -> m r) -> m r }
@@ -170,7 +173,6 @@ mapContT f m = ContT $ f . runContT m
 -- doaitse
 --------------------------------------------------------------------------------
 
-{-
 data Exists f = forall a . Exists (f a)
 
 data Ref env a where
@@ -178,7 +180,6 @@ data Ref env a where
 
 f1 :: forall env. (Exists (Ref env)) -> Nat
 f1 (Exists (ref1 :: Ref env b)) = Ze
--}
 
 --------------------------------------------------------------------------------
 -- gadt9
@@ -204,16 +205,13 @@ doy (Y X X) = Y X X
 -- gadt11
 --------------------------------------------------------------------------------
 {-
-data X f = X (f ())
-
 data B a where
-  B1 :: X []
-  B2 :: B [Nat]
+  B1 :: Int
 -}
 --------------------------------------------------------------------------------
 -- scoped
 --------------------------------------------------------------------------------
-{-
+
 data C x y where -- * -> * -> *
      C :: a -> C a a
 
@@ -222,11 +220,11 @@ data D x y where -- k -> * -> *
 
 g3 :: forall x y . D x y -> ()
 g3 (D (C (p :: y))) = ()
--}
+
 --------------------------------------------------------------------------------
 -- GEq1
 --------------------------------------------------------------------------------
-{-
+
 class GEq' f where
   geq' :: f a -> f a -> Nat
 
@@ -237,7 +235,7 @@ class Generic a where
 class GEq a where 
   geq :: (Generic a, GEq' (Rep a)) => a -> a -> Nat
   geq x y = geq' (from x) (from y)
--}
+
 --------------------------------------------------------------------------------
 -- GADT1
 --------------------------------------------------------------------------------
@@ -255,38 +253,37 @@ class C2 a where
 instance C2 a where
   type S2 Nat = Nat
 -}
-
 --------------------------------------------------------------------------------
 -- T2677
 --------------------------------------------------------------------------------
 
 type family A1 (x :: *) :: *
-type instance A1 a = a
-type instance A1 a = a -- just works!... but shouldn't.
+type instance A1 a   = Int
+--type instance A1 Int = Char -- shouldn't work
 
 --------------------------------------------------------------------------------
 -- read056
 --------------------------------------------------------------------------------
-{-
-class C a
-instance C Nat
+
+class C1 a
+instance C1 Nat
 
 newtype Foo = Foo Nat
-    deriving C
--}
+    deriving C1
+
 --------------------------------------------------------------------------------
 -- T303
 --------------------------------------------------------------------------------
 -- Fails with commented out "ret", without the comment, and both failures seem
 -- still independent from the original T303 failure.
-{-
+
 class IxMonad m where
     ret :: a -> m i i a
 
 data T a b c = T
 instance IxMonad T where
-    --ret _ = T
--}
+    ret _ = T
+
 --------------------------------------------------------------------------------
 -- rule2
 --------------------------------------------------------------------------------
@@ -299,11 +296,10 @@ blip = foo (\x -> x)
 --------------------------------------------------------------------------------
 -- T2478
 --------------------------------------------------------------------------------
--- Lack of zonking?
-{-
+
 data TrafoE t = forall env2 . TrafoE Nat t
 trafo () = TrafoE
--}
+
 --------------------------------------------------------------------------------
 -- Stuff below here depends on (some) libraries being present
 --------------------------------------------------------------------------------
@@ -311,7 +307,19 @@ trafo () = TrafoE
 --------------------------------------------------------------------------------
 -- Unboxed stuff
 --------------------------------------------------------------------------------
-{-
+
 testUnbox :: Int# -> a -> a
 testUnbox n a = a
+
+--------------------------------------------------------------------------------
+-- T5283
+--------------------------------------------------------------------------------
+{-
+-- See TcArrows, l. 272, corner_ty `eqType` mkTyVarTy w_tv
+
+mapAC :: Arrow arr => arr (env, b) c -> arr (env, [b]) [c]  
+mapAC = undefined
+
+t :: Arrow arr => arr [a] [a]
+t = proc ys -> (| mapAC (\y -> returnA -< y) |) ys
 -}

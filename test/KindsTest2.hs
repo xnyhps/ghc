@@ -9,6 +9,7 @@
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE UndecidableInstances       #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE PolyKinds                  #-}
 
 module KindsTest2 where
 
@@ -90,7 +91,7 @@ runA1 a = unA a
 --------------------------------------------------------------------------------
 -- Simple generic programming (instant-generics-like library)
 --------------------------------------------------------------------------------
-{-
+
 data U a = UNIT | SUM (U a) (U a) | PRODUCT (U a) (U a) | REC a
 
 -- GADT interpretation
@@ -162,7 +163,7 @@ instance Generic [a] where
 
 -- Testing size
 test1 = size "abc"
--}
+
 --------------------------------------------------------------------------------
 -- Indexed functors (didn't get very far, lacking explicit kind polymorphism)
 --------------------------------------------------------------------------------
@@ -207,9 +208,9 @@ data (:/:) :: (Nat -> *) -> (Nat -> *) -> (PLUS Nat Nat) -> * where
 -}
 
 --------------------------------------------------------------------------------
--- MultiP
+-- MultiP (currently fails but shouldn't!)
 --------------------------------------------------------------------------------
-
+{-
 type T0 = Ze
 type T1 = Su T0
 type T2 = Su T1
@@ -336,3 +337,4 @@ pmapEither f g = pmapu h where
   h :: forall n. NatV n -> El n (Es (Either a1 b1)) -> El n (Es (Either a2 b2))
   h ZeW = f
   h (SuW ZeW) = g
+-}
