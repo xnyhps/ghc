@@ -47,7 +47,7 @@ module TcSMonad (
 
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
-    getTcEvBindsBag, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
+    getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
@@ -974,8 +974,8 @@ getTcSTyBindsMap :: TcS (TyVarEnv (TcTyVar, TcType))
 getTcSTyBindsMap = getTcSTyBinds >>= wrapTcS . (TcM.readTcRef) 
 
 
-getTcEvBindsBag :: TcS EvBindMap
-getTcEvBindsBag
+getTcEvBindsMap :: TcS EvBindMap
+getTcEvBindsMap
   = do { EvBindsVar ev_ref _ <- getTcEvBinds 
        ; wrapTcS $ TcM.readTcRef ev_ref }
 

@@ -610,10 +610,17 @@ tidySkolemInfo _   info            = info
 
 ---------------- Substitution -------------------------
 substCt :: TvSubst -> Ct -> Ct 
--- Conservatively converts it to non-canonical
-substCt subst ct = CNonCanonical { cc_id     = substEvVar subst  (cc_id ct) 
-                                 , cc_flavor = substFlavor subst (cc_flavor ct)
-                                 , cc_depth  = cc_depth ct }
+-- Conservatively converts it to non-canonical:
+-- Postcondition: if the constraint does not get rewritten
+substCt subst ct
+  | ev <- cc_id ct, pty <- evVarPred (cc_id ct) 
+  , sty <- substTy subst pty 
+  = if sty `eqType` pty then 
+        ct { cc_flavor = substFlavor subst (cc_flavor ct) }
+    else 
+        CNonCanonical { cc_id  = setVarType ev sty 
+                      , cc_flavor = substFlavor subst (cc_flavor ct)
+                      , cc_depth  = cc_depth ct }
 
 substWC :: TvSubst -> WantedConstraints -> WantedConstraints
 substWC subst (WC { wc_flat = flat, wc_impl = implic, wc_insol = insol })

@@ -1,5 +1,6 @@
 \begin{code}
 module TcCanonical(
+    precanonicalize,
     canonicalize, 
     canOccursCheck, canEq, 
     rewriteWithFunDeps,
@@ -88,6 +89,69 @@ data StopOrContinue
 instance Outputable StopOrContinue where
   ppr Stop             = ptext (sLit "Stop")
   ppr (ContinueWith w) = ptext (sLit "ContinueWith") <+> ppr w
+
+
+
+-- Caching from current evidence bindings
+precanonicalize :: Ct -> TcS StopOrContinue
+precanonicalize ct 
+  | isWantedCt ct && isCNonCanonical ct -- See note [Caching for canonicals]
+  = do { bb <- getTcEvBindsMap
+       ; case lookupPredBind bb (evVarPred (cc_id ct)) of 
+           Nothing -> return (ContinueWith ct)
+           Just ev_var -> do { traceTcS "Pre-canonicalize" $ 
+                               vcat [ text "Solved work-item  :" <+> ppr ct
+                                    , text "From already bound:" <+> ppr ev_var ] 
+                             ; setEvBind (cc_id ct) (EvId ev_var) >> return Stop } }
+  | otherwise
+  = return (ContinueWith ct)
+
+\end{code}
+
+Note [Caching for canonicals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+Our plan with pre-canonicalization is to be able to solve a constraint really fast from existing
+bindings in TcEvBinds. So one may think that the condition (isCNonCanonical) is not necessary. 
+However consider the following setup:
+
+InertSet = { [W] d1 : Num t } 
+WorkList = { [W] d2 : Num t, [W] c : t ~ Int} 
+
+Now, we prioritize equalities, but in our concrete example (should_run/mc17.hs) the first (d2) constraint 
+is dealt with first, because (t ~ Int) is an equality that only later appears in the worklist since it is
+pulled out from a nested implication constraint. So, let's examine what happens:
+ 
+   - We encounter work item (d2 : Num t)
+
+   - Nothing is yet in EvBinds, so we reach the interaction with inerts 
+     and set:
+              d2 := d1 
+    and we discard d2 from the worklist. The inert set remains unaffected.
+
+   - Now the equation ([W] c : t ~ Int) is encountered and kicks-out (d1 : Num t) from the inerts.
+     Then that equation gets spontaneously solved, perhaps. We end up with:
+        InertSet : { [G] c : t ~ Int }
+        WorkList : { [W] d1 : Num t} 
+
+   - Now we examine (d1), we observe that there is a binding for (Num t) in the evidence binds and 
+     we set: 
+             d1 := d2 
+     and end up in a loop!
+
+Now, the constraints that get kicked out from the inert set are always Canonical, so by restricting
+the use of the pre-canonicalizer to NonCanonical constraints we eliminate this danger. Moreover, for 
+canonical constraints we already have good caching mechanisms (effectively the interaction solver) 
+and we are interested in reducing things like superclasses of the same non-canonical constraint being 
+generated hence I don't expect us to lose a lot by introducing the (isCNonCanonical) restriction.
+
+A similar situation can arise in TcSimplify, at the end of the solve_wanteds function, where constraints
+from the inert set are returned as new work -- our substCt ensures however that if they are not rewritten
+by subst, they remain canonical and hence we will not attempt to solve them from the EvBinds. If on the 
+other hand they did get rewritten and are now non-canonical they will still not match the EvBinds, so we 
+are again good.
+
+\begin{code}
+
 
 
 -- Top-level canonicalization
@@ -291,6 +355,7 @@ newSCWorkFromFlavored d ev flavor cls xis
                                            sc_vars [EvSuperClass ev n | n <- [0..]]
 
                         -- Emit now, canonicalize later in a lazier fashion
+                      ; traceTcS "newSCWorkFromFlavored" (text "Emitting superclass work:" <+> ppr sc_cts)
                       ; updWorkListTcS $ appendWorkListCt sc_cts }
       GivenSolved -> return ()
       -- Seems very dangerous to add the superclasses for dictionaries that may be 
@@ -309,6 +374,7 @@ newSCWorkFromFlavored d ev flavor cls xis
                                       CNonCanonical { cc_id = scv
                                                     , cc_flavor = Derived wloc
                                                     , cc_depth = d} }) impr_theta
+       ; traceTcS "newSCWorkFromFlavored" (text "Emitting superclass work:" <+> ppr sc_cts)
        ; updWorkListTcS $ appendWorkListCt sc_cts }
 
 is_improvement_pty :: PredType -> Bool 

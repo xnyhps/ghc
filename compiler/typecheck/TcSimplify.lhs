@@ -712,13 +712,13 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
 
        ; (insoluble_flats,unsolved_flats) <- extractUnsolvedTcS 
 
-       ; bb <- getTcEvBindsBag
+       ; bb <- getTcEvBindsMap
        ; tb <- getTcSTyBindsMap
 
        ; traceTcS "solveWanteds }" $
                  vcat [ text "unsolved_flats   =" <+> ppr unsolved_flats
                       , text "unsolved_implics =" <+> ppr unsolved_implics
-                      , text "current evbinds  =" <+> vcat (map ppr (varEnvElts bb))
+                      , text "current evbinds  =" <+> ppr (evBindMapBinds bb)
                       , text "current tybinds  =" <+> vcat (map ppr (varEnvElts tb))
                       ]
 
@@ -727,7 +727,10 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
                 -- NB: remaining_flats has already had subst applied
 
        ; return $ 
-         WC { wc_flat  = mapBag (substCt subst) remaining_unsolved_flats
+         WC { wc_flat  = mapBag (substCt subst) remaining_unsolved_flats  -- NB: if a constraint is not rewritten by subst then
+                                                                          -- 'canonicity' does not change. This is important
+                                                                          -- for the soundness of pre-canonicalization, 
+                                                                          -- see Note [Caching for canonicals] in TcCanonical
             , wc_impl  = mapBag (substImplication subst) unsolved_implics
             , wc_insol = mapBag (substCt subst) insoluble_flats }
        }
@@ -842,11 +845,11 @@ solveImplication tcs_untouchables
                           imp { ic_wanted = res_wanted
                               , ic_insol  = insolubleWC res_wanted }
 
-       ; evbinds <- getTcEvBindsBag 
+       ; evbinds <- getTcEvBindsMap
 
        ; traceTcS "solveImplication end }" $ vcat
              [ text "res_flat_free =" <+> ppr res_flat_free
-             , text "implication evbinds = " <+> vcat (map ppr (varEnvElts evbinds))
+             , text "implication evbinds = " <+> ppr (evBindMapBinds evbinds)
              , text "res_implic =" <+> ppr res_implic ]
 
        ; return (res_flat_free, res_implic) }

@@ -1071,8 +1071,6 @@ zonkTcEvBinds env (EvBinds bs)    = do { (env', bs') <- zonkEvBinds env bs
 
 zonkEvBindsVar :: ZonkEnv -> EvBindsVar -> TcM (ZonkEnv, Bag EvBind)
 zonkEvBindsVar env (EvBindsVar ref _) = do { bs <- readMutVar ref
-                                           ; traceTc "zonkEvBindsVar" $ 
-                                             text "bs = " <+> vcat (map ppr (varEnvElts bs))
                                            ; zonkEvBinds env (evBindMapBinds bs) }
 
 zonkEvBinds :: ZonkEnv -> Bag EvBind -> TcM (ZonkEnv, Bag EvBind)

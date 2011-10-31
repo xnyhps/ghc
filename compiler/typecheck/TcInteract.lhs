@@ -206,7 +206,8 @@ React with (F Int ~ b) ==> IR Stop True []    -- after substituting we re-canoni
 
 \begin{code}
 thePipeline :: [(String,SimplifierStage)]
-thePipeline = [ ("canonicalization",        canonicalizationStage)
+thePipeline = [ ("pre-canonicalization",    preCanonStage)
+              , ("canonicalization",        canonicalizationStage)
                 -- If ContinueWith, will be canonical 
               , ("interact with inert eqs", interactWithInertEqsStage)
                 -- If ContinueWith, will be wanted/derived eq or non-eq
@@ -219,6 +220,12 @@ thePipeline = [ ("canonicalization",        canonicalizationStage)
 
 
 \begin{code}
+
+-- Pre-canonicalization, see TcCanonical for details
+----------------------------------------------------------
+preCanonStage :: SimplifierStage
+preCanonStage = precanonicalize
+
 -- The canonicalization stage, see TcCanonical for details
 ----------------------------------------------------------
 canonicalizationStage :: SimplifierStage
