@@ -115,22 +115,22 @@ tcTyClGroup boot_details tyclds
                  -- Kind and type check declarations for this group
              concatMapM (tcTyClDecl rec_flags) tyclds }
 
-           -- Step 3: Add the implicit things;
+           -- Step 3: Perform the validity chebck
+           -- We can do this now because we are done with the recursive knot
+           -- Do it before Step 4 (adding implicit things) because the latter
+           -- expects well-formed TyCons
+       ; tcExtendGlobalEnv tyclss $ do
+       { traceTc "Starting validity check" (ppr tyclss)
+       ; mapM_ (addLocM checkValidTyCl) tyclds
+
+           -- Step 4: Add the implicit things;
            -- we want them in the environment because
            -- they may be mentioned in interface files
        ; let implicit_things = concatMap implicitTyThings tyclss
              dm_ids          = mkDefaultMethodIds tyclss
-       ; tcExtendGlobalEnv tyclss $
-         tcExtendGlobalEnvImplicit implicit_things $
-         tcExtendGlobalValEnv dm_ids $ do
-
-           -- Step 4: Perform the validity check
-           -- We can do this now because we are done with the recursive knot
-       { traceTc "Starting validity check" (ppr tyclss)
-       ; mapM_ (addLocM checkValidTyCl) tyclds
-
-       ; traceTc "done" empty
-       ; getGblEnv } }
+       ; tcExtendGlobalEnvImplicit implicit_things $ 
+         tcExtendGlobalValEnv dm_ids $ 
+         getGblEnv } }
 
 zipRecTyClss :: TyClGroup Name
              -> [TyThing]           -- Knot-tied
@@ -257,7 +257,8 @@ kcTyClGroup decls
   where
     generalise :: Name -> TcM (Name, Kind)
     generalise name
-      = do { thing <- tcLookup name
+      = do { traceTc "Generalise type of class" (ppr name)
+           ; thing <- tcLookup name
            ; let kc_kind = case thing of
                                AThing k -> k
                                _ -> pprPanic "kcTyClGroup" (ppr thing)
@@ -539,15 +540,15 @@ tcTyClDecl1 _parent calc_isrec
   ; return [ATyCon tycon] }
 
 tcTyClDecl1 _parent calc_isrec
-            (ClassDecl { tcdLName = L _ class_tycon_name, tcdTyVars = tvs
+            (ClassDecl { tcdLName = L _ class_name, tcdTyVars = tvs
 	      , tcdCtxt = ctxt, tcdMeths = meths
 	      , tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs })
   = ASSERT( isNoParent _parent )
-    tcTyClTyVars class_tycon_name tvs $ \ tvs' kind -> do
+    tcTyClTyVars class_name tvs $ \ tvs' kind -> do
   { MASSERT( isConstraintKind kind )
   ; ctxt' <- tcHsKindedContext =<< kcHsContext ctxt
   ; fds' <- mapM (addLocM tc_fundep) fundeps
-  ; (sig_stuff, gen_dm_env) <- tcClassSigs class_tycon_name sigs meths
+  ; (sig_stuff, gen_dm_env) <- tcClassSigs class_name sigs meths
   ; clas <- fixM $ \ clas -> do
 	    { let 	-- This little knot is just so we can get
 			-- hold of the name of the class TyCon, which we
@@ -555,12 +556,12 @@ tcTyClDecl1 _parent calc_isrec
 		    tycon_name = tyConName (classTyCon clas)
 		    tc_isrec = calc_isrec tycon_name
 
-            ; at_stuff <- tcClassATs clas tvs' ats at_defs
+            ; at_stuff <- tcClassATs class_name clas tvs' ats at_defs
             -- NB: 'ats' only contains "type family" and "data family" declarations
             -- and 'at_defs' only contains associated-type defaults
 
             ; buildClass False {- Must include unfoldings for selectors -}
-			 class_tycon_name tvs' ctxt' fds' at_stuff
+			 class_name tvs' ctxt' fds' at_stuff
 			 sig_stuff tc_isrec }
 
   ; let gen_dm_ids = [ AnId (mkExportedLocalId gen_dm_name gen_dm_ty)
@@ -604,14 +605,15 @@ Example:     class C a where
 We can get default defns only for type families, not data families
 	
 \begin{code}
-tcClassATs :: Class            -- The class
+tcClassATs :: Name             -- The class name (not knot-tied)
+           -> Class            -- The class (knot-tied)
            -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
            -> [LTyClDecl Name] -- Associated types. All FamTyCon
            -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
            -> TcM [ClassATItem]
-tcClassATs clas clas_tvs ats at_defs
+tcClassATs class_name clas clas_tvs ats at_defs
   = do {  -- Complain about associated type defaults for non associated-types
-         sequence_ [ failWithTc (badATErr clas n)
+         sequence_ [ failWithTc (badATErr class_name n)
                    | n <- map (tcdName . unLoc) at_defs
                    , not (n `elemNameSet` at_names) ]
        ; mapM tc_at ats }
@@ -623,10 +625,13 @@ tcClassATs clas clas_tvs ats at_defs
     at_defs_map = foldr (\at_def nenv -> extendNameEnv_C (++) nenv (tcdName (unLoc at_def)) [at_def]) 
                         emptyNameEnv at_defs
 
-    tc_at at = do { [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas)
+    tc_at at = do { traceTc "tcClassATs1" (ppr at)
+                  ; [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas)
                                                               (const Recursive)) at
-                  ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs)
-                                (lookupNameEnv at_defs_map (tyConName fam_tc) `orElse` []) 
+                  ; let at_defs = lookupNameEnv at_defs_map (tcdName (unLoc at)) `orElse` []
+                  ; traceTc "tcClassATs2" (ppr at_defs)
+                  ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs) at_defs
+                  ; traceTc "tcClassATs3" (ppr at)
                   ; return (fam_tc, atd) }
 
 
@@ -915,6 +920,11 @@ tcResultType (tmpl_tvs, res_tmpl) dc_tvs (ResTyGADT res_ty)
 	-- So we return ([a,b,z], [x,y], [a~(x,y),b~z], T [(x,y)] z z)
   = do	{ res_ty' <- tcHsKindedType res_ty
 	; let Just subst = tcMatchTy (mkVarSet tmpl_tvs) res_tmpl res_ty'
+                -- This 'Just' pattern is sure to match, because if not
+                -- checkValidDataCon will complain first. The 'subst'
+                -- should not be looked at until after checkValidDataCon
+                -- We can't check eagerly because we are in a "knot" in 
+                -- which 'tycon' is not yet fully defined
 
 		-- /Lazily/ figure out the univ_tvs etc
 		-- Each univ_tv is either a dc_tv or a tmpl_tv
@@ -1106,7 +1116,11 @@ checkValidTyCl :: TyClDecl Name -> TcM ()
 -- only so that we can add a nice context with tcAddDeclCtxt
 checkValidTyCl decl
   = tcAddDeclCtxt decl $
-    do	{ thing <- tcLookupLocatedGlobal (tcdLName decl)
+    do	{ traceTc "Validity of 1" (ppr decl)
+        ; env <- getGblEnv
+	; traceTc "Validity of 1a" (ppr (tcg_type_env env))
+	; thing <- tcLookupLocatedGlobal (tcdLName decl)
+	; traceTc "Validity of 2" (ppr decl)
 	; traceTc "Validity of" (ppr thing)
 	; case thing of
 	    ATyCon tc -> do
@@ -1146,14 +1160,16 @@ checkValidTyCon tc
       SynFamilyTyCon {} -> return ()
       SynonymTyCon ty   -> checkValidType syn_ctxt ty
   | otherwise
-  = do	-- Check the context on the data decl
-    checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
+  = do { -- Check the context on the data decl
+       ; traceTc "cvtc1" (ppr tc)
+       ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
 	
 	-- Check arg types of data constructors
-    mapM_ (checkValidDataCon tc) data_cons
+       ; traceTc "cvtc2" (ppr tc)
+       ; mapM_ (checkValidDataCon tc) data_cons
 
 	-- Check that fields with the same name share a type
-    mapM_ check_fields groups
+       ; mapM_ check_fields groups }
 
   where
     syn_ctxt  = TySynCtxt name
@@ -1214,7 +1230,7 @@ checkValidDataCon :: TyCon -> DataCon -> TcM ()
 checkValidDataCon tc con
   = setSrcSpan (srcLocSpan (getSrcLoc con))	$
     addErrCtxt (dataConCtxt con)		$ 
-    do	{ traceTc "Validity of data con" (ppr con <+> ppr (dataConRepType con))
+    do	{ traceTc "Validity of data con" (ppr con)
         ; let tc_tvs = tyConTyVars tc
 	      res_ty_tmpl = mkFamilyTyConApp tc (mkTyVarTys tc_tvs)
 	      actual_res_ty = dataConOrigResTy con
@@ -1230,6 +1246,7 @@ checkValidDataCon tc con
 	; checkValidType ctxt (dataConUserType con)
 	; when (isNewTyCon tc) (checkNewDataCon con)
         ; mapM_ check_bang (dataConStrictMarks con `zip` [1..])
+        ; traceTc "Done validity of data con" (ppr con <+> ppr (dataConRepType con))
     }
   where
     ctxt = ConArgCtxt (dataConName con) 
@@ -1623,7 +1640,7 @@ badDataConTyCon data_con res_ty_tmpl actual_res_ty
 		ptext (sLit "returns type") <+> quotes (ppr actual_res_ty))
        2 (ptext (sLit "instead of an instance of its parent type") <+> quotes (ppr res_ty_tmpl))
 
-badATErr :: Outputable a => a -> Name -> SDoc
+badATErr :: Name -> Name -> SDoc
 badATErr clas op
   = hsep [ptext (sLit "Class"), quotes (ppr clas), 
           ptext (sLit "does not have an associated type"), quotes (ppr op)]

@@ -623,7 +623,7 @@ tcAssocDecl clas mini_env (L loc decl)
   
        -- Check that the associated type comes from this class
        ; checkTc (Just clas == tyConAssoc_maybe fam_tc)
-                 (badATErr clas (tyConName at_tc))
+                 (badATErr (className clas) (tyConName at_tc))
 
        -- See Note [Checking consistent instantiation]
        ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
