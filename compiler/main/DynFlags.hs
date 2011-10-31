@@ -1950,7 +1950,9 @@ impliedFlags
     , (Opt_TypeFamilies,     turnOn, Opt_MonoLocalBinds)
 
     , (Opt_TypeFamilies,     turnOn, Opt_KindSignatures)  -- Type families use kind signatures
-      						     -- all over the place
+                                                          -- all over the place
+
+    , (Opt_PolyKinds,        turnOn, Opt_KindSignatures)
 
     , (Opt_ImpredicativeTypes,  turnOn, Opt_RankNTypes)
 
