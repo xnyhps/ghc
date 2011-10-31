@@ -31,33 +31,35 @@ type LlvmAlias = (LMString, LlvmType)
 
 -- | Llvm Types
 data LlvmType
-  = LMInt Int            -- ^ An integer with a given width in bits.
-  | LMFloat              -- ^ 32 bit floating point
-  | LMDouble             -- ^ 64 bit floating point
-  | LMFloat80            -- ^ 80 bit (x86 only) floating point
-  | LMFloat128           -- ^ 128 bit floating point
-  | LMPointer LlvmType   -- ^ A pointer to a 'LlvmType'
-  | LMArray Int LlvmType -- ^ An array of 'LlvmType'
-  | LMLabel              -- ^ A 'LlvmVar' can represent a label (address)
-  | LMVoid               -- ^ Void type
-  | LMStruct [LlvmType]  -- ^ Structure type
-  | LMAlias LlvmAlias    -- ^ A type alias
+  = LMInt Int             -- ^ An integer with a given width in bits.
+  | LMFloat               -- ^ 32 bit floating point
+  | LMDouble              -- ^ 64 bit floating point
+  | LMFloat80             -- ^ 80 bit (x86 only) floating point
+  | LMFloat128            -- ^ 128 bit floating point
+  | LMPointer LlvmType    -- ^ A pointer to a 'LlvmType'
+  | LMArray Int LlvmType  -- ^ An array of 'LlvmType'
+  | LMVector Int LlvmType -- ^ A vector of 'LlvmType'
+  | LMLabel               -- ^ A 'LlvmVar' can represent a label (address)
+  | LMVoid                -- ^ Void type
+  | LMStruct [LlvmType]   -- ^ Structure type
+  | LMAlias LlvmAlias     -- ^ A type alias
 
   -- | Function type, used to create pointers to functions
   | LMFunction LlvmFunctionDecl
   deriving (Eq)
 
 instance Show LlvmType where
-  show (LMInt size    ) = "i" ++ show size
-  show (LMFloat       ) = "float"
-  show (LMDouble      ) = "double"
-  show (LMFloat80     ) = "x86_fp80"
-  show (LMFloat128    ) = "fp128"
-  show (LMPointer x   ) = show x ++ "*"
-  show (LMArray nr tp ) = "[" ++ show nr ++ " x " ++ show tp ++ "]"
-  show (LMLabel       ) = "label"
-  show (LMVoid        ) = "void"
-  show (LMStruct tys  ) = "<{" ++ (commaCat tys) ++ "}>"
+  show (LMInt size     ) = "i" ++ show size
+  show (LMFloat        ) = "float"
+  show (LMDouble       ) = "double"
+  show (LMFloat80      ) = "x86_fp80"
+  show (LMFloat128     ) = "fp128"
+  show (LMPointer x    ) = show x ++ "*"
+  show (LMArray nr tp  ) = "[" ++ show nr ++ " x " ++ show tp ++ "]"
+  show (LMVector nr tp ) = "<" ++ show nr ++ " x " ++ show tp ++ ">"
+  show (LMLabel        ) = "label"
+  show (LMVoid         ) = "void"
+  show (LMStruct tys   ) = "<{" ++ (commaCat tys) ++ "}>"
 
   show (LMFunction (LlvmFunctionDecl _ _ _ r varg p _))
     = let varg' = case varg of
@@ -286,20 +288,21 @@ isGlobal _                         = False
 
 -- | Width in bits of an 'LlvmType', returns 0 if not applicable
 llvmWidthInBits :: LlvmType -> Int
-llvmWidthInBits (LMInt n)       = n
-llvmWidthInBits (LMFloat)       = 32
-llvmWidthInBits (LMDouble)      = 64
-llvmWidthInBits (LMFloat80)     = 80
-llvmWidthInBits (LMFloat128)    = 128
+llvmWidthInBits (LMInt n)         = n
+llvmWidthInBits (LMFloat)         = 32
+llvmWidthInBits (LMDouble)        = 64
+llvmWidthInBits (LMFloat80)       = 80
+llvmWidthInBits (LMFloat128)      = 128
 -- Could return either a pointer width here or the width of what
 -- it points to. We will go with the former for now.
-llvmWidthInBits (LMPointer _)   = llvmWidthInBits llvmWord
-llvmWidthInBits (LMArray _ _)   = llvmWidthInBits llvmWord
-llvmWidthInBits LMLabel         = 0
-llvmWidthInBits LMVoid          = 0
-llvmWidthInBits (LMStruct tys)  = sum $ map llvmWidthInBits tys
-llvmWidthInBits (LMFunction  _) = 0
-llvmWidthInBits (LMAlias (_,t)) = llvmWidthInBits t
+llvmWidthInBits (LMPointer _)     = llvmWidthInBits llvmWord
+llvmWidthInBits (LMArray _ _)     = llvmWidthInBits llvmWord
+llvmWidthInBits (LMVector nr tp)  = nr * llvmWidthInBits tp
+llvmWidthInBits LMLabel           = 0
+llvmWidthInBits LMVoid            = 0
+llvmWidthInBits (LMStruct tys)    = sum $ map llvmWidthInBits tys
+llvmWidthInBits (LMFunction  _)   = 0
+llvmWidthInBits (LMAlias (_,t))   = llvmWidthInBits t
 
 
 -- -----------------------------------------------------------------------------
