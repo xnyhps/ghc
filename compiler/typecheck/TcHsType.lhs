@@ -726,14 +726,10 @@ ds_type (HsCoreTy ty)       = return ty
 
 ds_type (HsExplicitListTy kind tys) = do
   kind' <- zonkTcKindToKind kind
-  go kind' tys
-  -- JPM: fold . map
-  where
-    go k [] = return $ mkTyConApp (buildPromotedDataTyCon nilDataCon) [k]
-    go k (ty:tys) = do
-      tau_tail <- go k tys
-      tau_head <- dsHsType ty
-      return $ mkTyConApp (buildPromotedDataTyCon consDataCon) [k, tau_head, tau_tail]
+  ds_tys <- mapM dsHsType tys
+  return $
+   foldr (\a b -> mkTyConApp (buildPromotedDataTyCon consDataCon) [kind', a, b])
+         (mkTyConApp (buildPromotedDataTyCon nilDataCon) [kind']) ds_tys
 
 ds_type (HsExplicitTupleTy kis tys) = do
   MASSERT( length kis == length tys )
@@ -847,45 +843,42 @@ kcHsTyVars tvs thing_inside
 kcHsTyVar :: HsTyVarBndr Name -> TcM (HsTyVarBndr Name)
 -- Return a *kind-annotated* binder, whose PostTcKind is
 -- initialised with a kind variable.
--- Typically the Kind inside the KindedTyVar will and a tyvar with a mutable kind in it	
--- We aren't yet sure whether the binder is a *type* variable or a *kind* variable
--- See Note [Kind-checking kind-polymorphic types]
+-- Typically the Kind inside the KindedTyVar will be a tyvar with a mutable kind 
+-- in it. We aren't yet sure whether the binder is a *type* variable or a *kind*
+-- variable. See Note [Kind-checking kind-polymorphic types]
+--
+-- If the variable is already in scope return it, instead of introducing a new
+-- one. This can occur in 
+--   instance C (a,b) where
+--     type F (a,b) c = ...
+-- Here a,b will be in scope when processing the associated type instance for F.
 kcHsTyVar tyvar = do in_scope <- getInLocalScope
                      if in_scope (hsTyVarName tyvar)
                       then do inscope_tyvar <- tcLookupTyVar (hsTyVarName tyvar)
-                              {- pprTrace "kcHsTyVar in scope" (ppr tyvar) -} 
-                              return (UserTyVar (tyVarName inscope_tyvar) (tyVarKind inscope_tyvar)) 
-                       else {- pprTrace "kcHsTyVar not in scope" (ppr tyvar) $ -} kcHsTyVar' tyvar
+                              return (UserTyVar (tyVarName inscope_tyvar)
+                                (tyVarKind inscope_tyvar)) 
+                       else kcHsTyVar' tyvar
     where
         kcHsTyVar' (UserTyVar name _)        = UserTyVar name <$> newMetaKindVar
         kcHsTyVar' (KindedTyVar name kind _) = do
           kind' <- scDsLHsKind kind
           return (KindedTyVar name kind kind')
 
--- JPM: in kcHsTyVar, check for already-in-scope (in type env); 
--- if so return (KindedTyVar name k k), where k is the kind
--- This can occur in 
---   instance C (a,b) where
---     type F (a,b) c = ...
--- Here a,b will be in scope when processing the associated type instance for F
-
 ------------------
-tcTyVarBndrs :: [LHsTyVarBndr Name] 	-- Kind-annotated binders, which need kind-zonking
-	     -> ([TyVar] -> TcM r)
-	     -> TcM r
+tcTyVarBndrs :: [LHsTyVarBndr Name] -- Kind-annotated binders, which need kind-zonking
+             -> ([TyVar] -> TcM r)
+             -> TcM r
 -- Used when type-checking types/classes/type-decls
 -- Brings into scope immutable TyVars, not mutable ones that require later zonking
 -- Fix #5426: avoid abstraction over kinds containing # or (#)
 tcTyVarBndrs bndrs thing_inside = do
     tyvars <- mapM (zonk . hsTyVarNameKind . unLoc) bndrs
-    {- pprTrace "tcTyVarBndrs tyvars" (ppr tyvars) $ -}
     tcExtendTyVarEnv tyvars (thing_inside tyvars)
   where
     zonk (name, kind)
-      = do { kind' <- zonkTcKind kind -- JPM
+      = do { kind' <- zonkTcKind kind
            ; checkTc (noHashInKind kind') (ptext (sLit "Kind signature contains # or (#)"))
-           ; {- pprTrace "tcTyVarBndrs zonk" (ppr (name,kind,kind'))
-           $ -} return (mkTyVar name kind') }
+           ; return (mkTyVar name kind') }
 
 tcTyVarBndrsKindGen :: [LHsTyVarBndr Name] -> ([TyVar] -> TcM r) -> TcM r
 -- tcTyVarBndrsKindGen [(f :: ?k -> *), (a :: ?k)] thing_inside
@@ -894,7 +887,7 @@ tcTyVarBndrsKindGen bndrs thing_inside
   = do { let kinds = map (hsTyVarKind . unLoc) bndrs
        ; (kvs, zonked_kinds) <- kindGeneralizeKinds kinds
        ; let tyvars = zipWith mkTyVar (map hsLTyVarName bndrs) zonked_kinds
-    	     ktvs = kvs ++ tyvars     -- See Note [Kinds of quantified type variables]
+             ktvs = kvs ++ tyvars     -- See Note [Kinds of quantified type variables]
        ; traceTc "tcTyVarBndrsKindGen" (ppr (bndrs, kvs, tyvars))
        ; tcExtendTyVarEnv ktvs (thing_inside ktvs) }
 \end{code}

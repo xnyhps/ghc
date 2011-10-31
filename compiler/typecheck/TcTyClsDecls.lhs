@@ -664,7 +664,7 @@ tcSynFamInstDecl fam_tc (TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
                 $ \tvs' pats' res_kind -> do
 
        { rhs'  <- kc_rhs rhs res_kind
-       ; rhs'' <- tcHsKindedType rhs' -- JPM rename tcHsKindedType to tcRhsType
+       ; rhs'' <- tcHsKindedType rhs'
 
        ; return (tvs', pats', rhs'') } }
 

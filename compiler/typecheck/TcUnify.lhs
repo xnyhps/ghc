@@ -1219,7 +1219,7 @@ kindSimpleKind k
   | isArgTypeKind k  = liftedTypeKind
   | otherwise        = k
 
--- JPM Todo: maybe this is not the most informative signature possible
+-- Overloaded because it is used with both Type/Kind and TyVar/KiVar
 mkKindErrorMsg :: (Outputable a, Outputable b, Outputable c, Outputable d)
                => a -> b -> c -> d -> SDoc
 mkKindErrorMsg ty1 ty2 k1 k2 = 

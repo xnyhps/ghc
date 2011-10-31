@@ -211,17 +211,17 @@ demoteNameSpace TcClsName = Just DataName
 Note [Demotion]
 ~~~~~~~~~~~~~~~
 
-When the user write:
+When the user writes:
   data Nat = Zero | Succ Nat
   foo :: f Zero -> Int
 
 'Zero' in the type signature of 'foo' is parsed as:
   HsTyVar ("Zero", TcClsName)
 
-When the renamer hit this occurence of 'Zero' it's going to realise
+When the renamer hits this occurence of 'Zero' it's going to realise
 that it's not in scope. But because it is renaming a type, it knows
 that 'Zero' might be a promoted data constructor, so it will demote
-it's namespace to DataName and do a second lookup.
+its namespace to DataName and do a second lookup.
 
 The final result (after the renamer) will be:
   HsTyVar ("Zero", DataName)
