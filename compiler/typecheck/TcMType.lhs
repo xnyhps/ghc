@@ -575,12 +575,22 @@ defaultKindVarToStar kv = ASSERT ( isKiVar kv )
 defaultKindVarsToStar :: [TcTyVar] -> TcM [TcTyVar]
 defaultKindVarsToStar = mapM defaultKindVarToStar
 
+checkKiVarsBeforeTys :: [TcTyVar] -> Bool
+checkKiVarsBeforeTys = go emptyVarSet where
+  go _kiVars [] = True
+  go kiVars (v:vs)
+    | isKiVar v = go (extendVarSet kiVars v) vs
+    | isTyVar v =    kiVarsOfKind (tyVarKind v) `intersectVarSet` kiVars == kiVars
+                  && go kiVars vs
+    | otherwise = panic "checkKiVarsBeforeTys"
+
 zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
 --               variable mentioning it in its kind
 zonkQuantifiedTyVars tyvars
   = do { poly_kinds <- xoptM Opt_PolyKinds
-       ; if poly_kinds then
+       ; ASSERT ( checkKiVarsBeforeTys tyvars )
+         if poly_kinds then
              mapM zonkQuantifiedTyVar tyvars 
            -- Because of the precondition, any kind variables
            -- mentioned in the kinds of the type variables refer to
