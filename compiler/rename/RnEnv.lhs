@@ -437,19 +437,29 @@ lookupOccRn rdr_name = do
 -- lookupPromotedOccRn looks up an optionally promoted RdrName.
 lookupPromotedOccRn :: RdrName -> RnM Name
 -- see Note [Demotion] in OccName
-lookupPromotedOccRn rdr_name = do
-  opt_name <- lookupOccRn_maybe rdr_name  -- 1. lookup the name
-  case opt_name of
-    Just name -> return name              -- 1.a. we found it!
-    Nothing -> do {                       -- 1.b. we did not find it -> 2
-  case demoteRdrName rdr_name of          -- 2. maybe it was implicitly promoted
-    Nothing -> err                        -- 2.a it was not in a promoted namespace
-    Just demoted_rdr_name -> do {         -- 2.b let's try every thing again -> 3
-  opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;  -- 3. lookup again
-  case opt_demoted_name of
-    Just demoted_name -> return demoted_name  -- 3.a. it was implicitly promoted!
-    Nothing -> err } }                    -- 3.b. we use rdr_name and not promoted_rdr_name
-                                          -- to have a correct error message
+lookupPromotedOccRn rdr_name = do {
+    -- 1. lookup the name
+    opt_name <- lookupOccRn_maybe rdr_name 
+  ; case opt_name of
+      -- 1.a. we found it!
+      Just name -> return name
+      -- 1.b. we did not find it -> 2
+      Nothing -> do {
+  ; -- 2. maybe it was implicitly promoted
+    case demoteRdrName rdr_name of
+      -- 2.a it was not in a promoted namespace
+      Nothing -> err
+      -- 2.b let's try every thing again -> 3
+      Just demoted_rdr_name -> do {
+  ; poly_kinds <- xoptM Opt_PolyKinds
+    -- 3. lookup again
+  ; opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;
+  ; case opt_demoted_name of
+      -- 3.a. it was implicitly promoted, but confirm that we can promote
+      -- JPM: We could try to suggest turning on PolyKinds here
+      Just demoted_name -> if poly_kinds then return demoted_name else err
+      -- 3.b. use rdr_name to have a correct error message
+      Nothing -> err } } }
   where err = unboundName WL_Any rdr_name
 
 -- lookupOccRn looks up an occurrence of a RdrName
