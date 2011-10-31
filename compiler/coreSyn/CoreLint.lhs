@@ -211,7 +211,7 @@ lintSingleBinding top_lvl_flag rec_flag (binder,rhs)
 %************************************************************************
 
 \begin{code}
-type InKind      = Kind	-- Substitution not yet applied
+--type InKind      = Kind	-- Substitution not yet applied
 type InType      = Type	
 type InCoercion  = Coercion
 type InVar       = Var
@@ -637,7 +637,8 @@ lintInTy :: InType -> LintM OutType
 lintInTy ty 
   = addLoc (InType ty) $
     do	{ ty' <- applySubstTy ty
-	; _ <- lintType ty'
+	; k <- lintType ty'
+	; lintKind k
 	; return ty' }
 
 lintInCo :: InCoercion -> LintM OutCoercion
@@ -689,8 +690,8 @@ lintKindCoercion co
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind
 lintCoercion (Refl ty)
-  = do { ty' <- lintType ty
-       ; return (ty', ty') }
+  = do { _k <- lintType ty
+       ; return (ty, ty) }
 
 lintCoercion co@(TyConAppCo tc cos)
   = do   -- We use the kind of the type constructor to know how many
@@ -746,9 +747,9 @@ lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
     (kcos, tcos) = splitAt (length kvs) cos
 
 lintCoercion (UnsafeCo ty1 ty2)
-  = do { ty1' <- lintType ty1
-       ; ty2' <- lintType ty2
-       ; return (ty1', ty2') }
+  = do { _k1 <- lintType ty1
+       ; _k2 <- lintType ty2
+       ; return (ty1, ty2) }
 
 lintCoercion (SymCo co) 
   = do { (ty1, ty2) <- lintCoercion co
