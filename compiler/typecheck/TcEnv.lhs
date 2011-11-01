@@ -722,7 +722,7 @@ notFound name
                        -- cause an infnite loop, in the case where we
                        -- are in the middle of a recursive TyCon/Class group;
                        -- so let's just not print it!  Getting a loop here is
-                       -- *very* unhelpful, because it hides one compiler bug with another
+                       -- very unhelpful, because it hides one compiler bug with another
                     ) }
 
 wrongThingErr :: String -> TcTyThing -> Name -> TcM a
