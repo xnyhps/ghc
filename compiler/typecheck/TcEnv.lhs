@@ -714,7 +714,7 @@ pprBinders bndrs  = pprWithCommas ppr bndrs
 
 notFound :: Name -> TcM TyThing
 notFound name 
-  = do { (gbl,lcl) <- getEnvs
+  = do { (_gbl,lcl) <- getEnvs
        ; failWithTc (vcat[ptext (sLit "GHC internal error:") <+> quotes (ppr name) <+> 
                      ptext (sLit "is not in scope during type checking, but it passed the renamer"),
                      ptext (sLit "tcl_env of environment:") <+> ppr (tcl_env lcl)]

@@ -96,7 +96,7 @@ tcTyClGroup boot_details tyclds
             -- (possibly-polymorphic) kind of each TyCon and Class
             -- See Note [Kind checking for type and class decls]
          names_w_poly_kinds <- kcTyClGroup tyclds
-       ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_kinds)
+       ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_poly_kinds)
 
 	    -- Step 2: type-check the group, returning 
 	    -- the final TyCons and Classes

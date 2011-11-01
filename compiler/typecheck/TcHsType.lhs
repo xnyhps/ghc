@@ -166,7 +166,7 @@ tcHsSigTypeNC ctxt hs_ty
     	  -- The kind is checked by checkValidType, and isn't necessarily
 	  -- of kind * in a Template Haskell quote eg [t| Maybe |]
 	; ty <- tcHsKindedType kinded_ty
-	; checkValidType ctxt ty	
+	; checkValidType ctxt ty
 	; return ty }
 
 -- Like tcHsType, but takes an expected kind
