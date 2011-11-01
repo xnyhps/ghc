@@ -633,7 +633,6 @@ lintAndScopeId id linterF
 lintInTy :: InType -> LintM OutType
 -- Check the type, and apply the substitution to it
 -- See Note [Linting type lets]
--- ToDo: check the kind structure of the type
 lintInTy ty 
   = addLoc (InType ty) $
     do	{ ty' <- applySubstTy ty
@@ -657,7 +656,8 @@ lintKind (FunTy k1 k2)
   = lintKind k1 >> lintKind k2
 
 lintKind kind@(TyConApp tc kis)
-  = do { unless (tyConArity tc == length kis) (addErrL malformed_kind)
+  = do { unless (tyConArity tc == length kis || isSuperKindTyCon tc)
+           (addErrL malformed_kind)
        ; mapM_ lintKind kis }
   where
     malformed_kind = hang (ptext (sLit "Malformed kind:")) 2 (quotes (ppr kind))
@@ -795,7 +795,12 @@ checkTcApp co n ty
 lintType :: OutType -> LintM Kind
 lintType (TyVarTy tv)
   = do { checkTyCoVarInScope tv
-       ; return (tyVarKind tv) }
+       ; let kind = tyVarKind tv
+       ; lintKind kind
+       ; if (isSuperKind kind) then failWithL msg
+         else return kind }
+  where msg = hang (ptext (sLit "Expecting a type, but got a kind"))
+                 2 (ptext (sLit "Offending kind:") <+> ppr tv)
 
 lintType ty@(AppTy t1 t2) 
   = do { k1 <- lintType t1
@@ -847,6 +852,7 @@ lint_kind_app doc kfn tys = go kfn tys
           -- Something of kind (kfa -> kfb) is applied to ty. 'ty' is
           -- a type accepting kind 'kfa'.
         { k <- lintType ty
+        ; lintKind kfa
         ; unless (k `isSubKind` kfa) (addErrL fail_msg)
         ; go kfb tys } }
 
