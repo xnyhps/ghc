@@ -120,7 +120,6 @@ ifaceTyConName IfaceSuperKindTc        = tySuperKindTyConName
 ifaceTyConName (IfaceTc ext)           = ext
 ifaceTyConName (IfaceIPTc n)           = pprPanic "ifaceTyConName:IPTc" (ppr n)
 	       		    	       	 -- Note [The Name of an IfaceAnyTc]
-                                         -- The same caveat applies to IfaceIPTc
 \end{code}
 
 Note [The Name of an IfaceAnyTc]
@@ -208,7 +207,8 @@ pprIfaceIdBndr :: (IfLclName, IfaceType) -> SDoc
 pprIfaceIdBndr (name, ty) = hsep [ppr name, dcolon, ppr ty]
 
 pprIfaceTvBndr :: IfaceTvBndr -> SDoc
-pprIfaceTvBndr (tv, IfaceTyConApp IfaceLiftedTypeKindTc []) 
+pprIfaceTvBndr (tv, IfaceTyConApp (IfaceTc n) [])
+  | n == liftedTypeKindTyConName
   = ppr tv
 pprIfaceTvBndr (tv, kind) = parens (ppr tv <> dcolon <> ppr kind)
 pprIfaceTvBndrs :: [IfaceTvBndr] -> SDoc
@@ -273,15 +273,20 @@ pprIfaceForAllPart tvs ctxt doc
 -------------------
 ppr_tc_app :: Int -> IfaceTyCon -> [IfaceType] -> SDoc
 ppr_tc_app _         tc 	 []   = ppr_tc tc
-ppr_tc_app _         IfaceListTc [ty] = brackets   (pprIfaceType ty)
-ppr_tc_app _         IfacePArrTc [ty] = pabrackets (pprIfaceType ty)
-ppr_tc_app _         (IfaceTupTc bx arity) tys
-  | arity == length tys 
-  = tupleParens bx (sep (punctuate comma (map pprIfaceType tys)))
-ppr_tc_app _         (IfaceIPTc n) [ty] = parens (ppr (IPName n) <> dcolon <> pprIfaceType ty)
-ppr_tc_app ctxt_prec tc tys 
+ppr_tc_app _         (IfaceTc n) [ty] | n == listTyConName = brackets (pprIfaceType ty)
+ppr_tc_app _         (IfaceTc n) [ty] | n == parrTyConName = pabrackets (pprIfaceType ty)
+ppr_tc_app _         (IfaceTc n) tys
+  | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
+  , Just sort <- tyConTuple_maybe tc
+  , tyConArity tc == length tys 
+  = tupleParens sort (sep (punctuate comma (map pprIfaceType tys)))
+  | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
+  , Just ip <- tyConIP_maybe tc
+  , [ty] <- tys
+  = parens (ppr ip <> dcolon <> pprIfaceType ty)
+ppr_tc_app ctxt_prec tc tys
   = maybeParen ctxt_prec tYCON_PREC 
-	       (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
+               (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
 
 ppr_tc :: IfaceTyCon -> SDoc
 -- Wrap infix type constructors in parens
@@ -357,13 +362,6 @@ toIfaceCoVar :: CoVar -> FastString
 toIfaceCoVar = occNameFS . getOccName
 
 ----------------
--- A little bit of (perhaps optional) trickiness here.  When
--- compiling Data.Tuple, the tycons are not TupleTyCons, although
--- they have a wired-in name.  But we'd like to dump them into the Iface
--- as a tuple tycon, to save lookups when reading the interface
--- Hence a tuple tycon may 'miss' in toIfaceTyCon, but then
--- toIfaceTyCon_name will still catch it.
-
 toIfaceTyCon :: TyCon -> IfaceTyCon
 toIfaceTyCon tc 
   | isTupleTyCon tc            = IfaceTupTc (tupleTyConSort tc) (tyConArity tc)

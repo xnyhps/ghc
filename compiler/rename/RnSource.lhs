@@ -363,7 +363,7 @@ rnDefaultDecl (DefaultDecl tys)
 
 \begin{code}
 rnHsForeignDecl :: ForeignDecl RdrName -> RnM (ForeignDecl Name, FreeVars)
-rnHsForeignDecl (ForeignImport name ty spec)
+rnHsForeignDecl (ForeignImport name ty _ spec)
   = do { topEnv :: HscEnv <- getTopEnv
        ; name' <- lookupLocatedTopBndrRn name
        ; (ty', fvs) <- rnHsTypeFVs (ForeignDeclCtx name) ty
@@ -372,12 +372,12 @@ rnHsForeignDecl (ForeignImport name ty spec)
        ; let packageId = thisPackage $ hsc_dflags topEnv
 	     spec'     = patchForeignImport packageId spec
 
-       ; return (ForeignImport name' ty' spec', fvs) }
+       ; return (ForeignImport name' ty' noForeignImportCoercionYet spec', fvs) }
 
-rnHsForeignDecl (ForeignExport name ty spec)
+rnHsForeignDecl (ForeignExport name ty _ spec)
   = do { name' <- lookupLocatedOccRn name
        ; (ty', fvs) <- rnHsTypeFVs (ForeignDeclCtx name) ty
-       ; return (ForeignExport name' ty' spec, fvs `addOneFV` unLoc name') }
+       ; return (ForeignExport name' ty' noForeignExportCoercionYet spec, fvs `addOneFV` unLoc name') }
 	-- NB: a foreign export is an *occurrence site* for name, so 
 	--     we add it to the free-variable list.  It might, for example,
 	--     be imported from another module
@@ -419,7 +419,7 @@ patchCCallTarget packageId callTarget
 rnSrcInstDecl :: InstDecl RdrName -> RnM (InstDecl Name, FreeVars)
 rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	-- Used for both source and interface file decls
-  = do { inst_ty' <- rnHsSigType (text "an instance decl") inst_ty
+  = do { inst_ty' <- rnLHsInstType (text "In an instance declaration") inst_ty
        ; let Just (inst_tyvars, _, L _ cls,_) = splitLHsInstDeclTy_maybe inst_ty'
 
 	-- Rename the bindings
@@ -432,8 +432,7 @@ rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 					          mbinds    
 
        -- Rename the associated types
-       -- Here the instance variables always scope, regardless of -XScopedTypeVariables					
-       -- NB: we allow duplicate associated-type decls; 
+       -- NB: We allow duplicate associated-type decls; 
        --     See Note [Associated type instances] in TcInstDcls
        ; (ats', at_fvs) <- extendTyVarEnvFVRn (map hsLTyVarName inst_tyvars) $
                            rnATInsts cls ats
@@ -446,9 +445,8 @@ rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	--
 	-- But the (unqualified) method names are in scope
        ; let binders = collectHsBindsBinders mbinds'
-	     bndr_set = mkNameSet binders
        ; uprags' <- bindLocalNames binders $
-	            renameSigs (Just bndr_set) okInstDclSig uprags
+	            renameSigs (InstDeclCtxt cls) uprags
 
        ; return (InstDecl inst_ty' mbinds' uprags' ats',
 	         meth_fvs `plusFV` at_fvs
@@ -504,7 +502,7 @@ rnSrcDerivDecl :: DerivDecl RdrName -> RnM (DerivDecl Name, FreeVars)
 rnSrcDerivDecl (DerivDecl ty)
   = do { standalone_deriv_ok <- xoptM Opt_StandaloneDeriving
        ; unless standalone_deriv_ok (addErr standaloneDerivErr)
-       ; ty' <- rnLHsType DerivDeclCtx ty
+       ; ty' <- rnLHsInstType (text "In a deriving declaration") ty
        ; let fvs = extractHsTyNames ty'
        ; return (DerivDecl ty', fvs) }
 
@@ -650,18 +648,30 @@ rnHsVectDecl (HsNoVect var)
   = do { var' <- lookupLocatedTopBndrRn var           -- only applies to local (not imported) names
        ; return (HsNoVect var', unitFV (unLoc var'))
        }
-rnHsVectDecl (HsVectTypeIn tycon Nothing)
+rnHsVectDecl (HsVectTypeIn isScalar tycon Nothing)
   = do { tycon' <- lookupLocatedOccRn tycon
-       ; return (HsVectTypeIn tycon' Nothing, unitFV (unLoc tycon'))
+       ; return (HsVectTypeIn isScalar tycon' Nothing, unitFV (unLoc tycon'))
        }
-rnHsVectDecl (HsVectTypeIn tycon (Just ty))
-  = do { tycon' <- lookupLocatedOccRn tycon
-       ; (ty', fv_ty) <- rnHsTypeFVs vect_doc ty
-       ; return (HsVectTypeIn tycon' (Just ty'), fv_ty `addOneFV` unLoc tycon')
+rnHsVectDecl (HsVectTypeIn isScalar tycon (Just rhs_tycon))
+  = do { tycon'     <- lookupLocatedOccRn tycon
+       ; rhs_tycon' <- lookupLocatedOccRn rhs_tycon
+       ; return ( HsVectTypeIn isScalar tycon' (Just rhs_tycon')
+                , mkFVs [unLoc tycon', unLoc rhs_tycon'])
        }
-  where vect_doc = VectDeclCtx tycon
-rnHsVectDecl (HsVectTypeOut _ _)
+rnHsVectDecl (HsVectTypeOut _ _ _)
   = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectTypeOut'"
+rnHsVectDecl (HsVectClassIn cls)
+  = do { cls' <- lookupLocatedOccRn cls
+       ; return (HsVectClassIn cls', unitFV (unLoc cls'))
+       }
+rnHsVectDecl (HsVectClassOut _)
+  = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectClassOut'"
+rnHsVectDecl (HsVectInstIn isScalar instTy)
+  = do { instTy' <- rnLHsInstType (text "In a VECTORISE pragma") instTy
+       ; return (HsVectInstIn isScalar instTy', emptyFVs)
+       }
+rnHsVectDecl (HsVectInstOut _ _)
+  = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectInstOut'"
 \end{code}
 
 %*********************************************************
@@ -801,7 +811,7 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 	     ; fds'  <- rnFds (docOfHsDocContext cls_doc) fds
              ; let rn_at = rnTyClDecl (Just cls')
              ; (ats', fv_ats) <- mapAndUnzipM (wrapLocFstM rn_at) ats
-	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
+	     ; sigs' <- renameSigs (ClsDeclCtxt cls') sigs
              ; (at_defs', fv_at_defs) <- mapAndUnzipM (wrapLocFstM rn_at) at_defs
 	     ; let fvs = extractHsCtxtTyNames context'	`plusFV`
 	                 hsSigsFVs sigs'                `plusFV`
@@ -866,6 +876,7 @@ bindQTvs doc mb_cls tyvars thing_inside
        ; mapM_ dupBoundTyVar (findDupRdrNames tv_rdr_names)
 
        ; rdr_env <- getLocalRdrEnv
+{- JPM
        ; tv_nbs <- mapM (mk_tv_name rdr_env) tv_rdr_names
        ; let tv_ns, fresh_ns :: [Name]
              tv_ns = map fst tv_nbs
@@ -874,15 +885,35 @@ bindQTvs doc mb_cls tyvars thing_inside
        ; tyvars' <- zipWithM (\old new -> replaceLTyVarName old new (rnLHsKind doc)) tyvars tv_ns
        ; (thing, fvs) <- bindLocalNames tv_ns $ thing_inside tyvars'
        ; return (thing, delFVs fresh_ns fvs) }
+-}
+       ; tv_ns <- mapM (mk_tv_name rdr_env) tv_rdr_names
+       ; tyvars' <- zipWithM (\old new -> replaceLTyVarName old new (rnLHsKind doc)) tyvars tv_ns
+       ; (thing, fvs) <- bindLocalNamesFV tv_ns $ thing_inside tyvars'
+
+	-- Check that the RHS of the decl mentions only type variables
+	-- bound on the LHS.  For example, this is not ok
+	-- 	 class C a b where
+	--         type F a x :: *
+	--	 instance C (p,q) r where
+        --	   type F (p,q) x = (x, r)	-- BAD: mentions 'r'
+	-- c.f. Trac #5515
+       ; let bad_tvs = filterNameSet (isTvOcc . nameOccName) fvs
+       ; unless (isEmptyNameSet bad_tvs) (badAssocRhs (nameSetToList bad_tvs))
+
+       ; return (thing, fvs) }
   where
-    mk_tv_name :: LocalRdrEnv -> Located RdrName -> RnM (Name, Bool)
-	       -- False <=> already in scope
-    	       -- True  <=> fresh
+    mk_tv_name :: LocalRdrEnv -> Located RdrName -> RnM Name
     mk_tv_name rdr_env (L l tv_rdr)
-      = do { case lookupLocalRdrEnv rdr_env tv_rdr of 
-               Just n  -> return (n, False)
-               Nothing -> do { n <- newLocalBndrRn (L l tv_rdr)
-                             ; return (n, True) } }
+      = case lookupLocalRdrEnv rdr_env tv_rdr of 
+          Just n  -> return n
+          Nothing -> newLocalBndrRn (L l tv_rdr)
+
+badAssocRhs :: [Name] -> RnM ()
+badAssocRhs ns
+  = addErr (hang (ptext (sLit "The RHS of an associated type declaration mentions type variable") 
+                  <> plural ns 
+                  <+> pprWithCommas (quotes . ppr) ns)
+               2 (ptext (sLit "All such variables must be bound on the LHS")))
 
 dupBoundTyVar :: [Located RdrName] -> RnM ()
 dupBoundTyVar (L loc tv : _) 

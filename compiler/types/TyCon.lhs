@@ -63,7 +63,7 @@ module TyCon(
 	tyConStupidTheta,
 	tyConArity,
         tyConParent,
-	tyConClass_maybe, tyConIP_maybe,
+	tyConTuple_maybe, tyConClass_maybe, tyConIP_maybe,
 	tyConFamInst_maybe, tyConFamilyCoercion_maybe,tyConFamInstSig_maybe,
         synTyConDefn, synTyConRhs, synTyConType,
         tyConExtName,           -- External name for foreign types
@@ -1429,6 +1429,10 @@ isClassTyCon _                                       = False
 tyConClass_maybe :: TyCon -> Maybe Class
 tyConClass_maybe (AlgTyCon {algTcParent = ClassTyCon clas}) = Just clas
 tyConClass_maybe _                                          = Nothing
+
+tyConTuple_maybe :: TyCon -> Maybe TupleSort
+tyConTuple_maybe (TupleTyCon {tyConTupleSort = sort}) = Just sort
+tyConTuple_maybe _                                    = Nothing
 
 -- | If this 'TyCon' is that for implicit parameter, return the IP it is for.
 -- Otherwise returns @Nothing@

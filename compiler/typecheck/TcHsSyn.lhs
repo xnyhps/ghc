@@ -993,8 +993,8 @@ zonkForeignExports :: ZonkEnv -> [LForeignDecl TcId] -> TcM [LForeignDecl Id]
 zonkForeignExports env ls = mappM (wrapLocM (zonkForeignExport env)) ls
 
 zonkForeignExport :: ZonkEnv -> ForeignDecl TcId -> TcM (ForeignDecl Id)
-zonkForeignExport env (ForeignExport i _hs_ty spec) =
-   returnM (ForeignExport (fmap (zonkIdOcc env) i) undefined spec)
+zonkForeignExport env (ForeignExport i _hs_ty co spec) =
+   returnM (ForeignExport (fmap (zonkIdOcc env) i) undefined co spec)
 zonkForeignExport _ for_imp 
   = returnM for_imp	-- Foreign imports don't need zonking
 \end{code}
@@ -1046,11 +1046,15 @@ zonkVect env (HsNoVect v)
   = do { v' <- wrapLocM (zonkIdBndr env) v
        ; return $ HsNoVect v'
        }
-zonkVect env (HsVectTypeOut t ty)
-  = do { ty' <- fmapMaybeM (zonkTcTypeToType env) ty
-       ; return $ HsVectTypeOut t ty'
-       }
-zonkVect _ (HsVectTypeIn _ _) = panic "TcHsSyn.zonkVect: HsVectTypeIn"
+zonkVect _env (HsVectTypeOut s t rt)
+  = return $ HsVectTypeOut s t rt
+zonkVect _ (HsVectTypeIn _ _ _) = panic "TcHsSyn.zonkVect: HsVectTypeIn"
+zonkVect _env (HsVectClassOut c)
+  = return $ HsVectClassOut c
+zonkVect _ (HsVectClassIn _) = panic "TcHsSyn.zonkVect: HsVectClassIn"
+zonkVect _env (HsVectInstOut s i)
+  = return $ HsVectInstOut s i
+zonkVect _ (HsVectInstIn _ _) = panic "TcHsSyn.zonkVect: HsVectInstIn"
 \end{code}
 
 %************************************************************************

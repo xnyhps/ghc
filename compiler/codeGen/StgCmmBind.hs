@@ -396,7 +396,9 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
     do  { -- Allocate the global ticky counter,
           -- and establish the ticky-counter
           -- label for this block
-        ; let ticky_ctr_lbl = closureRednCountsLabel cl_info
+        ; dflags <- getDynFlags
+        ; let platform = targetPlatform dflags
+              ticky_ctr_lbl = closureRednCountsLabel platform cl_info
         ; emitTickyCounter cl_info (map stripNV args)
         ; setTickyCtrLabel ticky_ctr_lbl $ do
 
@@ -454,14 +456,16 @@ mkSlowEntryCode :: ClosureInfo -> [LocalReg] -> FCode ()
 mkSlowEntryCode _ [] = panic "entering a closure with no arguments?"
 mkSlowEntryCode cl_info arg_regs -- function closure is already in `Node'
   | Just (_, ArgGen _) <- closureFunInfo cl_info
-  = emitProcWithConvention Slow CmmNonInfoTable slow_lbl arg_regs jump
+  = do dflags <- getDynFlags
+       let platform = targetPlatform dflags
+           slow_lbl = closureSlowEntryLabel  platform cl_info
+           fast_lbl = closureLocalEntryLabel platform cl_info
+           -- mkDirectJump does not clobber `Node' containing function closure
+           jump = mkDirectJump (mkLblExpr fast_lbl)
+                               (map (CmmReg . CmmLocal) arg_regs)
+                               initUpdFrameOff
+       emitProcWithConvention Slow CmmNonInfoTable slow_lbl arg_regs jump
   | otherwise = return ()
-  where
-     slow_lbl = closureSlowEntryLabel cl_info
-     fast_lbl = closureLocalEntryLabel cl_info
-     -- mkDirectJump does not clobber `Node' containing function closure
-     jump = mkDirectJump (mkLblExpr fast_lbl) (map (CmmReg . CmmLocal) arg_regs)
-                         initUpdFrameOff
 
 -----------------------------------------
 thunkCode :: ClosureInfo -> [(NonVoid Id, VirtualHpOffset)] -> CostCentreStack
@@ -640,25 +644,24 @@ link_caf _is_upd = do
 	-- so that the garbage collector can find them
 	-- This must be done *before* the info table pointer is overwritten,
 	-- because the old info table ptr is needed for reversion
-  ; emitRtsCallWithVols rtsPackageId (fsLit "newCAF")
+  ; ret <- newTemp bWord
+  ; emitRtsCallGen [(ret,NoHint)] rtsPackageId (fsLit "newCAF")
       [ (CmmReg (CmmGlobal BaseReg),  AddrHint),
-        (CmmReg nodeReg, AddrHint) ]
-      [node] False
-	-- node is live, so save it.
+        (CmmReg nodeReg, AddrHint),
+        (CmmReg (CmmLocal hp_rel), AddrHint) ]
+      (Just [node]) False
+        -- node is live, so save it.
 
-	-- Overwrite the closure with a (static) indirection
-	-- to the newly-allocated black hole
-  ; emit (mkStore (cmmRegOffW nodeReg off_indirectee) (CmmReg (CmmLocal hp_rel)) <*>
-	  mkStore (CmmReg nodeReg) ind_static_info)
+  -- see Note [atomic CAF entry] in rts/sm/Storage.c
+  ; emit $ mkCmmIfThen
+      (CmmMachOp mo_wordEq [ CmmReg (CmmLocal ret), CmmLit zeroCLit]) $
+        -- re-enter R1.  Doing this directly is slightly dodgy; we're
+        -- assuming lots of things, like the stack pointer hasn't
+        -- moved since we entered the CAF.
+        let target = entryCode (closureInfoPtr (CmmReg nodeReg)) in
+        mkJump target [] 0
 
   ; return hp_rel }
-  where
-    ind_static_info :: CmmExpr
-    ind_static_info = mkLblExpr mkIndStaticInfoLabel
-
-    off_indirectee :: WordOff
-    off_indirectee = fixedHdrSize + oFFSET_StgInd_indirectee*wORD_SIZE
-
 
 ------------------------------------------------------------------------
 --		Profiling

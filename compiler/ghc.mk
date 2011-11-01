@@ -105,6 +105,8 @@ endif
 	@echo 'cLeadingUnderscore    = "$(LeadingUnderscore)"'              >> $@
 	@echo 'cRAWCPP_FLAGS         :: String'                             >> $@
 	@echo 'cRAWCPP_FLAGS         = "$(RAWCPP_FLAGS)"'                   >> $@
+	@echo 'cLdHasNoCompactUnwind :: String'                             >> $@
+	@echo 'cLdHasNoCompactUnwind = "$(LdHasNoCompactUnwind)"'           >> $@
 	@echo 'cLdIsGNULd            :: String'                             >> $@
 	@echo 'cLdIsGNULd            = "$(LdIsGNULd)"'                      >> $@
 	@echo 'cLdHasBuildId         :: String'                             >> $@
@@ -489,6 +491,19 @@ compiler/main/Constants_HC_OPTS  += -fforce-recomp
 # this for just stage1 in the build system.
 ifeq "$(GhcVersion)" "6.12.2"
 compiler/hsSyn/HsLit_HC_OPTS     += -fomit-interface-pragmas
+endif
+
+# LibFFI.hs #includes ffi.h
+compiler/stage2/build/LibFFI.hs : $(ffi_HEADER)
+# On Windows it seems we also need to link directly to libffi
+ifeq  "$(HOSTPLATFORM)" "i386-unknown-mingw32"
+define windowsDynLinkToFfi
+# $1 = way
+ifneq "$$(findstring dyn, $1)" ""
+compiler_stage2_$1_ALL_HC_OPTS += -lffi-5
+endif
+endef
+$(foreach way,$(GhcLibWays),$(eval $(call windowsDynLinkToFfi,$(way))))
 endif
 
 # Note [munge-stage1-package-config]

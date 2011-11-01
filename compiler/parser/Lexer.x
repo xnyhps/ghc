@@ -55,6 +55,7 @@ module Lexer (
    activeContext, nextIsEOF,
    getLexState, popLexState, pushLexState,
    extension, bangPatEnabled, datatypeContextsEnabled,
+   traditionalRecordSyntaxEnabled,
    addWarning,
    lexTokenStream
   ) where
@@ -583,9 +584,7 @@ data Token
   | ITlineComment     String     -- comment starting by "--"
   | ITblockComment    String     -- comment in {- -}
 
-#ifdef DEBUG
-  deriving Show -- debugging
-#endif
+  deriving Show
 
 -- the bitmap provided as the third component indicates whether the
 -- corresponding extension keyword is valid under the extension options
@@ -1205,7 +1204,7 @@ lex_string s = do
         | Just ('&',i) <- next -> do
                 setInput i; lex_string s
         | Just (c,i) <- next, c <= '\x7f' && is_space c -> do
-                           -- is_space only works for <= '\x7f' (#3751)
+                           -- is_space only works for <= '\x7f' (#3751, #5425)
                 setInput i; lex_stringgap s
         where next = alexGetChar' i
 
@@ -1221,7 +1220,8 @@ lex_stringgap s = do
   c <- getCharOrFail i
   case c of
     '\\' -> lex_string s
-    c | is_space c -> lex_stringgap s
+    c | c <= '\x7f' && is_space c -> lex_stringgap s
+                           -- is_space only works for <= '\x7f' (#3751, #5425)
     _other -> lit_error i
 
 
@@ -1412,18 +1412,18 @@ lex_quasiquote_tok span buf len = do
                 -- 'tail' drops the initial '[',
                 -- while the -1 drops the trailing '|'
   quoteStart <- getSrcLoc
-  quote <- lex_quasiquote ""
+  quote <- lex_quasiquote quoteStart ""
   end <- getSrcLoc
   return (L (mkRealSrcSpan (realSrcSpanStart span) end)
            (ITquasiQuote (mkFastString quoter,
                           mkFastString (reverse quote),
                           mkRealSrcSpan quoteStart end)))
 
-lex_quasiquote :: String -> P String
-lex_quasiquote s = do
+lex_quasiquote :: RealSrcLoc -> String -> P String
+lex_quasiquote start s = do
   i <- getInput
   case alexGetChar' i of
-    Nothing -> lit_error i
+    Nothing -> quasiquote_error start
 
     -- NB: The string "|]" terminates the quasiquote,
     -- with absolutely no escaping. See the extensive
@@ -1434,7 +1434,12 @@ lex_quasiquote s = do
         -> do { setInput i; return s }
 
     Just (c, i) -> do
-         setInput i; lex_quasiquote (c : s)
+         setInput i; lex_quasiquote start (c : s)
+
+quasiquote_error :: RealSrcLoc -> P a
+quasiquote_error start = do
+  (AI end buf) <- getInput
+  reportLexError start end buf "unterminated quasiquotation"
 
 -- -----------------------------------------------------------------------------
 -- Warnings
@@ -1778,6 +1783,8 @@ nondecreasingIndentationBit :: Int
 nondecreasingIndentationBit = 25
 safeHaskellBit :: Int
 safeHaskellBit = 26
+traditionalRecordSyntaxBit :: Int
+traditionalRecordSyntaxBit = 27
 
 always :: Int -> Bool
 always           _     = True
@@ -1819,6 +1826,8 @@ relaxedLayout :: Int -> Bool
 relaxedLayout flags = testBit flags relaxedLayoutBit
 nondecreasingIndentation :: Int -> Bool
 nondecreasingIndentation flags = testBit flags nondecreasingIndentationBit
+traditionalRecordSyntaxEnabled :: Int -> Bool
+traditionalRecordSyntaxEnabled flags = testBit flags traditionalRecordSyntaxBit
 
 -- PState for parsing options pragmas
 --
@@ -1874,7 +1883,8 @@ mkPState flags buf loc =
                .|. alternativeLayoutRuleBit    `setBitIf` xopt Opt_AlternativeLayoutRule    flags
                .|. relaxedLayoutBit            `setBitIf` xopt Opt_RelaxedLayout            flags
                .|. nondecreasingIndentationBit `setBitIf` xopt Opt_NondecreasingIndentation flags
-               .|. safeHaskellBit              `setBitIf` safeHaskellOn                     flags
+               .|. safeHaskellBit              `setBitIf` safeImportsOn                     flags
+               .|. traditionalRecordSyntaxBit  `setBitIf` xopt Opt_TraditionalRecordSyntax  flags
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b

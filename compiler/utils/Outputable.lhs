@@ -77,12 +77,15 @@ import FastString
 import FastTypes
 import Platform
 import qualified Pretty
+import Util		( snocView )
 import Pretty		( Doc, Mode(..) )
 import Panic
 
 import Data.Char
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Word
 import System.IO	( Handle, stderr, stdout, hFlush )
 import System.FilePath
@@ -452,14 +455,14 @@ cparen :: Bool -> SDoc -> SDoc
 
 cparen b d     = SDoc $ Pretty.cparen b . runSDoc d
 
--- quotes encloses something in single quotes...
+-- 'quotes' encloses something in single quotes...
 -- but it omits them if the thing ends in a single quote
 -- so that we don't get `foo''.  Instead we just have foo'.
 quotes d = SDoc $ \sty -> 
            let pp_d = runSDoc d sty in
-           case show pp_d of
-             ('\'' : _) -> pp_d
-             _other     -> Pretty.quotes pp_d
+           case snocView (show pp_d) of
+             Just (_, '\'') -> pp_d
+             _other         -> Pretty.quotes pp_d
 
 semi, comma, colon, equals, space, dcolon, arrow, underscore, dot :: SDoc
 darrow, lparen, rparen, lbrack, rbrack, lbrace, rbrace, blankLine :: SDoc
@@ -622,6 +625,8 @@ instance Outputable Bool where
 
 instance Outputable Int where
    ppr n = int n
+instance PlatformOutputable Int where
+   pprPlatform _ = ppr
 
 instance Outputable Word16 where
    ppr n = integer $ fromIntegral n
@@ -642,6 +647,9 @@ instance (Outputable a) => Outputable [a] where
 instance (PlatformOutputable a) => PlatformOutputable [a] where
     pprPlatform platform xs = brackets (fsep (punctuate comma (map (pprPlatform platform) xs)))
 
+instance (Outputable a) => Outputable (Set a) where
+    ppr s = braces (fsep (punctuate comma (map ppr (Set.toList s))))
+
 instance (Outputable a, Outputable b) => Outputable (a, b) where
     ppr (x,y) = parens (sep [ppr x <> comma, ppr y])
 instance (PlatformOutputable a, PlatformOutputable b) => PlatformOutputable (a, b) where
@@ -651,6 +659,9 @@ instance (PlatformOutputable a, PlatformOutputable b) => PlatformOutputable (a, 
 instance Outputable a => Outputable (Maybe a) where
   ppr Nothing = ptext (sLit "Nothing")
   ppr (Just x) = ptext (sLit "Just") <+> ppr x
+instance PlatformOutputable a => PlatformOutputable (Maybe a) where
+  pprPlatform _        Nothing  = ptext (sLit "Nothing")
+  pprPlatform platform (Just x) = ptext (sLit "Just") <+> pprPlatform platform x
 
 instance (Outputable a, Outputable b) => Outputable (Either a b) where
   ppr (Left x)  = ptext (sLit "Left")  <+> ppr x

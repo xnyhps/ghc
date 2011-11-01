@@ -268,7 +268,7 @@ See Note [seqId magic] in MkId, and
 
 
 \begin{code}
-tcExpr (OpApp arg1 op fix arg2) res_ty
+tcExpr exp@(OpApp arg1 op fix arg2) res_ty
   | (L loc (HsVar op_name)) <- op
   , op_name `hasKey` seqIdKey		-- Note [Typing rule for seq]
   = do { arg1_ty <- newFlexiTyVarTy liftedTypeKind
@@ -283,12 +283,22 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
   , op_name `hasKey` dollarIdKey	-- Note [Typing rule for ($)]
   = do { traceTc "Application rule" (ppr op)
        ; (arg1', arg1_ty) <- tcInferRho arg1
+
        ; let doc = ptext (sLit "The first argument of ($) takes")
        ; (co_arg1, [arg2_ty], op_res_ty) <- matchExpectedFunTys doc 1 arg1_ty
        	 -- arg2_ty maybe polymorphic; that's the point
+
+       -- Make sure that the argument and result types have kind '*'
+       -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
+       ; let ctxt = ptext (    sLit "When kind checking ($) application")
+                           <+> ppr exp
+       ; _ <- unifyKind ctxt (typeKind arg2_ty) liftedTypeKind
+       ; _ <- unifyKind ctxt (typeKind res_ty)  liftedTypeKind
+
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
        ; co_res <- unifyType op_res_ty res_ty
        ; op_id <- tcLookupId op_name
+
        ; let op' = L loc (HsWrap (mkWpTyApps [arg2_ty, op_res_ty]) (HsVar op_id))
        ; return $ mkHsWrapCo co_res $
          OpApp (mkLHsWrapCo co_arg1 arg1') op' fix arg2' }

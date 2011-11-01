@@ -16,6 +16,8 @@ import TcRnTypes
 import MkIface
 import Id
 import Name
+import InstEnv
+import Class
 import Avail
 import CoreSyn
 import CoreSubst
@@ -81,7 +83,8 @@ deSugar hsc_env
                             tcg_fam_insts    = fam_insts,
                             tcg_hpc          = other_hpc_info })
 
-  = do	{ let dflags = hsc_dflags hsc_env
+  = do { let dflags = hsc_dflags hsc_env
+             platform = targetPlatform dflags
         ; showPass dflags "Desugar"
 
 	-- Desugar the program
@@ -109,7 +112,7 @@ deSugar hsc_env
                           ; ds_rules <- mapMaybeM dsRule rules
                           ; ds_vects <- mapM dsVect vects
                           ; let hpc_init
-                                  | opt_Hpc   = hpcInitCode mod ds_hpc_info
+                                  | opt_Hpc   = hpcInitCode platform mod ds_hpc_info
                                   | otherwise = empty
                           ; return ( ds_ev_binds
                                    , foreign_prs `appOL` core_prs `appOL` spec_prs
@@ -407,8 +410,16 @@ dsVect (L loc (HsVect (L _ v) rhs))
        }
 dsVect (L _loc (HsNoVect (L _ v)))
   = return $ NoVect v
-dsVect (L _loc (HsVectTypeOut tycon ty))
-  = return $ VectType tycon ty
-dsVect vd@(L _ (HsVectTypeIn _ _ty))
+dsVect (L _loc (HsVectTypeOut isScalar tycon rhs_tycon))
+  = return $ VectType isScalar tycon rhs_tycon
+dsVect vd@(L _ (HsVectTypeIn _ _ _))
   = pprPanic "Desugar.dsVect: unexpected 'HsVectTypeIn'" (ppr vd)
+dsVect (L _loc (HsVectClassOut cls))
+  = return $ VectClass (classTyCon cls)
+dsVect vc@(L _ (HsVectClassIn _))
+  = pprPanic "Desugar.dsVect: unexpected 'HsVectClassIn'" (ppr vc)
+dsVect (L _loc (HsVectInstOut isScalar inst))
+  = return $ VectInst isScalar (instanceDFunId inst)
+dsVect vi@(L _ (HsVectInstIn _ _))
+  = pprPanic "Desugar.dsVect: unexpected 'HsVectInstIn'" (ppr vi)
 \end{code}

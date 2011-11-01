@@ -26,7 +26,7 @@ module TcType (
   UserTypeCtxt(..), pprUserTypeCtxt,
   TcTyVarDetails(..), pprTcTyVarDetails, vanillaSkolemTv, superSkolemTv,
   MetaDetails(Flexi, Indirect), MetaInfo(..), 
-  isImmutableTyVar, isSkolemTyVar, isMetaTyVar,  isMetaTyVarTy,
+  isImmutableTyVar, isSkolemTyVar, isMetaTyVar,  isMetaTyVarTy, isTyVarTy,
   isSigTyVar, isOverlappableTyVar,  isTyConableTyVar,
   isAmbiguousTyVar, metaTvRef, 
   isFlexi, isIndirect, isRuntimeUnkSkol,
@@ -352,10 +352,10 @@ data UserTypeCtxt
   | DefaultDeclCtxt	-- Types in a default declaration
   | SpecInstCtxt	-- SPECIALISE instance pragma
   | ThBrackCtxt		-- Template Haskell type brackets [t| ... |]
-
   | GenSigCtxt          -- Higher-rank or impredicative situations
                         -- e.g. (f e) where f has a higher-rank type
                         -- We might want to elaborate this
+  | GhciCtxt            -- GHCi command :kind <type>
 
 -- Notes re TySynCtxt
 -- We allow type synonyms that aren't types; e.g.  type List = []
@@ -411,20 +411,21 @@ pprTcTyVarDetails (MetaTv TcsTv _) = ptext (sLit "tcs")
 pprTcTyVarDetails (MetaTv SigTv _) = ptext (sLit "sig")
 
 pprUserTypeCtxt :: UserTypeCtxt -> SDoc
-pprUserTypeCtxt (InfSigCtxt n)   = ptext (sLit "the inferred type for") <+> quotes (ppr n)
-pprUserTypeCtxt (FunSigCtxt n)   = ptext (sLit "the type signature for") <+> quotes (ppr n)
-pprUserTypeCtxt ExprSigCtxt      = ptext (sLit "an expression type signature")
-pprUserTypeCtxt (ConArgCtxt c)   = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
-pprUserTypeCtxt (TySynCtxt c)    = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
-pprUserTypeCtxt GenPatCtxt       = ptext (sLit "the type pattern of a generic definition")
-pprUserTypeCtxt ThBrackCtxt      = ptext (sLit "a Template Haskell quotation [t|...|]")
-pprUserTypeCtxt LamPatSigCtxt    = ptext (sLit "a pattern type signature")
-pprUserTypeCtxt BindPatSigCtxt   = ptext (sLit "a pattern type signature")
-pprUserTypeCtxt ResSigCtxt       = ptext (sLit "a result type signature")
-pprUserTypeCtxt (ForSigCtxt n)   = ptext (sLit "the foreign declaration for") <+> quotes (ppr n)
-pprUserTypeCtxt DefaultDeclCtxt  = ptext (sLit "a type in a `default' declaration")
-pprUserTypeCtxt SpecInstCtxt     = ptext (sLit "a SPECIALISE instance pragma")
-pprUserTypeCtxt GenSigCtxt       = ptext (sLit "a type expected by the context")
+pprUserTypeCtxt (InfSigCtxt n)    = ptext (sLit "the inferred type for") <+> quotes (ppr n)
+pprUserTypeCtxt (FunSigCtxt n)    = ptext (sLit "the type signature for") <+> quotes (ppr n)
+pprUserTypeCtxt ExprSigCtxt       = ptext (sLit "an expression type signature")
+pprUserTypeCtxt (ConArgCtxt c)    = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
+pprUserTypeCtxt (TySynCtxt c)     = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
+pprUserTypeCtxt GenPatCtxt        = ptext (sLit "the type pattern of a generic definition")
+pprUserTypeCtxt ThBrackCtxt       = ptext (sLit "a Template Haskell quotation [t|...|]")
+pprUserTypeCtxt LamPatSigCtxt     = ptext (sLit "a pattern type signature")
+pprUserTypeCtxt BindPatSigCtxt    = ptext (sLit "a pattern type signature")
+pprUserTypeCtxt ResSigCtxt        = ptext (sLit "a result type signature")
+pprUserTypeCtxt (ForSigCtxt n)    = ptext (sLit "the foreign declaration for") <+> quotes (ppr n)
+pprUserTypeCtxt DefaultDeclCtxt   = ptext (sLit "a type in a `default' declaration")
+pprUserTypeCtxt SpecInstCtxt      = ptext (sLit "a SPECIALISE instance pragma")
+pprUserTypeCtxt GenSigCtxt        = ptext (sLit "a type expected by the context")
+pprUserTypeCtxt GhciCtxt          = ptext (sLit "a type in a GHCi command")
 \end{code}
 
 
@@ -1033,14 +1034,13 @@ evVarPred_maybe v = if isPredTy ty then Just ty else Nothing
   where ty = varType v
 
 evVarPred :: EvVar -> PredType
-#ifdef DEBUG
 evVarPred var
+ | debugIsOn
   = case evVarPred_maybe var of
       Just pred -> pred
       Nothing   -> pprPanic "tcEvVarPred" (ppr var <+> ppr (varType var))
-#else
-evVarPred = varType
-#endif
+ | otherwise
+  = varType var
 \end{code}
 
 Superclasses
@@ -1236,28 +1236,17 @@ restricted set of types as arguments and results (the restricting factor
 being the )
 
 \begin{code}
-tcSplitIOType_maybe :: Type -> Maybe (TyCon, Type, Coercion)
--- (isIOType t) returns Just (IO,t',co)
---				if co : t ~ IO t'
---		returns Nothing otherwise
-tcSplitIOType_maybe ty 
+tcSplitIOType_maybe :: Type -> Maybe (TyCon, Type)
+-- (tcSplitIOType_maybe t) returns Just (IO,t',co)
+--              if co : t ~ IO t'
+--              returns Nothing otherwise
+tcSplitIOType_maybe ty
   = case tcSplitTyConApp_maybe ty of
-	-- This split absolutely has to be a tcSplit, because we must
-	-- see the IO type; and it's a newtype which is transparent to splitTyConApp.
-
-	Just (io_tycon, [io_res_ty]) 
-	   |  io_tycon `hasKey` ioTyConKey 
-           -> Just (io_tycon, io_res_ty, mkReflCo ty)
-
-	Just (tc, tys)
-	   | not (isRecursiveTyCon tc)
-	   , Just (ty, co1) <- instNewTyCon_maybe tc tys
-		  -- Newtypes that require a coercion are ok
-	   -> case tcSplitIOType_maybe ty of
-		Nothing		    -> Nothing
-		Just (tc, ty', co2) -> Just (tc, ty', co1 `mkTransCo` co2)
-
-	_ -> Nothing
+        Just (io_tycon, [io_res_ty])
+         | io_tycon `hasKey` ioTyConKey ->
+            Just (io_tycon, io_res_ty)
+        _ ->
+            Nothing
 
 isFFITy :: Type -> Bool
 -- True for any TyCon that can possibly be an arg or result of an FFI call
@@ -1324,20 +1313,15 @@ isFFIDotnetObjTy ty
 isFunPtrTy :: Type -> Bool
 isFunPtrTy = checkRepTyConKey [funPtrTyConKey]
 
+-- normaliseFfiType gets run before checkRepTyCon, so we don't
+-- need to worry about looking through newtypes or type functions
+-- here; that's already been taken care of.
 checkRepTyCon :: (TyCon -> Bool) -> Type -> Bool
--- Look through newtypes, but *not* foralls
--- Should work even for recursive newtypes
--- eg Manuel had:	newtype T = MkT (Ptr T)
 checkRepTyCon check_tc ty
-  = go emptyNameSet ty
-  where
-    go rec_nts ty
-      | Just (tc,tys) <- splitTyConApp_maybe ty
-      = case carefullySplitNewType_maybe rec_nts tc tys of
-      	   Just (rec_nts', ty') -> go rec_nts' ty'
-	   Nothing	   	-> check_tc tc
-      | otherwise
-      = False
+    | Just (tc, _) <- splitTyConApp_maybe ty
+    = check_tc tc
+    | otherwise
+    = False
 
 checkRepTyConKey :: [Unique] -> Type -> Bool
 -- Like checkRepTyCon, but just looks at the TyCon key

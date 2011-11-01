@@ -8,11 +8,11 @@
 module TcRnDriver (
 #ifdef GHCI
 	tcRnStmt, tcRnExpr, tcRnType,
+	tcRnImportDecls,
 	tcRnLookupRdrName,
 	getModuleInterface,
 	tcRnDeclsi,
 #endif
-	tcRnImports,
 	tcRnLookupName,
 	tcRnGetInfo,
 	tcRnModule, 
@@ -110,6 +110,7 @@ import Control.Monad
 
 
 \begin{code}
+-- | Top level entry point for typechecker and renamer
 tcRnModule :: HscEnv 
 	   -> HscSource
 	   -> Bool 		-- True <=> save renamed syntax
@@ -1108,7 +1109,14 @@ setInteractiveContext hsc_env icxt thing_inside
         -- Perhaps it would be better to just extend the global TyVar
         -- list from the free tyvars in the Ids here?  Anyway, at least
         -- this hack is localised.
-
+        --
+        -- Note [delete shadowed tcg_rdr_env entries]
+        -- We also *delete* entries from tcg_rdr_env that we have
+        -- shadowed in the local env (see above).  This isn't strictly
+        -- necessary, but in an out-of-scope error when GHC suggests
+        -- names it can be confusing to see multiple identical
+        -- entries. (#5564)
+        --
         (tmp_ids, types_n_classes) = partitionWith sel_id (ic_tythings icxt)
           where sel_id (AnId id) = Left id
                 sel_id other     = Right other
@@ -1125,7 +1133,9 @@ setInteractiveContext hsc_env icxt thing_inside
                      , c <- tyConDataCons t ]
     in
     updGblEnv (\env -> env {
-          tcg_rdr_env      = ic_rn_gbl_env icxt
+          tcg_rdr_env      = delListFromOccEnv (ic_rn_gbl_env icxt)
+                                               (map getOccName visible_tmp_ids)
+                                 -- Note [delete shadowed tcg_rdr_env entries]
         , tcg_type_env     = type_env
         , tcg_inst_env     = extendInstEnvList
                               (extendInstEnvList (tcg_inst_env env) ic_insts)
@@ -1271,12 +1281,12 @@ runPlans (p:ps) = tryTcLIE_ (runPlans ps) p
 mkPlan :: LStmt Name -> TcM PlanResult
 mkPlan (L loc (ExprStmt expr _ _ _))	-- An expression typed at the prompt 
   = do	{ uniq <- newUnique		-- is treated very specially
-	; let fresh_it  = itName uniq
+        ; let fresh_it  = itName uniq loc
 	      the_bind  = L loc $ mkTopFunBind (L loc fresh_it) matches
 	      matches   = [mkMatch [] expr emptyLocalBinds]
 	      let_stmt  = L loc $ LetStmt $ HsValBinds $
                           ValBindsOut [(NonRecursive,unitBag the_bind)] []
-	      bind_stmt = L loc $ BindStmt (nlVarPat fresh_it) expr
+              bind_stmt = L loc $ BindStmt (L loc (VarPat fresh_it)) expr
 					   (HsVar bindIOName) noSyntaxExpr 
 	      print_it  = L loc $ ExprStmt (nlHsApp (nlHsVar printName) (nlHsVar fresh_it))
 			          	   (HsVar thenIOName) noSyntaxExpr placeHolderType
@@ -1392,7 +1402,7 @@ tcRnExpr hsc_env ictxt rdr_expr
 	-- Now typecheck the expression; 
 	-- it might have a rank-2 type (e.g. :t runST)
     uniq <- newUnique ;
-    let { fresh_it  = itName uniq } ;
+    let { fresh_it  = itName uniq (getLoc rdr_expr) } ;
     ((_tc_expr, res_ty), lie)	<- captureConstraints (tcInferRho rn_expr) ;
     ((qtvs, dicts, _, _), lie_top) <- captureConstraints $ 
                                       simplifyInfer True {- Free vars are closed -}
@@ -1404,6 +1414,15 @@ tcRnExpr hsc_env ictxt rdr_expr
     let { all_expr_ty = mkForAllTys qtvs (mkPiTypes dicts res_ty) } ;
     zonkTcType all_expr_ty
     }
+
+--------------------------
+tcRnImportDecls :: HscEnv
+	 	-> [LImportDecl RdrName]
+	 	-> IO (Messages, Maybe GlobalRdrEnv)
+tcRnImportDecls hsc_env import_decls
+ =  initTcPrintErrors hsc_env iNTERACTIVE $ 
+    do { gbl_env <- tcRnImports hsc_env iNTERACTIVE import_decls
+       ; return (tcg_rdr_env gbl_env) }
 \end{code}
 
 tcRnType just finds the kind of a type
@@ -1422,7 +1441,8 @@ tcRnType hsc_env ictxt normalise rdr_type
     failIfErrsM ;
 
 	-- Now kind-check the type
-    ty <- tcHsSigType GenSigCtxt rn_type ;
+	-- It can have any rank or kind
+    ty <- tcHsSigType GhciCtxt rn_type ;
 
     ty' <- if normalise 
            then do { fam_envs <- tcGetFamInstEnvs 

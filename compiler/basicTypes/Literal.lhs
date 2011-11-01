@@ -23,6 +23,7 @@ module Literal
         , literalType
         , hashLiteral
         , absentLiteralOf
+        , pprLiteral
 
         -- ** Predicates on Literals and their contents
         , litIsDupable, litIsTrivial
@@ -38,6 +39,8 @@ module Literal
         , float2IntLit, int2FloatLit, double2IntLit, int2DoubleLit
         , nullAddrLit, float2DoubleLit, double2FloatLit
         ) where
+
+#include "HsVersions.h"
 
 import TysPrim
 import PrelNames
@@ -197,7 +200,7 @@ instance Binary Literal where
 
 \begin{code}
 instance Outputable Literal where
-    ppr lit = pprLit lit
+    ppr lit = pprLiteral (\d -> d) lit
 
 instance Show Literal where
     showsPrec p lit = showsPrecSDoc p (ppr lit)
@@ -220,16 +223,12 @@ instance Ord Literal where
 \begin{code}
 -- | Creates a 'Literal' of type @Int#@
 mkMachInt :: Integer -> Literal
-mkMachInt  x   = -- ASSERT2( inIntRange x,  integer x )
-                 -- Not true: you can write out of range Int# literals
-                 -- For example, one can write (intToWord# 0xffff0000) to
-                 -- get a particular Word bit-pattern, and there's no other
-                 -- convenient way to write such literals, which is why we allow it.
+mkMachInt  x   = ASSERT2( inIntRange x,  integer x )
                  MachInt x
 
 -- | Creates a 'Literal' of type @Word#@
 mkMachWord :: Integer -> Literal
-mkMachWord x   = -- ASSERT2( inWordRange x, integer x )
+mkMachWord x   = ASSERT2( inWordRange x, integer x )
                  MachWord x
 
 -- | Creates a 'Literal' of type @Int64#@
@@ -377,12 +376,12 @@ literalType (MachWord64  _) = word64PrimTy
 literalType (MachFloat _)   = floatPrimTy
 literalType (MachDouble _)  = doublePrimTy
 literalType (MachLabel _ _ _) = addrPrimTy
-literalType (LitInteger _ mkIntegerId)
+literalType (LitInteger _ mk_integer_id)
       -- We really mean idType, rather than varType, but importing Id
       -- causes a module import loop
-    = case varType mkIntegerId of
-      FunTy _ (FunTy _ integerTy) -> integerTy
-      _ -> panic "literalType: mkIntegerId has the wrong type"
+    = case varType mk_integer_id of
+        FunTy _ (FunTy _ integerTy) -> integerTy
+        _ -> panic "literalType: mkIntegerId has the wrong type"
 
 absentLiteralOf :: TyCon -> Maybe Literal
 -- Return a literal of the appropriate primtive
@@ -439,21 +438,24 @@ litTag (LitInteger  {})    = _ILIT(11)
   exceptions: MachFloat gets an initial keyword prefix.
 
 \begin{code}
-pprLit :: Literal -> SDoc
-pprLit (MachChar ch)    = pprHsChar ch
-pprLit (MachStr s)      = pprHsString s
-pprLit (MachInt i)      = pprIntVal i
-pprLit (MachInt64 i)    = ptext (sLit "__int64") <+> integer i
-pprLit (MachWord w)     = ptext (sLit "__word") <+> integer w
-pprLit (MachWord64 w)   = ptext (sLit "__word64") <+> integer w
-pprLit (MachFloat f)    = ptext (sLit "__float") <+> float (fromRat f)
-pprLit (MachDouble d)   = double (fromRat d)
-pprLit (MachNullAddr)   = ptext (sLit "__NULL")
-pprLit (MachLabel l mb fod) = ptext (sLit "__label") <+> b <+> ppr fod
+pprLiteral :: (SDoc -> SDoc) -> Literal -> SDoc
+-- The function is used on non-atomic literals
+-- to wrap parens around literals that occur in
+-- a context requiring an atomic thing
+pprLiteral _       (MachChar ch)    = pprHsChar ch
+pprLiteral _       (MachStr s)      = pprHsString s
+pprLiteral _       (MachInt i)      = pprIntVal i
+pprLiteral _       (MachDouble d)   = double (fromRat d)
+pprLiteral _       (MachNullAddr)   = ptext (sLit "__NULL")
+pprLiteral add_par (LitInteger i _) = add_par (ptext (sLit "__integer") <+> integer i)
+pprLiteral add_par (MachInt64 i)    = add_par (ptext (sLit "__int64") <+> integer i)
+pprLiteral add_par (MachWord w)     = add_par (ptext (sLit "__word") <+> integer w)
+pprLiteral add_par (MachWord64 w)   = add_par (ptext (sLit "__word64") <+> integer w)
+pprLiteral add_par (MachFloat f)    = add_par (ptext (sLit "__float") <+> float (fromRat f))
+pprLiteral add_par (MachLabel l mb fod) = add_par (ptext (sLit "__label") <+> b <+> ppr fod)
     where b = case mb of
               Nothing -> pprHsString l
               Just x  -> doubleQuotes (text (unpackFS l ++ '@':show x))
-pprLit (LitInteger i _) = ptext (sLit "__integer") <+> integer i
 
 pprIntVal :: Integer -> SDoc
 -- ^ Print negative integers with parens to be sure it's unambiguous

@@ -7,12 +7,18 @@
 --
 -- Binary interface file support.
 
-module BinIface ( writeBinIface, readBinIface,
+module BinIface ( writeBinIface, readBinIface, getSymtabName, getDictFastString,
                   CheckHiWay(..), TraceBinIFaceReading(..) ) where
 
 #include "HsVersions.h"
 
 import TcRnMonad
+import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon, tyConIP_maybe)
+import DataCon    (dataConName, dataConWorkId, dataConTyCon)
+import IParam     (ipFastString, ipTyConName)
+import PrelInfo   (wiredInThings, basicKnownKeyNames)
+import Id         (idName, isDataConWorkId_maybe)
+import TysWiredIn
 import IfaceEnv
 import HscTypes
 import BasicTypes
@@ -36,9 +42,12 @@ import Config
 import FastMutInt
 import Unique
 import Outputable
+import Platform
 import FastString
 import Constants
 
+import Data.Bits
+import Data.Char
 import Data.List
 import Data.Word
 import Data.Array
@@ -57,14 +66,14 @@ data TraceBinIFaceReading = TraceBinIFaceReading | QuietBinIFaceReading
 readBinIface :: CheckHiWay -> TraceBinIFaceReading -> FilePath
              -> TcRnIf a b ModIface
 readBinIface checkHiWay traceBinIFaceReading hi_path = do
-  update_nc <- mkNameCacheUpdater
+  ncu <- mkNameCacheUpdater
   dflags <- getDOpts
-  liftIO $ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc
+  liftIO $ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu
 
 readBinIface_ :: DynFlags -> CheckHiWay -> TraceBinIFaceReading -> FilePath
-              -> NameCacheUpdater (Array Int Name)
+              -> NameCacheUpdater
               -> IO ModIface
-readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
+readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu = do
   let printer :: SDoc -> IO ()
       printer = case traceBinIFaceReading of
                 TraceBinIFaceReading -> \sd -> printSDoc sd defaultDumpStyle
@@ -88,9 +97,9 @@ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
         -- (This magic number does not change when we change
         --  GHC interface file format)
   magic <- get bh
-  wantedGot "Magic" binaryInterfaceMagic magic
+  wantedGot "Magic" (binaryInterfaceMagic dflags) magic
   errorOnMismatch "magic number mismatch: old/corrupt interface file?"
-      binaryInterfaceMagic magic
+      (binaryInterfaceMagic dflags) magic
 
         -- Note [dummy iface field]
         -- read a dummy 32/64 bit value.  This field used to hold the
@@ -126,24 +135,28 @@ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path update_nc = do
   seekBin bh data_p             -- Back to where we were before
 
         -- Initialise the user-data field of bh
-  ud <- newReadState dict
-  bh <- return (setUserData bh ud)
-        
-  symtab_p <- Binary.get bh     -- Get the symtab ptr
-  data_p <- tellBin bh          -- Remember where we are now
-  seekBin bh symtab_p
-  symtab <- getSymbolTable bh update_nc
-  seekBin bh data_p             -- Back to where we were before
-  let ud = getUserData bh
-  bh <- return $! setUserData bh ud{ud_symtab = symtab}
-  iface <- get bh
-  return iface
+  bh <- do
+    bh <- return $ setUserData bh $ newReadState (error "getSymtabName")
+                                                 (getDictFastString dict)
+
+    symtab_p <- Binary.get bh     -- Get the symtab ptr
+    data_p <- tellBin bh          -- Remember where we are now
+    seekBin bh symtab_p
+    symtab <- getSymbolTable bh ncu
+    seekBin bh data_p             -- Back to where we were before
+    
+    -- It is only now that we know how to get a Name
+    return $ setUserData bh $ newReadState (getSymtabName ncu dict symtab)
+                                           (getDictFastString dict)
+
+        -- Read the interface file
+  get bh
 
 
 writeBinIface :: DynFlags -> FilePath -> ModIface -> IO ()
 writeBinIface dflags hi_path mod_iface = do
   bh <- openBinMem initBinMemSize
-  put_ bh binaryInterfaceMagic
+  put_ bh (binaryInterfaceMagic dflags)
 
        -- dummy 32/64-bit field before the version/way for
        -- compatibility with older interface file formats.
@@ -178,10 +191,10 @@ writeBinIface dflags hi_path mod_iface = do
   let bin_dict = BinDictionary {
                       bin_dict_next = dict_next_ref,
                       bin_dict_map  = dict_map_ref }
-  ud <- newWriteState (putName bin_symtab) (putFastString bin_dict)
-
+  
 	-- Put the main thing, 
-  bh <- return $ setUserData bh ud
+  bh <- return $ setUserData bh $ newWriteState (putName bin_dict bin_symtab)
+                                                (putFastString bin_dict)
   put_ bh mod_iface
 
 	-- Write the symtab pointer at the fornt of the file
@@ -217,16 +230,11 @@ writeBinIface dflags hi_path mod_iface = do
 initBinMemSize :: Int
 initBinMemSize = 1024 * 1024
 
--- The *host* architecture version:
-#include "../includes/MachDeps.h"
+binaryInterfaceMagic :: DynFlags -> Word32
+binaryInterfaceMagic dflags
+ | target32Bit (targetPlatform dflags) = 0x1face
+ | otherwise                           = 0x1face64
 
-binaryInterfaceMagic :: Word32
-#if   WORD_SIZE_IN_BITS == 32
-binaryInterfaceMagic = 0x1face
-#elif WORD_SIZE_IN_BITS == 64
-binaryInterfaceMagic = 0x1face64
-#endif
-  
 -- -----------------------------------------------------------------------------
 -- The symbol table
 
@@ -236,12 +244,12 @@ putSymbolTable bh next_off symtab = do
   let names = elems (array (0,next_off-1) (eltsUFM symtab))
   mapM_ (\n -> serialiseName bh n symtab) names
 
-getSymbolTable :: BinHandle -> NameCacheUpdater (Array Int Name)
-               -> IO (Array Int Name)
-getSymbolTable bh update_namecache = do
+getSymbolTable :: BinHandle -> NameCacheUpdater
+               -> IO SymbolTable
+getSymbolTable bh ncu = do
   sz <- get bh
   od_names <- sequence (replicate sz (get bh))
-  update_namecache $ \namecache ->
+  updateNameCache ncu $ \namecache ->
     let
         arr = listArray (0,sz-1) names
         (namecache', names) =    
@@ -277,21 +285,108 @@ serialiseName bh name _ = do
   put_ bh (modulePackageId mod, moduleName mod, nameOccName name)
 
 
-putName :: BinSymbolTable -> BinHandle -> Name -> IO ()
-putName BinSymbolTable{ 
-            bin_symtab_map = symtab_map_ref,
-            bin_symtab_next = symtab_next }    bh name
-  = do
-    symtab_map <- readIORef symtab_map_ref
-    case lookupUFM symtab_map name of
-      Just (off,_) -> put_ bh (fromIntegral off :: Word32)
-      Nothing -> do
-         off <- readFastMutInt symtab_next
-         writeFastMutInt symtab_next (off+1)
-         writeIORef symtab_map_ref
-             $! addToUFM symtab_map name (off,name)
-         put_ bh (fromIntegral off :: Word32)
+-- Note [Symbol table representation of names]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- An occurrence of a name in an interface file is serialized as a single 32-bit word.
+-- The format of this word is:
+--  00xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+--   A normal name. x is an index into the symbol table
+--  01xxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyy
+--   A known-key name. x is the Unique's Char, y is the int part
+--  10xxyyzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+--   A tuple name:
+--    x is the tuple sort (00b ==> boxed, 01b ==> unboxed, 10b ==> constraint)
+--    y is the thing (00b ==> tycon, 01b ==> datacon, 10b ==> datacon worker)
+--    z is the arity
+--  11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+--   An implicit parameter TyCon name. x is an index into the FastString *dictionary*
+--
+-- Note that we have to have special representation for tuples and IP TyCons because they
+-- form an "infinite" family and hence are not recorded explicitly in wiredInTyThings or
+-- basicKnownKeyNames.
 
+knownKeyNamesMap :: UniqFM Name
+knownKeyNamesMap = listToUFM_Directly [(nameUnique n, n) | n <- knownKeyNames]
+  where
+    knownKeyNames :: [Name]
+    knownKeyNames = map getName wiredInThings
+                    ++ basicKnownKeyNames
+
+
+-- See Note [Symbol table representation of names]
+putName :: BinDictionary -> BinSymbolTable -> BinHandle -> Name -> IO ()
+putName dict BinSymbolTable{ 
+               bin_symtab_map = symtab_map_ref,
+               bin_symtab_next = symtab_next }    bh name
+  | name `elemUFM` knownKeyNamesMap
+  , let (c, u) = unpkUnique (nameUnique name) -- INVARIANT: (ord c) fits in 8 bits
+  = -- ASSERT(u < 2^(22 :: Int))
+    put_ bh (0x40000000 .|. (fromIntegral (ord c) `shiftL` 22) .|. (fromIntegral u :: Word32))
+  | otherwise
+  = case wiredInNameTyThing_maybe name of
+     Just (ATyCon tc)
+       | isTupleTyCon tc             -> putTupleName_ bh tc 0
+       | Just ip <- tyConIP_maybe tc -> do
+         off <- allocateFastString dict (ipFastString ip)
+         -- MASSERT(off < 2^(30 :: Int))
+         put_ bh (0xC0000000 .|. off)
+     Just (ADataCon dc)
+       | let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 1
+     Just (AnId x)
+       | Just dc <- isDataConWorkId_maybe x, let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 2
+     _ -> do
+       symtab_map <- readIORef symtab_map_ref
+       case lookupUFM symtab_map name of
+         Just (off,_) -> put_ bh (fromIntegral off :: Word32)
+         Nothing -> do
+            off <- readFastMutInt symtab_next
+            -- MASSERT(off < 2^(30 :: Int))
+            writeFastMutInt symtab_next (off+1)
+            writeIORef symtab_map_ref
+                $! addToUFM symtab_map name (off,name)
+            put_ bh (fromIntegral off :: Word32)
+
+putTupleName_ :: BinHandle -> TyCon -> Word32 -> IO ()
+putTupleName_ bh tc thing_tag
+  = -- ASSERT(arity < 2^(30 :: Int))
+    put_ bh (0x80000000 .|. (sort_tag `shiftL` 28) .|. (thing_tag `shiftL` 26) .|. arity)
+  where
+    arity = fromIntegral (tupleTyConArity tc)
+    sort_tag = case tupleTyConSort tc of
+        BoxedTuple      -> 0
+        UnboxedTuple    -> 1
+        ConstraintTuple -> 2
+
+-- See Note [Symbol table representation of names]
+getSymtabName :: NameCacheUpdater
+              -> Dictionary -> SymbolTable
+              -> BinHandle -> IO Name
+getSymtabName ncu dict symtab bh = do
+    i <- get bh
+    case i .&. 0xC0000000 of
+        0x00000000 -> return $! symtab ! fromIntegral (i ::  Word32)
+        0x40000000 -> return $! case lookupUFM_Directly knownKeyNamesMap (mkUnique tag ix) of
+                        Nothing -> pprPanic "getSymtabName:unknown known-key unique" (ppr i)
+                        Just n  -> n
+          where tag = chr (fromIntegral ((i .&. 0x3FC00000) `shiftR` 22))
+                ix = fromIntegral i .&. 0x003FFFFF
+        0x80000000 -> return $! case thing_tag of
+                        0 -> tyConName (tupleTyCon sort arity)
+                        1 -> dataConName dc
+                        2 -> idName (dataConWorkId dc)
+                        _ -> pprPanic "getSymtabName:unknown tuple thing" (ppr i)
+          where
+            dc = tupleCon sort arity
+            sort = case (i .&. 0x30000000) `shiftR` 28 of
+                     0 -> BoxedTuple
+                     1 -> UnboxedTuple
+                     2 -> ConstraintTuple
+                     _ -> pprPanic "getSymtabName:unknown tuple sort" (ppr i)
+            thing_tag = (i .&. 0x0CFFFFFF) `shiftR` 26
+            arity = fromIntegral (i .&. 0x03FFFFFF)
+        0xC0000000 -> liftM ipTyConName $ updateNameCache ncu $ flip allocateIPName (dict ! fromIntegral (i .&. 0x3FFFFFFF))
+        _          -> pprPanic "getSymtabName:unknown name tag" (ppr i)
 
 data BinSymbolTable = BinSymbolTable {
         bin_symtab_next :: !FastMutInt, -- The next index to use
@@ -301,19 +396,25 @@ data BinSymbolTable = BinSymbolTable {
 
 
 putFastString :: BinDictionary -> BinHandle -> FastString -> IO ()
-putFastString BinDictionary { bin_dict_next = j_r,
-                              bin_dict_map  = out_r}  bh f
-  = do
+putFastString dict bh fs = allocateFastString dict fs >>= put_ bh
+
+allocateFastString :: BinDictionary -> FastString -> IO Word32
+allocateFastString BinDictionary { bin_dict_next = j_r,
+                                   bin_dict_map  = out_r} f = do
     out <- readIORef out_r
     let uniq = getUnique f
     case lookupUFM out uniq of
-        Just (j, _)  -> put_ bh (fromIntegral j :: Word32)
+        Just (j, _)  -> return (fromIntegral j :: Word32)
         Nothing -> do
            j <- readFastMutInt j_r
-           put_ bh (fromIntegral j :: Word32)
            writeFastMutInt j_r (j + 1)
            writeIORef out_r $! addToUFM out uniq (j, f)
+           return (fromIntegral j :: Word32)
 
+getDictFastString :: Dictionary -> BinHandle -> IO FastString
+getDictFastString dict bh = do
+    j <- get bh
+    return $! (dict ! fromIntegral (j :: Word32))
 
 data BinDictionary = BinDictionary {
         bin_dict_next :: !FastMutInt, -- The next index to use
@@ -1065,10 +1166,6 @@ instance Binary IfaceExpr where
             putByte bh 13
             put_ bh m
             put_ bh ix
-    put_ bh (IfaceTupId aa ab) = do
-      putByte bh 14
-      put_ bh aa
-      put_ bh ab
     get bh = do
 	    h <- getByte bh
 	    case h of
@@ -1110,9 +1207,6 @@ instance Binary IfaceExpr where
               13 -> do m <- get bh
                        ix <- get bh
                        return (IfaceTick m ix)
-              14 -> do aa <- get bh
-                       ab <- get bh
-                       return (IfaceTupId aa ab)
               _ -> panic ("get IfaceExpr " ++ show h)
 
 instance Binary IfaceConAlt where
@@ -1121,11 +1215,8 @@ instance Binary IfaceConAlt where
     put_ bh (IfaceDataAlt aa) = do
 	    putByte bh 1
 	    put_ bh aa
-    put_ bh (IfaceTupleAlt ab) = do
-	    putByte bh 2
-	    put_ bh ab
     put_ bh (IfaceLitAlt ac) = do
-	    putByte bh 3
+	    putByte bh 2
 	    put_ bh ac
     get bh = do
 	    h <- getByte bh
@@ -1133,8 +1224,6 @@ instance Binary IfaceConAlt where
 	      0 -> do return IfaceDefault
 	      1 -> do aa <- get bh
 		      return (IfaceDataAlt aa)
-	      2 -> do ab <- get bh
-		      return (IfaceTupleAlt ab)
 	      _ -> do ac <- get bh
 		      return (IfaceLitAlt ac)
 

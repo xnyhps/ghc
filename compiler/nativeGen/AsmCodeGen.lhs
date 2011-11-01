@@ -150,7 +150,8 @@ data NcgImpl statics instr jumpDest = NcgImpl {
 --------------------
 nativeCodeGen :: DynFlags -> Handle -> UniqSupply -> [RawCmmGroup] -> IO ()
 nativeCodeGen dflags h us cmms
- = let nCG' :: (Outputable statics, PlatformOutputable instr, Instruction instr) => NcgImpl statics instr jumpDest -> IO ()
+ = let platform = targetPlatform dflags
+       nCG' :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr) => NcgImpl statics instr jumpDest -> IO ()
        nCG' ncgImpl = nativeCodeGen' dflags ncgImpl h us cmms
        x86NcgImpl = NcgImpl {
                          cmmTopCodeGen             = X86.CodeGen.cmmTopCodeGen
@@ -160,13 +161,13 @@ nativeCodeGen dflags h us cmms
                         ,shortcutStatics           = X86.Instr.shortcutStatics
                         ,shortcutJump              = X86.Instr.shortcutJump
                         ,pprNatCmmDecl              = X86.Ppr.pprNatCmmDecl
-                        ,maxSpillSlots             = X86.Instr.maxSpillSlots
+                        ,maxSpillSlots             = X86.Instr.maxSpillSlots (target32Bit platform)
                         ,allocatableRegs           = X86.Regs.allocatableRegs
                         ,ncg_x86fp_kludge          = id
                         ,ncgExpandTop              = id
                         ,ncgMakeFarBranches        = id
                     }
-   in case platformArch $ targetPlatform dflags of
+   in case platformArch platform of
                  ArchX86    -> nCG' (x86NcgImpl { ncg_x86fp_kludge = map x86fp_kludge })
                  ArchX86_64 -> nCG' x86NcgImpl
                  ArchPPC ->
@@ -203,10 +204,16 @@ nativeCodeGen dflags h us cmms
                      panic "nativeCodeGen: No NCG for ARM"
                  ArchPPC_64 ->
                      panic "nativeCodeGen: No NCG for PPC 64"
+                 ArchAlpha ->
+                     panic "nativeCodeGen: No NCG for Alpha"
+                 ArchMipseb ->
+                     panic "nativeCodeGen: No NCG for mipseb"
+                 ArchMipsel ->
+                     panic "nativeCodeGen: No NCG for mipsel"
                  ArchUnknown ->
                      panic "nativeCodeGen: No NCG for unknown arch"
 
-nativeCodeGen' :: (Outputable statics, PlatformOutputable instr, Instruction instr)
+nativeCodeGen' :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr)
                => DynFlags
                -> NcgImpl statics instr jumpDest
                -> Handle -> UniqSupply -> [RawCmmGroup] -> IO ()
@@ -273,7 +280,7 @@ nativeCodeGen' dflags ncgImpl h us cmms
 
 -- | Do native code generation on all these cmms.
 --
-cmmNativeGens :: (Outputable statics, PlatformOutputable instr, Instruction instr)
+cmmNativeGens :: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr)
               => DynFlags
               -> NcgImpl statics instr jumpDest
               -> BufHandle
@@ -294,11 +301,13 @@ cmmNativeGens _ _ _ _ [] impAcc profAcc _
 
 cmmNativeGens dflags ncgImpl h us (cmm : cmms) impAcc profAcc count
  = do
+        let platform = targetPlatform dflags
+
  	(us', native, imports, colorStats, linearStats)
 		<- cmmNativeGen dflags ncgImpl us cmm count
 
 	Pretty.bufLeftRender h
-		$ {-# SCC "pprNativeCode" #-} Pretty.vcat $ map (pprNatCmmDecl ncgImpl (targetPlatform dflags)) native
+		$ {-# SCC "pprNativeCode" #-} Pretty.vcat $ map (pprNatCmmDecl ncgImpl platform) native
 
            -- carefully evaluate this strictly.  Binding it with 'let'
            -- and then using 'seq' doesn't work, because the let
@@ -312,7 +321,7 @@ cmmNativeGens dflags ncgImpl h us (cmm : cmms) impAcc profAcc count
 	count' <- return $! count + 1;
 
 	-- force evaulation all this stuff to avoid space leaks
-	seqString (showSDoc $ vcat $ map ppr imports) `seq` return ()
+	seqString (showSDoc $ vcat $ map (pprPlatform platform) imports) `seq` return ()
 
 	cmmNativeGens dflags ncgImpl
             h us' cmms
@@ -328,7 +337,7 @@ cmmNativeGens dflags ncgImpl h us (cmm : cmms) impAcc profAcc count
 --	Dumping the output of each stage along the way.
 --	Global conflict graph and NGC stats
 cmmNativeGen
-	:: (Outputable statics, PlatformOutputable instr, Instruction instr)
+	:: (PlatformOutputable statics, PlatformOutputable instr, Instruction instr)
     => DynFlags
     -> NcgImpl statics instr jumpDest
 	-> UniqSupply
@@ -498,24 +507,25 @@ x86fp_kludge (CmmProc info lbl (ListGraph code)) =
 makeImportsDoc :: DynFlags -> [CLabel] -> Pretty.Doc
 makeImportsDoc dflags imports
  = dyld_stubs imports
-
-#if HAVE_SUBSECTIONS_VIA_SYMBOLS
-                -- On recent versions of Darwin, the linker supports
-                -- dead-stripping of code and data on a per-symbol basis.
-                -- There's a hack to make this work in PprMach.pprNatCmmDecl.
-            Pretty.$$ Pretty.text ".subsections_via_symbols"
-#endif
-#if HAVE_GNU_NONEXEC_STACK
+            Pretty.$$
+            -- On recent versions of Darwin, the linker supports
+            -- dead-stripping of code and data on a per-symbol basis.
+            -- There's a hack to make this work in PprMach.pprNatCmmDecl.
+            (if platformHasSubsectionsViaSymbols (targetPlatform dflags)
+             then Pretty.text ".subsections_via_symbols"
+             else Pretty.empty)
+            Pretty.$$ 
                 -- On recent GNU ELF systems one can mark an object file
                 -- as not requiring an executable stack. If all objects
                 -- linked into a program have this note then the program
                 -- will not use an executable stack, which is good for
                 -- security. GHC generated code does not need an executable
                 -- stack so add the note in:
-            Pretty.$$ Pretty.text ".section .note.GNU-stack,\"\",@progbits"
-#endif
+            (if platformHasGnuNonexecStack (targetPlatform dflags)
+             then Pretty.text ".section .note.GNU-stack,\"\",@progbits"
+             else Pretty.empty)
                 -- And just because every other compiler does, lets stick in
-		-- an identifier directive: .ident "GHC x.y.z"
+                -- an identifier directive: .ident "GHC x.y.z"
             Pretty.$$ let compilerIdent = Pretty.text "GHC" Pretty.<+>
 	                                  Pretty.text cProjectVersion
                        in Pretty.text ".ident" Pretty.<+>
@@ -528,8 +538,9 @@ makeImportsDoc dflags imports
 {-      dyld_stubs imps = Pretty.vcat $ map pprDyldSymbolStub $
 				    map head $ group $ sort imps-}
 
-	arch	= platformArch	$ targetPlatform dflags
-	os	= platformOS	$ targetPlatform dflags
+	platform = targetPlatform dflags
+	arch = platformArch platform
+	os   = platformOS   platform
 	
 	-- (Hack) sometimes two Labels pretty-print the same, but have
 	-- different uniques; so we compare their text versions...
@@ -537,7 +548,7 @@ makeImportsDoc dflags imports
 		| needImportedSymbols arch os
 		= Pretty.vcat $
 			(pprGotDeclaration arch os :) $
-			map ( pprImportedSymbol arch os . fst . head) $
+			map ( pprImportedSymbol platform . fst . head) $
 			groupBy (\(_,a) (_,b) -> a == b) $
 			sortBy (\(_,a) (_,b) -> compare a b) $
 			map doPpr $
@@ -545,7 +556,7 @@ makeImportsDoc dflags imports
 		| otherwise
 		= Pretty.empty
 
-	doPpr lbl = (lbl, renderWithStyle (pprCLabel lbl) astyle)
+	doPpr lbl = (lbl, renderWithStyle (pprCLabel platform lbl) astyle)
 	astyle = mkCodeStyle AsmStyle
 
 
@@ -879,10 +890,12 @@ cmmStmtConFold stmt
 
         CmmCondBranch test dest
            -> do test' <- cmmExprConFold DataReference test
+                 dflags <- getDynFlagsCmmOpt
+                 let platform = targetPlatform dflags
 	         return $ case test' of
 		   CmmLit (CmmInt 0 _) -> 
 		     CmmComment (mkFastString ("deleted: " ++ 
-					showSDoc (pprStmt stmt)))
+					showSDoc (pprStmt platform stmt)))
 
 		   CmmLit (CmmInt _ _) -> CmmBranch dest
 		   _other -> CmmCondBranch test' dest

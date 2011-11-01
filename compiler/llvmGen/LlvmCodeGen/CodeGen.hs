@@ -22,6 +22,7 @@ import FastString
 import ForeignCall
 import Outputable hiding ( panic, pprPanic )
 import qualified Outputable
+import Platform
 import UniqSupply
 import Unique
 import Util
@@ -143,11 +144,10 @@ genCall :: LlvmEnv -> CmmCallTarget -> [HintedCmmFormal] -> [HintedCmmActual]
 
 -- Write barrier needs to be handled specially as it is implemented as an LLVM
 -- intrinsic function.
-#if i386_TARGET_ARCH || x86_64_TARGET_ARCH || sparc_TARGET_ARCH
-genCall env (CmmPrim MO_WriteBarrier) _ _ _ = return (env, nilOL, [])
-
-#else
-genCall env (CmmPrim MO_WriteBarrier) _ _ _ = do
+genCall env (CmmPrim MO_WriteBarrier) _ _ _
+ | platformArch (getLlvmPlatform env) `elem` [ArchX86, ArchX86_64, ArchSPARC]
+    = return (env, nilOL, [])
+ | otherwise = do
     let fname = fsLit "llvm.memory.barrier"
     let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc LMVoid
                     FixedArgs (tysToParams [i1, i1, i1, i1, i1]) llvmFunAlign
@@ -167,7 +167,6 @@ genCall env (CmmPrim MO_WriteBarrier) _ _ _ = do
     where
         lmTrue :: LlvmVar
         lmTrue  = mkIntLit i1 (-1)
-#endif
 
 -- Handle popcnt function specifically since GHC only really has i32 and i64
 -- types and things like Word8 are backed by an i32 and just present a logical
@@ -235,11 +234,10 @@ genCall env target res args ret = do
 
     -- translate to LLVM call convention
     let lmconv = case cconv of
-#if i386_TARGET_ARCH || x86_64_TARGET_ARCH
-            StdCallConv  -> CC_X86_Stdcc
-#else
-            StdCallConv  -> CC_Ccc
-#endif
+            StdCallConv  -> case platformArch (getLlvmPlatform env) of
+                            ArchX86    -> CC_X86_Stdcc
+                            ArchX86_64 -> CC_X86_Stdcc
+                            _          -> CC_Ccc
             CCallConv    -> CC_Ccc
             PrimCallConv -> CC_Ccc
             CmmCallConv  -> panic "CmmCallConv not supported here!"
@@ -313,7 +311,7 @@ genCall env target res args ret = do
 getFunPtr :: LlvmEnv -> (LMString -> LlvmType) -> CmmCallTarget
           -> UniqSM ExprData
 getFunPtr env funTy targ = case targ of
-    CmmCallee (CmmLit (CmmLabel lbl)) _ -> litCase $ strCLabel_llvm lbl
+    CmmCallee (CmmLit (CmmLabel lbl)) _ -> litCase $ strCLabel_llvm env lbl
 
     CmmCallee expr _ -> do
         (env', v1, stmts, top) <- exprToVar env expr
@@ -614,7 +612,7 @@ genStore_slow env addr val = do
 
         other ->
             pprPanic "genStore: ptr not right type!"
-                    (PprCmm.pprExpr addr <+> text (
+                    (PprCmm.pprExpr (getLlvmPlatform env) addr <+> text (
                         "Size of Ptr: " ++ show llvmPtrBits ++
                         ", Size of var: " ++ show (llvmWidthInBits other) ++
                         ", Var: " ++ show vaddr))
@@ -880,7 +878,7 @@ genMachOp_slow env opt op [x, y] = case op of
                 else do
                     -- XXX: Error. Continue anyway so we can debug the generated
                     -- ll file.
-                    let cmmToStr = (lines . show . llvmSDoc . PprCmm.pprExpr)
+                    let cmmToStr = (lines . show . llvmSDoc . PprCmm.pprExpr (getLlvmPlatform env))
                     let dx = Comment $ map fsLit $ cmmToStr x
                     let dy = Comment $ map fsLit $ cmmToStr y
                     (v1, s1) <- doExpr (ty vx) $ binOp vx vy
@@ -894,8 +892,8 @@ genMachOp_slow env opt op [x, y] = case op of
                     --         _              -> "unknown"
                     -- panic $ "genMachOp: comparison between different types ("
                     --         ++ o ++ " "++ show vx ++ ", " ++ show vy ++ ")"
-                    --         ++ "\ne1: " ++ (show.llvmSDoc.PprCmm.pprExpr $ x)
-                    --         ++ "\ne2: " ++ (show.llvmSDoc.PprCmm.pprExpr $ y)
+                    --         ++ "\ne1: " ++ (show.llvmSDoc.PprCmm.pprExpr (getLlvmPlatform env) $ x)
+                    --         ++ "\ne2: " ++ (show.llvmSDoc.PprCmm.pprExpr (getLlvmPlatform env) $ y)
 
         -- | Need to use EOption here as Cmm expects word size results from
         -- comparisons while LLVM return i1. Need to extend to llvmWord type
@@ -1042,7 +1040,7 @@ genLoad_slow env e ty = do
                     return (env', dvar, stmts `snocOL` cast `snocOL` load, tops)
 
          other -> pprPanic "exprToVar: CmmLoad expression is not right type!"
-                        (PprCmm.pprExpr e <+> text (
+                        (PprCmm.pprExpr (getLlvmPlatform env) e <+> text (
                             "Size of Ptr: " ++ show llvmPtrBits ++
                             ", Size of var: " ++ show (llvmWidthInBits other) ++
                             ", Var: " ++ show iptr))
@@ -1088,7 +1086,7 @@ genLit env (CmmFloat r w)
               nilOL, [])
 
 genLit env cmm@(CmmLabel l)
-  = let label = strCLabel_llvm l
+  = let label = strCLabel_llvm env l
         ty = funLookup label env
         lmty = cmmToLlvmType $ cmmLitType cmm
     in case ty of
@@ -1193,7 +1191,7 @@ trashStmts = concatOL $ map trashReg activeStgRegs
 -- with foreign functions.
 getHsFunc :: LlvmEnv -> CLabel -> UniqSM ExprData
 getHsFunc env lbl
-  = let fn = strCLabel_llvm lbl
+  = let fn = strCLabel_llvm env lbl
         ty    = funLookup fn env
     in case ty of
         -- Function in module in right form
@@ -1211,7 +1209,7 @@ getHsFunc env lbl
 
         -- label not in module, create external reference
         Nothing  -> do
-            let ty' = LMFunction $ llvmFunSig lbl ExternallyVisible
+            let ty' = LMFunction $ llvmFunSig env lbl ExternallyVisible
             let fun = LMGlobalVar fn ty' ExternallyVisible Nothing Nothing False
             let top = CmmData Data [([],[ty'])]
             let env' = funInsert fn ty' env
