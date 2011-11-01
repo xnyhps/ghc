@@ -762,7 +762,8 @@ ds_app ty tys = do
                           return (mkAppTys fun_ty arg_tys)
 
 ds_var_app :: Name -> [Type] -> TcM Type
--- See Note [Looking up names when typechecking types]
+-- See Note [Type checking recursive type and class declarations]
+-- in TcTyClsDecls
 ds_var_app name arg_tys 
   | isTvNameSpace (rdrNameSpace (nameRdrName name))
   = do { thing <- tcLookup name

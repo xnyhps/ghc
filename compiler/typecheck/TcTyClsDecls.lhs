@@ -94,7 +94,8 @@ tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 tcTyClGroup boot_details tyclds
   = do {    -- Step 1: kind-check this group and returns the final
             -- (possibly-polymorphic) kind of each TyCon and Class
-         names_w_kinds <- kcTyClGroup tyclds
+            -- See Note [Kind checking for type and class decls]
+         names_w_poly_kinds <- kcTyClGroup tyclds
        ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_kinds)
 
 	    -- Step 2: type-check the group, returning 
@@ -106,12 +107,13 @@ tcTyClGroup boot_details tyclds
                  -- NB: if the decls mention any ill-staged data cons
                  -- (see Note [ANothing] in typecheck/TcRnTypes.lhs) we
                  -- will have failed already in kcTyClGroup, so no worries here
-		 -- See Note [Looking up naames during when typechecking types]
-		 --     in TcHsType
            ; tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-	     tcExtendKindEnv names_w_kinds                   $
 
-                 -- See Note [Kind checking for type and class decls]
+                 -- Also extend the local type envt with bindings giving
+                 -- the (polymorphic) kind of each knot-tied TyCon or Class
+		 -- See Note [Type checking recursive type and class declarations]
+	     tcExtendKindEnv names_w_poly_kinds              $
+
                  -- Kind and type check declarations for this group
              concatMapM (tcTyClDecl rec_flags) tyclds }
 
@@ -223,6 +225,7 @@ initial kind environment.  (This is handled by `allDecls').
 \begin{code}
 kcTyClGroup :: TyClGroup Name -> TcM [(Name,Kind)]
 -- Kind check this group, kind generalize, and return the resulting local env
+-- See Note [Kind checking for type and class decls]
 kcTyClGroup decls
   = do	{ mod <- getModule
 	; traceTc "kcTyClGroup" (ptext (sLit "module") <+> ppr mod $$ vcat (map ppr decls))
@@ -462,6 +465,48 @@ discardResult a = a >> return ()
 %*									*
 %************************************************************************
 
+Note [Type checking recursive type and class declarations]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+At this point we have completed *kind-checking* of a mutually
+recursive group of type/class decls (done in kcTyClGroup). However,
+we discarded the kind-checked types (eg RHSs of data type decls); 
+note that kcTyClDecl returns ().  There are two reasons:
+
+  * It's convenient, because we don't have to rebuild a
+    kinded HsDecl (a fairly elaborate type)
+
+  * It's necessary, because after kind-generalisation, the
+    TyCons/Classes may now be kind-polymorphic, and hence need
+    to be given kind arguments.  
+
+Example:
+       data T f a = MkT (f a) (T f a)
+During kind-checking, we give T the kind T :: k1 -> k2 -> *
+and figure out constraints on k1, k2 etc. Then we generalise
+to get   T :: forall k. (k->*) -> k -> *
+So now the (T f a) in the RHS must be elaborated to (T k f a).
+    
+However, during tcTyClDecl of T (above) we will be in a recursive
+"knot". So we aren't allowed to look at the TyCon T itself; we are only
+allowed to put it (lazily) in the returned structures.  But when
+kind-checking the RHS of T's decl, we *do* need to know T's kind (so
+that we can correctly elaboarate (T k f a).  How can we get T's kind
+without looking at T?  Delicate answer: during tcTyClDecl, we extend
+  *Global* env with T -> ATyCon (the (not yet built) TyCon for T)
+  *Local*  env with T -> AThing (polymorphic kind of T)
+Then:
+
+  * During TcHsType.kc_hs_type we look in the *local* env, to get the
+    known kind for T.
+
+  * But in TcHsType.ds_type (and ds_var_app in particular) we look in
+    the *global* env to get the TyCon. But we must be careful not to
+    force the TyCon or we'll get a loop.
+
+This fancy footwork (with two bindings for T) is only necesary for the
+TyCons or Classes of this recursive group.  Earlier, finished groups,
+live in the global env only.
+
 \begin{code}
 tcTyClDecl :: (Name -> RecFlag) -> LTyClDecl Name -> TcM [TyThing]
 tcTyClDecl calc_isrec (L loc decl)
@@ -556,7 +601,7 @@ tcTyClDecl1 _parent calc_isrec
 		    tycon_name = tyConName (classTyCon clas)
 		    tc_isrec = calc_isrec tycon_name
 
-            ; at_stuff <- tcClassATs class_name clas tvs' ats at_defs
+            ; at_stuff <- tcClassATs class_name (AssocFamilyTyCon clas) tvs' ats at_defs
             -- NB: 'ats' only contains "type family" and "data family" declarations
             -- and 'at_defs' only contains associated-type defaults
 
@@ -606,12 +651,12 @@ We can get default defns only for type families, not data families
 	
 \begin{code}
 tcClassATs :: Name             -- The class name (not knot-tied)
-           -> Class            -- The class (knot-tied)
+           -> TyConParent      -- The class parent of this associated type
            -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
            -> [LTyClDecl Name] -- Associated types. All FamTyCon
            -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
            -> TcM [ClassATItem]
-tcClassATs class_name clas clas_tvs ats at_defs
+tcClassATs class_name parent clas_tvs ats at_defs
   = do {  -- Complain about associated type defaults for non associated-types
          sequence_ [ failWithTc (badATErr class_name n)
                    | n <- map (tcdName . unLoc) at_defs
@@ -626,7 +671,7 @@ tcClassATs class_name clas clas_tvs ats at_defs
                         emptyNameEnv at_defs
 
     tc_at at = do { traceTc "tcClassATs1" (ppr at)
-                  ; [ATyCon fam_tc] <- addLocM (tcTyClDecl1 (AssocFamilyTyCon clas)
+                  ; [ATyCon fam_tc] <- addLocM (tcTyClDecl1 parent
                                                               (const Recursive)) at
                   ; let at_defs = lookupNameEnv at_defs_map (tcdName (unLoc at)) `orElse` []
                   ; traceTc "tcClassATs2" (ppr at_defs)
