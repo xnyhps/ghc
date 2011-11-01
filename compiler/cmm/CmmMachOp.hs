@@ -102,6 +102,9 @@ data MachOp
   | MO_SS_Conv Width Width      -- Signed int -> Signed int
   | MO_UU_Conv Width Width      -- unsigned int -> unsigned int
   | MO_FF_Conv Width Width      -- Float -> Float
+
+  -- Float vector operations
+  | MO_VF_Add Length Width  
   deriving (Eq, Show)
 
 pprMachOp :: MachOp -> SDoc
@@ -337,6 +340,8 @@ machOpResultType mop tys =
     MO_FS_Conv _ to     -> cmmBits to
     MO_SF_Conv _ to     -> cmmFloat to
     MO_FF_Conv _ to     -> cmmFloat to
+
+    MO_VF_Add {}        -> ty1
   where
     (ty1:_) = tys
 
@@ -403,6 +408,8 @@ machOpArgReps op =
     MO_SF_Conv from _   -> [from]
     MO_FS_Conv from _   -> [from]
     MO_FF_Conv from _   -> [from]
+
+    MO_VF_Add _ r       -> [r,r]
 
 -----------------------------------------------------------------------------
 -- CallishMachOp

@@ -147,16 +147,18 @@ stmtToInstrs stmt = do
     CmmComment s   -> return (unitOL (COMMENT s))
 
     CmmAssign reg src
-      | isFloatType ty         -> assignReg_FltCode size reg src
-      | is32Bit && isWord64 ty -> assignReg_I64Code      reg src
-      | otherwise              -> assignReg_IntCode size reg src
+      | isVecType ty || isVecExpr src -> return nilOL
+      | isFloatType ty                -> assignReg_FltCode size reg src
+      | is32Bit && isWord64 ty        -> assignReg_I64Code      reg src
+      | otherwise                     -> assignReg_IntCode size reg src
         where ty = cmmRegType reg
               size = cmmTypeSize ty
 
     CmmStore addr src
-      | isFloatType ty         -> assignMem_FltCode size addr src
-      | is32Bit && isWord64 ty -> assignMem_I64Code      addr src
-      | otherwise              -> assignMem_IntCode size addr src
+      | isVecType ty || isVecExpr src -> return nilOL
+      | isFloatType ty                -> assignMem_FltCode size addr src
+      | is32Bit && isWord64 ty        -> assignMem_I64Code      addr src
+      | otherwise                     -> assignMem_IntCode size addr src
         where ty = cmmExprType src
               size = cmmTypeSize ty
 
@@ -169,6 +171,10 @@ stmtToInstrs stmt = do
     CmmJump arg _         -> genJump arg
     CmmReturn _           ->
       panic "stmtToInstrs: return statement should have been cps'd away"
+  where
+    isVecExpr :: CmmExpr -> Bool
+    isVecExpr (CmmMachOp (MO_VF_Add {}) _) = True
+    isVecExpr _                            = False
 
 
 --------------------------------------------------------------------------------

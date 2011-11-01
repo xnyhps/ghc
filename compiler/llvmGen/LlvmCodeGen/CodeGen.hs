@@ -863,6 +863,8 @@ genMachOp_slow env opt op [x, y] = case op of
     MO_U_Shr _ -> genBinMach LM_MO_LShr
     MO_S_Shr _ -> genBinMach LM_MO_AShr
 
+    MO_VF_Add _ _ -> genBinMach LM_MO_FAdd
+
     a -> panic $ "genMachOp: unmatched binary CmmMachOp! (" ++ show a ++ ")"
 
     where

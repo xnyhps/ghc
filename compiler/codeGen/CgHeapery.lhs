@@ -361,14 +361,15 @@ altHeapCheck alt_type code
     rts_label (PrimAlt tc)
       = CmmLit $ CmmLabel $ 
 	case primRepToCgRep (tyConPrimRep tc) of
-	  VoidArg   -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_noregs")
-	  FloatArg  -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_f1")
-	  DoubleArg -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_d1")
-	  LongArg   -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_l1")
+	  VoidArg       -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_noregs")
+	  FloatArg      -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_f1")
+	  DoubleArg     -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_d1")
+	  LongArg       -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_l1")
+	  FloatVecArg _ -> panic "altHeapCheck: Float vector"
 				-- R1 is boxed but unlifted: 
-	  PtrArg    -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unpt_r1")
+	  PtrArg        -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unpt_r1")
 				-- R1 is unboxed:
-	  NonPtrArg -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unbx_r1")
+	  NonPtrArg     -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unbx_r1")
 
     rts_label (UbxTupAlt _) = panic "altHeapCheck"
 \end{code}

@@ -766,6 +766,7 @@ data PrimRep
   | AddrRep		-- ^ A pointer, but /not/ to a Haskell value (use 'PtrRep')
   | FloatRep
   | DoubleRep
+  | FloatVecRep Int
   deriving( Eq, Show )
 
 instance Outputable PrimRep where
@@ -773,15 +774,16 @@ instance Outputable PrimRep where
 
 -- | Find the size of a 'PrimRep', in words
 primRepSizeW :: PrimRep -> Int
-primRepSizeW IntRep   = 1
-primRepSizeW WordRep  = 1
-primRepSizeW Int64Rep = wORD64_SIZE `quot` wORD_SIZE
-primRepSizeW Word64Rep= wORD64_SIZE `quot` wORD_SIZE
-primRepSizeW FloatRep = 1    -- NB. might not take a full word
-primRepSizeW DoubleRep= dOUBLE_SIZE `quot` wORD_SIZE
-primRepSizeW AddrRep  = 1
-primRepSizeW PtrRep   = 1
-primRepSizeW VoidRep  = 0
+primRepSizeW IntRep          = 1
+primRepSizeW WordRep         = 1
+primRepSizeW Int64Rep        = wORD64_SIZE `quot` wORD_SIZE
+primRepSizeW Word64Rep       = wORD64_SIZE `quot` wORD_SIZE
+primRepSizeW FloatRep        = 1    -- NB. might not take a full word
+primRepSizeW DoubleRep       = dOUBLE_SIZE `quot` wORD_SIZE
+primRepSizeW (FloatVecRep l) = l
+primRepSizeW AddrRep         = 1
+primRepSizeW PtrRep          = 1
+primRepSizeW VoidRep         = 0
 \end{code}
 
 %************************************************************************

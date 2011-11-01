@@ -195,12 +195,13 @@ slowCallPattern _ 					= panic "CgStackery.slowCallPattern"
 -------------------------------------------------------------------------
 
 dataReturnConvPrim :: CgRep -> CmmReg
-dataReturnConvPrim PtrArg    = CmmGlobal (VanillaReg 1 VGcPtr)
-dataReturnConvPrim NonPtrArg = CmmGlobal (VanillaReg 1 VNonGcPtr)
-dataReturnConvPrim LongArg   = CmmGlobal (LongReg 1)
-dataReturnConvPrim FloatArg  = CmmGlobal (FloatReg 1)
-dataReturnConvPrim DoubleArg = CmmGlobal (DoubleReg 1)
-dataReturnConvPrim VoidArg   = panic "dataReturnConvPrim: void"
+dataReturnConvPrim PtrArg          = CmmGlobal (VanillaReg 1 VGcPtr)
+dataReturnConvPrim NonPtrArg       = CmmGlobal (VanillaReg 1 VNonGcPtr)
+dataReturnConvPrim LongArg         = CmmGlobal (LongReg 1)
+dataReturnConvPrim FloatArg        = CmmGlobal (FloatReg 1)
+dataReturnConvPrim DoubleArg       = CmmGlobal (DoubleReg 1)
+dataReturnConvPrim (FloatVecArg l) = CmmGlobal (FloatVecReg l 1)
+dataReturnConvPrim VoidArg         = panic "dataReturnConvPrim: void"
 
 
 -- getSequelAmode returns an amode which refers to an info table.  The info

@@ -238,42 +238,47 @@ entry to the garbage collector.
 
 \begin{code}
 data CgRep 
-  = VoidArg 	-- Void
-  | PtrArg 	-- Word-sized heap pointer, followed
-		-- by the garbage collector
-  | NonPtrArg 	-- Word-sized non-pointer
-		-- (including addresses not followed by GC)
-  | LongArg	-- 64-bit non-pointer
-  | FloatArg 	-- 32-bit float
-  | DoubleArg 	-- 64-bit float
+  = VoidArg             -- Void
+  | PtrArg              -- Word-sized heap pointer, followed
+                        -- by the garbage collector
+  | NonPtrArg           -- Word-sized non-pointer
+                        -- (including addresses not followed by GC)
+  | LongArg             -- 64-bit non-pointer
+  | FloatArg            -- 32-bit float
+  | DoubleArg           -- 64-bit float
+  | FloatVecArg Length  -- Vector of 32-bit floats
   deriving Eq
 
 instance Outputable CgRep where
-    ppr VoidArg   = ptext (sLit "V_")
-    ppr PtrArg    = ptext (sLit "P_")
-    ppr NonPtrArg = ptext (sLit "I_")
-    ppr LongArg   = ptext (sLit "L_")
-    ppr FloatArg  = ptext (sLit "F_")
-    ppr DoubleArg = ptext (sLit "D_")
+    ppr VoidArg         = ptext (sLit "V_")
+    ppr PtrArg          = ptext (sLit "P_")
+    ppr NonPtrArg       = ptext (sLit "I_")
+    ppr LongArg         = ptext (sLit "L_")
+    ppr FloatArg        = ptext (sLit "F_")
+    ppr DoubleArg       = ptext (sLit "D_")
+    ppr (FloatVecArg l) = ptext (sLit ("F" ++ show l ++ "_"))
 
 argMachRep :: CgRep -> CmmType
-argMachRep PtrArg    = gcWord
-argMachRep NonPtrArg = bWord
-argMachRep LongArg   = b64
-argMachRep FloatArg  = f32
-argMachRep DoubleArg = f64
-argMachRep VoidArg   = panic "argMachRep:VoidRep"
+argMachRep PtrArg          = gcWord
+argMachRep NonPtrArg       = bWord
+argMachRep LongArg         = b64
+argMachRep FloatArg        = f32
+argMachRep DoubleArg       = f64
+argMachRep VoidArg         = panic "argMachRep:VoidRep"
+argMachRep (FloatVecArg 4) = vec4f32
+argMachRep (FloatVecArg l) = panic ("argMachRep:FloatVecArg" ++ show l)
 
 primRepToCgRep :: PrimRep -> CgRep
-primRepToCgRep VoidRep    = VoidArg
-primRepToCgRep PtrRep     = PtrArg
-primRepToCgRep IntRep	  = NonPtrArg
-primRepToCgRep WordRep	  = NonPtrArg
-primRepToCgRep Int64Rep   = LongArg
-primRepToCgRep Word64Rep  = LongArg
-primRepToCgRep AddrRep    = NonPtrArg
-primRepToCgRep FloatRep   = FloatArg
-primRepToCgRep DoubleRep  = DoubleArg
+primRepToCgRep VoidRep          = VoidArg
+primRepToCgRep PtrRep           = PtrArg
+primRepToCgRep IntRep           = NonPtrArg
+primRepToCgRep WordRep          = NonPtrArg
+primRepToCgRep Int64Rep         = LongArg
+primRepToCgRep Word64Rep        = LongArg
+primRepToCgRep AddrRep          = NonPtrArg
+primRepToCgRep FloatRep         = FloatArg
+primRepToCgRep DoubleRep        = DoubleArg
+primRepToCgRep (FloatVecRep l)  = FloatVecArg l
 
 idCgRep :: Id -> CgRep
 idCgRep x = typeCgRep . idType $ x

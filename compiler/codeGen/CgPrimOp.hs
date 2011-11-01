@@ -271,6 +271,7 @@ emitPrimOp res IndexOffAddrOp_Word8     args _ = doIndexOffAddrOp (Just mo_u_8To
 emitPrimOp res IndexOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16ToWord) b16 res args
 emitPrimOp res IndexOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res IndexOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
+emitPrimOp res IndexOffAddrOp_FloatVec4 args _ = doIndexOffAddrOp Nothing vec4f32 res args
 
 -- ReadXXXoffAddr, which are identical, for our purposes, to IndexXXXoffAddr.
 
@@ -290,6 +291,7 @@ emitPrimOp res ReadOffAddrOp_Word8     args _ = doIndexOffAddrOp (Just mo_u_8ToW
 emitPrimOp res ReadOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16ToWord) b16 res args
 emitPrimOp res ReadOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res ReadOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
+emitPrimOp res ReadOffAddrOp_FloatVec4 args _ = doIndexOffAddrOp Nothing vec4f32 res args
 
 -- IndexXXXArray
 
@@ -309,6 +311,7 @@ emitPrimOp res IndexByteArrayOp_Word8     args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res IndexByteArrayOp_Word16    args _ = doIndexByteArrayOp (Just mo_u_16ToWord) b16  res args
 emitPrimOp res IndexByteArrayOp_Word32    args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res IndexByteArrayOp_Word64    args _ = doIndexByteArrayOp Nothing b64  res args
+emitPrimOp res IndexByteArrayOp_FloatVec4 args _ = doIndexByteArrayOp Nothing vec4f32 res args
 
 -- ReadXXXArray, identical to IndexXXXArray.
 
@@ -328,6 +331,7 @@ emitPrimOp res ReadByteArrayOp_Word8      args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res ReadByteArrayOp_Word16     args _ = doIndexByteArrayOp (Just mo_u_16ToWord) b16  res args
 emitPrimOp res ReadByteArrayOp_Word32     args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res ReadByteArrayOp_Word64     args _ = doIndexByteArrayOp Nothing b64  res args
+emitPrimOp res ReadByteArrayOp_FloatVec4  args _ = doIndexByteArrayOp Nothing vec4f32 res args
 
 -- WriteXXXoffAddr
 
@@ -347,6 +351,7 @@ emitPrimOp res WriteOffAddrOp_Word8      args _ = doWriteOffAddrOp (Just mo_Word
 emitPrimOp res WriteOffAddrOp_Word16     args _ = doWriteOffAddrOp (Just mo_WordTo16) b16 res args
 emitPrimOp res WriteOffAddrOp_Word32     args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
 emitPrimOp res WriteOffAddrOp_Word64     args _ = doWriteOffAddrOp Nothing b64 res args
+emitPrimOp res WriteOffAddrOp_FloatVec4  args _ = doWriteOffAddrOp Nothing vec4f32 res args
 
 -- WriteXXXArray
 
@@ -366,6 +371,7 @@ emitPrimOp res WriteByteArrayOp_Word8     args _ = doWriteByteArrayOp (Just mo_W
 emitPrimOp res WriteByteArrayOp_Word16    args _ = doWriteByteArrayOp (Just mo_WordTo16) b16  res args
 emitPrimOp res WriteByteArrayOp_Word32    args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
 emitPrimOp res WriteByteArrayOp_Word64    args _ = doWriteByteArrayOp Nothing b64  res args
+emitPrimOp res WriteByteArrayOp_FloatVec4 args _ = doWriteByteArrayOp Nothing vec4f32 res args
 
 -- Copying byte arrays
 
@@ -549,6 +555,8 @@ translateOp SameMutableArrayOp     = Just mo_wordEq
 translateOp SameMutableByteArrayOp = Just mo_wordEq
 translateOp SameTVarOp             = Just mo_wordEq
 translateOp EqStablePtrOp          = Just mo_wordEq
+
+translateOp FloatVec4AddOp = Just (MO_VF_Add 4 W32)
 
 translateOp _ = Nothing
 

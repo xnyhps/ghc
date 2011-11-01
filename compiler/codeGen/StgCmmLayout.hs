@@ -195,6 +195,7 @@ slowCallPattern (N: _)		      = (fsLit "stg_ap_n", 1)
 slowCallPattern (F: _)		      = (fsLit "stg_ap_f", 1)
 slowCallPattern (D: _)		      = (fsLit "stg_ap_d", 1)
 slowCallPattern (L: _)		      = (fsLit "stg_ap_l", 1)
+slowCallPattern (FV _ : _)	      = error "No slow call pattern for Float vector"
 slowCallPattern []		      = (fsLit "stg_ap_0", 0)
 
 
@@ -205,30 +206,33 @@ slowCallPattern []		      = (fsLit "stg_ap_0", 0)
 -- ArgRep is not exported (even abstractly)
 -- It's a local helper type for classification
 
-data ArgRep = P 	-- GC Ptr
-	  | N   -- One-word non-ptr
-	  | L	-- Two-word non-ptr (long)
-	  | V	-- Void
-	  | F	-- Float
-	  | D	-- Double
+data ArgRep = P      -- GC Ptr
+            | N      -- One-word non-ptr
+            | L      -- Two-word non-ptr (long)
+            | V      -- Void
+            | F      -- Float
+            | D      -- Double
+            | FV Int -- Float vector
 instance Outputable ArgRep where
-  ppr P = text "P"
-  ppr N = text "N"
-  ppr L = text "L"
-  ppr V = text "V"
-  ppr F = text "F"
-  ppr D = text "D"
+  ppr P      = text "P"
+  ppr N      = text "N"
+  ppr L      = text "L"
+  ppr V      = text "V"
+  ppr F      = text "F"
+  ppr D      = text "D"
+  ppr (FV l) = text "FV" <> ppr l
 
 toArgRep :: PrimRep -> ArgRep
-toArgRep VoidRep   = V
-toArgRep PtrRep    = P
-toArgRep IntRep    = N
-toArgRep WordRep   = N
-toArgRep AddrRep   = N
-toArgRep Int64Rep  = L
-toArgRep Word64Rep = L
-toArgRep FloatRep  = F
-toArgRep DoubleRep = D
+toArgRep VoidRep         = V
+toArgRep PtrRep          = P
+toArgRep IntRep          = N
+toArgRep WordRep         = N
+toArgRep AddrRep         = N
+toArgRep Int64Rep        = L
+toArgRep Word64Rep       = L
+toArgRep FloatRep        = F
+toArgRep DoubleRep       = D
+toArgRep (FloatVecRep l) = FV l
 
 isNonV :: ArgRep -> Bool
 isNonV V = False
@@ -238,12 +242,13 @@ argsReps :: [StgArg] -> [ArgRep]
 argsReps = map (toArgRep . argPrimRep)
 
 argRepSizeW :: ArgRep -> WordOff		-- Size in words
-argRepSizeW N = 1
-argRepSizeW P = 1
-argRepSizeW F = 1
-argRepSizeW L = wORD64_SIZE `quot` wORD_SIZE
-argRepSizeW D = dOUBLE_SIZE `quot` wORD_SIZE
-argRepSizeW V = 0
+argRepSizeW N      = 1
+argRepSizeW P      = 1
+argRepSizeW F      = 1
+argRepSizeW L      = wORD64_SIZE `quot` wORD_SIZE
+argRepSizeW D      = dOUBLE_SIZE `quot` wORD_SIZE
+argRepSizeW V      = 0
+argRepSizeW (FV l) = l
 
 idArgRep :: Id -> ArgRep
 idArgRep = toArgRep . idPrimRep

@@ -11,6 +11,12 @@ module CmmType
     , widthInBits, widthInBytes, widthInLog, widthFromBytes
     , wordWidth, halfWordWidth, cIntWidth, cLongWidth
     , narrowU, narrowS
+
+    , Length
+    , vec, vec2, vec4, vec8, vec16
+    , vec2f64, vec2b64, vec4f32, vec4b32, vec8b16, vec16b8
+    , vecLength, vecType
+    , isVecType
    )
 where
 
@@ -35,6 +41,7 @@ import Data.Int
 
 data CmmType    -- The important one!
   = CmmType CmmCat Width
+  | CmmVecType Length CmmCat Width
 
 data CmmCat     -- "Category" (not exported)
    = GcPtrCat   -- GC pointer
@@ -44,7 +51,9 @@ data CmmCat     -- "Category" (not exported)
         -- See Note [Signed vs unsigned] at the end
 
 instance Outputable CmmType where
-  ppr (CmmType cat wid) = ppr cat <> ppr (widthInBits wid)
+  ppr (CmmType cat wid)      = ppr cat <> ppr (widthInBits wid)
+  ppr (CmmVecType l cat wid) = ppr cat <> ppr (widthInBits wid) <>
+                               text "x" <> ppr l
 
 instance Outputable CmmCat where
   ppr FloatCat  = ptext $ sLit("F")
@@ -62,22 +71,38 @@ instance Outputable CmmCat where
 -- Gc/NonGc distinction, and sometimes we don't
 -- So we use an explicit function to force you to think about it
 cmmEqType :: CmmType -> CmmType -> Bool -- Exact equality
-cmmEqType (CmmType c1 w1) (CmmType c2 w2) = c1==c2 && w1==w2
+cmmEqType (CmmType c1 w1)       (CmmType c2 w2)       = c1==c2 && w1==w2
+cmmEqType (CmmVecType s1 c1 w1) (CmmVecType s2 c2 w2) = s1==s2 && c1==c2 && w1==w2
+cmmEqType _                     _                     = False
 
 cmmEqType_ignoring_ptrhood :: CmmType -> CmmType -> Bool
   -- This equality is temporary; used in CmmLint
   -- but the RTS files are not yet well-typed wrt pointers
-cmmEqType_ignoring_ptrhood (CmmType c1 w1) (CmmType c2 w2)
-   = c1 `weak_eq` c2 && w1==w2
-   where
-      FloatCat `weak_eq` FloatCat = True
-      FloatCat `weak_eq` _other   = False
-      _other   `weak_eq` FloatCat = False
-      _word1   `weak_eq` _word2   = True        -- Ignores GcPtr
+cmmEqType_ignoring_ptrhood t1 t2 =
+    go t1 t2
+  where
+    go :: CmmType -> CmmType -> Bool
+    go (CmmType c1 w1)       (CmmType c2 w2)       = c1 `weak_eq` c2 && w1==w2
+    go (CmmVecType s1 c1 w1) (CmmVecType s2 c2 w2) = s1==s2 && c1 `weak_eq` c2 && w1==w2
+    go _                     _                     = False
+
+    weak_eq :: CmmCat -> CmmCat -> Bool
+    FloatCat `weak_eq` FloatCat = True
+    FloatCat `weak_eq` _other   = False
+    _other   `weak_eq` FloatCat = False
+    _word1   `weak_eq` _word2   = True        -- Ignores GcPtr
 
 --- Simple operations on CmmType -----
+
+-- XXX This is a terrible hack! Now that we have SIMD vectors, the size of a
+-- type is no longer determined by a width.
 typeWidth :: CmmType -> Width
-typeWidth (CmmType _ w) = w
+typeWidth (CmmType _ w)         = w
+typeWidth (CmmVecType 2  _ W64) = W128
+typeWidth (CmmVecType 4  _ W32) = W128
+typeWidth (CmmVecType 8  _ W16) = W128
+typeWidth (CmmVecType 16 _ W8)  = W128
+typeWidth _                     = error "typeWidth: can't calculate width"
 
 cmmBits, cmmFloat :: Width -> CmmType
 cmmBits  = CmmType BitsCat
@@ -226,6 +251,42 @@ narrowS W16 x = fromIntegral (fromIntegral x :: Int16)
 narrowS W32 x = fromIntegral (fromIntegral x :: Int32)
 narrowS W64 x = fromIntegral (fromIntegral x :: Int64)
 narrowS _ _ = panic "narrowTo"
+
+-----------------------------------------------------------------------------
+--              SIMD
+-----------------------------------------------------------------------------
+
+type Length = Int
+
+vec :: Length -> CmmType -> CmmType
+vec x (CmmType cat wid)  = CmmVecType x cat wid
+vec _ _                  = panic "vector of vectors"
+
+vec2, vec4, vec8, vec16 :: CmmType -> CmmType
+vec2  = vec 2
+vec4  = vec 4
+vec8  = vec 8
+vec16 = vec 16
+
+vec2f64, vec2b64, vec4f32, vec4b32, vec8b16, vec16b8 :: CmmType
+vec2f64 = vec 2 f64
+vec2b64 = vec 2 b64
+vec4f32 = vec 4 f32
+vec4b32 = vec 4 b32
+vec8b16 = vec 8 b16
+vec16b8 = vec 16 b8
+
+vecLength :: CmmType -> Length
+vecLength (CmmVecType x _ _) = x
+vecLength _                  = panic "vecLength: not a vector"
+
+vecType :: CmmType -> CmmType
+vecType (CmmVecType _ cat wid) = CmmType cat wid
+vecType _                      = panic "vecType: not a vector"
+
+isVecType :: CmmType -> Bool
+isVecType (CmmVecType {}) = True
+isVecType _               = False
 
 -------------------------------------------------------------------------
 {-      Note [Signed vs unsigned]

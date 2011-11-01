@@ -331,6 +331,10 @@ data GlobalReg
   | LongReg	        -- long int registers (64-bit, really)
 	{-# UNPACK #-} !Int	-- its number
 
+  | FloatVecReg		-- single-precision floating-point vector registers
+        Length
+	{-# UNPACK #-} !Int	-- its number
+
   -- STG registers
   | Sp			-- Stack ptr; points to last occupied stack location.
   | SpLim		-- Stack limit
@@ -365,6 +369,7 @@ instance Eq GlobalReg where
    FloatReg i == FloatReg j = i==j
    DoubleReg i == DoubleReg j = i==j
    LongReg i == LongReg j = i==j
+   FloatVecReg l1 i == FloatVecReg l2 j = l1==l2 && i==j
    Sp == Sp = True
    SpLim == SpLim = True
    Hp == Hp = True
@@ -381,9 +386,10 @@ instance Eq GlobalReg where
 instance Ord GlobalReg where
    compare (VanillaReg i _) (VanillaReg j _) = compare i j
      -- Ignore type when seeking clashes
-   compare (FloatReg i)  (FloatReg  j) = compare i j
-   compare (DoubleReg i) (DoubleReg j) = compare i j
-   compare (LongReg i)   (LongReg   j) = compare i j
+   compare (FloatReg i)        (FloatReg  j)      = compare i j
+   compare (DoubleReg i)       (DoubleReg j)      = compare i j
+   compare (LongReg i)         (LongReg   j)      = compare i j
+   compare (FloatVecReg l1 i)  (FloatVecReg l2 j) = compare (l1, i) (l2, j)
    compare Sp Sp = EQ
    compare SpLim SpLim = EQ
    compare Hp Hp = EQ
@@ -396,14 +402,16 @@ instance Ord GlobalReg where
    compare GCFun GCFun = EQ
    compare BaseReg BaseReg = EQ
    compare PicBaseReg PicBaseReg = EQ
-   compare (VanillaReg _ _) _ = LT
-   compare _ (VanillaReg _ _) = GT
-   compare (FloatReg _) _     = LT
-   compare _ (FloatReg _)     = GT
-   compare (DoubleReg _) _    = LT
-   compare _ (DoubleReg _)    = GT
-   compare (LongReg _) _      = LT
-   compare _ (LongReg _)      = GT
+   compare (VanillaReg _ _) _   = LT
+   compare _ (VanillaReg _ _)   = GT
+   compare (FloatReg _) _       = LT
+   compare _ (FloatReg _)       = GT
+   compare (DoubleReg _) _      = LT
+   compare _ (DoubleReg _)      = GT
+   compare (LongReg _) _        = LT
+   compare _ (LongReg _)        = GT
+   compare (FloatVecReg _ _) _  = LT
+   compare _ (FloatVecReg _ _)  = GT
    compare Sp _ = LT
    compare _ Sp = GT
    compare SpLim _ = LT
@@ -441,9 +449,11 @@ node = VanillaReg 1 VGcPtr
 globalRegType :: GlobalReg -> CmmType
 globalRegType (VanillaReg _ VGcPtr)    = gcWord
 globalRegType (VanillaReg _ VNonGcPtr) = bWord
-globalRegType (FloatReg _) 	= cmmFloat W32
-globalRegType (DoubleReg _) 	= cmmFloat W64
-globalRegType (LongReg _) 	= cmmBits W64
-globalRegType Hp		= gcWord	-- The initialiser for all 
-					    	-- dynamically allocated closures
-globalRegType _			= bWord
+globalRegType (FloatReg _)             = cmmFloat W32
+globalRegType (DoubleReg _)            = cmmFloat W64
+globalRegType (LongReg _)              = cmmBits W64
+globalRegType (FloatVecReg l _)        = vec l (cmmFloat W32)
+globalRegType Hp                       = gcWord  -- The initialiser for all
+                                                 -- dynamically allocated
+                                                 -- closures
+globalRegType _                        = bWord

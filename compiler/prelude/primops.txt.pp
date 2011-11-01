@@ -1933,6 +1933,39 @@ primop  TraceEventOp "traceEvent#" GenPrimOp
    out_of_line      = True
 
 ------------------------------------------------------------------------
+section "SIMD" 
+	{Operations on vectors.}
+------------------------------------------------------------------------
+
+primtype FloatVec4#
+
+primop FloatVec4AddOp "plusFloatVec4#" Dyadic            
+   FloatVec4# -> FloatVec4# -> FloatVec4#
+   with commutable = True
+
+primop IndexByteArrayOp_FloatVec4 "indexFloatVec4Array#" GenPrimOp
+   ByteArray# -> Int# -> FloatVec4#
+
+primop ReadByteArrayOp_FloatVec4 "readFloatVec4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, FloatVec4# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_FloatVec4 "writeFloatVec4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> FloatVec4# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_FloatVec4 "indexFloatVec4OffAddr#" GenPrimOp
+   Addr# -> Int# -> FloatVec4#
+
+primop ReadOffAddrOp_FloatVec4 "readFloatVec4OffAddr#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, FloatVec4# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_FloatVec4 "writeFloatVec4OffAddr#" GenPrimOp
+   Addr# -> Int# -> FloatVec4# -> State# s -> State# s
+   with has_side_effects = True
+
+------------------------------------------------------------------------
 ---                                                                  ---
 ------------------------------------------------------------------------
 
