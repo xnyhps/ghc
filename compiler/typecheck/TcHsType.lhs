@@ -568,30 +568,27 @@ kcHsLPredType pred = kc_check_lhs_type pred ekConstraint
 
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
-kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
-    traceTc "lk1" (ppr name)
-    thing <- tcLookup name
-    traceTc "lk2" (ppr name <+> ppr thing)
-    case thing of
-        ATyVar _ ty             -> wrap_mono (typeKind ty)
-        AThing kind             -> wrap_poly kind
-               -- Should be wrap_mono in the first kind checking
-               -- (before kind generalization in TcTyClsDecls) and
-               -- wrap_poly in the second kind checking before
-               -- desugaring. Since we cannot make the difference,
-               -- we use wrap_poly which works for both.
-        AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
-        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
-        _                       -> wrongThingErr "type" thing name
-    where
-      wrap_mono kind = return (HsTyVar name, kind)
-      wrap_poly kind
-        | null kvs = wrap_mono kind
-        | otherwise = do
-          kvs' <- mapM (const newMetaKindVar) kvs
-          let ki = substKiWith kvs kvs' ki_body
-          return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
-        where (kvs, ki_body) = splitForAllTys kind
+kcTyVar name         -- Could be a tyvar, a tycon, or a datacon
+  = do { -- traceTc "lk1" (ppr name)
+       ; thing <- tcLookup name
+       ; -- traceTc "lk2" (ppr name <+> ppr thing)
+       ; case thing of
+           ATyVar _ ty           -> wrap_mono (typeKind ty)
+           AThing kind           -> wrap_mono kind
+           AGlobal (ATyCon tc)   -> wrap_poly (tyConKind tc)
+           AGlobal (ADataCon dc) -> kcDataCon dc >>= wrap_poly
+           _                     -> wrongThingErr "type" thing name }
+  where
+    wrap_mono kind = do { traceTc "lk3" (ppr name <+> dcolon <+> ppr kind)
+                        ; return (HsTyVar name, kind) }
+    wrap_poly kind
+      | null kvs = wrap_mono kind
+      | otherwise
+      = do { traceTc "lk4" (ppr name <+> dcolon <+> ppr kind)
+           ; kvs' <- mapM (const newMetaKindVar) kvs
+           ; let ki = substKiWith kvs kvs' ki_body
+           ; return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki) }
+      where (kvs, ki_body) = splitForAllTys kind
 
 -- IA0_TODO: this function should disapear, and use the dcPromoted field of DataCon
 kcDataCon :: DataCon -> TcM TcKind
@@ -1196,6 +1193,8 @@ data EkCtxt  = EkUnk		-- Unknown context
              | EkIParam         -- Implicit parameter type
              | EkFamInst        -- Family instance
 
+instance Outputable ExpKind where
+  ppr (EK k _) = ptext (sLit "Expected kind:") <+> ppr k
 
 ekLifted, ekOpen, ekArg, ekConstraint :: ExpKind
 ekLifted     = EK liftedTypeKind EkUnk
