@@ -54,7 +54,7 @@ module TcMType (
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
-  zonkTcKind, defaultKindVarToStar, defaultKindVarsToStar,
+  zonkTcKind, defaultKindVarToStar,
   zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
@@ -96,7 +96,7 @@ import Unique( Unique )
 import Bag
 
 import Control.Monad
-import Data.List        ( (\\) )
+import Data.List        ( (\\), partition )
 \end{code}
 
 
@@ -568,31 +568,21 @@ zonkTcPredType = zonkTcType
 		     are used at the end of type checking
 
 \begin{code}
-defaultKindVarToStar :: TcTyVar -> TcM TcTyVar
-defaultKindVarToStar kv = ASSERT ( isKiVar kv )
-                          zonkTyVarKind (setTyVarKind kv liftedTypeKind)
+defaultKindVarToStar :: TcTyVar -> TcM ()
+-- We have a meta-kind: unify it with '*'
+defaultKindVarToStar kv 
+  = ASSERT ( isKiVar kv && isMetaTyVar kv )
+    writeMetaKindVar kv liftedTypeKind
 
-defaultKindVarsToStar :: [TcTyVar] -> TcM [TcTyVar]
-defaultKindVarsToStar = mapM defaultKindVarToStar
-
-checkKiVarsBeforeTys :: [TcTyVar] -> Bool
-checkKiVarsBeforeTys = go emptyVarSet where
-  go _kiVars [] = True
-  go kiVars (v:vs)
-    | isKiVar v = go (extendVarSet kiVars v) vs
-    | isTyVar v =    kiVarsOfKind (tyVarKind v) `intersectVarSet` kiVars == kiVars
-                  && go kiVars vs
-    | otherwise = panic "checkKiVarsBeforeTys"
-
-zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
+zonkQuantifiedTyVars :: TcTyVarSet -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
 --               variable mentioning it in its kind
 zonkQuantifiedTyVars tyvars
-  = do { poly_kinds <- xoptM Opt_PolyKinds
-       ; ASSERT ( checkKiVarsBeforeTys tyvars )
-         if poly_kinds then
-             mapM zonkQuantifiedTyVar tyvars 
-           -- Because of the precondition, any kind variables
+  = do { let (kvs, tvs) = partitionKiTyVars (varSetElems tyvars)
+       ; poly_kinds <- xoptM Opt_PolyKinds
+       ; if poly_kinds then
+             mapM zonkQuantifiedTyVar (kvs ++ tvs)
+           -- Because of the order, any kind variables
            -- mentioned in the kinds of the type variables refer to
            -- the now-quantified versions
          else
@@ -600,10 +590,9 @@ zonkQuantifiedTyVars tyvars
              -- to *, and zonk the tyvars as usual.  Notice that this
              -- may make zonkQuantifiedTyVars return a shorter list
              -- than it was passed, but that's ok
-             do { _ <- defaultKindVarsToStar kvs
-                ; mapM zonkQuantifiedTyVar tvs } }
-  where
-    (kvs, tvs) = partitionKiTyVars tyvars
+             do { let (meta_kvs, skolem_kvs) = partition isMetaTyVar kvs
+                ; mapM_ defaultKindVarToStar meta_kvs
+                ; mapM zonkQuantifiedTyVar (skolem_kvs ++ tvs) } }
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- The quantified type variables often include meta type variables

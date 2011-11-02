@@ -964,19 +964,17 @@ kindGeneralizeKinds kinds
          -- the kinds, and *not* in the environment
        ; zonked_kinds <- mapM zonkTcKind kinds
        ; gbl_tvs <- tcGetGlobalTyVars -- Already zonked
-       ; let kvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds 
-                                            `minusVarSet` gbl_tvs)
+       ; let kvs_to_quantify = tyVarsOfTypes zonked_kinds 
+                               `minusVarSet` gbl_tvs
 
-       ; kvs <- ASSERT2 (and (map isKiVar kvs_to_quantify), ppr kvs_to_quantify)
+       ; kvs <- ASSERT2 (all isKiVar (varSetElems kvs_to_quantify), ppr kvs_to_quantify)
                 zonkQuantifiedTyVars kvs_to_quantify
 
-       -- If PolyKinds is off, zonkQuantifiedTyVars will return the empty list
-       ; poly_kinds <- xoptM Opt_PolyKinds
-       ; let new_kvs = if poly_kinds then mkTyVarTys kvs
-                         else ASSERT ( null kvs )
-                              -- In that case, we want to replace by kind *
-                              replicate (length kvs_to_quantify) liftedTypeKind
-       ; let final_kinds = substKisWith kvs_to_quantify new_kvs zonked_kinds
+         -- Zonk the kinds again, to pick up either the kind 
+         -- variables we quantify over, or *, depending on whether
+         -- zonkQuantifiedTyVars decided to generalise (which in
+         -- turn depends on PolyKinds)
+       ; final_kinds <- mapM zonkTcKind zonked_kinds
 
        ; traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
                                    <+> ppr kvs   <+> ppr final_kinds)
