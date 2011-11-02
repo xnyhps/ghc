@@ -339,16 +339,18 @@ separateByPtrFollowness things
 
 \begin{code}
 cgRepSizeB :: CgRep -> ByteOff
-cgRepSizeB DoubleArg = dOUBLE_SIZE
-cgRepSizeB LongArg   = wORD64_SIZE
-cgRepSizeB VoidArg   = 0
-cgRepSizeB _         = wORD_SIZE
+cgRepSizeB DoubleArg         = dOUBLE_SIZE
+cgRepSizeB LongArg           = wORD64_SIZE
+cgRepSizeB (FloatVecArg len) = len*wORD_SIZE
+cgRepSizeB VoidArg           = 0
+cgRepSizeB _                 = wORD_SIZE
 
 cgRepSizeW :: CgRep -> ByteOff
-cgRepSizeW DoubleArg = dOUBLE_SIZE `quot` wORD_SIZE
-cgRepSizeW LongArg   = wORD64_SIZE `quot` wORD_SIZE
-cgRepSizeW VoidArg   = 0
-cgRepSizeW _         = 1
+cgRepSizeW DoubleArg         = dOUBLE_SIZE `quot` wORD_SIZE
+cgRepSizeW LongArg           = wORD64_SIZE `quot` wORD_SIZE
+cgRepSizeW (FloatVecArg len) = len
+cgRepSizeW VoidArg           = 0
+cgRepSizeW _                 = 1
 
 retAddrSizeW :: WordOff
 retAddrSizeW = 1	-- One word
