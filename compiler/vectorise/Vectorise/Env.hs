@@ -9,11 +9,9 @@ module Vectorise.Env (
   GlobalEnv(..),
   initGlobalEnv,
   extendImportedVarsEnv,
-  setFamEnv,
   extendFamEnv,
   extendTyConsEnv,
-  extendDataConsEnv,
-  extendPAFunsEnv,
+  setPAFunsEnv,
   setPRFunsEnv,
   modVectInfo
 ) where
@@ -90,9 +88,11 @@ data GlobalEnv
           -- vectorisation declaration and those that the vectoriser determines to be scalar.
 
         , global_scalar_tycons       :: NameSet
-          -- ^Type constructors whose values can only contain scalar data and that appear in a
-          -- 'VECTORISE SCALAR type' pragma in the current or an imported module.  Scalar code may
-          -- only operate on such data.
+          -- ^Type constructors whose values can only contain scalar data.  This includes type
+          -- constructors that appear in a 'VECTORISE SCALAR type' pragma or 'VECTORISE type' pragma
+          -- *without* a right-hand side in the current or an imported module as well as type
+          -- constructors that are automatically identified as scalar by the vectoriser (in
+          -- 'Vectorise.Type.Env').  Scalar code may only operate on such data.
         
         , global_novect_vars          :: VarSet
           -- ^Variables that are not vectorised.  (They may be referenced in the right-hand sides
@@ -133,7 +133,7 @@ initGlobalEnv info vectDecls instEnvs famInstEnvs
   , global_novect_vars          = mkVarSet novects
   , global_tycons               = mapNameEnv snd $ vectInfoTyCon info
   , global_datacons             = mapNameEnv snd $ vectInfoDataCon info
-  , global_pa_funs              = mapNameEnv snd $ vectInfoPADFun info
+  , global_pa_funs              = emptyNameEnv
   , global_pr_funs              = emptyNameEnv
   , global_inst_env             = instEnvs
   , global_fam_inst_env         = famInstEnvs
@@ -147,7 +147,7 @@ initGlobalEnv info vectDecls instEnvs famInstEnvs
                                         --   inference — see also 'TcBinds.tcVect'
     scalar_vars   = [var              | Vect     var   Nothing                  <- vectDecls]
     novects       = [var              | NoVect   var                            <- vectDecls]
-    scalar_tycons = [tyConName tycon  | VectType tycon Nothing                  <- vectDecls]
+    scalar_tycons = [tyConName tycon  | VectType True tycon _                   <- vectDecls]
 
 
 -- Operators on Global Environments -------------------------------------------
@@ -157,13 +157,6 @@ initGlobalEnv info vectDecls instEnvs famInstEnvs
 extendImportedVarsEnv :: [(Var, Var)] -> GlobalEnv -> GlobalEnv
 extendImportedVarsEnv ps genv
   = genv { global_vars = extendVarEnvList (global_vars genv) ps }
-
--- |Set the list of type family instances in an environment.
---
-setFamEnv :: FamInstEnv -> GlobalEnv -> GlobalEnv
-setFamEnv l_fam_inst genv
-  = genv { global_fam_inst_env = (g_fam_inst, l_fam_inst) }
-  where (g_fam_inst, _) = global_fam_inst_env genv
 
 -- |Extend the list of type family instances.
 --
@@ -178,23 +171,15 @@ extendTyConsEnv :: [(Name, TyCon)] -> GlobalEnv -> GlobalEnv
 extendTyConsEnv ps genv
   = genv { global_tycons = extendNameEnvList (global_tycons genv) ps }
 
--- |Extend the list of data constructors in an environment.
+-- |Set the list of PA functions in an environment.
 --
-extendDataConsEnv :: [(Name, DataCon)] -> GlobalEnv -> GlobalEnv
-extendDataConsEnv ps genv
-  = genv { global_datacons = extendNameEnvList (global_datacons genv) ps }
-
--- |Extend the list of PA functions in an environment.
---
-extendPAFunsEnv :: [(Name, Var)] -> GlobalEnv -> GlobalEnv
-extendPAFunsEnv ps genv
-  = genv { global_pa_funs = extendNameEnvList (global_pa_funs genv) ps }
+setPAFunsEnv :: [(Name, Var)] -> GlobalEnv -> GlobalEnv
+setPAFunsEnv ps genv = genv { global_pa_funs = mkNameEnv ps }
 
 -- |Set the list of PR functions in an environment.
 --
 setPRFunsEnv :: [(Name, Var)] -> GlobalEnv -> GlobalEnv
-setPRFunsEnv ps genv
-  = genv { global_pr_funs = mkNameEnv ps }
+setPRFunsEnv ps genv = genv { global_pr_funs = mkNameEnv ps }
 
 -- |Compute vectorisation information that goes into 'ModGuts' (and is stored in interface files).
 -- The incoming 'vectInfo' is that from the 'HscEnv' and 'EPS'.  The outgoing one contains only the
@@ -202,24 +187,22 @@ setPRFunsEnv ps genv
 -- data constructors referenced in VECTORISE pragmas, even if they are defined in an imported
 -- module.
 --
-modVectInfo :: GlobalEnv -> [TyCon] -> [CoreVect]-> VectInfo -> VectInfo
-modVectInfo env tycons vectDecls info
+modVectInfo :: GlobalEnv -> [Id] -> [TyCon] -> [CoreVect]-> VectInfo -> VectInfo
+modVectInfo env mg_ids mg_tyCons vectDecls info
   = info 
     { vectInfoVar          = mk_env ids      (global_vars     env)
     , vectInfoTyCon        = mk_env tyCons   (global_tycons   env)
     , vectInfoDataCon      = mk_env dataCons (global_datacons env)
-    , vectInfoPADFun       = mk_env tyCons   (global_pa_funs  env)
     , vectInfoScalarVars   = global_scalar_vars   env `minusVarSet`  vectInfoScalarVars   info
     , vectInfoScalarTyCons = global_scalar_tycons env `minusNameSet` vectInfoScalarTyCons info
     }
   where
-    vectIds        = [id    | Vect     id    _ <- vectDecls]
-    vectTypeTyCons = [tycon | VectType tycon _ <- vectDecls]
+    vectIds        = [id    | Vect     id    _   <- vectDecls]
+    vectTypeTyCons = [tycon | VectType _ tycon _ <- vectDecls]
     vectDataCons   = concatMap tyConDataCons vectTypeTyCons
-    ids            = {- typeEnvIds      tyenv ++ -} vectIds
-                     -- XXX: what Ids do you want here?
-    tyCons         = tycons ++ vectTypeTyCons
-    dataCons       = concatMap tyConDataCons tycons ++ vectDataCons
+    ids            = mg_ids ++ vectIds
+    tyCons         = mg_tyCons ++ vectTypeTyCons
+    dataCons       = concatMap tyConDataCons mg_tyCons ++ vectDataCons
     
     -- Produce an entry for every declaration that is mentioned in the domain of the 'inspectedEnv'
     mk_env decls inspectedEnv

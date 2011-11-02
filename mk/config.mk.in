@@ -114,11 +114,12 @@ GhcDynamic=NO
 GhcProfiled=NO
 
 # Do we support shared libs?
-SharedLibsPlatformList = i386-unknown-linux x86_64-unknown-linux \
-	i386-unknown-freebsd x86_64-unknown-freebsd \
-	i386-unknown-openbsd x86_64-unknown-openbsd \
-	i386-unknown-mingw32 \
-	i386-apple-darwin powerpc-apple-darwin
+SharedLibsPlatformList =                        \
+    i386-unknown-linux   x86_64-unknown-linux   \
+    i386-unknown-freebsd x86_64-unknown-freebsd \
+    i386-unknown-openbsd x86_64-unknown-openbsd \
+    i386-unknown-mingw32                        \
+    i386-apple-darwin    x86_64-apple-darwin    powerpc-apple-darwin
 
 ifeq "$(SOLARIS_BROKEN_SHLD)" "NO"
 SharedLibsPlatformList += i386-unknown-solaris2
@@ -137,7 +138,7 @@ PlatformSupportsSharedLibs = $(if $(filter $(TARGETPLATFORM),\
 # the compiler you build with is generating registerised binaries), but
 # the stage2 compiler will be an unregisterised binary.
 #
-ifneq "$(findstring $(HostArch_CPP), i386 x86_64 powerpc)" ""
+ifneq "$(findstring $(HostArch_CPP), i386 x86_64 powerpc arm)" ""
 GhcUnregisterised=NO
 else
 GhcUnregisterised=YES
@@ -538,6 +539,16 @@ else
 GhcCanonVersion = $(GhcMajVersion)$(GhcMinVersion)
 endif
 
+# Work around #5453, which causes the stage1 compiler to segfault when
+# built with 7.2.1.
+ifeq "$(GhcVersion)" "7.2.1"
+CONF_HC_OPTS_STAGE0 += -fno-full-laziness
+compiler/cmm/Bitmap_HC_OPTS += -ffull-laziness
+# urgh.  Compiling cmm/Bitmap.hs with -fno-full-laziness results in 
+#   "gmp: overflow in mpz type"
+# for some unknown reason, so turn full-laziness back on for this module.
+endif
+
 #-----------------------------------------------------------------------------
 # C compiler
 #
@@ -682,6 +693,10 @@ LdIsGNULd		= @LdIsGNULd@
 # Set to YES if ld has the --build-id flag.  Sometimes we need to
 # disable it with --build-id=none.
 LdHasBuildId	        = @LdHasBuildId@
+
+# Set to YES if ld has the --no_compact_unwind flag. See #5019
+# and compiler/main/DriverPipeline.hs.
+LdHasNoCompactUnwind	= @LdHasNoCompactUnwind@
 
 # On MSYS, building with SplitObjs=YES fails with 
 #   ar: Bad file number

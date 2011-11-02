@@ -50,6 +50,7 @@ int TRACE_sched;
 int TRACE_gc;
 int TRACE_spark_sampled;
 int TRACE_spark_full;
+int TRACE_user;
 
 #ifdef THREADED_RTS
 static Mutex trace_utx;
@@ -106,9 +107,12 @@ void initTracing (void)
         RtsFlags.TraceFlags.sparks_full ||
         RtsFlags.DebugFlags.sparks;
 
+    TRACE_user =
+        RtsFlags.TraceFlags.user;
+
     eventlog_enabled = RtsFlags.TraceFlags.tracing == TRACE_EVENTLOG;
 
-    /* Note: we can have TRACE_sched or TRACE_spark turned on even when
+    /* Note: we can have any of the TRACE_* flags turned on even when
        eventlog_enabled is off. In the DEBUG way we may be tracing to stderr.
      */
 
@@ -293,9 +297,9 @@ void traceGcEvent_ (Capability *cap, EventTypeNum tag)
     }
 }
 
-void traceCapsetModify_ (EventTypeNum tag,
-                         CapsetID capset,
-                         StgWord32 other)
+void traceCapsetEvent_ (EventTypeNum tag,
+                        CapsetID capset,
+                        StgWord info)
 {
 #ifdef DEBUG
     if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
@@ -304,18 +308,18 @@ void traceCapsetModify_ (EventTypeNum tag,
         tracePreface();
         switch (tag) {
         case EVENT_CAPSET_CREATE:   // (capset, capset_type)
-            debugBelch("created capset %lu of type %d\n", (lnat)capset, (int)other);
+            debugBelch("created capset %lu of type %d\n", (lnat)capset, (int)info);
             break;
         case EVENT_CAPSET_DELETE:   // (capset)
             debugBelch("deleted capset %lu\n", (lnat)capset);
             break;
         case EVENT_CAPSET_ASSIGN_CAP:  // (capset, capno)
             debugBelch("assigned cap %lu to capset %lu\n",
-                       (lnat)other, (lnat)capset);
+                       (lnat)info, (lnat)capset);
             break;
         case EVENT_CAPSET_REMOVE_CAP:  // (capset, capno)
             debugBelch("removed cap %lu from capset %lu\n",
-                       (lnat)other, (lnat)capset);
+                       (lnat)info, (lnat)capset);
             break;
         }
         RELEASE_LOCK(&trace_utx);
@@ -323,25 +327,31 @@ void traceCapsetModify_ (EventTypeNum tag,
 #endif
     {
         if (eventlog_enabled) {
-            postCapsetModifyEvent(tag, capset, other);
+            postCapsetEvent(tag, capset, info);
         }
+    }
+}
+
+void traceWallClockTime_(void) {
+    if (eventlog_enabled) {
+        postWallClockTime(CAPSET_CLOCKDOMAIN_DEFAULT);
     }
 }
 
 void traceOSProcessInfo_(void) {
     if (eventlog_enabled) {
-        postCapsetModifyEvent(EVENT_OSPROCESS_PID,
-                              CAPSET_OSPROCESS_DEFAULT,
-                              getpid());
+        postCapsetEvent(EVENT_OSPROCESS_PID,
+                        CAPSET_OSPROCESS_DEFAULT,
+                        getpid());
 
 #if !defined(cygwin32_HOST_OS) && !defined (mingw32_HOST_OS)
 /* Windows has no strong concept of process heirarchy, so no getppid().
  * In any case, this trace event is mainly useful for tracing programs
  * that use 'forkProcess' which Windows doesn't support anyway.
  */
-        postCapsetModifyEvent(EVENT_OSPROCESS_PPID,
-                              CAPSET_OSPROCESS_DEFAULT,
-                              getppid());
+        postCapsetEvent(EVENT_OSPROCESS_PPID,
+                        CAPSET_OSPROCESS_DEFAULT,
+                        getppid());
 #endif
         {
             char buf[256];
@@ -515,13 +525,17 @@ static void traceFormatUserMsg(Capability *cap, char *msg, ...)
     va_list ap;
     va_start(ap,msg);
 
+    /* Note: normally we don't check the TRACE_* flags here as they're checked
+       by the wrappers in Trace.h. But traceUserMsg is special since it has no
+       wrapper (it's called from cmm code), so we check TRACE_user here
+     */
 #ifdef DEBUG
-    if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
+    if (RtsFlags.TraceFlags.tracing == TRACE_STDERR && TRACE_user) {
         traceCap_stderr(cap, msg, ap);
     } else
 #endif
     {
-        if (eventlog_enabled) {
+        if (eventlog_enabled && TRACE_user) {
             postUserMsg(cap, msg, ap);
         }
     }

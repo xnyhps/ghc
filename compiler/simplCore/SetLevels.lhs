@@ -67,6 +67,7 @@ import IdInfo
 import Var
 import VarSet
 import VarEnv
+import Literal		( litIsTrivial )
 import Demand		( StrictSig, increaseStrictSigArity )
 import Name		( getOccName, mkSystemVarName )
 import OccName		( occNameString )
@@ -359,7 +360,7 @@ lvlCase ctxt_lvl env scrut_fvs scrut' case_bndr ty alts
   | [(con@(DataAlt {}), bs, rhs)] <- alts
   , exprOkForSpeculation scrut'	  -- See Note [Check the output scrutinee for okForSpec]
   , not (isTopLvl dest_lvl)	  -- Can't have top-level cases
-  =     -- See Note [Case floating]
+  =     -- See Note [Floating cases]
     	-- Always float the case if possible
   	-- Unlike lets we don't insist that it escapes a value lambda
     do { (rhs_env, (case_bndr':bs')) <- cloneVars env (case_bndr:bs) dest_lvl
@@ -570,7 +571,8 @@ notWorthFloating e abs_vars
   = go e (count isId abs_vars)
   where
     go (_, AnnVar {}) n    = n >= 0
-    go (_, AnnLit {}) n    = n >= 0
+    go (_, AnnLit lit) n   = ASSERT( n==0 ) 
+                             litIsTrivial lit	-- Note [Floating literals]
     go (_, AnnCast e _)  n = go e n
     go (_, AnnApp e arg) n 
        | (_, AnnType {}) <- arg = go e n
@@ -587,6 +589,16 @@ notWorthFloating e abs_vars
     is_triv (_, AnnApp e (_, AnnCoercion {})) = is_triv e
     is_triv _                             = False     
 \end{code}
+
+Note [Floating literals]
+~~~~~~~~~~~~~~~~~~~~~~~~
+It's important to float Integer literals, so that they get shared,
+rather than being allocated every time round the loop.
+Hence the litIsTrivial.
+
+We'd *like* to share MachStr literal strings too, mainly so we could
+CSE them, but alas can't do so directly because they are unlifted.
+
 
 Note [Escaping a value lambda]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

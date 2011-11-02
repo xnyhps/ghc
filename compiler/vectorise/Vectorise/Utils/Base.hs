@@ -1,27 +1,26 @@
-
 module Vectorise.Utils.Base (
-	voidType,
-	newLocalVVar,
+  voidType,
+  newLocalVVar,
 
-	mkDataConTagLit,
-	mkDataConTag, dataConTagZ,
-	mkBuiltinTyConApp,
-	mkBuiltinTyConApps,
-	mkWrapType,
-	mkClosureTypes,
-	mkPReprType,
-	mkPArrayType, splitPrimTyCon,
-	mkPArray,
-	mkPDataType,
-	mkBuiltinCo,
-	mkVScrut,
+  mkDataConTagLit,
+  mkDataConTag, dataConTagZ,
+  mkBuiltinTyConApp,
+  mkBuiltinTyConApps,
+  mkWrapType,
+  mkClosureTypes,
+  mkPReprType,
+  mkPArrayType, splitPrimTyCon,
+  mkPArray,
+  mkPDataType,
+  mkBuiltinCo,
+  mkVScrut,
 
-        preprSynTyCon,
-	pdataReprTyCon,
-	pdataReprDataCon,
-        prDFunOfTyCon
-)
-where
+  -- preprSynTyCon,
+  pdataReprTyCon,
+  pdataReprDataCon,
+  prDFunOfTyCon
+) where
+
 import Vectorise.Monad
 import Vectorise.Vect
 import Vectorise.Builtins
@@ -96,24 +95,23 @@ mkPReprType :: Type -> VM Type
 mkPReprType ty = mkBuiltinTyConApp preprTyCon [ty]
 
 
------
+-- |Wrap a type into 'PArray', treating unboxed types specially.
+--
 mkPArrayType :: Type -> VM Type
 mkPArrayType ty
   | Just tycon <- splitPrimTyCon ty
-  = do
-      r <- lookupPrimPArray tycon
-      case r of
-        Just arr -> return $ mkTyConApp arr []
-        Nothing  -> cantVectorise "Primitive tycon not vectorised" (ppr tycon)
-
+  = do { arr <- builtin (parray_PrimTyCon tycon)
+       ; return $ mkTyConApp arr []
+       }
 mkPArrayType ty = mkBuiltinTyConApp parrayTyCon [ty]
 
+-- |Checks if a type constructor is defined in 'GHC.Prim' (e.g., 'Int#'); if so, returns it.
+--
 splitPrimTyCon :: Type -> Maybe TyCon
 splitPrimTyCon ty
   | Just (tycon, []) <- splitTyConApp_maybe ty
   , isPrimTyCon tycon
   = Just tycon
-
   | otherwise = Nothing
 
 
@@ -124,17 +122,14 @@ mkPArray ty len dat = do
                         let [dc] = tyConDataCons tc
                         return $ mkConApp dc [Type ty, len, dat]
 
-
 mkPDataType :: Type -> VM Type
 mkPDataType ty = mkBuiltinTyConApp pdataTyCon [ty]
-
 
 mkBuiltinCo :: (Builtins -> TyCon) -> VM Coercion
 mkBuiltinCo get_tc
   = do
       tc <- builtin get_tc
       return $ mkTyConAppCo tc []
-
 
 mkVScrut :: VExpr -> VM (CoreExpr, CoreExpr, TyCon, [Type])
 mkVScrut (ve, le)
@@ -144,12 +139,11 @@ mkVScrut (ve, le)
   where
     ty = exprType ve
 
-preprSynTyCon :: Type -> VM (TyCon, [Type])
-preprSynTyCon ty = builtin preprTyCon >>= (`lookupFamInst` [ty])
+-- preprSynTyCon :: Type -> VM (TyCon, [Type])
+-- preprSynTyCon ty = builtin preprTyCon >>= (`lookupFamInst` [ty])
 
 pdataReprTyCon :: Type -> VM (TyCon, [Type])
 pdataReprTyCon ty = builtin pdataTyCon >>= (`lookupFamInst` [ty])
-
 
 pdataReprDataCon :: Type -> VM (DataCon, [Type])
 pdataReprDataCon ty

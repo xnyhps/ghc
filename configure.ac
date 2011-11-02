@@ -207,6 +207,19 @@ AC_CANONICAL_TARGET
 
 FPTOOLS_SET_PLATFORM_VARS
 
+# Verify that the installed (bootstrap) GHC is capable of generating
+# code for the requested build platform.
+if test "$BootingFromHc" = "NO"
+then
+    if test "$BuildPlatform" != "$bootstrap_target"
+    then
+        echo "This GHC (${WithGhc}) does not generate code for the build platform"
+        echo "   GHC target platform    : $bootstrap_target"
+        echo "   Desired build platform : $BuildPlatform"
+        exit 1
+    fi
+fi
+
 # Testing if we shall enable shared libs support on Solaris.
 # Anything older than SunOS 5.11 aka Solaris 11 (Express) is broken.
 
@@ -221,108 +234,6 @@ case $host in
      fi
      ;;
 esac
-
-checkArch() {
-    case $1 in
-    alpha|arm|hppa|hppa1_1|i386|ia64|m68k|mips|mipseb|mipsel|powerpc|powerpc64|rs6000|s390|s390x|sparc|sparc64|vax|x86_64)
-        ;;
-    *)
-        echo "Unknown arch $1"
-        exit 1
-        ;;
-    esac
-}
-
-checkVendor() {
-    case $1 in
-    dec|unknown|hp|apple|next|sun|sgi|ibm)
-        ;;
-    *)
-        echo "Unknown vendor $1"
-        exit 1
-        ;;
-    esac
-}
-
-checkOS() {
-    case $1 in
-    linux|freebsd|netbsd|openbsd|dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|solaris2|cygwin32|mingw32|darwin|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
-        ;;
-    *)
-        echo "Unknown OS '$1'"
-        exit 1
-        ;;
-    esac
-}
-
-BuildPlatform="$BuildArch-$BuildVendor-$BuildOS"
-BuildPlatform_CPP=`echo "$BuildPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
-BuildArch_CPP=`    echo "$BuildArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
-BuildVendor_CPP=`  echo "$BuildVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
-BuildOS_CPP=`      echo "$BuildOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
-
-checkArch "$BuildArch"
-checkVendor "$BuildVendor"
-checkOS "$BuildOS"
-
-HostPlatform="$HostArch-$HostVendor-$HostOS"
-HostPlatform_CPP=`echo "$HostPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
-HostArch_CPP=`    echo "$HostArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
-HostVendor_CPP=`  echo "$HostVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
-HostOS_CPP=`      echo "$HostOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
-
-checkArch "$HostArch"
-checkVendor "$HostVendor"
-checkOS "$HostOS"
-
-TargetPlatform="$TargetArch-$TargetVendor-$TargetOS"
-TargetPlatform_CPP=`echo "$TargetPlatform" | sed -e 's/\./_/g' -e 's/-/_/g'`
-TargetArch_CPP=`    echo "$TargetArch"     | sed -e 's/\./_/g' -e 's/-/_/g'`
-TargetVendor_CPP=`  echo "$TargetVendor"   | sed -e 's/\./_/g' -e 's/-/_/g'`
-TargetOS_CPP=`      echo "$TargetOS"       | sed -e 's/\./_/g' -e 's/-/_/g'`
-
-checkArch "$TargetArch"
-checkVendor "$TargetVendor"
-checkOS "$TargetOS"
-
-# Verify that the installed (bootstrap) GHC is capable of generating
-# code for the requested build platform.
-if test "$BootingFromHc" = "NO"
-then
-    if test "$BuildPlatform" != "$bootstrap_target"
-    then
-        echo "This GHC (${WithGhc}) does not generate code for the build platform"
-        echo "   GHC target platform    : $bootstrap_target"
-        echo "   Desired build platform : $BuildPlatform"
-        exit 1
-    fi
-fi
-
-echo "GHC build  : $BuildPlatform"
-echo "GHC host   : $HostPlatform"
-echo "GHC target : $TargetPlatform"
-
-AC_SUBST(BuildPlatform)
-AC_SUBST(HostPlatform)
-AC_SUBST(TargetPlatform)
-AC_SUBST(HostPlatform_CPP)
-AC_SUBST(BuildPlatform_CPP)
-AC_SUBST(TargetPlatform_CPP)
-
-AC_SUBST(HostArch_CPP)
-AC_SUBST(BuildArch_CPP)
-AC_SUBST(TargetArch_CPP)
-
-AC_SUBST(HostOS_CPP)
-AC_SUBST(BuildOS_CPP)
-AC_SUBST(TargetOS_CPP)
-
-AC_SUBST(HostVendor_CPP)
-AC_SUBST(BuildVendor_CPP)
-AC_SUBST(TargetVendor_CPP)
-
-AC_SUBST(exeext)
-AC_SUBST(soext)
 
 AC_SUBST(SOLARIS_BROKEN_SHLD)
 
@@ -532,6 +443,11 @@ AC_SUBST(CONF_LD_LINKER_OPTS_STAGE2)
 AC_SUBST(CONF_CPP_OPTS_STAGE0)
 AC_SUBST(CONF_CPP_OPTS_STAGE1)
 AC_SUBST(CONF_CPP_OPTS_STAGE2)
+
+dnl ** Set up the variables for the platform in the settings file.
+dnl May need to use gcc to find platform details.
+dnl --------------------------------------------------------------
+FPTOOLS_SET_HASKELL_PLATFORM_VARS
 
 FP_SETTINGS
 
@@ -786,37 +702,7 @@ dnl ** check for ld, whether it has an -x option, and if it is GNU ld
 FP_PROG_LD_X
 FP_PROG_LD_IS_GNU
 FP_PROG_LD_BUILD_ID
-
-dnl ** check for Apple-style dead-stripping support
-dnl    (.subsections-via-symbols assembler directive)
-
-
-AC_MSG_CHECKING(for .subsections_via_symbols)
-AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM([], [__asm__ (".subsections_via_symbols");])],
-    [AC_MSG_RESULT(yes)
-     AC_DEFINE([HAVE_SUBSECTIONS_VIA_SYMBOLS],[1],
-               [Define to 1 if Apple-style dead-stripping is supported.])
-    ],
-    [AC_MSG_RESULT(no)])
-
-dnl *** check for GNU non-executable stack note support (ELF only)
-dnl     (.section .note.GNU-stack,"",@progbits)
-
-dnl This test doesn't work with "gcc -g" in gcc 4.4 (GHC trac #3889:
-dnl     Error: can't resolve `.note.GNU-stack' {.note.GNU-stack section} - `.Ltext0' {.text section}
-dnl so we empty CFLAGS while running this test
-CFLAGS2="$CFLAGS"
-CFLAGS=
-AC_MSG_CHECKING(for GNU non-executable stack support)
-AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM([__asm__ (".section .note.GNU-stack,\"\",@progbits");], [0])],
-    [AC_MSG_RESULT(yes)
-     AC_DEFINE([HAVE_GNU_NONEXEC_STACK],[1],
-               [Define to 1 if GNU non-executable stack notes are supported.])
-    ],
-    [AC_MSG_RESULT(no)])
-CFLAGS="$CFLAGS2"
+FP_PROG_LD_NO_COMPACT_UNWIND
 
 FP_VISIBILITY_HIDDEN
 
@@ -891,7 +777,7 @@ AC_SUBST(BUILD_DOCBOOK_PS)
 AC_SUBST(BUILD_DOCBOOK_PDF)
 
 LIBRARY_VERSION(base)
-LIBRARY_VERSION(Cabal, Cabal/cabal)
+LIBRARY_VERSION(Cabal, Cabal/Cabal)
 LIBRARY_VERSION(ghc-prim)
 LIBRARY_ghc_VERSION="$ProjectVersion"
 AC_SUBST(LIBRARY_ghc_VERSION)

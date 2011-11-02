@@ -120,10 +120,9 @@ names in PrelNames, so they use wTcQual, wDataQual, etc
 -- Because of their infinite nature, this list excludes tuples, Any and implicit
 -- parameter TyCons. Instead, we have a hack in lookupOrigNameCache to deal with
 -- these names.
+--
+-- See also Note [Known-key names]
 wiredInTyCons :: [TyCon]
--- It does not need to include kind constructors, because
--- all that wiredInThings does is to initialise the Name table,
--- and kind constructors don't appear in source code.
 
 wiredInTyCons = [ unitTyCon	-- Not treated like other tuples, because
 				-- it's defined in GHC.Base, and there's only
@@ -340,9 +339,9 @@ mk_tuple sort arity = (tycon, tuple_con)
 	  ConstraintTuple -> constraintKind
 
 	tyvars = take arity $ case sort of
-	  BoxedTuple   -> alphaTyVars
-	  UnboxedTuple -> openAlphaTyVars
-	  ConstraintTuple    -> tyVarList constraintKind
+	  BoxedTuple      -> alphaTyVars
+	  UnboxedTuple    -> argAlphaTyVars	-- No nested unboxed tuples
+	  ConstraintTuple -> tyVarList constraintKind
 
 	tuple_con = pcDataCon dc_name tyvars tyvar_tys tycon
 	tyvar_tys = mkTyVarTys tyvars

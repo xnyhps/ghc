@@ -14,7 +14,7 @@ module TysPrim(
         tyVarList, alphaTyVars, betaTyVars, alphaTyVar, betaTyVar, gammaTyVar, deltaTyVar,
 	alphaTy, betaTy, gammaTy, deltaTy,
 	openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar, openAlphaTyVars,
-        argAlphaTy, argAlphaTyVar, argBetaTy, argBetaTyVar,
+        argAlphaTy, argAlphaTyVar, argAlphaTyVars, argBetaTy, argBetaTyVar,
         kKiVar,
 
         -- Kind constructors...
@@ -68,7 +68,7 @@ module TysPrim(
         eqPrimTyCon,            -- ty1 ~# ty2
 
 	-- * Any
-	anyTyCon, anyTypeOfKind
+	anyTy, anyTyCon, anyTypeOfKind
   ) where
 
 #include "HsVersions.h"
@@ -123,6 +123,13 @@ primTyCons
     , anyKindTyCon
     , constraintKindTyCon
     , eqPrimTyCon
+
+    , liftedTypeKindTyCon
+    , unliftedTypeKindTyCon
+    , openTypeKindTyCon
+    , argTypeKindTyCon
+    , ubxTupleKindTyCon
+    , constraintKindTyCon
     ]
 
 mkPrimTc :: FastString -> Unique -> TyCon -> Name
@@ -205,8 +212,9 @@ openAlphaTy, openBetaTy :: Type
 openAlphaTy = mkTyVarTy openAlphaTyVar
 openBetaTy  = mkTyVarTy openBetaTyVar
 
+argAlphaTyVars :: [TyVar]
 argAlphaTyVar, argBetaTyVar :: TyVar
-(argAlphaTyVar : argBetaTyVar : _) = tyVarList argTypeKind
+argAlphaTyVars@(argAlphaTyVar : argBetaTyVar : _) = tyVarList argTypeKind
 argAlphaTy, argBetaTy :: Type
 argAlphaTy = mkTyVarTy argAlphaTyVar
 argBetaTy  = mkTyVarTy argBetaTyVar
@@ -664,6 +672,9 @@ This commit uses
 \begin{code}
 anyTyConName :: Name
 anyTyConName = mkPrimTc (fsLit "Any") anyTyConKey anyTyCon
+
+anyTy :: Type
+anyTy = mkTyConTy anyTyCon
 
 anyTyCon :: TyCon
 anyTyCon = mkLiftedPrimTyCon anyTyConName kind 1 PtrRep

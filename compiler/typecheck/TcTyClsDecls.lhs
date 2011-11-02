@@ -246,16 +246,13 @@ kcTyClGroup decls
         { tcl_env <- kcSynDecls (calcSynCycles syn_decls)
         ; setLclEnv tcl_env $  do
 
-          -- Now check for cyclic classes
-        { checkClassCycleErrs syn_decls non_syn_decls
-
 	   -- Step 3: kind-check the synonyms
         ; mapM_ (wrapLocM kcTyClDecl) non_syn_decls
 
 	     -- Step 4: generalisation
 	     -- Kind checking done for this group
              -- Now we have to kind generalize the flexis
-        ; mapM generalise (tyClsBinders decls) }}}
+        ; mapM generalise (tyClsBinders decls) }}
 
   where
     generalise :: Name -> TcM (Name, Kind)
@@ -304,6 +301,15 @@ getInitialKinds (L _ decl)
        = concatMapM getInitialKinds ats
     get_inner_kinds _
        = return []
+
+kcLookupKind :: Located Name -> TcM Kind
+kcLookupKind nm = do
+    tc_ty_thing <- tcLookupLocated nm
+    case tc_ty_thing of
+        AThing k            -> return k
+        AGlobal (ATyCon tc) -> return (tyConKind tc)
+        _                   -> pprPanic "kcLookupKind" (ppr tc_ty_thing)
+
 
 ----------------
 kcSynDecls :: [SCC (LTyClDecl Name)] -> TcM (TcLclEnv)	-- Kind bindings
@@ -368,11 +374,8 @@ kcTyClDeclBody :: TyClDecl Name
 -- check the result kind matches
 kcTyClDeclBody decl thing_inside
   = tcAddDeclCtxt decl		$
-    do 	{ tc_ty_thing <- tcLookupLocated (tcdLName decl)
-	; let tc_kind	 = case tc_ty_thing of
-                             AThing k -> k
-                             _ -> pprPanic "kcTyClDeclBody" (ppr tc_ty_thing)
-	      (kinds, _) = splitKindFunTys tc_kind
+    do 	{ tc_kind <- kcLookupKind (tcdLName decl)
+	; let (kinds, _) = splitKindFunTys tc_kind
 	      hs_tvs 	 = tcdTyVars decl
 	      kinded_tvs = ASSERT( length kinds >= length hs_tvs )
 			   zipWith add_kind hs_tvs kinds
@@ -686,9 +689,10 @@ tcDefaultAssocDecl :: TyCon              -- ^ Family TyCon
                    -> LTyClDecl Name     -- ^ RHS
                    -> TcM ATDefault      -- ^ Type checked RHS and free TyVars
 tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
-  = setSrcSpan loc      $
-    tcAddDeclCtxt decl  $
-    do { (at_tvs, at_tys, at_rhs) <- tcSynFamInstDecl fam_tc decl
+  = setSrcSpan loc $
+    tcAddDefaultAssocDeclCtxt decl $
+    do { traceTc "tcDefaultAssocDecl" (ppr decl)
+       ; (at_tvs, at_tys, at_rhs) <- tcSynFamInstDecl fam_tc decl
        
        -- See Note [Checking consistent instantiation]
        -- We only want to check this on the *class* TyVars,
@@ -1145,16 +1149,10 @@ Validity checking is done once the mutually-recursive knot has been
 tied, so we can look at things freely.
 
 \begin{code}
-checkClassCycleErrs :: [LTyClDecl Name] -> [LTyClDecl Name] -> TcM ()
-checkClassCycleErrs syn_decls alg_decls
-  | null cls_cycles
-  = return ()
-  | otherwise
-  = do { mapM_ recClsErr cls_cycles
-       ; failM }       -- Give up now, because later checkValidTyCl
-                       -- will loop if the synonym is recursive
-  where
-    cls_cycles = calcClassCycles syn_decls alg_decls
+checkClassCycleErrs :: Class -> TcM ()
+checkClassCycleErrs cls
+  = unless (null cls_cycles) $ mapM_ recClsErr cls_cycles
+  where cls_cycles = calcClassCycles cls
 
 checkValidTyCl :: TyClDecl Name -> TcM ()
 -- We do the validity check over declarations, rather than TyThings
@@ -1332,6 +1330,9 @@ checkValidClass cls
 
    	-- Check the super-classes
 	; checkValidTheta (ClassSCCtxt (className cls)) theta
+
+          -- Now check for cyclic superclasses
+        ; checkClassCycleErrs cls
 
 	-- Check the class operations
 	; mapM_ (check_op constrained_class_methods) op_stuff
@@ -1613,6 +1614,13 @@ gotten by appying the eq_spec to the univ_tvs of the data con.
 %************************************************************************
 
 \begin{code}
+tcAddDefaultAssocDeclCtxt :: TyClDecl Name -> TcM a -> TcM a
+tcAddDefaultAssocDeclCtxt decl thing_inside
+  = addErrCtxt ctxt thing_inside
+  where
+     ctxt = hsep [ptext (sLit "In the type synonym instance default declaration for"),
+                  quotes (ppr (tcdName decl))]
+
 resultTypeMisMatch :: Name -> DataCon -> DataCon -> SDoc
 resultTypeMisMatch field_name con1 con2
   = vcat [sep [ptext (sLit "Constructors") <+> ppr con1 <+> ptext (sLit "and") <+> ppr con2, 
@@ -1665,14 +1673,10 @@ recSynErr syn_decls
     sorted_decls = sortLocated syn_decls
     ppr_decl (L loc decl) = ppr loc <> colon <+> ppr decl
 
-recClsErr :: [Located (TyClDecl Name)] -> TcRn ()
-recClsErr cls_decls
-  = setSrcSpan (getLoc (head sorted_decls)) $
-    addErr (sep [ptext (sLit "Cycle in class declarations (via superclasses):"),
-                nest 2 (vcat (map ppr_decl sorted_decls))])
-  where
-    sorted_decls = sortLocated cls_decls
-    ppr_decl (L loc decl) = ppr loc <> colon <+> ppr (decl { tcdSigs = [] })
+recClsErr :: [TyCon] -> TcRn ()
+recClsErr cycles
+  = addErr (sep [ptext (sLit "Cycle in class declaration (via superclasses):"),
+                 nest 2 (hsep (intersperse (text "->") (map ppr cycles)))])
 
 sortLocated :: [Located a] -> [Located a]
 sortLocated things = sortLe le things

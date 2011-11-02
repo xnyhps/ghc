@@ -1761,9 +1761,9 @@ section "Bytecode operations"
 primtype BCO#
    {Primitive bytecode type.}
 
-primop   AddrToHValueOp "addrToHValue#" GenPrimOp
+primop   AddrToAnyOp "addrToAny#" GenPrimOp
    Addr# -> (# a #)
-   {Convert an {\tt Addr\#} to a followable type.}
+   {Convert an {\tt Addr\#} to a followable Any type.}
    with
    code_size = 0
 
