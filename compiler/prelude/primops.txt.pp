@@ -1937,32 +1937,32 @@ section "SIMD"
 	{Operations on vectors.}
 ------------------------------------------------------------------------
 
-primtype FloatVec4#
+primtype FloatX4#
 
-primop FloatVec4AddOp "plusFloatVec4#" Dyadic            
-   FloatVec4# -> FloatVec4# -> FloatVec4#
+primop FloatX4AddOp "plusFloatX4#" Dyadic            
+   FloatX4# -> FloatX4# -> FloatX4#
    with commutable = True
 
-primop IndexByteArrayOp_FloatVec4 "indexFloatVec4Array#" GenPrimOp
-   ByteArray# -> Int# -> FloatVec4#
+primop IndexByteArrayOp_FloatX4 "indexFloatX4Array#" GenPrimOp
+   ByteArray# -> Int# -> FloatX4#
 
-primop ReadByteArrayOp_FloatVec4 "readFloatVec4Array#" GenPrimOp
-   MutableByteArray# s -> Int# -> State# s -> (# State# s, FloatVec4# #)
+primop ReadByteArrayOp_FloatX4 "readFloatX4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, FloatX4# #)
    with has_side_effects = True
 
-primop WriteByteArrayOp_FloatVec4 "writeFloatVec4Array#" GenPrimOp
-   MutableByteArray# s -> Int# -> FloatVec4# -> State# s -> State# s
+primop WriteByteArrayOp_FloatX4 "writeFloatX4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> FloatX4# -> State# s -> State# s
    with has_side_effects = True
 
-primop IndexOffAddrOp_FloatVec4 "indexFloatVec4OffAddr#" GenPrimOp
-   Addr# -> Int# -> FloatVec4#
+primop IndexOffAddrOp_FloatX4 "indexFloatX4OffAddr#" GenPrimOp
+   Addr# -> Int# -> FloatX4#
 
-primop ReadOffAddrOp_FloatVec4 "readFloatVec4OffAddr#" GenPrimOp
-   Addr# -> Int# -> State# s -> (# State# s, FloatVec4# #)
+primop ReadOffAddrOp_FloatX4 "readFloatX4OffAddr#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, FloatX4# #)
    with has_side_effects = True
 
-primop  WriteOffAddrOp_FloatVec4 "writeFloatVec4OffAddr#" GenPrimOp
-   Addr# -> Int# -> FloatVec4# -> State# s -> State# s
+primop  WriteOffAddrOp_FloatX4 "writeFloatX4OffAddr#" GenPrimOp
+   Addr# -> Int# -> FloatX4# -> State# s -> State# s
    with has_side_effects = True
 
 ------------------------------------------------------------------------
