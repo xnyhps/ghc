@@ -478,17 +478,22 @@ kc_hs_type (HsCoreTy ty)
 kc_hs_type (HsForAllTy exp tv_names context ty)
   = kcHsTyVars tv_names         $ \ tv_names' ->
     do	{ ctxt' <- kcHsContext context
-	; ty'   <- kcLiftedType ty
+	; (ty', k)  <- kc_lhs_type ty
 	     -- The body of a forall is usually a type, but in principle
 	     -- there's no reason to prohibit *unlifted* types.
 	     -- In fact, GHC can itself construct a function with an
 	     -- unboxed tuple inside a for-all (via CPR analyis; see 
-	     -- typecheck/should_compile/tc170)
+	     -- typecheck/should_compile/tc170).
+             --
+             -- Moreover in instance heads we get forall-types with
+             -- kind Constraint.  
 	     --
-	     -- Still, that's only for internal interfaces, which aren't
-	     -- kind-checked, so we only allow liftedTypeKind here
+	     -- Really we should check that it's a type of value kind
+             -- {*, Constraint, #}, but I'm not doing that yet
+             -- Example that should be rejected:  
+             --          f :: (forall (a:*->*). a) Int
 
-  	; return (HsForAllTy exp tv_names' ctxt' ty', liftedTypeKind) }
+  	; return (HsForAllTy exp tv_names' ctxt' ty', k) }
 
 kc_hs_type (HsBangTy b ty)
   = do { (ty', kind) <- kc_lhs_type ty
