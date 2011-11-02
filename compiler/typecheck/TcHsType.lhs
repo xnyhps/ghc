@@ -60,7 +60,7 @@ import NameSet
 import TysWiredIn
 import BasicTypes
 import SrcLoc
-import DynFlags ( ExtensionFlag( Opt_ConstraintKinds, Opt_PolyKinds ) )
+import DynFlags ( ExtensionFlag( Opt_ConstraintKinds ) )
 import Util
 import UniqSupply
 import Outputable
@@ -185,31 +185,19 @@ tcHsType hs_ty
        ; ty <- tcHsKindedType kinded_ty
        ; return ty }
 
-tcHsInstHead :: LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
+tcHsInstHead :: UserTypeCtxt -> LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
 -- Typecheck an instance head.  We can't use 
 -- tcHsSigType, because it's not a valid user type.
-tcHsInstHead (L loc hs_ty)
+tcHsInstHead ctxt lhs_ty@(L loc hs_ty)
   = setSrcSpan loc   $	-- No need for an "In the type..." context
                         -- because that comes from the caller
-    case splitHsClassTy_maybe cls_ty of
-        Just _ -> do -- Kind-checking first
-        { (tvs, ctxt, cls_ty) <- kcHsTyVars tv_names $ \ tv_names' -> do
-            { ctxt' <- mapM kcHsLPredType ctxt
-            ; cls_ty' <- kc_check_hs_type cls_ty ekConstraint
-               -- The body of a forall is usually lifted, but in an instance
-               -- head we only allow something of kind Constraint.
-            ; return (tv_names', ctxt', cls_ty') }
-          -- Now desugar the kind-checked type
-        ; tcTyVarBndrsKindGen tvs $ \ tvs' -> do
-            cls_ty' <- ds_type cls_ty
-            let Just (tc, tys) = splitTyConApp_maybe cls_ty'
-            ctxt' <- dsHsTypes ctxt
-            clas <- case tyConClass_maybe tc of
-                      Just clas -> return clas
-                      Nothing -> failWithTc (ppr tc <+> ptext (sLit "is not a class"))
-            return (tvs', ctxt', clas, tys) }
-        _ -> failWithTc (ptext (sLit "Malformed instance type"))
-      where (tv_names, ctxt, cls_ty) = splitHsForAllTy hs_ty
+    do { kinded_ty <- kc_check_hs_type hs_ty ekConstraint
+       ; ty <- ds_type kinded_ty
+       ; let (tvs, theta, tau) = tcSplitSigmaTy ty
+       ; case getClassPredTys_maybe tau of
+           Nothing          -> failWithTc (ptext (sLit "Malformed instance type"))
+           Just (clas,tys)  -> do { checkValidInstance ctxt lhs_ty tvs theta clas tys
+                                  ; return (tvs, theta, clas, tys) } }
 
 tcHsQuantifiedType :: [LHsTyVarBndr Name] -> LHsType Name -> TcM ([TyVar], Type)
 -- Behave very like type-checking (HsForAllTy sig_tvs hs_ty),
@@ -1222,7 +1210,7 @@ checkExpectedKind :: Outputable a => a -> TcKind -> ExpKind -> TcM ()
 --      with the expected kind exp_kind
 -- The first argument, ty, is used only in the error message generation
 checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
-    (_errs, mb_r) <- tryTc (unifyKind empty exp_kind act_kind)
+    (_errs, mb_r) <- tryTc (unifyKind empty act_kind exp_kind)
     case mb_r of
         Just _  -> return ()  -- Unification succeeded
         Nothing -> do

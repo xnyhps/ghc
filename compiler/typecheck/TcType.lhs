@@ -350,12 +350,21 @@ data UserTypeCtxt
 			-- 	f x :: t = ....
   | ForSigCtxt Name	-- Foreign inport or export signature
   | DefaultDeclCtxt	-- Types in a default declaration
+  | InstDeclCtxt        -- An instance declaration
   | SpecInstCtxt	-- SPECIALISE instance pragma
   | ThBrackCtxt		-- Template Haskell type brackets [t| ... |]
   | GenSigCtxt          -- Higher-rank or impredicative situations
                         -- e.g. (f e) where f has a higher-rank type
                         -- We might want to elaborate this
   | GhciCtxt            -- GHCi command :kind <type>
+
+  | ClassSCCtxt Name	-- Superclasses of a class
+  | SigmaCtxt		-- Theta part of a normal for-all type
+			--	f :: <S> => a -> a
+  | DataTyCtxt Name	-- Theta part of a data decl
+			--	data <S> => T a = MkT a
+\end{code}
+
 
 -- Notes re TySynCtxt
 -- We allow type synonyms that aren't types; e.g.  type List = []
@@ -369,7 +378,7 @@ data UserTypeCtxt
 
 ---------------------------------
 -- Kind variables:
-
+\begin{code}
 mkKindName :: Unique -> Name
 mkKindName unique = mkSystemName unique kind_var_occ
 
@@ -423,9 +432,13 @@ pprUserTypeCtxt BindPatSigCtxt    = ptext (sLit "a pattern type signature")
 pprUserTypeCtxt ResSigCtxt        = ptext (sLit "a result type signature")
 pprUserTypeCtxt (ForSigCtxt n)    = ptext (sLit "the foreign declaration for") <+> quotes (ppr n)
 pprUserTypeCtxt DefaultDeclCtxt   = ptext (sLit "a type in a `default' declaration")
+pprUserTypeCtxt InstDeclCtxt      = ptext (sLit "an instance declaration")
 pprUserTypeCtxt SpecInstCtxt      = ptext (sLit "a SPECIALISE instance pragma")
 pprUserTypeCtxt GenSigCtxt        = ptext (sLit "a type expected by the context")
 pprUserTypeCtxt GhciCtxt          = ptext (sLit "a type in a GHCi command")
+pprUserTyCtxt (ClassSCCtxt c)     = ptext (sLit "the super-classes of class") <+> quotes (ppr c)
+pprUserTyCtxt SigmaCtxt           = ptext (sLit "the context of a polymorphic type")
+pprUserTyCtxt (DataTyCtxt tc)     = ptext (sLit "the context of the data type declaration for") <+> quotes (ppr tc)
 \end{code}
 
 
