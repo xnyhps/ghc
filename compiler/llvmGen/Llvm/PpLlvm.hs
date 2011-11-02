@@ -192,6 +192,8 @@ ppLlvmExpression expr
         Malloc     tp amount        -> ppMalloc tp amount
         Phi        tp precessors    -> ppPhi tp precessors
         Asm        asm c ty v se sk -> ppAsm asm c ty v se sk
+        Extract    vec idx          -> ppExtract vec idx
+        Insert     vec elt idx      -> ppInsert vec elt idx
 
 
 --------------------------------------------------------------------------------
@@ -253,7 +255,6 @@ ppCmpOp op left right =
 
 ppAssignment :: LlvmVar -> Doc -> Doc
 ppAssignment var expr = (text $ getName var) <+> equals <+> expr
-
 
 -- XXX: On x86, vector types need to be 16-byte aligned for aligned access, but
 -- we have no way of guaranteeing that this is true with GHC (we would need to
@@ -344,6 +345,20 @@ ppAsm asm constraints rty vars sideeffect alignstack =
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
 
+ppExtract :: LlvmVar -> Int -> Doc
+ppExtract vec idx =
+  let idx' = LMLitVar $ LMIntLit (toInteger idx) i32
+  in text "extractelement"
+        <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
+        <+> (texts idx')
+
+ppInsert :: LlvmVar -> LlvmVar -> Int -> Doc
+ppInsert vec elt idx =
+  let idx' = LMLitVar $ LMIntLit (toInteger idx) i32
+  in text "insertelement"
+        <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
+        <+> (texts (getVarType elt)) <+> (text $ getName elt) <> comma
+        <+> (texts idx')
 
 --------------------------------------------------------------------------------
 -- * Misc functions

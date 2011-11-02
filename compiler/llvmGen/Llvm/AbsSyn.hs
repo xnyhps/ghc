@@ -167,6 +167,21 @@ data LlvmExpression
   | Compare LlvmCmpOp LlvmVar LlvmVar
 
   {- |
+    Extract a scalar element from a vector
+      * val: The vector
+      * idx: The index of the scalar within the vector
+  -}
+  | Extract LlvmVar Int
+
+  {- |
+    Insert a scalar element into a vector
+      * val:   The source vector
+      * elt:   The scalar to insert
+      * index: The index at which to insert the scalar
+  -}
+  | Insert LlvmVar LlvmVar Int
+
+  {- |
     Allocate amount * sizeof(tp) bytes on the heap
       * tp:     LlvmType to reserve room for
       * amount: The nr of tp's which must be allocated
