@@ -387,6 +387,13 @@ emitPrimOp [res] PopCnt32Op [w] live = emitPopCntCall res w W32 live
 emitPrimOp [res] PopCnt64Op [w] live = emitPopCntCall res w W64 live
 emitPrimOp [res] PopCntOp [w] live = emitPopCntCall res w wordWidth live
 
+-- SIMD vector packing and unpacking
+emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
+    doVecPack vec4f32 es res
+
+emitPrimOp res@[_,_,_,_] FloatX4UnpackOp [arg] _ =
+    doVecUnpack vec4f32 arg res
+
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg] _
    | nopOp op
@@ -661,6 +668,55 @@ mkBasicIndexedWrite off Nothing write_rep base idx val
    = stmtC (CmmStore (cmmIndexOffExpr off write_rep base idx) val)
 mkBasicIndexedWrite off (Just cast) write_rep base idx val
    = stmtC (CmmStore (cmmIndexOffExpr off write_rep base idx) (CmmMachOp cast [val]))
+
+------------------------------------------------------------------------------
+-- Helpers for translating vector packing and unpacking.
+
+doVecPack :: CmmType -> [CmmExpr] -> CmmFormal -> Code
+doVecPack ty es res = do
+    dst <- newTemp ty
+    vecPack dst es 0
+  where
+    vecPack :: CmmFormal -> [CmmExpr] -> Int -> Code
+    vecPack src [] _ =
+        stmtC (CmmAssign (CmmLocal res) (CmmReg (CmmLocal src)))
+
+    vecPack src (e : es) i = do
+        dst <- newTemp ty
+        stmtC $ CmmAssign (CmmLocal dst)
+                          (CmmMachOp (MO_V_Insert len wid)
+                                     [CmmReg (CmmLocal src), e, iLit])
+        vecPack dst es (i + 1)
+      where
+        iLit = CmmLit (mkIntCLit i)
+
+    len :: Length
+    len = vecLength ty 
+
+    wid :: Width
+    wid = typeWidth (vecType ty)
+
+doVecUnpack :: CmmType -> CmmExpr -> [CmmFormal] -> Code
+doVecUnpack ty e res =
+    vecUnpack res 0
+  where
+    vecUnpack :: [CmmFormal] -> Int -> Code
+    vecUnpack [] _ =
+        return ()
+
+    vecUnpack (r : rs) i = do
+        stmtC $ CmmAssign (CmmLocal r)
+                          (CmmMachOp (MO_V_Extract len wid)
+                                     [e, iLit])
+        vecUnpack rs (i + 1)
+      where
+        iLit = CmmLit (mkIntCLit i)
+
+    len :: Length
+    len = vecLength ty 
+
+    wid :: Width
+    wid = typeWidth (vecType ty)
 
 -- ----------------------------------------------------------------------------
 -- Misc utils

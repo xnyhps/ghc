@@ -814,6 +814,22 @@ genMachOp_fast env opt op r n e
 -- This handles all the cases not handle by the specialised genMachOp_fast.
 genMachOp_slow :: LlvmEnv -> EOption -> MachOp -> [CmmExpr] -> UniqSM ExprData
 
+-- Element extraction
+genMachOp_slow env _ (MO_V_Extract {}) [val, CmmLit (CmmInt idx _)] = do
+    (env1, vval, stmts, top) <- exprToVar env val
+    let (LMVector _ ty)      =  getVarType vval
+    (v1, s1) <- doExpr ty $ Extract vval (fromInteger idx)
+    return (env1, v1, stmts `snocOL` s1, top)
+
+-- Element insertion
+genMachOp_slow env _ (MO_V_Insert {}) [val, elt, CmmLit (CmmInt idx _)] = do
+    (env1, vval, stmts1, top1) <- exprToVar env val
+    (env2, velt, stmts2, top2) <- exprToVar env1 elt
+    let ty                     =  getVarType vval
+    (v1, s1) <- doExpr ty $ Insert vval velt (fromInteger idx)
+    return (env2, v1, stmts1 `appOL` stmts2 `snocOL` s1,
+            top1 ++ top2)
+    
 -- Binary MachOp
 genMachOp_slow env opt op [x, y] = case op of
 

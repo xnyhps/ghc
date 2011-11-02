@@ -103,6 +103,10 @@ data MachOp
   | MO_UU_Conv Width Width      -- unsigned int -> unsigned int
   | MO_FF_Conv Width Width      -- Float -> Float
 
+  -- Vector element insertion and extraction operations
+  | MO_V_Insert Length Width
+  | MO_V_Extract Length Width
+
   -- Float vector operations
   | MO_VF_Add Length Width  
   deriving (Eq, Show)
@@ -340,6 +344,9 @@ machOpResultType mop tys =
     MO_FS_Conv _ to     -> cmmBits to
     MO_SF_Conv _ to     -> cmmFloat to
     MO_FF_Conv _ to     -> cmmFloat to
+
+    MO_V_Insert {}      -> ty1
+    MO_V_Extract {}     -> vecType ty1
 
     MO_VF_Add {}        -> ty1
   where

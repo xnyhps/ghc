@@ -1939,6 +1939,16 @@ section "SIMD"
 
 primtype FloatX4#
 
+primop FloatX4PackOp "packFloatX4#" GenPrimOp         
+   Float# -> Float# -> Float# -> Float# -> FloatX4#
+   with
+   code_size = 4
+
+primop FloatX4UnpackOp "unpackFloatX4#" GenPrimOp         
+   FloatX4# -> (# Float#, Float#, Float#, Float# #)
+   with
+   code_size = 4
+
 primop FloatX4AddOp "plusFloatX4#" Dyadic            
    FloatX4# -> FloatX4# -> FloatX4#
    with commutable = True

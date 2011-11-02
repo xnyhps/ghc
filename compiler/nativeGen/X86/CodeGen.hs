@@ -173,8 +173,10 @@ stmtToInstrs stmt = do
       panic "stmtToInstrs: return statement should have been cps'd away"
   where
     isVecExpr :: CmmExpr -> Bool
-    isVecExpr (CmmMachOp (MO_VF_Add {}) _) = True
-    isVecExpr _                            = False
+    isVecExpr (CmmMachOp (MO_V_Insert {}) _)  = True
+    isVecExpr (CmmMachOp (MO_V_Extract {}) _) = True
+    isVecExpr (CmmMachOp (MO_VF_Add {}) _)    = True
+    isVecExpr _                               = False
 
 
 --------------------------------------------------------------------------------
