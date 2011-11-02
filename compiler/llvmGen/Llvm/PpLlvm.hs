@@ -255,13 +255,31 @@ ppAssignment :: LlvmVar -> Doc -> Doc
 ppAssignment var expr = (text $ getName var) <+> equals <+> expr
 
 
-ppLoad :: LlvmVar -> Doc
-ppLoad var = text "load" <+> texts var
+-- XXX: On x86, vector types need to be 16-byte aligned for aligned access, but
+-- we have no way of guaranteeing that this is true with GHC (we would need to
+-- modify the layout of the stack and closures, change the storage manager,
+-- etc.). So, we blindly tell LLVM that *any* vector store or load could be
+-- unaligned. In the future we may be able to guarantee that certain vector
+-- access patterns are aligned, in which case we will need a more granular way
+-- of specifying alignment.
 
+ppLoad :: LlvmVar -> Doc
+ppLoad var
+    | isVecPtrVar var = text "load" <+> texts var <>
+                        comma <+> text "align 1"
+    | otherwise       = text "load" <+> texts var
+  where
+    isVecPtrVar :: LlvmVar -> Bool
+    isVecPtrVar = isVec . pLower . getVarType
 
 ppStore :: LlvmVar -> LlvmVar -> Doc
-ppStore val dst = text "store" <+> texts val <> comma <+> texts dst
-
+ppStore val dst
+    | isVecPtrVar dst = text "store" <+> texts val <> comma <+> texts dst <>
+                        comma <+> text "align 1"
+    | otherwise       = text "store" <+> texts val <> comma <+> texts dst
+  where
+    isVecPtrVar :: LlvmVar -> Bool
+    isVecPtrVar = isVec . pLower . getVarType
 
 ppCast :: LlvmCastOp -> LlvmVar -> LlvmType -> Doc
 ppCast op from to = texts op <+> texts from <+> text "to" <+> texts to

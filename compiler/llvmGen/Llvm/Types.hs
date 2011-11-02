@@ -281,6 +281,11 @@ isPointer :: LlvmType -> Bool
 isPointer (LMPointer _) = True
 isPointer _             = False
 
+-- | Test if the given 'LlvmType' is an 'LMVector' construct
+isVec :: LlvmType -> Bool
+isVec (LMVector {}) = True
+isVec _             = False
+
 -- | Test if a 'LlvmVar' is global.
 isGlobal :: LlvmVar -> Bool
 isGlobal (LMGlobalVar _ _ _ _ _ _) = True
