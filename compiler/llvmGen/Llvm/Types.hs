@@ -105,12 +105,15 @@ data LlvmLit
   | LMFloatLit Double LlvmType
   -- | Literal NULL, only applicable to pointer types
   | LMNullLit LlvmType
+  -- | Vector literal
+  | LMVectorLit [LlvmLit] LlvmType
   -- | Undefined value, random bit pattern. Useful for optimisations.
   | LMUndefLit LlvmType
   deriving (Eq)
 
 instance Show LlvmLit where
-  show l = show (getLitType l) ++ " " ++ getLit l
+  show l@(LMVectorLit {}) = getLit l
+  show l                  = show (getLitType l) ++ " " ++ getLit l
 
 
 -- | Llvm Static Data.
@@ -192,6 +195,7 @@ getLit (LMIntLit   i _       ) = show ((fromInteger i)::Int)
 getLit (LMFloatLit r LMFloat ) = fToStr $ realToFrac r
 getLit (LMFloatLit r LMDouble) = dToStr r
 getLit f@(LMFloatLit _ _) = error $ "Can't print this float literal!" ++ show f
+getLit (LMVectorLit ls _) = "< " ++ commaCat ls ++ " >"
 getLit (LMNullLit _     ) = "null"
 getLit (LMUndefLit _    ) = "undef"
 
@@ -204,10 +208,11 @@ getVarType (LMLitVar    l          ) = getLitType l
 
 -- | Return the 'LlvmType' of a 'LlvmLit'
 getLitType :: LlvmLit -> LlvmType
-getLitType (LMIntLit   _ t) = t
-getLitType (LMFloatLit _ t) = t
-getLitType (LMNullLit    t) = t
-getLitType (LMUndefLit   t) = t
+getLitType (LMIntLit    _ t) = t
+getLitType (LMFloatLit  _ t) = t
+getLitType (LMVectorLit _ t) = t
+getLitType (LMNullLit     t) = t
+getLitType (LMUndefLit    t) = t
 
 -- | Return the 'LlvmType' of the 'LlvmStatic'
 getStatType :: LlvmStatic -> LlvmType
