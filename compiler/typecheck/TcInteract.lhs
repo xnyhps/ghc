@@ -206,7 +206,8 @@ React with (F Int ~ b) ==> IR Stop True []    -- after substituting we re-canoni
 
 \begin{code}
 thePipeline :: [(String,SimplifierStage)]
-thePipeline = [ ("pre-canonicalization",    preCanonStage)
+thePipeline = [ ("rewrite from inert eqs",   rewriteFromInertEqsStage) 
+                -- Always ContinueWith a potentially rewritten item
               , ("canonicalization",        canonicalizationStage)
                 -- If ContinueWith, will be canonical 
               , ("interact with inert eqs", interactWithInertEqsStage)
@@ -221,15 +222,17 @@ thePipeline = [ ("pre-canonicalization",    preCanonStage)
 
 \begin{code}
 
--- Pre-canonicalization, see TcCanonical for details
-----------------------------------------------------------
-preCanonStage :: SimplifierStage
-preCanonStage = precanonicalize
+-- Rewriting from inert equalities stage, see TcCanonical for details
+----------------------------------------------------------------------
+rewriteFromInertEqsStage :: SimplifierStage
+rewriteFromInertEqsStage = TcCanonical.rewriteFromInerts
+
 
 -- The canonicalization stage, see TcCanonical for details
 ----------------------------------------------------------
 canonicalizationStage :: SimplifierStage
-canonicalizationStage = canonicalize 
+canonicalizationStage = TcCanonical.canonicalize 
+
 \end{code}
 
 *********************************************************************************
@@ -436,16 +439,18 @@ solveWithIdentity d eqv wd tv xi
                              text "Coercion:           " <+> pprEq (mkTyVarTy tv) xi,
                              text "Left  Kind is     : " <+> ppr (typeKind (mkTyVarTy tv)),
                              text "Right Kind is     : " <+> ppr (typeKind xi)
-                  ]
+                            ]
 
        ; setWantedTyBind tv xi
        ; let refl_xi = mkReflCo xi
-       ; eqv_given <- newGivenEqVar (mkTyVarTy tv) xi refl_xi
+
+       ; let solved_fl = mkSolvedFlavor wd UnkSkol 
+       ; eqv_given <- newGivenEqVar solved_fl (mkTyVarTy tv) xi refl_xi
 
        ; when (isWanted wd) (setEqBind eqv refl_xi)
            -- We don't want to do this for Derived, that's why we use 'when (isWanted wd)'
-       ; return $ SPSolved (CTyEqCan { cc_id = eqv_given
-                                     , cc_flavor = mkSolvedFlavor wd UnkSkol
+       ; return $ SPSolved (CTyEqCan { cc_id     = eqv_given
+                                     , cc_flavor = solved_fl
                                      , cc_tyvar  = tv, cc_rhs = xi, cc_depth = d }) }
 \end{code}
 
@@ -593,7 +598,14 @@ doInteractWithInert
                | otherwise         -> irKeepGoing "NOP"
 
            -- Actual Functional Dependencies
-           Just (rewritten_tys2,_cos2,fd_work)
+           Just (_rewritten_tys2,_cos2,fd_work)
+              -- Standard thing: create derived fds and keep on going. Importantly we don't
+               -- throw workitem back in the worklist because this can cause loops. See #5236.
+               -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
+                     ; irKeepGoing "Cls/Cls (new fundeps)" } -- Just keep going without droping the inert 
+
+{- DV: I am commenting this optimisation code out as I am not confident about how much it helps: 
+
                | not (eqTypes tys1 rewritten_tys2) 
                -- Standard thing: create derived fds and keep on going. Importantly we don't
                -- throw workitem back in the worklist because this can cause loops. See #5236.
@@ -626,6 +638,7 @@ doInteractWithInert
                            do { emitFDWorkAsDerived fd_work (cc_depth workItem) 
                               ; irKeepGoing "Cls/Cls (new fundeps)"
                               }
+-}
        }
   where get_workitem_wloc (Wanted wl)  = wl 
         get_workitem_wloc (Derived wl) = wl 
@@ -660,19 +673,20 @@ doInteractWithInert (CIPCan { cc_id = id1, cc_flavor = ifl, cc_ip_nm = nm1, cc_i
 
   | nm1 == nm2
   =  	-- See Note [When improvement happens]
-    do { eqv <- newEqVar ty2 ty1 -- See Note [Efficient Orientation]
-       ; let flav = Wanted (combineCtLoc ifl wfl)
-       ; let ct = CNonCanonical { cc_id = eqv 
-                                , cc_flavor = flav
-                                , cc_depth  = cc_depth workItem }
-       ; updWorkListTcS (extendWorkListEq ct) 
+    do { let flav = Wanted (combineCtLoc ifl wfl)
+       ; eqv <- newEqVar flav ty2 ty1 -- See Note [Efficient Orientation]
+       ; when (isNewEvVar eqv) $
+              (let ct = CNonCanonical { cc_id     = evc_the_evvar eqv 
+                                      , cc_flavor = flav
+                                      , cc_depth  = cc_depth workItem }
+              in updWorkListTcS (extendWorkListEq ct))
 
        ; case wfl of
            Given   {} -> pprPanic "Unexpected given IP" (ppr workItem)
            Derived {} -> pprPanic "Unexpected derived IP" (ppr workItem)
            Wanted  {} ->
                do { setEvBind (cc_id workItem) $ 
-                    mkEvCast id1 (mkSymCo (mkTyConAppCo (ipTyCon nm1) [mkEqVarLCo eqv]))
+                    mkEvCast id1 (mkSymCo (mkTyConAppCo (ipTyCon nm1) [mkEqVarLCo (evc_the_evvar eqv)]))
                     -- DV: Changing: used to be (mkSymCo (mkEqVarLCo eqv))
                   ; irWorkItemConsumed "IP/IP (solved by rewriting)" } }
 
@@ -709,7 +723,8 @@ rewriteEqLHS :: WhichComesFromInert -> (EqVar,Xi) -> (EqVar,SubGoalDepth,CtFlavo
 -- We have an option of creating new work (xi1 ~ xi2) OR (xi2 ~ xi1), 
 --    See Note [Efficient Orientation] for that 
 rewriteEqLHS LeftComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2) 
-  = do { eqv2' <- newEqVar xi2 xi1 
+  = do { evc <- newEqVar gw xi2 xi1
+       ; let eqv2' = evc_the_evvar evc
        ; case gw of 
            Wanted {} 
                -> setEqBind eqv2 $ 
@@ -719,14 +734,14 @@ rewriteEqLHS LeftComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2)
                   mkSymCo (mkEqVarLCo eqv2) `mkTransCo` mkEqVarLCo eqv1
            Derived {} 
                -> return ()
-
-       ; updWorkListTcS $ 
-         extendWorkListEq (CNonCanonical { cc_id     = eqv2'
-                                         , cc_flavor = gw
-                                         , cc_depth  = d }) }
+       ; when (isNewEvVar evc) $ 
+              updWorkListTcS (extendWorkListEq (CNonCanonical { cc_id     = eqv2'
+                                                              , cc_flavor = gw
+                                                              , cc_depth  = d  } ) ) }
 
 rewriteEqLHS RightComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2) 
-  = do { eqv2' <- newEqVar xi1 xi2
+  = do { evc <- newEqVar gw xi1 xi2
+       ; let eqv2' = evc_the_evvar evc
        ; case gw of
            Wanted {} 
                -> setEqBind eqv2 $ 
@@ -737,11 +752,10 @@ rewriteEqLHS RightComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2)
            Derived {} 
                -> return ()
 
-       ; updWorkListTcS $ 
-         extendWorkListEq (CNonCanonical { cc_id = eqv2'
-                                         , cc_flavor = gw
-                                         , cc_depth  = d }) }
-
+       ; when (isNewEvVar evc) $
+              updWorkListTcS (extendWorkListEq (CNonCanonical { cc_id = eqv2'
+                                                              , cc_flavor = gw
+                                                              , cc_depth  = d } ) ) }
 
 solveOneFromTheOther :: String             -- Info 
                      -> (EvTerm, CtFlavor) -- Inert 
@@ -1185,7 +1199,7 @@ doTopReact _inerts workItem@(CDictCan { cc_flavor = Derived loc
        }
 
 -- Wanted dictionary
-doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
+doTopReact inerts workItem@(CDictCan { cc_flavor = Wanted loc
                                      , cc_class = cls, cc_tyargs = xis })
   -- See Note [MATCHING-SYNONYMS]
   = do { traceTcS "doTopReact" (ppr workItem)
@@ -1205,23 +1219,28 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                           -> return NoTopInt
                   }
            -- Actual Functional Dependencies
-           Just (xis',cos,fd_work) ->
-               do { lkup_inst_res <- matchClassInst inerts cls xis' loc
-                  ; case lkup_inst_res of
-                      NoInstance
-                          -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
-                                ; return $
-                                  SomeTopInt { tir_rule = "Dict/Top (no match but fundeps)"
-                                             , tir_new_item = ContinueWith workItem } } 
-                      -- This WHOLE branch is an optimization: we can immediately discharge the dictionary
-                      GenInst wtvs ev_term
-                          -> do { let dict_co = mkTyConAppCo (classTyCon cls) cos
-                                ; emitFDWorkAsWanted fd_work (cc_depth workItem) 
-                                ; dv' <- newDictVar cls xis'
-                                ; setDictBind dv' ev_term
-                                ; doSolveFromInstance wtvs (mkEvCast dv' dict_co) workItem }
-                  } }
+           Just (_xis',_cos,fd_work) ->
+               do { emitFDWorkAsDerived fd_work (cc_depth workItem)
+                  ; return SomeTopInt { tir_rule = "Dict/Top (fundeps)"
+                                      , tir_new_item = ContinueWith workItem } } }
+{- DV: Old code used to have this optimisation but I am not sure how much it helps:
+                      -- ; case lkup_inst_res of
+                      -- NoInstance
+                      --     -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
+                      --           ; return $
+                      --             SomeTopInt { tir_rule = "Dict/Top (no match but fundeps)"
+                      --                        , tir_new_item = ContinueWith workItem } } 
+                      -- -- This WHOLE branch is an optimization: we can immediately discharge the dictionary
+                      -- GenInst wtvs ev_term
+                      --     -> do { let dict_co = mkTyConAppCo (classTyCon cls) cos
+                      --           ; emitFDWorkAsWanted fd_work (cc_depth workItem) 
 
+                      --           ; evc <- newEvVar (mkClassPred cls xis') (mkSolvedFlavor fl UnkSkol)
+                      --           ; let dv' = evc_the_evvar evc
+
+                      --           ; setEvBind dv' ev_term
+                      --           ; doSolveFromInstance wtvs (mkEvCast dv' dict_co) workItem }
+-}
    where doSolveFromInstance :: [WantedEvVar] 
                              -> EvTerm 
                              -> Ct 
@@ -1232,7 +1251,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
             = do { traceTcS "doTopReact/found nullary instance for" (ppr (cc_id workItem))
                  ; setEvBind (cc_id workItem) ev_term
                  ; return $ 
-                   SomeTopInt { tir_rule = "Dict/Top (solved, no new work, no caching)" 
+                   SomeTopInt { tir_rule = "Dict/Top (solved, no new work)" 
                               , tir_new_item = Stop } } -- Don't put him in the inerts
             | otherwise 
             = do { traceTcS "doTopReact/found non-nullary instance for" $ 
@@ -1240,16 +1259,15 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                  ; setEvBind (cc_id workItem) ev_term 
                         -- Solved and new wanted work produced, you may cache the 
                         -- (tentatively solved) dictionary as Solved given.
-                 ; let solved    = workItem { cc_flavor = solved_fl }
-                       solved_fl = mkSolvedFlavor fl UnkSkol
-                       ct_from_wev (EvVarX v fl)
+                 ; let ct_from_wev (EvVarX v fl)
                            = CNonCanonical { cc_id = v, cc_flavor = Wanted fl
                                            , cc_depth  = cc_depth workItem + 1 }
                        wtvs_cts = map ct_from_wev wtvs
                  ; updWorkListTcS (appendWorkListCt wtvs_cts)
                  ; return $ 
-                   SomeTopInt { tir_rule     = "Dict/Top (solved, more work, caching)"
-                              , tir_new_item = ContinueWith solved } } -- Cache in inerts 
+                   SomeTopInt { tir_rule     = "Dict/Top (solved, more work)"
+                              , tir_new_item = Stop } } -- DONT cache in inerts the Solved item, now the cache is 
+                                                        -- based on evidence variables.
 
 -- Type functions
 doTopReact _inerts (CFunEqCan { cc_flavor = fl })
@@ -1272,20 +1290,21 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                             -- See Note [Type synonym families] in TyCon
                          coe = mkAxInstCo coe_tc rep_tys 
                    ; case fl of
-                       Wanted {} -> do { eqv' <- newEqVar rhs_ty xi
+                       Wanted {} -> do { evc <- newEqVar fl rhs_ty xi -- Wanted version
+                                       ; let eqv' = evc_the_evvar evc
                                        ; setEqBind eqv (coe `mkTransCo` mkEqVarLCo eqv')
-                                       ; let ct = CNonCanonical { cc_id = eqv'
-                                                                , cc_flavor = fl 
-                                                                , cc_depth = cc_depth workItem } -- Or +1? 
-                                       ; updWorkListTcS (extendWorkListEq ct) 
-                                       ; let solved = workItem { cc_flavor = solved_fl }
-                                             solved_fl = mkSolvedFlavor fl UnkSkol
+                                       ; when (isNewEvVar evc) $ 
+                                            (let ct = CNonCanonical { cc_id = eqv'
+                                                                    , cc_flavor = fl 
+                                                                    , cc_depth = cc_depth workItem + 1} 
+                                             in updWorkListTcS (extendWorkListEq ct))
+
                                        ; return $ 
-                                         SomeTopInt { tir_rule = "Fun/Top (solved, more work, caching)"
-                                                    , tir_new_item = ContinueWith solved }
-                                       }
-                       Given {} -> do { eqv' <- newEqVar xi rhs_ty
-                                      ; setEqBind eqv' (mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe)
+                                         SomeTopInt { tir_rule = "Fun/Top (solved, more work)"
+                                                    , tir_new_item = Stop } } -- DONT cache in inerts the Solved item
+
+                       Given {} -> do { eqv' <- newGivenEqVar fl xi rhs_ty $ 
+                                                mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe
                                       ; let ct = CNonCanonical { cc_id = eqv'
                                                                , cc_flavor = fl
                                                                , cc_depth = cc_depth workItem + 1}  
@@ -1293,17 +1312,17 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
 
                                       ; return $ 
                                         SomeTopInt { tir_rule = "Fun/Top (given)"
-                                                   , tir_new_item = Stop }
-                                      }
-                       Derived {} -> do { eqv' <- newDerivedId (mkEqPred (xi, rhs_ty))
-                                        ; let ct = CNonCanonical { cc_id = eqv'
+                                                   , tir_new_item = Stop } }
+                       Derived {} -> do { evc <- newEvVar fl (mkEqPred (xi, rhs_ty))
+                                        ; let eqv' = evc_the_evvar evc
+                                        ; when (isNewEvVar evc) $ 
+                                            (let ct = CNonCanonical { cc_id  = eqv'
                                                                  , cc_flavor = fl
-                                                                 , cc_depth = cc_depth workItem +1 } 
-                                        ; updWorkListTcS (extendWorkListEq ct) 
+                                                                 , cc_depth  = cc_depth workItem + 1 } 
+                                             in updWorkListTcS (extendWorkListEq ct)) 
                                         ; return $ 
                                           SomeTopInt { tir_rule = "Fun/Top (derived)"
-                                                     , tir_new_item = Stop }
-                                        }
+                                                     , tir_new_item = Stop } }
                    }
        }
 
@@ -1544,8 +1563,11 @@ matchClassInst inerts clas tys loc
                  ; if null theta then
                        return (GenInst [] (EvDFunApp dfun_id tys []))
                    else do
-                     { ev_vars <- instDFunConstraints theta
-                     ; let wevs = [EvVarX w loc | w <- ev_vars]
+                     { evc_vars <- instDFunConstraints theta (Wanted loc)
+                     ; let ev_vars = map evc_the_evvar evc_vars
+                           new_evc_vars = filter isNewEvVar evc_vars 
+                           wevs = map (\v -> EvVarX (evc_the_evvar v) loc) new_evc_vars
+                                  -- wevs are only the real new variables that can be emitted 
                      ; return $ GenInst wevs (EvDFunApp dfun_id tys ev_vars) }
                  }
         }

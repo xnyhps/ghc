@@ -34,8 +34,9 @@ module TcSMonad (
 
        -- Creation of evidence variables
     newEvVar,
-    newDerivedId, newGivenEqVar,
-    newEqVar, newIPVar, newDictVar, newKindConstraint,
+    newGivenEqVar,
+    newEqVar, newKindConstraint,
+    EvVarCreated (..), isNewEvVar,
 
        -- Setting evidence variables 
     setEqBind,
@@ -53,7 +54,7 @@ module TcSMonad (
 
         -- Inerts 
     InertSet(..), 
-    getInertEqs, getRelevantInertFunEq, rewriteFromInertEqs, 
+    getInertEqs, getRelevantInertFunEq, rewriteFromInertEqs,
     tyVarsOfInert, emptyInert, getTcSInerts, updInertSet, extractUnsolved,
     extractUnsolvedTcS,
     updInertSetTcS, partitionCCanMap, partitionEqMap,
@@ -113,7 +114,8 @@ import Outputable
 import Bag
 import MonadUtils
 import VarSet
-import Pair
+
+import Pair ( pSnd )
 import FastString
 import Util
 
@@ -128,6 +130,9 @@ import Maybes ( orElse )
 import Control.Monad( when )
 import StaticFlags( opt_PprStyle_Debug )
 import Data.IORef
+
+import TrieMap
+
 \end{code}
 
 \begin{code}
@@ -701,8 +706,10 @@ added.  This is initialised from the innermost implication constraint.
 \begin{code}
 data TcSEnv
   = TcSEnv { 
-      tcs_ev_binds :: EvBindsVar,
-          -- Evidence bindings
+      tcs_ev_binds    :: EvBindsVar,
+      tcs_evvar_cache :: IORef (TypeMap (EvVar,CtFlavor)), 
+          -- Evidence bindings and a cache from predicate types to the created evidence 
+          -- variables. The scope of the cache will be the same as the scope of tcs_ev_binds
 
       tcs_ty_binds :: IORef (TyVarEnv (TcTyVar, TcType)),
           -- Global type bindings
@@ -814,6 +821,7 @@ runTcS :: SimplContext
        -> TcM (a, Bag EvBind)
 runTcS context untouch is wl tcs 
   = do { ty_binds_var <- TcM.newTcRef emptyVarEnv
+       ; ev_cache_var <- TcM.newTcRef emptyTM
        ; ev_binds_var@(EvBindsVar evb_ref _) <- TcM.newTcEvBinds
        ; step_count <- TcM.newTcRef 0
 
@@ -821,6 +829,7 @@ runTcS context untouch is wl tcs
        ; wl_var <- TcM.newTcRef wl
 
        ; let env = TcSEnv { tcs_ev_binds = ev_binds_var
+                          , tcs_evvar_cache = ev_cache_var
                           , tcs_ty_binds = ty_binds_var
                           , tcs_context  = context
                           , tcs_untch    = (untouch, emptyVarSet) -- No Tcs untouchables yet
@@ -872,15 +881,19 @@ nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside)
          -- Inherit the inerts from the outer scope
        ; orig_inerts <- TcM.readTcRef inert_var
        ; new_inert_var <- TcM.newTcRef orig_inerts
+                          
+         -- Make a new cache
+       ; ev_var_cache <- TcM.newTcRef emptyTM
                              
-       ; let nest_env = TcSEnv { tcs_ev_binds = ref
-                               , tcs_ty_binds = ty_binds
-                               , tcs_untch    = inner_untch
-                               , tcs_count    = count
-                               , tcs_ic_depth = idepth+1
-                               , tcs_context  = ctxtUnderImplic ctxt 
-                               , tcs_inerts   = new_inert_var
-                               , tcs_worklist = wl_var 
+       ; let nest_env = TcSEnv { tcs_ev_binds    = ref
+                               , tcs_evvar_cache = ev_var_cache
+                               , tcs_ty_binds    = ty_binds
+                               , tcs_untch       = inner_untch
+                               , tcs_count       = count
+                               , tcs_ic_depth    = idepth+1
+                               , tcs_context     = ctxtUnderImplic ctxt 
+                               , tcs_inerts      = new_inert_var
+                               , tcs_worklist    = wl_var 
                                -- NB: worklist is going to be empty anyway, 
                                -- so reuse the same ref cell
                                }
@@ -908,8 +921,10 @@ tryTcS tcs
 
                 ; ty_binds_var <- TcM.newTcRef emptyVarEnv
                 ; ev_binds_var <- TcM.newTcEvBinds
+                ; ev_binds_cache_var <- TcM.newTcRef emptyTM
 
                 ; let env1 = env { tcs_ev_binds = ev_binds_var
+                                 , tcs_evvar_cache = ev_binds_cache_var
                                  , tcs_ty_binds = ty_binds_var
                                  , tcs_inerts   = is_var
                                  , tcs_worklist = wl_var } 
@@ -964,6 +979,9 @@ getTcSContext = TcS (return . tcs_context)
 getTcEvBinds :: TcS EvBindsVar
 getTcEvBinds = TcS (return . tcs_ev_binds) 
 
+getTcSEvVarCache :: TcS (IORef (TypeMap (EvVar,CtFlavor)))
+getTcSEvVarCache = TcS (return . tcs_evvar_cache)
+
 getUntouchables :: TcS TcsUntouchables
 getUntouchables = TcS (return . tcs_untch)
 
@@ -978,6 +996,7 @@ getTcEvBindsMap :: TcS EvBindMap
 getTcEvBindsMap
   = do { EvBindsVar ev_ref _ <- getTcEvBinds 
        ; wrapTcS $ TcM.readTcRef ev_ref }
+
 
 setEqBind :: EqVar -> LCoercion -> TcS () 
 setEqBind eqv co = setEvBind eqv (EvCoercionBox co)
@@ -1108,9 +1127,9 @@ instDFunTypes mb_inst_tys
     inst_tv (Left tv)  = mkTyVarTy <$> instFlexiTcS tv
     inst_tv (Right ty) = return ty 
 
-instDFunConstraints :: TcThetaType -> TcS [EvVar] 
-instDFunConstraints preds = wrapTcS $ TcM.newWantedEvVars preds 
-
+instDFunConstraints :: TcThetaType -> CtFlavor -> TcS [EvVarCreated] 
+instDFunConstraints preds fl
+  = mapM (newEvVar fl) preds
 
 instFlexiTcS :: TyVar -> TcS TcTyVar 
 -- Like TcM.instMetaTyVar but the variable that is created is always
@@ -1132,12 +1151,12 @@ isFlexiTcsTv tv
   | MetaTv TcsTv _ <- tcTyVarDetails tv = True
   | otherwise                           = False
 
-newKindConstraint :: TcTyVar -> Kind -> TcS CoVar
+newKindConstraint :: TcTyVar -> Kind -> CtFlavor -> TcS EvVarCreated
 -- Create new wanted CoVar that constrains the type to have the specified kind. 
-newKindConstraint tv knd 
+newKindConstraint tv knd fl
   = do { tv_k <- instFlexiTcSHelper (tyVarName tv) knd 
        ; let ty_k = mkTyVarTy tv_k
-       ; eqv <- newEqVar (mkTyVarTy tv) ty_k
+       ; eqv <- newEqVar fl (mkTyVarTy tv) ty_k
        ; return eqv }
 
 instFlexiTcSHelper :: Name -> Kind -> TcS TcTyVar
@@ -1152,30 +1171,49 @@ instFlexiTcSHelper tvname tvkind
 -- Superclasses and recursive dictionaries 
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-newEvVar :: TcPredType -> TcS EvVar
-newEvVar pty = wrapTcS $ TcM.newEvVar pty
+data EvVarCreated 
+  = EvVarCreated { evc_is_new    :: Bool    -- True iff the variable was just created
+                 , evc_the_evvar :: EvVar } -- The actual evidence variable could be cached or new
 
-newDerivedId :: TcPredType -> TcS EvVar 
-newDerivedId pty = wrapTcS $ TcM.newEvVar pty
+isNewEvVar :: EvVarCreated -> Bool
+isNewEvVar = evc_is_new
 
-newGivenEqVar :: TcType -> TcType -> Coercion -> TcS EvVar 
--- Note we create immutable variables for given or derived, since we
--- must bind them to TcEvBinds (because their evidence may involve 
--- superclasses). However we should be able to override existing
--- 'derived' evidence, even in TcEvBinds 
-newGivenEqVar ty1 ty2 co 
-  = do { cv <- newEqVar ty1 ty2
-       ; setEvBind cv (EvCoercionBox co) 
-       ; return cv } 
+newEvVar :: CtFlavor -> TcPredType -> TcS EvVarCreated
+-- Post: If Given then evc_is_new is True
+-- Hence it is safe to do a setEvBind right after a newEvVar with a Given flavor
+newEvVar fl pty
+  = do { eref <- getTcSEvVarCache
+       ; ecache <- wrapTcS (TcM.readTcRef eref)
+       ; lkup_upd_cache eref ecache (lookupTM pty ecache) }
+  where -- Not cached
+        lkup_upd_cache eref ecache Nothing
+          = do_update_cache eref ecache
+        -- Cached ...
+        lkup_upd_cache eref ecache (Just (cached_evvar,cached_flavor))
+          | cached_flavor `canSolve` fl  
+          , not (isGivenOrSolved fl) -- ... with a better flavor
+          = return (EvVarCreated False cached_evvar) 
+          | otherwise                -- ... with a worse flavor
+          = do_update_cache eref ecache
 
-newEqVar :: TcType -> TcType -> TcS EvVar
-newEqVar ty1 ty2 = wrapTcS $ TcM.newEq ty1 ty2 
+        do_update_cache eref ecache
+          = do { new_evvar <- wrapTcS (TcM.newEvVar pty)
+               ; let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) ecache
+               ; wrapTcS (TcM.writeTcRef eref ecache')
+               ; return (EvVarCreated True new_evvar) }
 
-newIPVar :: IPName Name -> TcType -> TcS EvVar 
-newIPVar nm ty = wrapTcS $ TcM.newIP nm ty 
+newGivenEqVar :: CtFlavor -> TcType -> TcType -> Coercion -> TcS EvVar
+-- Pre: fl is Given
+newGivenEqVar fl ty1 ty2 co 
+  = do { ecv <- newEqVar fl ty1 ty2
+       ; let v = evc_the_evvar ecv -- Will be a new EvVar by post of newEvVar
+       ; setEvBind v (EvCoercionBox co)
+       ; return v }
 
-newDictVar :: Class -> [TcType] -> TcS EvVar 
-newDictVar cl tys = wrapTcS $ TcM.newDict cl tys 
+newEqVar :: CtFlavor -> TcType -> TcType -> TcS EvVarCreated
+newEqVar fl ty1 ty2 
+  = newEvVar fl (mkEqPred (ty1,ty2))
+
 \end{code} 
 
 
@@ -1247,30 +1285,28 @@ getRelevantInertFunEq tc xi_args fl
         fun_match _ = False -- Should be an assertion failure, really
 
 
-rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)  
+
+rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -- Precondition: Ct are CTyEqCans only!
                     -> CtFlavor 
                     -> EvVar 
-                    -> TcS (EvVar,Bool)
+                    -> TcS (EvVarCreated,Bool)
 -- Boolean flag returned: True <-> no rewriting happened
 rewriteFromInertEqs (subst,inscope) fl v 
   = do { let co = liftInertEqsPred subst inscope fl (evVarPred v)
-       ; if isReflCo co then return (v,True)
+       ; if isReflCo co then return (EvVarCreated False v,True)
          else do { traceTcS "rewriteFromInertEqs" $
                    text "Original item =" <+> ppr v <+> dcolon <+> ppr (evVarPred v)
-                 ; v' <- newEvVar (pSnd (liftedCoercionKind co))
-		 ; traceTcS "rw1" (ppr v')
-		 ; traceTcS "rw2" (ppr v' <+> dcolon <+> ppr (evVarPred v'))
-		 ; traceTcS "rw3" (ppr subst)
-		 ; traceTcS "rw4" (ppr co)
+                 ; v_res <- newEvVar fl (pSnd (liftedCoercionKind co))
+                 ; let v' = evc_the_evvar v_res
                  ; case fl of 
                      Wanted {}  -> setEvBind v (EvCast v' (mkSymCo co)) 
                      Given {}   -> setEvBind v' (EvCast v co) 
                      Derived {} -> return ()
                  ; traceTcS "rewriteFromInertEqs" $
                    text "Rewritten item =" <+> ppr v' <+> dcolon <+> ppr (evVarPred v')
-                 ; return (v',False) }
-       }
+                 ; return (v_res,False) } }
+
 
 -- See Note [LiftInertEqs]
 liftInertEqsPred :: TyVarEnv (Ct,Coercion)
@@ -1279,6 +1315,7 @@ liftInertEqsPred :: TyVarEnv (Ct,Coercion)
                  -> PredType -> Coercion
 liftInertEqsPred subst inscope fl pty
   = ty_cts_subst subst inscope fl pty
+
 
 ty_cts_subst :: TyVarEnv (Ct,Coercion)
              -> InScopeSet -> CtFlavor -> Type -> Coercion

@@ -38,8 +38,6 @@ import Bag
 import Unique
 import FastString
 
-import TrieMap -- For type-map like things in Evidence Binds
-
 import Data.IORef( IORef )
 import Data.Data hiding ( Fixity )
 \end{code}
@@ -475,29 +473,21 @@ data EvBindsVar = EvBindsVar (IORef EvBindMap) Unique
      -- The Unique is only for debug printing
 
 -----------------
-data EvBindMap = EvBindMap { ev_bind_varenv  :: VarEnv EvBind -- Map from evidence variables to evidence terms
-                           , ev_bind_typemap :: TypeMap EvVar -- Map from types to their evidence variables, 
-                                                              -- needed for pre-canonicalization (see TcCanonical.lhs)
-                           }
+newtype EvBindMap = EvBindMap { ev_bind_varenv :: VarEnv EvBind } -- Map from evidence variables to evidence terms
 
 emptyEvBindMap :: EvBindMap
-emptyEvBindMap = EvBindMap { ev_bind_varenv  = emptyVarEnv, ev_bind_typemap = emptyTM }
+emptyEvBindMap = EvBindMap { ev_bind_varenv = emptyVarEnv }
 
 extendEvBinds :: EvBindMap -> EvVar -> EvTerm -> EvBindMap
 extendEvBinds bs v t 
-  = EvBindMap { ev_bind_varenv  = extendVarEnv (ev_bind_varenv bs) v (EvBind v t)
-              , ev_bind_typemap = alterTM (varType v) x_tymap (ev_bind_typemap bs) }
-  where x_tymap Nothing      = Just v
-        x_tymap (Just v_old) = Just v_old
+  = EvBindMap { ev_bind_varenv = extendVarEnv (ev_bind_varenv bs) v (EvBind v t) }
 
 lookupEvBind :: EvBindMap -> EvVar -> Maybe EvBind
 lookupEvBind bs = lookupVarEnv (ev_bind_varenv bs)
 
 evBindMapBinds :: EvBindMap -> Bag EvBind
-evBindMapBinds bs = foldVarEnv consBag emptyBag (ev_bind_varenv bs)
-
-lookupPredBind :: EvBindMap -> Type -> Maybe EvVar
-lookupPredBind bs ty = lookupTM ty (ev_bind_typemap bs)
+evBindMapBinds bs 
+  = foldVarEnv consBag emptyBag (ev_bind_varenv bs)
 
 -----------------
 instance Data TcEvBinds where

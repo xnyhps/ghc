@@ -727,10 +727,7 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
                 -- NB: remaining_flats has already had subst applied
 
        ; return $ 
-         WC { wc_flat  = mapBag (substCt subst) remaining_unsolved_flats  -- NB: if a constraint is not rewritten by subst then
-                                                                          -- 'canonicity' does not change. This is important
-                                                                          -- for the soundness of pre-canonicalization, 
-                                                                          -- see Note [Caching for canonicals] in TcCanonical
+         WC { wc_flat  = mapBag (substCt subst) remaining_unsolved_flats
             , wc_impl  = mapBag (substImplication subst) unsolved_implics
             , wc_insol = mapBag (substCt subst) insoluble_flats }
        }
@@ -1175,10 +1172,13 @@ defaultTyVar :: TcsUntouchables -> TcTyVar -> TcS Cts
 defaultTyVar untch the_tv 
   | isTouchableMetaTyVar_InRange untch the_tv
   , not (k `eqKind` default_k)
-  = do { eqv <- TcSMonad.newKindConstraint the_tv default_k
-       ; let loc = CtLoc DefaultOrigin (getSrcSpan the_tv) [] -- Yuk
-       ; return $ 
-         unitBag (CNonCanonical {cc_id = eqv, cc_flavor = Wanted loc, cc_depth = 0 }) }
+  = do { let loc = CtLoc DefaultOrigin (getSrcSpan the_tv) [] -- Yuk
+             fl  = Wanted loc
+       ; eqv <- TcSMonad.newKindConstraint the_tv default_k fl
+       ; if isNewEvVar eqv then 
+             return $ unitBag (CNonCanonical { cc_id = evc_the_evvar eqv
+                                             , cc_flavor = fl, cc_depth = 0 })
+         else return emptyBag }
   | otherwise            
   = return emptyBag	 -- The common case
   where
@@ -1239,21 +1239,25 @@ findDefaultableGroups (ctxt, default_tys, (ovl_strings, extended_defaults))
     -- Similarly is_std_class
 
 ------------------------------
-disambigGroup :: [Type]                    -- The default types 
+disambigGroup :: [Type]           -- The default types 
               -> [(Ct, TcTyVar)]  -- All classes of the form (C a)
-	      	 		           --  sharing same type variable
+	      	 		  --  sharing same type variable
               -> TcS Cts
 
 disambigGroup []  _grp
   = return emptyBag
 disambigGroup (default_ty:default_tys) group
   = do { traceTcS "disambigGroup" (ppr group $$ ppr default_ty)
-       ; eqv <- TcSMonad.newEqVar (mkTyVarTy the_tv) default_ty
-       ; let der_flav = mk_derived_flavor (cc_flavor the_ct)
-             derived_eq = CNonCanonical { cc_id = eqv, cc_flavor = der_flav, cc_depth = 0 }
-
+       ; let der_flav = mk_derived_flavor (cc_flavor the_ct) 
+       ; eqv <- TcSMonad.newEqVar der_flav (mkTyVarTy the_tv) default_ty
+       ; let derived_eq 
+               | isNewEvVar eqv 
+               = [ CNonCanonical { cc_id = evc_the_evvar eqv
+                                 , cc_flavor = der_flav, cc_depth = 0 } ]
+               | otherwise 
+               = []
        ; success <- tryTcS $
-                    do { solveInteractCts (derived_eq : wanteds)
+                    do { solveInteractCts (derived_eq ++ wanteds)
                        ; (_,unsolved) <- extractUnsolvedTcS 
                        ; return (isEmptyBag (keepWanted unsolved)) } 
                                             -- Don't care about Derived's
@@ -1261,7 +1265,7 @@ disambigGroup (default_ty:default_tys) group
            True  ->  -- Success: record the type variable binding, and return
                     do { wrapWarnTcS $ warnDefaulting wanteds default_ty
                        ; traceTcS "disambigGroup succeeded" (ppr default_ty)
-                       ; return (unitBag derived_eq) }
+                       ; return (listToBag derived_eq) }
            False ->    -- Failure: try with the next type
                     do { traceTcS "disambigGroup failed, will try other default types"
                                   (ppr default_ty)
