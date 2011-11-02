@@ -447,14 +447,13 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
         ; checkTc (not is_boot || (isEmptyLHsBinds binds && null uprags))
                   badBootDeclErr
 
-        ; (tyvars, theta, clas, inst_tys) <- tcHsInstHead poly_ty
-        ; checkValidInstance poly_ty tyvars theta clas inst_tys
+        ; (tyvars, theta, clas, inst_tys) <- tcHsInstHead InstDeclCtxt poly_ty
         ; let mini_env = mkVarEnv (classTyVars clas `zip` inst_tys)
 
         -- Next, process any associated types.
         ; traceTc "tcLocalInstDecl" (ppr poly_ty)
         ; idx_tycons0 <- tcExtendTyVarEnv tyvars $
-                        mapAndRecoverM (tcAssocDecl clas mini_env) ats
+                         mapAndRecoverM (tcAssocDecl clas mini_env) ats
 
         -- Check for missing associated types and build them
         -- from their defaults (if available)
@@ -889,7 +888,7 @@ tcSpecInst :: Id -> Sig Name -> TcM TcSpecPrag
 tcSpecInst dfun_id prag@(SpecInstSig hs_ty)
   = addErrCtxt (spec_ctxt prag) $
     do  { let name = idName dfun_id
-        ; (tyvars, theta, clas, tys) <- tcHsInstHead hs_ty
+        ; (tyvars, theta, clas, tys) <- tcHsInstHead SpecInstCtxt hs_ty
         ; let spec_dfun_ty = mkDictFunTy tyvars theta clas tys
 
         ; co_fn <- tcSubType (SpecPragOrigin name) SpecInstCtxt

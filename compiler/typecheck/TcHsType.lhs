@@ -60,7 +60,7 @@ import NameSet
 import TysWiredIn
 import BasicTypes
 import SrcLoc
-import DynFlags ( ExtensionFlag( Opt_ConstraintKinds, Opt_PolyKinds ) )
+import DynFlags ( ExtensionFlag( Opt_ConstraintKinds ) )
 import Util
 import UniqSupply
 import Outputable
@@ -185,31 +185,19 @@ tcHsType hs_ty
        ; ty <- tcHsKindedType kinded_ty
        ; return ty }
 
-tcHsInstHead :: LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
+tcHsInstHead :: UserTypeCtxt -> LHsType Name -> TcM ([TyVar], ThetaType, Class, [Type])
 -- Typecheck an instance head.  We can't use 
 -- tcHsSigType, because it's not a valid user type.
-tcHsInstHead (L loc hs_ty)
+tcHsInstHead ctxt lhs_ty@(L loc hs_ty)
   = setSrcSpan loc   $	-- No need for an "In the type..." context
                         -- because that comes from the caller
-    case splitHsClassTy_maybe cls_ty of
-        Just _ -> do -- Kind-checking first
-        { (tvs, ctxt, cls_ty) <- kcHsTyVars tv_names $ \ tv_names' -> do
-            { ctxt' <- mapM kcHsLPredType ctxt
-            ; cls_ty' <- kc_check_hs_type cls_ty ekConstraint
-               -- The body of a forall is usually lifted, but in an instance
-               -- head we only allow something of kind Constraint.
-            ; return (tv_names', ctxt', cls_ty') }
-          -- Now desugar the kind-checked type
-        ; tcTyVarBndrsKindGen tvs $ \ tvs' -> do
-            cls_ty' <- ds_type cls_ty
-            let Just (tc, tys) = splitTyConApp_maybe cls_ty'
-            ctxt' <- dsHsTypes ctxt
-            clas <- case tyConClass_maybe tc of
-                      Just clas -> return clas
-                      Nothing -> failWithTc (ppr tc <+> ptext (sLit "is not a class"))
-            return (tvs', ctxt', clas, tys) }
-        _ -> failWithTc (ptext (sLit "Malformed instance type"))
-      where (tv_names, ctxt, cls_ty) = splitHsForAllTy hs_ty
+    do { kinded_ty <- kc_check_hs_type hs_ty ekConstraint
+       ; ty <- ds_type kinded_ty
+       ; let (tvs, theta, tau) = tcSplitSigmaTy ty
+       ; case getClassPredTys_maybe tau of
+           Nothing          -> failWithTc (ptext (sLit "Malformed instance type"))
+           Just (clas,tys)  -> do { checkValidInstance ctxt lhs_ty tvs theta clas tys
+                                  ; return (tvs, theta, clas, tys) } }
 
 tcHsQuantifiedType :: [LHsTyVarBndr Name] -> LHsType Name -> TcM ([TyVar], Type)
 -- Behave very like type-checking (HsForAllTy sig_tvs hs_ty),
@@ -478,17 +466,22 @@ kc_hs_type (HsCoreTy ty)
 kc_hs_type (HsForAllTy exp tv_names context ty)
   = kcHsTyVars tv_names         $ \ tv_names' ->
     do	{ ctxt' <- kcHsContext context
-	; ty'   <- kcLiftedType ty
+	; (ty', k)  <- kc_lhs_type ty
 	     -- The body of a forall is usually a type, but in principle
 	     -- there's no reason to prohibit *unlifted* types.
 	     -- In fact, GHC can itself construct a function with an
 	     -- unboxed tuple inside a for-all (via CPR analyis; see 
-	     -- typecheck/should_compile/tc170)
+	     -- typecheck/should_compile/tc170).
+             --
+             -- Moreover in instance heads we get forall-types with
+             -- kind Constraint.  
 	     --
-	     -- Still, that's only for internal interfaces, which aren't
-	     -- kind-checked, so we only allow liftedTypeKind here
+	     -- Really we should check that it's a type of value kind
+             -- {*, Constraint, #}, but I'm not doing that yet
+             -- Example that should be rejected:  
+             --          f :: (forall (a:*->*). a) Int
 
-  	; return (HsForAllTy exp tv_names' ctxt' ty', liftedTypeKind) }
+  	; return (HsForAllTy exp tv_names' ctxt' ty', k) }
 
 kc_hs_type (HsBangTy b ty)
   = do { (ty', kind) <- kc_lhs_type ty
@@ -568,30 +561,27 @@ kcHsLPredType pred = kc_check_lhs_type pred ekConstraint
 
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
-kcTyVar name = do       -- Could be a tyvar, a tycon, or a datacon
-    traceTc "lk1" (ppr name)
-    thing <- tcLookup name
-    traceTc "lk2" (ppr name <+> ppr thing)
-    case thing of
-        ATyVar _ ty             -> wrap_mono (typeKind ty)
-        AThing kind             -> wrap_poly kind
-               -- Should be wrap_mono in the first kind checking
-               -- (before kind generalization in TcTyClsDecls) and
-               -- wrap_poly in the second kind checking before
-               -- desugaring. Since we cannot make the difference,
-               -- we use wrap_poly which works for both.
-        AGlobal (ATyCon tc)     -> wrap_poly (tyConKind tc)
-        AGlobal (ADataCon dc)   -> kcDataCon dc >>= wrap_poly
-        _                       -> wrongThingErr "type" thing name
-    where
-      wrap_mono kind = return (HsTyVar name, kind)
-      wrap_poly kind
-        | null kvs = wrap_mono kind
-        | otherwise = do
-          kvs' <- mapM (const newMetaKindVar) kvs
-          let ki = substKiWith kvs kvs' ki_body
-          return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki)
-        where (kvs, ki_body) = splitForAllTys kind
+kcTyVar name         -- Could be a tyvar, a tycon, or a datacon
+  = do { -- traceTc "lk1" (ppr name)
+       ; thing <- tcLookup name
+       ; -- traceTc "lk2" (ppr name <+> ppr thing)
+       ; case thing of
+           ATyVar _ ty           -> wrap_mono (typeKind ty)
+           AThing kind           -> wrap_mono kind
+           AGlobal (ATyCon tc)   -> wrap_poly (tyConKind tc)
+           AGlobal (ADataCon dc) -> kcDataCon dc >>= wrap_poly
+           _                     -> wrongThingErr "type" thing name }
+  where
+    wrap_mono kind = do { traceTc "lk3" (ppr name <+> dcolon <+> ppr kind)
+                        ; return (HsTyVar name, kind) }
+    wrap_poly kind
+      | null kvs = wrap_mono kind
+      | otherwise
+      = do { traceTc "lk4" (ppr name <+> dcolon <+> ppr kind)
+           ; kvs' <- mapM (const newMetaKindVar) kvs
+           ; let ki = substKiWith kvs kvs' ki_body
+           ; return (HsWrapTy (WpKiApps kvs') (HsTyVar name), ki) }
+      where (kvs, ki_body) = splitForAllTys kind
 
 -- IA0_TODO: this function should disapear, and use the dcPromoted field of DataCon
 kcDataCon :: DataCon -> TcM TcKind
@@ -964,19 +954,17 @@ kindGeneralizeKinds kinds
          -- the kinds, and *not* in the environment
        ; zonked_kinds <- mapM zonkTcKind kinds
        ; gbl_tvs <- tcGetGlobalTyVars -- Already zonked
-       ; let kvs_to_quantify = varSetElems (tyVarsOfTypes zonked_kinds 
-                                            `minusVarSet` gbl_tvs)
+       ; let kvs_to_quantify = tyVarsOfTypes zonked_kinds 
+                               `minusVarSet` gbl_tvs
 
-       ; kvs <- ASSERT2 (and (map isKiVar kvs_to_quantify), ppr kvs_to_quantify)
+       ; kvs <- ASSERT2 (all isKiVar (varSetElems kvs_to_quantify), ppr kvs_to_quantify)
                 zonkQuantifiedTyVars kvs_to_quantify
 
-       -- If PolyKinds is off, zonkQuantifiedTyVars will return the empty list
-       ; poly_kinds <- xoptM Opt_PolyKinds
-       ; let new_kvs = if poly_kinds then mkTyVarTys kvs
-                         else ASSERT ( null kvs )
-                              -- In that case, we want to replace by kind *
-                              replicate (length kvs_to_quantify) liftedTypeKind
-       ; let final_kinds = substKisWith kvs_to_quantify new_kvs zonked_kinds
+         -- Zonk the kinds again, to pick up either the kind 
+         -- variables we quantify over, or *, depending on whether
+         -- zonkQuantifiedTyVars decided to generalise (which in
+         -- turn depends on PolyKinds)
+       ; final_kinds <- mapM zonkTcKind zonked_kinds
 
        ; traceTc "generalizeKind" (    ppr kinds <+> ppr kvs_to_quantify
                                    <+> ppr kvs   <+> ppr final_kinds)
@@ -1198,6 +1186,8 @@ data EkCtxt  = EkUnk		-- Unknown context
              | EkIParam         -- Implicit parameter type
              | EkFamInst        -- Family instance
 
+instance Outputable ExpKind where
+  ppr (EK k _) = ptext (sLit "Expected kind:") <+> ppr k
 
 ekLifted, ekOpen, ekArg, ekConstraint :: ExpKind
 ekLifted     = EK liftedTypeKind EkUnk
@@ -1220,7 +1210,7 @@ checkExpectedKind :: Outputable a => a -> TcKind -> ExpKind -> TcM ()
 --      with the expected kind exp_kind
 -- The first argument, ty, is used only in the error message generation
 checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
-    (_errs, mb_r) <- tryTc (unifyKind empty exp_kind act_kind)
+    (_errs, mb_r) <- tryTc (unifyKind empty act_kind exp_kind)
     case mb_r of
         Just _  -> return ()  -- Unification succeeded
         Nothing -> do

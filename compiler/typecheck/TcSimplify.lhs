@@ -21,8 +21,6 @@ import VarSet
 import VarEnv 
 import Coercion
 import TypeRep
-import Type     ( varSetElemsKvsFirst )
-
 import Name
 import NameEnv	( emptyNameEnv )
 import Bag
@@ -235,7 +233,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
        ; let tvs_to_quantify = tyVarsOfTypes zonked_taus `minusVarSet` gbl_tvs
        	     		       -- tvs_to_quantify can contain both kind and type vars
        	                       -- See Note [Which variables to quantify]
-       ; qtvs <- zonkQuantifiedTyVars (varSetElemsKvsFirst tvs_to_quantify)
+       ; qtvs <- zonkQuantifiedTyVars tvs_to_quantify
        ; return (qtvs, [], False, emptyTcEvBinds) }
 
   | otherwise
@@ -319,8 +317,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
                         -- they are also bound in ic_skols and we want them to be
                         -- tidied uniformly
 
-       ; gloc <- getCtLoc skol_info
-       ; qtvs_to_return <- zonkQuantifiedTyVars (varSetElemsKvsFirst qtvs)
+       ; qtvs_to_return <- zonkQuantifiedTyVars qtvs
 
             -- Step 5
             -- Minimize `bound' and emit an implication
@@ -328,6 +325,7 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
        ; ev_binds_var <- newTcEvBinds
        ; mapBagM_ (\(EvBind evar etrm) -> addTcEvBind ev_binds_var evar etrm) tc_binds0
        ; lcl_env <- getLclTypeEnv
+       ; gloc <- getCtLoc skol_info
        ; let implic = Implic { ic_untch    = NoUntouchables
                              , ic_env      = lcl_env
                              , ic_skols    = mkVarSet qtvs_to_return

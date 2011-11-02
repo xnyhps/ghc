@@ -550,8 +550,10 @@ data TcTyThing
 				-- for error-message purposes; it is the corresponding
 				-- Name in the domain of the envt
 
-  | AThing  TcKind 		-- Used temporarily, during kind checking, for the
-				--	tycons and clases in this recursive group
+  | AThing  TcKind   -- Used temporarily, during kind checking, for the
+		     --	tycons and clases in this recursive group
+                     -- Can be a mono-kind or a poly-kind; in TcTyClsDcls see
+                     -- Note [Type checking recursive type and class declarations]
 
   | ANothing                    -- see Note [ANothing]
 

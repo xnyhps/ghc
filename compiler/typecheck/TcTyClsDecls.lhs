@@ -1352,12 +1352,12 @@ checkValidClass cls
 
     check_op constrained_class_methods (sel_id, dm) 
       = addErrCtxt (classOpCtxt sel_id tau) $ do
-	{ checkValidTheta SigmaCtxt (tail theta)
+	{ checkValidTheta ctxt (tail theta)
 		-- The 'tail' removes the initial (C a) from the
 		-- class itself, leaving just the method type
 
 	; traceTc "class op type" (ppr op_ty <+> ppr tau)
-	; checkValidType (FunSigCtxt op_name) tau
+	; checkValidType ctxt tau
 
 		-- Check that the type mentions at least one of
 		-- the class type variables...or at least one reachable
@@ -1375,6 +1375,7 @@ checkValidClass cls
             _                  -> return ()
 	}
 	where
+          ctxt    = FunSigCtxt op_name
 	  op_name = idName sel_id
 	  op_ty   = idType sel_id
 	  (_,theta1,tau1) = tcSplitSigmaTy op_ty

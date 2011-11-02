@@ -41,7 +41,7 @@ module TcMType (
   --------------------------------
   -- Checking type validity
   Rank, UserTypeCtxt(..), checkValidType, checkValidMonoType,
-  SourceTyCtxt(..), checkValidTheta, 
+  checkValidTheta, 
   checkValidInstHead, checkValidInstance, validDerivPred,
   checkInstTermination, checkValidFamInst, checkTyFamFreeness, 
   arityErr, 
@@ -54,7 +54,7 @@ module TcMType (
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
-  zonkTcKind, defaultKindVarToStar, defaultKindVarsToStar,
+  zonkTcKind, defaultKindVarToStar,
   zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
@@ -96,7 +96,7 @@ import Unique( Unique )
 import Bag
 
 import Control.Monad
-import Data.List        ( (\\) )
+import Data.List        ( (\\), partition )
 \end{code}
 
 
@@ -568,31 +568,21 @@ zonkTcPredType = zonkTcType
 		     are used at the end of type checking
 
 \begin{code}
-defaultKindVarToStar :: TcTyVar -> TcM TcTyVar
-defaultKindVarToStar kv = ASSERT ( isKiVar kv )
-                          zonkTyVarKind (setTyVarKind kv liftedTypeKind)
+defaultKindVarToStar :: TcTyVar -> TcM ()
+-- We have a meta-kind: unify it with '*'
+defaultKindVarToStar kv 
+  = ASSERT ( isKiVar kv && isMetaTyVar kv )
+    writeMetaKindVar kv liftedTypeKind
 
-defaultKindVarsToStar :: [TcTyVar] -> TcM [TcTyVar]
-defaultKindVarsToStar = mapM defaultKindVarToStar
-
-checkKiVarsBeforeTys :: [TcTyVar] -> Bool
-checkKiVarsBeforeTys = go emptyVarSet where
-  go _kiVars [] = True
-  go kiVars (v:vs)
-    | isKiVar v = go (extendVarSet kiVars v) vs
-    | isTyVar v =    kiVarsOfKind (tyVarKind v) `intersectVarSet` kiVars == kiVars
-                  && go kiVars vs
-    | otherwise = panic "checkKiVarsBeforeTys"
-
-zonkQuantifiedTyVars :: [TcTyVar] -> TcM [TcTyVar]
+zonkQuantifiedTyVars :: TcTyVarSet -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
 --               variable mentioning it in its kind
 zonkQuantifiedTyVars tyvars
-  = do { poly_kinds <- xoptM Opt_PolyKinds
-       ; ASSERT ( checkKiVarsBeforeTys tyvars )
-         if poly_kinds then
-             mapM zonkQuantifiedTyVar tyvars 
-           -- Because of the precondition, any kind variables
+  = do { let (kvs, tvs) = partitionKiTyVars (varSetElems tyvars)
+       ; poly_kinds <- xoptM Opt_PolyKinds
+       ; if poly_kinds then
+             mapM zonkQuantifiedTyVar (kvs ++ tvs)
+           -- Because of the order, any kind variables
            -- mentioned in the kinds of the type variables refer to
            -- the now-quantified versions
          else
@@ -600,10 +590,9 @@ zonkQuantifiedTyVars tyvars
              -- to *, and zonk the tyvars as usual.  Notice that this
              -- may make zonkQuantifiedTyVars return a shorter list
              -- than it was passed, but that's ok
-             do { _ <- defaultKindVarsToStar kvs
-                ; mapM zonkQuantifiedTyVar tvs } }
-  where
-    (kvs, tvs) = partitionKiTyVars tyvars
+             do { let (meta_kvs, skolem_kvs) = partition isMetaTyVar kvs
+                ; mapM_ defaultKindVarToStar meta_kvs
+                ; mapM zonkQuantifiedTyVar (skolem_kvs ++ tvs) } }
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
 -- The quantified type variables often include meta type variables
@@ -1172,39 +1161,12 @@ If we do both, we get exponential behaviour!!
 %************************************************************************
 
 \begin{code}
--- Enumerate the contexts in which a "source type", <S>, can occur
---	Eq a 
--- or 	?x::Int
--- or 	r <: {x::Int}
--- or 	(N a) where N is a newtype
-
-data SourceTyCtxt
-  = ClassSCCtxt Name	-- Superclasses of clas
-			-- 	class <S> => C a where ...
-  | SigmaCtxt		-- Theta part of a normal for-all type
-			--	f :: <S> => a -> a
-  | DataTyCtxt Name	-- Theta part of a data decl
-			--	data <S> => T a = MkT a
-  | TypeCtxt 		-- Source type in an ordinary type
-			-- 	f :: N a -> N a
-  | InstThetaCtxt	-- Context of an instance decl
-			--	instance <S> => C [a] where ...
-		
-pprSourceTyCtxt :: SourceTyCtxt -> SDoc
-pprSourceTyCtxt (ClassSCCtxt c) = ptext (sLit "the super-classes of class") <+> quotes (ppr c)
-pprSourceTyCtxt SigmaCtxt       = ptext (sLit "the context of a polymorphic type")
-pprSourceTyCtxt (DataTyCtxt tc) = ptext (sLit "the context of the data type declaration for") <+> quotes (ppr tc)
-pprSourceTyCtxt InstThetaCtxt   = ptext (sLit "the context of an instance declaration")
-pprSourceTyCtxt TypeCtxt        = ptext (sLit "the context of a type")
-\end{code}
-
-\begin{code}
-checkValidTheta :: SourceTyCtxt -> ThetaType -> TcM ()
+checkValidTheta :: UserTypeCtxt -> ThetaType -> TcM ()
 checkValidTheta ctxt theta 
   = addErrCtxt (checkThetaCtxt ctxt theta) (check_valid_theta ctxt theta)
 
 -------------------------
-check_valid_theta :: SourceTyCtxt -> [PredType] -> TcM ()
+check_valid_theta :: UserTypeCtxt -> [PredType] -> TcM ()
 check_valid_theta _ []
   = return ()
 check_valid_theta ctxt theta = do
@@ -1215,10 +1177,10 @@ check_valid_theta ctxt theta = do
     (_,dups) = removeDups cmpPred theta
 
 -------------------------
-check_pred_ty :: DynFlags -> SourceTyCtxt -> PredType -> TcM ()
+check_pred_ty :: DynFlags -> UserTypeCtxt -> PredType -> TcM ()
 check_pred_ty dflags ctxt pred = check_pred_ty' dflags ctxt (shallowPredTypePredTree pred)
 
-check_pred_ty' :: DynFlags -> SourceTyCtxt -> PredTree -> TcM ()
+check_pred_ty' :: DynFlags -> UserTypeCtxt -> PredTree -> TcM ()
 check_pred_ty' dflags ctxt (ClassPred cls tys)
   = do {	-- Class predicates are valid in all contexts
        ; checkTc (arity == n_tys) arity_err
@@ -1294,15 +1256,15 @@ check_pred_ty' dflags ctxt (IrredPred pred)
            | xopt Opt_UndecidableInstances dflags -> return ()
            | otherwise -> do
              -- Make sure it is OK to have an irred pred in this context
-             checkTc (case ctxt of ClassSCCtxt _ -> False; InstThetaCtxt -> False; _ -> True)
+             checkTc (case ctxt of ClassSCCtxt _ -> False; InstDeclCtxt -> False; _ -> True)
                      (predIrredBadCtxtErr pred)
 
 -------------------------
-check_class_pred_tys :: DynFlags -> SourceTyCtxt -> [KindOrType] -> Bool
+check_class_pred_tys :: DynFlags -> UserTypeCtxt -> [KindOrType] -> Bool
 check_class_pred_tys dflags ctxt kts
   = case ctxt of
-	TypeCtxt      -> True	-- {-# SPECIALISE instance Eq (T Int) #-} is fine
-	InstThetaCtxt -> flexible_contexts || undecidable_ok || all tcIsTyVarTy tys
+	SpecInstCtxt -> True	-- {-# SPECIALISE instance Eq (T Int) #-} is fine
+	InstDeclCtxt -> flexible_contexts || undecidable_ok || all tcIsTyVarTy tys
 				-- Further checks on head and theta in
 				-- checkInstTermination
 	_             -> flexible_contexts || all tyvar_head tys
@@ -1465,10 +1427,10 @@ so we can take their type variables into account as part of the
 
 
 \begin{code}
-checkThetaCtxt :: SourceTyCtxt -> ThetaType -> SDoc
+checkThetaCtxt :: UserTypeCtxt -> ThetaType -> SDoc
 checkThetaCtxt ctxt theta
   = vcat [ptext (sLit "In the context:") <+> pprTheta theta,
-	  ptext (sLit "While checking") <+> pprSourceTyCtxt ctxt ]
+	  ptext (sLit "While checking") <+> pprUserTypeCtxt ctxt ]
 
 eqPredTyErr, predTyVarErr, predTupleErr, predIrredErr, predIrredBadCtxtErr :: PredType -> SDoc
 eqPredTyErr  pred = ptext (sLit "Illegal equational constraint") <+> pprType pred
@@ -1513,20 +1475,23 @@ compiled elsewhere). In these cases, we let them go through anyway.
 We can also have instances for functions: @instance Foo (a -> b) ...@.
 
 \begin{code}
-checkValidInstHead :: Class -> [Type] -> TcM ()
-checkValidInstHead clas tys
+checkValidInstHead :: UserTypeCtxt -> Class -> [Type] -> TcM ()
+checkValidInstHead ctxt clas tys
   = do { dflags <- getDOpts
 
-           -- If GlasgowExts then check at least one isn't a type variable
-       ; checkTc (xopt Opt_TypeSynonymInstances dflags ||
-                  all tcInstHeadTyNotSynonym tys)
+           -- Check language restrictions; 
+           -- but not for SPECIALISE isntance pragmas
+       ; unless spec_inst_prag $
+         do { checkTc (xopt Opt_TypeSynonymInstances dflags ||
+                       all tcInstHeadTyNotSynonym tys)
                  (instTypeErr pp_pred head_type_synonym_msg)
-       ; checkTc (xopt Opt_FlexibleInstances dflags ||
-                  all tcInstHeadTyAppAllTyVars tys)
+            ; checkTc (xopt Opt_FlexibleInstances dflags ||
+                       all tcInstHeadTyAppAllTyVars tys)
                  (instTypeErr pp_pred head_type_args_tyvars_msg)
-       ; checkTc (xopt Opt_MultiParamTypeClasses dflags ||
-                  isSingleton (dropWhile isKind tys))  -- IA0_NOTE: only count type arguments
-                 (instTypeErr pp_pred head_one_type_msg)
+            ; checkTc (xopt Opt_MultiParamTypeClasses dflags ||
+                       isSingleton (dropWhile isKind tys))  -- IA0_NOTE: only count type arguments
+                 (instTypeErr pp_pred head_one_type_msg) }
+
          -- May not contain type family applications
        ; mapM_ checkTyFamFreeness tys
 
@@ -1539,6 +1504,8 @@ checkValidInstHead clas tys
        }
 
   where
+    spec_inst_prag = case ctxt of { SpecInstCtxt -> True; _ -> False }
+
     pp_pred = pprClassPred clas tys
     head_type_synonym_msg = parens (
                 text "All instance types must be of the form (T t1 ... tn)" $$
@@ -1591,12 +1558,12 @@ validDerivPred tv_set ty = case getClassPredTys_maybe ty of
 %************************************************************************
 
 \begin{code}
-checkValidInstance :: LHsType Name -> [TyVar] -> ThetaType
+checkValidInstance :: UserTypeCtxt -> LHsType Name -> [TyVar] -> ThetaType
                    -> Class -> [TcType] -> TcM ()
-checkValidInstance hs_type tyvars theta clas inst_tys
+checkValidInstance ctxt hs_type tyvars theta clas inst_tys
   = setSrcSpan (getLoc hs_type) $
-    do  { setSrcSpan head_loc (checkValidInstHead clas inst_tys)
-        ; checkValidTheta InstThetaCtxt theta
+    do  { setSrcSpan head_loc (checkValidInstHead ctxt clas inst_tys)
+        ; checkValidTheta ctxt theta
 	; checkAmbiguity tyvars theta (tyVarsOfTypes inst_tys)
 
 	-- Check that instance inference will terminate (if we care)

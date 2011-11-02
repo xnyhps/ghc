@@ -55,8 +55,9 @@ data Class
 	className :: Name,              -- Just the cached name of the TyCon
 	classKey  :: Unique,		-- Cached unique of TyCon
 	
-	classTyVars  :: [TyVar],	-- The class type variables;
+	classTyVars  :: [TyVar],	-- The class kind and type variables;
 		     			-- identical to those of the TyCon
+
 	classFunDeps :: [FunDep TyVar],	-- The functional dependencies
 
 	-- Superclasses: eg: (F a ~ b, F b ~ G a, Eq a, Show b)
