@@ -601,24 +601,11 @@ move_STACK (StgStack *src, StgStack *dest)
    Hp/HpLim).
    -------------------------------------------------------------------------- */
 
-/*
- * This is a terrible hack to guarantee that *all* allocated objects are aligned
- * on a 4-word boundary so we can use aligned SSE instructions. We can't just
- * align some objects, because when the GC runs and compresses the heap, they
- * could end up non-aligned.
- */
-#define ALIGN_WORDS 4
-#define ALIGN_MASK  (ALIGN_WORDS-1)
-
-#define ALIGN_ROUND_UP(n)  (((n)+ALIGN_WORDS-1) & ~ALIGN_MASK)
-
 StgPtr
 allocate (Capability *cap, lnat n)
 {
     bdescr *bd;
     StgPtr p;
-
-    n = ALIGN_ROUND_UP(n);
 
     if (n >= LARGE_OBJECT_THRESHOLD/sizeof(W_)) {
 	lnat req_blocks =  (lnat)BLOCK_ROUND_UP(n*sizeof(W_)) / BLOCK_SIZE;
