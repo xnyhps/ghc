@@ -436,9 +436,9 @@ pprUserTypeCtxt InstDeclCtxt      = ptext (sLit "an instance declaration")
 pprUserTypeCtxt SpecInstCtxt      = ptext (sLit "a SPECIALISE instance pragma")
 pprUserTypeCtxt GenSigCtxt        = ptext (sLit "a type expected by the context")
 pprUserTypeCtxt GhciCtxt          = ptext (sLit "a type in a GHCi command")
-pprUserTyCtxt (ClassSCCtxt c)     = ptext (sLit "the super-classes of class") <+> quotes (ppr c)
-pprUserTyCtxt SigmaCtxt           = ptext (sLit "the context of a polymorphic type")
-pprUserTyCtxt (DataTyCtxt tc)     = ptext (sLit "the context of the data type declaration for") <+> quotes (ppr tc)
+pprUserTypeCtxt (ClassSCCtxt c)   = ptext (sLit "the super-classes of class") <+> quotes (ppr c)
+pprUserTypeCtxt SigmaCtxt         = ptext (sLit "the context of a polymorphic type")
+pprUserTypeCtxt (DataTyCtxt tc)   = ptext (sLit "the context of the data type declaration for") <+> quotes (ppr tc)
 \end{code}
 
 

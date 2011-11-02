@@ -591,7 +591,8 @@ zonkQuantifiedTyVars tyvars
              -- may make zonkQuantifiedTyVars return a shorter list
              -- than it was passed, but that's ok
              do { let (meta_kvs, skolem_kvs) = partition isMetaTyVar kvs
-                ; mapM_ defaultKindVarToStar meta_kvs
+                ; WARN ( not (null skolem_kvs), ppr skolem_kvs )
+                  mapM_ defaultKindVarToStar meta_kvs
                 ; mapM zonkQuantifiedTyVar (skolem_kvs ++ tvs) } }
 
 zonkQuantifiedTyVar :: TcTyVar -> TcM TcTyVar
@@ -922,8 +923,8 @@ checkValidType ctxt ty = do
 		 SpecInstCtxt   -> gen_rank 1
                  ThBrackCtxt    -> gen_rank 1
 		 GhciCtxt       -> ArbitraryRank
-                 GenSigCtxt     -> panic "checkValidType"
-                                     -- Can't happen; GenSigCtxt not used for *user* sigs
+                 _              -> panic "checkValidType"
+                                     -- Can't happen; not used for *user* sigs
 
 	actual_kind = typeKind ty
 
