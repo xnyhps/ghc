@@ -121,7 +121,6 @@ primTyCons
     , word64PrimTyCon
     , anyTyCon
     , anyKindTyCon
-    , constraintKindTyCon
     , eqPrimTyCon
 
     , liftedTypeKindTyCon
