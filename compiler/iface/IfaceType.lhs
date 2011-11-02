@@ -207,8 +207,7 @@ pprIfaceIdBndr :: (IfLclName, IfaceType) -> SDoc
 pprIfaceIdBndr (name, ty) = hsep [ppr name, dcolon, ppr ty]
 
 pprIfaceTvBndr :: IfaceTvBndr -> SDoc
-pprIfaceTvBndr (tv, IfaceTyConApp (IfaceTc n) [])
-  | n == liftedTypeKindTyConName
+pprIfaceTvBndr (tv, IfaceTyConApp IfaceLiftedTypeKindTc [])
   = ppr tv
 pprIfaceTvBndr (tv, kind) = parens (ppr tv <> dcolon <> ppr kind)
 pprIfaceTvBndrs :: [IfaceTvBndr] -> SDoc
