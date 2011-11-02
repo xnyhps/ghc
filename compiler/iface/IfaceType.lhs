@@ -80,7 +80,7 @@ data IfaceType	   -- A kind of universal type, used for types, kinds, and coerci
 type IfacePredType = IfaceType
 type IfaceContext = [IfacePredType]
 
-data IfaceTyCon 	-- Encodes type consructors, kind constructors
+data IfaceTyCon 	-- Encodes type constructors, kind constructors
      			-- coercion constructors, the lot
   = IfaceTc IfExtName	-- The common case
   | IfaceIntTc | IfaceBoolTc | IfaceCharTc
@@ -271,18 +271,21 @@ pprIfaceForAllPart tvs ctxt doc
 
 -------------------
 ppr_tc_app :: Int -> IfaceTyCon -> [IfaceType] -> SDoc
-ppr_tc_app _         tc 	 []   = ppr_tc tc
-ppr_tc_app _         (IfaceTc n) [ty] | n == listTyConName = brackets (pprIfaceType ty)
-ppr_tc_app _         (IfaceTc n) [ty] | n == parrTyConName = pabrackets (pprIfaceType ty)
-ppr_tc_app _         (IfaceTc n) tys
-  | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
-  , Just sort <- tyConTuple_maybe tc
-  , tyConArity tc == length tys 
-  = tupleParens sort (sep (punctuate comma (map pprIfaceType tys)))
-  | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
-  , Just ip <- tyConIP_maybe tc
-  , [ty] <- tys
-  = parens (ppr ip <> dcolon <> pprIfaceType ty)
+ppr_tc_app _         tc          []   = ppr_tc tc
+
+ppr_tc_app _         IfaceListTc [ty] = brackets (pprIfaceType ty)
+ppr_tc_app _         IfaceListTc _    = panic "ppr_tc_app IfaceListTc"
+
+ppr_tc_app _         IfacePArrTc [ty] = pabrackets (pprIfaceType ty)
+ppr_tc_app _         IfacePArrTc _    = panic "ppr_tc_app IfacePArrTc"
+
+ppr_tc_app _         (IfaceTupTc sort _) tys =
+  tupleParens sort (sep (punctuate comma (map pprIfaceType tys)))
+
+ppr_tc_app _         (IfaceIPTc n) [ty] =
+  parens (ppr n <> dcolon <> pprIfaceType ty)
+ppr_tc_app _         (IfaceIPTc _) _ = panic "ppr_tc_app IfaceIPTc"
+
 ppr_tc_app ctxt_prec tc tys
   = maybeParen ctxt_prec tYCON_PREC 
                (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
