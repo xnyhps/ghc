@@ -336,7 +336,7 @@ data TyCon
 	tc_kind     :: Kind,
 	tyConArity  :: Arity,
 
-	tyConTyVars :: [TyVar],	  -- ^ The type variables used in the type constructor.
+	tyConTyVars :: [TyVar],	  -- ^ The kind and type variables used in the type constructor.
                                   -- Invariant: length tyvars = arity
 	                          -- Precisely, this list scopes over:
 	                          --

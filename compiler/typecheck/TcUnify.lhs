@@ -1118,8 +1118,8 @@ matchExpectedFunKind _                         = return Nothing
 
 -----------------  
 unifyKind :: SDoc             -- Error message
-          -> TcKind	      -- k1
-          -> TcKind  	      -- k2
+          -> TcKind	      -- k1 (actual)
+          -> TcKind  	      -- k2 (expected)
           -> TcM Ordering     -- Returns the relation between the kinds
 	     	 	      -- LT <=> k1 is a sub-kind of k2
 
