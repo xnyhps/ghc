@@ -550,6 +550,7 @@ data TyConParent
     NoParentTyCon
 
   -- | Type constructors representing a class dictionary.
+  -- See Note [ATyCon for classes] in TypeRep
   | ClassTyCon
 	Class		-- INVARIANT: the classTyCon of this Class is the current tycon
 

@@ -221,6 +221,17 @@ setGlobalTypeEnv tcg_env new_type_env
          ; return (tcg_env { tcg_type_env = new_type_env }) }
 
 
+tcExtendGlobalEnvImplicit :: [TyThing] -> TcM r -> TcM r
+  -- Extend the global environment with some TyThings that can be obtained
+  -- via implicitTyThings from other entities in the environment.  Examples
+  -- are dfuns, famInstTyCons, data cons, etc.
+  -- These TyThings are not added to tcg_tcs or tcg_clss.
+tcExtendGlobalEnvImplicit things thing_inside
+   = do { tcg_env <- getGblEnv
+        ; let ge'  = extendTypeEnvList (tcg_type_env tcg_env) things
+        ; tcg_env' <- setGlobalTypeEnv tcg_env ge'
+        ; setGblEnv tcg_env' thing_inside }
+
 tcExtendGlobalEnv :: [TyThing] -> TcM r -> TcM r
   -- Given a mixture of Ids, TyCons, Classes, all defined in the
   -- module being compiled, extend the global environment
@@ -236,21 +247,10 @@ tcExtendGlobalEnv things thing_inside
             tcExtendGlobalEnvImplicit things thing_inside
        }
 
-tcExtendGlobalEnvImplicit :: [TyThing] -> TcM r -> TcM r
-  -- Extend the global environment with some TyThings that can be obtained
-  -- via implicitTyThings from other entities in the environment.  Examples
-  -- are dfuns, famInstTyCons, data cons, etc.
-  -- These TyThings are not added to tcg_tcs or tcg_clss.
-tcExtendGlobalEnvImplicit things thing_inside
-   = do { tcg_env <- getGblEnv
-        ; let ge'  = extendTypeEnvList (tcg_type_env tcg_env) things
-        ; tcg_env' <- setGlobalTypeEnv tcg_env ge'
-        ; setGblEnv tcg_env' thing_inside }
-
 tcExtendGlobalValEnv :: [Id] -> TcM a -> TcM a
   -- Same deal as tcExtendGlobalEnv, but for Ids
 tcExtendGlobalValEnv ids thing_inside 
-  = tcExtendGlobalEnv [AnId id | id <- ids] thing_inside
+  = tcExtendGlobalEnvImplicit [AnId id | id <- ids] thing_inside
 
 tcExtendRecEnv :: [(Name,TyThing)] -> TcM r -> TcM r
 -- Extend the global environments for the type/class knot tying game

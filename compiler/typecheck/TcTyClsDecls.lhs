@@ -89,16 +89,17 @@ tcTyAndClassDecls boot_details decls_s
            ; setGblEnv env $ fold_env tyclds_s }
              -- remaining groups are typecheck in the extended global env
 
-tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
+tcTyClGroup :: ModDetails -> [TyClGroup Name] -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
 tcTyClGroup boot_details tyclds
   = do {    -- Step 1: kind-check this group and returns the final
             -- (possibly-polymorphic) kind of each TyCon and Class
             -- See Note [Kind checking for type and class decls]
-         names_w_poly_kinds <- kcTyClGroup tyclds
+            KIND-CHECK ALL GROPU
+         names_w_poly_kinds <- FOLD  kcTyClGroup tyclds
        ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_poly_kinds)
 
-	    -- Step 2: type-check the group, returning 
+	    -- Step 2: type-check all groups together, returning 
 	    -- the final TyCons and Classes
        ; tyclss <- fixM $ \ rec_tyclss -> do
            { let rec_flags = calcRecFlags boot_details rec_tyclss

@@ -311,13 +311,22 @@ Despite the fact that DataCon has to be imported via a hi-boot route,
 this module seems the right place for TyThing, because it's needed for
 funTyCon and all the types in TysPrim.
 
+Note [ATyCon for classes]
+~~~~~~~~~~~~~~~~~~~~~~~~~
+Both classes and type constructors are represented in the type environment
+as ATyCon.  You can tell the difference, and get to the class, with
+   isClassTyCon :: TyCon -> Bool
+   tyConClass_maybe :: TyCon -> Maybe Class
+The Class and its associated TyCon have the same Name.
+
 \begin{code}
 -- | A typecheckable-thing, essentially anything that has a name
-data TyThing = AnId     Id
-	     | ADataCon DataCon
-	     | ATyCon   TyCon
-             | ACoAxiom CoAxiom
-        deriving (Eq, Ord)
+data TyThing 
+  = AnId     Id
+  | ADataCon DataCon
+  | ATyCon   TyCon       -- TyCons and classes; see Note [ATyCon for classes]
+  | ACoAxiom CoAxiom
+  deriving (Eq, Ord)
 
 instance Outputable TyThing where 
   ppr = pprTyThing

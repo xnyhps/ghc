@@ -49,8 +49,9 @@ A @Class@ corresponds to a Greek kappa in the static semantics:
 \begin{code}
 data Class
   = Class {
-	classTyCon :: TyCon,		-- The data type constructor for
-					-- dictionaries of this class
+	classTyCon :: TyCon,	-- The data type constructor for
+				-- dictionaries of this class
+                                -- See Note [ATyCon for classes] in TypeRep
 
 	className :: Name,              -- Just the cached name of the TyCon
 	classKey  :: Unique,		-- Cached unique of TyCon
