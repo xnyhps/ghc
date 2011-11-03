@@ -62,7 +62,6 @@ vectoriseIO hsc_env guts
 --
 vectModule :: ModGuts -> VM ModGuts
 vectModule guts@(ModGuts { mg_tcs        = tycons
-                         , mg_clss       = classes
                          , mg_insts      = insts
                          , mg_binds      = binds
                          , mg_fam_insts  = fam_insts
@@ -80,8 +79,7 @@ vectModule guts@(ModGuts { mg_tcs        = tycons
       ; (new_tycons, new_fam_insts, tc_binds) <- vectTypeEnv tycons [vd
                                                                     | vd@(VectType _ _ _) <- vect_decls]
 
-      ; let new_classes = []  -- !!!FIXME
-            new_insts   = []
+      ; let new_insts   = []
             -- !!!we need to compute an extended 'mg_inst_env' as well!!!
 
           -- Family instance environment for /all/ home-package modules including those instances
@@ -93,7 +91,6 @@ vectModule guts@(ModGuts { mg_tcs        = tycons
       ; binds_imp <- mapM vectImpBind [imp_id | Vect imp_id _ <- vect_decls, isGlobalId imp_id]
 
       ; return $ guts { mg_tcs          = tycons ++ new_tycons
-                      , mg_clss         = classes ++ new_classes
                       , mg_insts        = insts ++ new_insts
                       , mg_binds        = Rec tc_binds : (binds_top ++ binds_imp)
                       , mg_fam_inst_env = fam_inst_env

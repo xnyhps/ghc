@@ -874,7 +874,7 @@ compileCore simplify fn = do
         gutsToCoreModule (Right mg) = CoreModule {
           cm_module  = mg_module mg,
           cm_types   = typeEnvFromEntities (bindersOfBinds (mg_binds mg))
-                                           (mg_tcs mg) (mg_clss mg)
+                                           (mg_tcs mg)
                                            (mg_fam_insts mg),
           cm_binds   = mg_binds mg
          }

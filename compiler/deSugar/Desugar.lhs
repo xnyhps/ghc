@@ -18,6 +18,7 @@ import Id
 import Name
 import InstEnv
 import Class
+import TyCon ( isClassTyCon )
 import Avail
 import CoreSyn
 import CoreSubst
@@ -78,7 +79,6 @@ deSugar hsc_env
                             tcg_rules        = rules,
                             tcg_vects        = vects,
                             tcg_tcs          = tcs,
-                            tcg_clss         = clss,
                             tcg_insts        = insts,
                             tcg_fam_insts    = fam_insts,
                             tcg_hpc          = other_hpc_info })
@@ -92,6 +92,7 @@ deSugar hsc_env
 	; let auto_scc = mkAutoScc dflags mod export_set
         ; let target = hscTarget dflags
         ; let hpcInfo = emptyHpcInfo other_hpc_info
+        ; let onlyTcs = [ tc | tc <- tcs, not (isClassTyCon tc) ]
 	; (msgs, mb_res)
               <- case target of
 	           HscNothing ->
@@ -102,7 +103,8 @@ deSugar hsc_env
 			 <- if (opt_Hpc
 				  || target == HscInterpreted)
 			       && (not (isHsBoot hsc_src))
-                              then addCoverageTicksToBinds dflags mod mod_loc tcs binds 
+                              then addCoverageTicksToBinds dflags mod mod_loc
+                                     onlyTcs binds
                               else return (binds, hpcInfo, emptyModBreaks)
                      initDs hsc_env mod rdr_env type_env $ do
                        do { ds_ev_binds <- dsEvBinds ev_binds
@@ -168,7 +170,6 @@ deSugar hsc_env
                 mg_warns        = warns,
                 mg_anns         = anns,
                 mg_tcs          = tcs,
-                mg_clss         = clss,
                 mg_insts        = insts,
                 mg_fam_insts    = fam_insts,
                 mg_inst_env     = inst_env,

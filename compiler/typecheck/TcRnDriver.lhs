@@ -347,7 +347,6 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
                                 mg_deps      = noDependencies,	-- ??
                                 mg_exports   = my_exports,
                                 mg_tcs       = tcg_tcs tcg_env,
-                                mg_clss      = tcg_clss tcg_env,
                                 mg_insts     = tcg_insts tcg_env,
                                 mg_fam_insts = tcg_fam_insts tcg_env,
                                 mg_inst_env  = tcg_inst_env tcg_env,
@@ -1716,10 +1715,8 @@ pprTcGblEnv (TcGblEnv { tcg_type_env  = type_env,
 
 pprModGuts :: ModGuts -> SDoc
 pprModGuts (ModGuts { mg_tcs = tcs
-                    , mg_clss = clss
                     , mg_rules = rules })
-  = vcat [ ppr_types [] (mkTypeEnv (map ATyCon tcs
-                                    ++ map (ATyCon . classTyCon) clss)),
+  = vcat [ ppr_types [] (mkTypeEnv (map ATyCon tcs)),
 	   ppr_rules rules ]
 
 ppr_types :: [Instance] -> TypeEnv -> SDoc
