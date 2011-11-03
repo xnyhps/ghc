@@ -27,10 +27,8 @@ import Control.Arrow
 data Nat = Ze | Su Nat
 data List a = Nil | Cons a (List a)
 
-data G1 :: [*] -> *
-
-data Vec :: * -> Nat -> * where
 {-
+data Vec :: * -> Nat -> * where
   VNil  :: Vec a Ze
   VCons :: a -> Vec a n -> Vec a (Su n)
 
@@ -315,11 +313,18 @@ testUnbox n a = a
 -- T5283
 --------------------------------------------------------------------------------
 {-
--- See TcArrows, l. 272, corner_ty `eqType` mkTyVarTy w_tv
+-- See TcArrows, l. 283, corner_ty `eqType` mkTyVarTy w_tv
 
 mapAC :: Arrow arr => arr (env, b) c -> arr (env, [b]) [c]  
 mapAC = undefined
 
 t :: Arrow arr => arr [a] [a]
 t = proc ys -> (| mapAC (\y -> returnA -< y) |) ys
+-}
+--------------------------------------------------------------------------------
+-- tc167
+--------------------------------------------------------------------------------
+{-
+f :: (->) Int# Int#
+f x = x
 -}
