@@ -67,41 +67,75 @@ import Data.List
 %*									*
 %************************************************************************
 
+Note [Grouping of type and class declarations]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+tcTyAndClassDecls is called on a list of `TyClGroup`s. Each group is a strongly
+connected component of mutually dependent types and classes. We first kind-check
+each group separately, and then type-check all groups together at once.
+
+Why do we kind-check in groups of dependent types? Take the following example:
+
+  type Id a = a
+  data X = X (Id Int)
+
+If we were to kind-check the two declarations together, we would give Id the
+kind * -> *, since we apply it to an Int in the definition of X. But we can do
+better than that, since Id really is kind polymorphic, and should get kind
+forall (k::BOX). k -> k. Since it does not depend on anything else, it can be
+kind-checked by itself, hence getting the most general kind. We then kind-check
+X, which works fine because we then know the polymorphic kind of Id, and simply
+instantiate k to *.
+
+Why do we type-check all the groups together, after having kind-checked
+separately? Previously we type-checked each group right after kind-checking, but
+that's not correct. Take the following example:
+
+  module A where
+    import {-# SOURCE #-} B
+    type X = Y
+
+  module B where
+    import A
+    data Y = Y X
+
+JPM finish this comment. I'm not sure I fully understand the previous behavior.
+
 \begin{code}
 
 tcTyAndClassDecls :: ModDetails
-                   -> [TyClGroup Name]       -- Mutually-recursive groups in dependency order
-                   -> TcM (TcGblEnv)         -- Input env extended by types and classes
-                                             -- and their implicit Ids,DataCons
+                   -> [TyClGroup Name] -- Mutually-recursive groups in dependency order
+                   -> TcM (TcGblEnv)   -- Input env extended by types and classes
+                                       -- and their implicit Ids,DataCons
 -- Fails if there are any errors
 tcTyAndClassDecls boot_details decls_s
-  = checkNoErrs $ do    -- The code recovers internally, but if anything gave rise to
-                        -- an error we'd better stop now, to avoid a cascade
-  { let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
-                   -- Remove family instance decls altogether
-                   -- They are dealt with by TcInstDcls
-  ; fold_env tyclds_s }  -- type check each group in dependency order folding the global env
-  where
-    fold_env :: [TyClGroup Name] -> TcM TcGblEnv
-    fold_env [] = getGblEnv
-    fold_env (tyclds:tyclds_s)
-      = do { env <- tcTyClGroup boot_details tyclds
-           ; setGblEnv env $ fold_env tyclds_s }
-             -- remaining groups are typecheck in the extended global env
+  = let tyclds_s = map (filterOut (isFamInstDecl . unLoc)) decls_s
+        -- Remove family instance decls altogether
+        -- They are dealt with by TcInstDcls
 
-tcTyClGroup :: ModDetails -> [TyClGroup Name] -> TcM TcGblEnv
+        -- Step 1: kind-check each group, extending the 
+        -- kind environment as we go. Returns the final
+        -- (possibly-polymorphic) kind of each TyCon and Class
+        kcTyClGroups (tyClGroup:tyClGroups) =
+          do names_w_poly_kinds <- kcTyClGroup tyClGroup
+             traceTc "tcTyAndClassDecls generalized kinds" (ppr names_w_poly_kinds)
+             -- Also extend the local type envt with bindings giving
+             -- the (polymorphic) kind of each knot-tied TyCon or Class
+             -- See Note [Type checking recursive type and class declarations]
+             tcExtendKindEnv names_w_poly_kinds $ kcTyClGroups tyClGroups
+
+        -- Step 2: type-check all groups together, returning 
+        -- the final TyCons and Classes
+        kcTyClGroups [] = tcTyClGroup boot_details (concat tyclds_s)
+
+    -- The code recovers internally, but if anything gave rise to
+    -- an error we'd better stop now, to avoid a cascade
+    in checkNoErrs (kcTyClGroups tyclds_s)
+
+tcTyClGroup :: ModDetails -> TyClGroup Name -> TcM TcGblEnv
 -- Typecheck one strongly-connected component of type and class decls
-tcTyClGroup boot_details tyclds
-  = do {    -- Step 1: kind-check this group and returns the final
-            -- (possibly-polymorphic) kind of each TyCon and Class
-            -- See Note [Kind checking for type and class decls]
-            KIND-CHECK ALL GROPU
-         names_w_poly_kinds <- FOLD  kcTyClGroup tyclds
-       ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_poly_kinds)
-
-	    -- Step 2: type-check all groups together, returning 
-	    -- the final TyCons and Classes
-       ; tyclss <- fixM $ \ rec_tyclss -> do
+tcTyClGroup boot_details tyclds = do {
+         tyclss <- fixM $ \ rec_tyclss -> do
            { let rec_flags = calcRecFlags boot_details rec_tyclss
 
                  -- Populate environment with knot-tied ATyCon for TyCons
@@ -109,12 +143,6 @@ tcTyClGroup boot_details tyclds
                  -- (see Note [ANothing] in typecheck/TcRnTypes.lhs) we
                  -- will have failed already in kcTyClGroup, so no worries here
            ; tcExtendRecEnv (zipRecTyClss tyclds rec_tyclss) $
-
-                 -- Also extend the local type envt with bindings giving
-                 -- the (polymorphic) kind of each knot-tied TyCon or Class
-		 -- See Note [Type checking recursive type and class declarations]
-	     tcExtendKindEnv names_w_poly_kinds              $
-
                  -- Kind and type check declarations for this group
              concatMapM (tcTyClDecl rec_flags) tyclds }
 
@@ -170,7 +198,7 @@ tyClsBinders decls
 %************************************************************************
 
 Note [Kind checking for type and class decls]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Kind checking is done thus:
 
    1. Make up a kind variable for each parameter of the *data* type, 
