@@ -247,6 +247,7 @@ data CgRep
   | FloatArg            -- 32-bit float
   | DoubleArg           -- 64-bit float
   | FloatVecArg Length  -- Vector of 32-bit floats
+  | Int32VecArg Length  -- Vector of 32-bit integers
   deriving Eq
 
 instance Outputable CgRep where
@@ -257,6 +258,7 @@ instance Outputable CgRep where
     ppr FloatArg          = ptext (sLit "F_")
     ppr DoubleArg         = ptext (sLit "D_")
     ppr (FloatVecArg len) = ptext (sLit ("F" ++ show len ++ "_"))
+    ppr (Int32VecArg len) = ptext (sLit ("N" ++ show len ++ "_"))
 
 argMachRep :: CgRep -> CmmType
 argMachRep PtrArg            = gcWord
@@ -267,6 +269,8 @@ argMachRep DoubleArg         = f64
 argMachRep VoidArg           = panic "argMachRep:VoidRep"
 argMachRep (FloatVecArg 4)   = vec4f32
 argMachRep (FloatVecArg len) = panic ("argMachRep:FloatVecArg" ++ show len)
+argMachRep (Int32VecArg 4)   = vec4bWord
+argMachRep (Int32VecArg len) = panic ("argMachRep:Int32VecArg" ++ show len)
 
 primRepToCgRep :: PrimRep -> CgRep
 primRepToCgRep VoidRep            = VoidArg
@@ -279,6 +283,7 @@ primRepToCgRep AddrRep            = NonPtrArg
 primRepToCgRep FloatRep           = FloatArg
 primRepToCgRep DoubleRep          = DoubleArg
 primRepToCgRep (FloatVecRep len)  = FloatVecArg len
+primRepToCgRep (Int32VecRep len)  = Int32VecArg len
 
 idCgRep :: Id -> CgRep
 idCgRep x = typeCgRep . idType $ x

@@ -196,6 +196,7 @@ slowCallPattern (F: _)		      = (fsLit "stg_ap_f", 1)
 slowCallPattern (D: _)		      = (fsLit "stg_ap_d", 1)
 slowCallPattern (L: _)		      = (fsLit "stg_ap_l", 1)
 slowCallPattern (FV _ : _)	      = error "No slow call pattern for Float vector"
+slowCallPattern (NV _ : _)	      = error "No slow call pattern for Int vector"
 slowCallPattern []		      = (fsLit "stg_ap_0", 0)
 
 
@@ -213,6 +214,7 @@ data ArgRep = P      -- GC Ptr
             | F      -- Float
             | D      -- Double
             | FV Int -- Float vector
+            | NV Int -- Int32 vector
 instance Outputable ArgRep where
   ppr P      = text "P"
   ppr N      = text "N"
@@ -221,6 +223,7 @@ instance Outputable ArgRep where
   ppr F      = text "F"
   ppr D      = text "D"
   ppr (FV l) = text "FV" <> ppr l
+  ppr (NV l) = text "NV" <> ppr l
 
 toArgRep :: PrimRep -> ArgRep
 toArgRep VoidRep         = V
@@ -233,6 +236,7 @@ toArgRep Word64Rep       = L
 toArgRep FloatRep        = F
 toArgRep DoubleRep       = D
 toArgRep (FloatVecRep l) = FV l
+toArgRep (Int32VecRep l) = NV l
 
 isNonV :: ArgRep -> Bool
 isNonV V = False
@@ -249,6 +253,7 @@ argRepSizeW L      = wORD64_SIZE `quot` wORD_SIZE
 argRepSizeW D      = dOUBLE_SIZE `quot` wORD_SIZE
 argRepSizeW V      = 0
 argRepSizeW (FV l) = l
+argRepSizeW (NV l) = l
 
 idArgRep :: Id -> ArgRep
 idArgRep = toArgRep . idPrimRep

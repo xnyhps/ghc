@@ -367,6 +367,8 @@ altHeapCheck alt_type code
 	  LongArg       -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_l1")
 	  FloatVecArg _ -> panic "altHeapCheck: Float vector"
 				-- R1 is boxed but unlifted: 
+	  Int32VecArg _ -> panic "altHeapCheck: Int32 vector"
+				-- R1 is boxed but unlifted: 
 	  PtrArg        -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unpt_r1")
 				-- R1 is unboxed:
 	  NonPtrArg     -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unbx_r1")

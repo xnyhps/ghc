@@ -272,6 +272,7 @@ emitPrimOp res IndexOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16T
 emitPrimOp res IndexOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res IndexOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
 emitPrimOp res IndexOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
+emitPrimOp res IndexOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4bWord res args
 
 -- ReadXXXoffAddr, which are identical, for our purposes, to IndexXXXoffAddr.
 
@@ -292,6 +293,7 @@ emitPrimOp res ReadOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16To
 emitPrimOp res ReadOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res ReadOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
 emitPrimOp res ReadOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
+emitPrimOp res ReadOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4bWord res args
 
 -- IndexXXXArray
 
@@ -312,6 +314,7 @@ emitPrimOp res IndexByteArrayOp_Word16    args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res IndexByteArrayOp_Word32    args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res IndexByteArrayOp_Word64    args _ = doIndexByteArrayOp Nothing b64  res args
 emitPrimOp res IndexByteArrayOp_FloatX4   args _ = doIndexByteArrayOp Nothing vec4f32 res args
+emitPrimOp res IndexByteArrayOp_Int32X4   args _ = doIndexByteArrayOp Nothing vec4bWord res args
 
 -- ReadXXXArray, identical to IndexXXXArray.
 
@@ -332,6 +335,7 @@ emitPrimOp res ReadByteArrayOp_Word16     args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res ReadByteArrayOp_Word32     args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res ReadByteArrayOp_Word64     args _ = doIndexByteArrayOp Nothing b64  res args
 emitPrimOp res ReadByteArrayOp_FloatX4    args _ = doIndexByteArrayOp Nothing vec4f32 res args
+emitPrimOp res ReadByteArrayOp_Int32X4    args _ = doIndexByteArrayOp Nothing vec4bWord res args
 
 -- WriteXXXoffAddr
 
@@ -352,6 +356,7 @@ emitPrimOp res WriteOffAddrOp_Word16     args _ = doWriteOffAddrOp (Just mo_Word
 emitPrimOp res WriteOffAddrOp_Word32     args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
 emitPrimOp res WriteOffAddrOp_Word64     args _ = doWriteOffAddrOp Nothing b64 res args
 emitPrimOp res WriteOffAddrOp_FloatX4    args _ = doWriteOffAddrOp Nothing vec4f32 res args
+emitPrimOp res WriteOffAddrOp_Int32X4    args _ = doWriteOffAddrOp Nothing vec4bWord res args
 
 -- WriteXXXArray
 
@@ -372,6 +377,7 @@ emitPrimOp res WriteByteArrayOp_Word16    args _ = doWriteByteArrayOp (Just mo_W
 emitPrimOp res WriteByteArrayOp_Word32    args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
 emitPrimOp res WriteByteArrayOp_Word64    args _ = doWriteByteArrayOp Nothing b64  res args
 emitPrimOp res WriteByteArrayOp_FloatX4   args _ = doWriteByteArrayOp Nothing vec4f32 res args
+emitPrimOp res WriteByteArrayOp_Int32X4   args _ = doWriteByteArrayOp Nothing vec4bWord res args
 
 -- Copying byte arrays
 
@@ -393,6 +399,12 @@ emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
 
 emitPrimOp res@[_,_,_,_] FloatX4UnpackOp [arg] _ =
     doVecUnpack vec4f32 arg res
+
+emitPrimOp [res] Int32X4PackOp es@[_,_,_,_] _ =
+    doVecPack vec4bWord es res
+
+emitPrimOp res@[_,_,_,_] Int32X4UnpackOp [arg] _ =
+    doVecUnpack vec4bWord arg res
 
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg] _
@@ -568,6 +580,15 @@ translateOp FloatX4SubOp  = Just (MO_VF_Sub  4 W32)
 translateOp FloatX4MulOp  = Just (MO_VF_Mul  4 W32)
 translateOp FloatX4DivOp  = Just (MO_VF_Quot 4 W32)
 translateOp FloatX4NegOp  = Just (MO_VF_Neg  4 W32)
+
+translateOp Int32X4AddOp   = Just (MO_VN_Add   4 W32)
+translateOp Int32X4SubOp   = Just (MO_VN_Sub   4 W32)
+translateOp Int32X4MulOp   = Just (MO_VN_Mul   4 W32)
+translateOp Int32X4SDivOp  = Just (MO_VN_SQuot 4 W32)
+translateOp Int32X4SRemOp  = Just (MO_VN_SRem  4 W32)
+translateOp Int32X4UDivOp  = Just (MO_VN_UQuot 4 W32)
+translateOp Int32X4URemOp  = Just (MO_VN_URem  4 W32)
+translateOp Int32X4NegOp   = Just (MO_VN_Neg   4 W32)
 
 translateOp _ = Nothing
 

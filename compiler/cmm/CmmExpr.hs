@@ -334,6 +334,10 @@ data GlobalReg
   | FloatVecReg		-- single-precision floating-point vector registers
         Length
 	{-# UNPACK #-} !Int	-- its number
+	
+  | Int32VecReg		-- 32-bit integer vector registers
+        Length
+	{-# UNPACK #-} !Int	-- its number
 
   -- STG registers
   | Sp			-- Stack ptr; points to last occupied stack location.
@@ -370,6 +374,7 @@ instance Eq GlobalReg where
    DoubleReg i == DoubleReg j = i==j
    LongReg i == LongReg j = i==j
    FloatVecReg l1 i == FloatVecReg l2 j = l1==l2 && i==j
+   Int32VecReg l1 i == Int32VecReg l2 j = l1==l2 && i==j
    Sp == Sp = True
    SpLim == SpLim = True
    Hp == Hp = True
@@ -390,6 +395,7 @@ instance Ord GlobalReg where
    compare (DoubleReg i)       (DoubleReg j)      = compare i j
    compare (LongReg i)         (LongReg   j)      = compare i j
    compare (FloatVecReg l1 i)  (FloatVecReg l2 j) = compare (l1, i) (l2, j)
+   compare (Int32VecReg l1 i)  (Int32VecReg l2 j) = compare (l1, i) (l2, j)
    compare Sp Sp = EQ
    compare SpLim SpLim = EQ
    compare Hp Hp = EQ
@@ -412,6 +418,8 @@ instance Ord GlobalReg where
    compare _ (LongReg _)        = GT
    compare (FloatVecReg _ _) _  = LT
    compare _ (FloatVecReg _ _)  = GT
+   compare (Int32VecReg _ _) _  = LT
+   compare _ (Int32VecReg _ _)  = GT
    compare Sp _ = LT
    compare _ Sp = GT
    compare SpLim _ = LT
@@ -453,6 +461,7 @@ globalRegType (FloatReg _)             = cmmFloat W32
 globalRegType (DoubleReg _)            = cmmFloat W64
 globalRegType (LongReg _)              = cmmBits W64
 globalRegType (FloatVecReg l _)        = vec l (cmmFloat W32)
+globalRegType (Int32VecReg l _)        = vec l (cmmBits  W32)
 globalRegType Hp                       = gcWord  -- The initialiser for all
                                                  -- dynamically allocated
                                                  -- closures

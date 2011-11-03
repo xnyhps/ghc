@@ -180,6 +180,14 @@ stmtToInstrs stmt = do
     isVecExpr (CmmMachOp (MO_VF_Mul {}) _)    = True
     isVecExpr (CmmMachOp (MO_VF_Quot {}) _)   = True
     isVecExpr (CmmMachOp (MO_VF_Neg {}) _)    = True
+    isVecExpr (CmmMachOp (MO_VN_Add {}) _)    = True
+    isVecExpr (CmmMachOp (MO_VN_Sub {}) _)    = True
+    isVecExpr (CmmMachOp (MO_VN_Mul {}) _)    = True
+    isVecExpr (CmmMachOp (MO_VN_SQuot {}) _)  = True
+    isVecExpr (CmmMachOp (MO_VN_SRem {}) _)   = True
+    isVecExpr (CmmMachOp (MO_VN_UQuot {}) _)  = True
+    isVecExpr (CmmMachOp (MO_VN_URem {}) _)   = True
+    isVecExpr (CmmMachOp (MO_VN_Neg {}) _)    = True
     isVecExpr _                               = False
 
 

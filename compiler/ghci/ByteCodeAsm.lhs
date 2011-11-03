@@ -425,6 +425,7 @@ push_alts VoidArg         = bci_PUSH_ALTS_V
 push_alts LongArg         = bci_PUSH_ALTS_L
 push_alts PtrArg          = bci_PUSH_ALTS_P
 push_alts (FloatVecArg _) = error "push_alts: Float vector"
+push_alts (Int32VecArg _) = error "push_alts: Int32 vector"
 
 return_ubx :: CgRep -> Word16
 return_ubx NonPtrArg       = bci_RETURN_N
@@ -434,6 +435,7 @@ return_ubx VoidArg         = bci_RETURN_V
 return_ubx LongArg         = bci_RETURN_L
 return_ubx PtrArg          = bci_RETURN_P
 return_ubx (FloatVecArg _) = error "return_ubx: Float vector"
+return_ubx (Int32VecArg _) = error "return_ubx: Int32 vector"
 
 
 -- The size in 16-bit entities of an instruction.

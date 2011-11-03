@@ -100,6 +100,7 @@ primRepCmmType AddrRep         = bWord
 primRepCmmType FloatRep        = f32
 primRepCmmType DoubleRep       = f64
 primRepCmmType (FloatVecRep l) = vec l f32
+primRepCmmType (Int32VecRep l) = vec l f32
 
 typeCmmType :: Type -> CmmType
 typeCmmType ty = primRepCmmType (typePrimRep ty)
@@ -115,6 +116,7 @@ primRepForeignHint AddrRep         = AddrHint -- NB! AddrHint, but NonPtrArg
 primRepForeignHint FloatRep        = NoHint
 primRepForeignHint DoubleRep       = NoHint
 primRepForeignHint (FloatVecRep _) = NoHint
+primRepForeignHing (Int32VecRep _) = NoHint
 
 typeForeignHint :: Type -> ForeignHint
 typeForeignHint = primRepForeignHint . typePrimRep

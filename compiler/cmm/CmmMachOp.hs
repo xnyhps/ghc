@@ -113,6 +113,16 @@ data MachOp
   | MO_VF_Neg  Length Width             -- unary -
   | MO_VF_Mul  Length Width
   | MO_VF_Quot Length Width
+  
+  -- Float Int32 operations
+  | MO_VN_Add   Length Width  
+  | MO_VN_Sub   Length Width  
+  | MO_VN_Neg   Length Width             -- unary -
+  | MO_VN_Mul   Length Width
+  | MO_VN_SQuot Length Width
+  | MO_VN_SRem  Length Width
+  | MO_VN_UQuot Length Width
+  | MO_VN_URem  Length Width
   deriving (Eq, Show)
 
 pprMachOp :: MachOp -> SDoc
@@ -357,6 +367,15 @@ machOpResultType mop tys =
     MO_VF_Mul {}        -> ty1
     MO_VF_Quot {}       -> ty1
     MO_VF_Neg {}        -> ty1
+    
+    MO_VN_Add {}         -> ty1
+    MO_VN_Sub {}         -> ty1
+    MO_VN_Mul {}         -> ty1
+    MO_VN_SQuot {}       -> ty1
+    MO_VN_SRem {}        -> ty1
+    MO_VN_UQuot {}       -> ty1
+    MO_VN_URem {}        -> ty1
+    MO_VN_Neg {}         -> ty1
   where
     (ty1:_) = tys
 
@@ -432,6 +451,15 @@ machOpArgReps op =
     MO_VF_Mul  _ r      -> [r,r]
     MO_VF_Quot _ r      -> [r,r]
     MO_VF_Neg  _ r      -> [r]
+    
+    MO_VN_Add   _ r      -> [r,r]
+    MO_VN_Sub   _ r      -> [r,r]
+    MO_VN_Mul   _ r      -> [r,r]
+    MO_VN_SQuot _ r      -> [r,r]
+    MO_VN_SRem  _ r      -> [r,r]
+    MO_VN_UQuot _ r      -> [r,r]
+    MO_VN_URem  _ r      -> [r,r]
+    MO_VN_Neg   _ r      -> [r]
 
 -----------------------------------------------------------------------------
 -- CallishMachOp

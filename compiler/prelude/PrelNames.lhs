@@ -1359,6 +1359,10 @@ floatX4PrimTyConKey :: Unique
 
 floatX4PrimTyConKey = mkPreludeTyConUnique 157
 
+int32X4PrimTyConKey :: Unique
+
+int32X4PrimTyConKey = mkPreludeTyConUnique 158
+
 ---------------- Template Haskell -------------------
 --      USES TyConUniques 200-299
 -----------------------------------------------------

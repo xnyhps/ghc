@@ -201,6 +201,7 @@ dataReturnConvPrim LongArg         = CmmGlobal (LongReg 1)
 dataReturnConvPrim FloatArg        = CmmGlobal (FloatReg 1)
 dataReturnConvPrim DoubleArg       = CmmGlobal (DoubleReg 1)
 dataReturnConvPrim (FloatVecArg l) = CmmGlobal (FloatVecReg l 1)
+dataReturnConvPrim (Int32VecArg l) = CmmGlobal (Int32VecReg l 1)
 dataReturnConvPrim VoidArg         = panic "dataReturnConvPrim: void"
 
 

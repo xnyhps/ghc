@@ -767,6 +767,7 @@ data PrimRep
   | FloatRep
   | DoubleRep
   | FloatVecRep Int
+  | Int32VecRep Int
   deriving( Eq, Show )
 
 instance Outputable PrimRep where
@@ -781,6 +782,7 @@ primRepSizeW Word64Rep         = wORD64_SIZE `quot` wORD_SIZE
 primRepSizeW FloatRep          = 1    -- NB. might not take a full word
 primRepSizeW DoubleRep         = dOUBLE_SIZE `quot` wORD_SIZE
 primRepSizeW (FloatVecRep len) = len
+primRepSizeW (Int32VecRep len) = len
 primRepSizeW AddrRep           = 1
 primRepSizeW PtrRep            = 1
 primRepSizeW VoidRep           = 0

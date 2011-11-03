@@ -70,7 +70,8 @@ module TysPrim(
 	anyTy, anyTyCon, anyTyConOfKind, anyTypeOfKind,
 
         -- * SIMD
-	floatX4PrimTyCon,		floatX4PrimTy
+	floatX4PrimTyCon,		floatX4PrimTy,
+	int32X4PrimTyCon,		int32X4PrimTy
   ) where
 
 #include "HsVersions.h"
@@ -133,6 +134,7 @@ primTyCons
     , constraintKindTyCon
 
     , floatX4PrimTyCon
+    , int32X4PrimTyCon
     ]
 
 mkPrimTc :: FastString -> Unique -> TyCon -> Name
@@ -142,7 +144,7 @@ mkPrimTc fs unique tycon
 		  (ATyCon tycon)	-- Relevant TyCon
 		  UserSyntax		-- None are built-in syntax
 
-charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, realWorldTyConName, arrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, floatX4PrimTyConName :: Name
+charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, realWorldTyConName, arrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, floatX4PrimTyConName, int32X4PrimTyConName :: Name
 charPrimTyConName    	      = mkPrimTc (fsLit "Char#") charPrimTyConKey charPrimTyCon
 intPrimTyConName     	      = mkPrimTc (fsLit "Int#") intPrimTyConKey  intPrimTyCon
 int32PrimTyConName	      = mkPrimTc (fsLit "Int32#") int32PrimTyConKey int32PrimTyCon
@@ -169,6 +171,7 @@ bcoPrimTyConName 	      = mkPrimTc (fsLit "BCO#") bcoPrimTyConKey bcoPrimTyCon
 weakPrimTyConName  	      = mkPrimTc (fsLit "Weak#") weakPrimTyConKey weakPrimTyCon
 threadIdPrimTyConName  	      = mkPrimTc (fsLit "ThreadId#") threadIdPrimTyConKey threadIdPrimTyCon
 floatX4PrimTyConName        = mkPrimTc (fsLit "FloatX4#") floatX4PrimTyConKey floatX4PrimTyCon
+int32X4PrimTyConName		= mkPrimTc (fsLit "Int32X4#") int32X4PrimTyConKey int32X4PrimTyCon
 \end{code}
 
 %************************************************************************
@@ -716,4 +719,9 @@ floatX4PrimTy	:: Type
 floatX4PrimTy	= mkTyConTy floatX4PrimTyCon
 floatX4PrimTyCon :: TyCon
 floatX4PrimTyCon = pcPrimTyCon0 floatX4PrimTyConName (FloatVecRep 4)
+
+int32X4PrimTy	:: Type
+int32X4PrimTy	= mkTyConTy int32X4PrimTyCon
+int32X4PrimTyCon :: TyCon
+int32X4PrimTyCon = pcPrimTyCon0 int32X4PrimTyConName (Int32VecRep 4)
 \end{code}

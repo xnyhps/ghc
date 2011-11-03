@@ -1989,6 +1989,70 @@ primop  WriteOffAddrOp_FloatX4 "writeFloatX4OffAddr#" GenPrimOp
    Addr# -> Int# -> FloatX4# -> State# s -> State# s
    with has_side_effects = True
 
+primtype Int32X4#
+
+primop Int32X4PackOp "packInt32X4#" GenPrimOp         
+   Int32# -> Int32# -> Int32# -> Int32# -> Int32X4#
+   with
+   code_size = 4
+
+primop Int32X4UnpackOp "unpackInt32X4#" GenPrimOp         
+   Int32X4# -> (# Int32#, Int32#, Int32#, Int32# #)
+   with
+   code_size = 4
+
+primop Int32X4AddOp "plusInt32X4#" Dyadic            
+   Int32X4# -> Int32X4# -> Int32X4#
+   with commutable = True
+
+primop Int32X4SubOp "minusInt32X4#" Dyadic
+  Int32X4# -> Int32X4# -> Int32X4#
+
+primop Int32X4MulOp "timesInt32X4#" Dyadic    
+   Int32X4# -> Int32X4# -> Int32X4#
+   with commutable = True
+
+primop Int32X4SDivOp "divideSInt32X4#" Dyadic  
+   Int32X4# -> Int32X4# -> Int32X4#
+   with can_fail = True
+   
+primop Int32X4SRemOp "remainSInt32X4#" Dyadic  
+   Int32X4# -> Int32X4# -> Int32X4#
+   with can_fail = True
+   
+primop Int32X4UDivOp "divideUInt32X4#" Dyadic  
+   Int32X4# -> Int32X4# -> Int32X4#
+   with can_fail = True
+   
+primop Int32X4URemOp "remainUInt32X4#" Dyadic  
+   Int32X4# -> Int32X4# -> Int32X4#
+   with can_fail = True        
+
+primop Int32X4NegOp "negateInt32X4#" Monadic
+   Int32X4# -> Int32X4#
+
+primop IndexByteArrayOp_Int32X4 "indexInt32X4Array#" GenPrimOp
+   ByteArray# -> Int# -> Int32X4#
+
+primop ReadByteArrayOp_Int32X4 "readInt32X4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, Int32X4# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_Int32X4 "writeInt32X4Array#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int32X4# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_Int32X4 "indexInt32X4OffAddr#" GenPrimOp
+   Addr# -> Int# -> Int32X4#
+
+primop ReadOffAddrOp_Int32X4 "readInt32X4OffAddr#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, Int32X4# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_Int32X4 "writeInt32X4OffAddr#" GenPrimOp
+   Addr# -> Int# -> Int32X4# -> State# s -> State# s
+   with has_side_effects = True
+   
 ------------------------------------------------------------------------
 ---                                                                  ---
 ------------------------------------------------------------------------

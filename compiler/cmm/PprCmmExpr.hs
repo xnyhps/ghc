@@ -261,6 +261,7 @@ pprGlobalReg gr
         DoubleReg     n    -> char 'D' <> int n
         LongReg       n    -> char 'L' <> int n
         FloatVecReg l n    -> char 'F' <> int l <> char 'x' <> int n
+        Int32VecReg l n	   -> char 'N' <> int l <> char 'i' <> int n
         Sp                 -> ptext (sLit "Sp")
         SpLim              -> ptext (sLit "SpLim")
         Hp                 -> ptext (sLit "Hp")
