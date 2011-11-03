@@ -1953,6 +1953,20 @@ primop FloatX4AddOp "plusFloatX4#" Dyadic
    FloatX4# -> FloatX4# -> FloatX4#
    with commutable = True
 
+primop FloatX4SubOp "minusFloatX4#" Dyadic
+  FloatX4# -> FloatX4# -> FloatX4#
+
+primop FloatX4MulOp "timesFloatX4#" Dyadic    
+   FloatX4# -> FloatX4# -> FloatX4#
+   with commutable = True
+
+primop FloatX4DivOp "divideFloatX4#" Dyadic  
+   FloatX4# -> FloatX4# -> FloatX4#
+   with can_fail = True
+
+primop FloatX4NegOp "negateFloatX4#" Monadic
+   FloatX4# -> FloatX4#
+
 primop IndexByteArrayOp_FloatX4 "indexFloatX4Array#" GenPrimOp
    ByteArray# -> Int# -> FloatX4#
 

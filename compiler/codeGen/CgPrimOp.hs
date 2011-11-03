@@ -563,7 +563,11 @@ translateOp SameMutableByteArrayOp = Just mo_wordEq
 translateOp SameTVarOp             = Just mo_wordEq
 translateOp EqStablePtrOp          = Just mo_wordEq
 
-translateOp FloatX4AddOp = Just (MO_VF_Add 4 W32)
+translateOp FloatX4AddOp  = Just (MO_VF_Add  4 W32)
+translateOp FloatX4SubOp  = Just (MO_VF_Sub  4 W32)
+translateOp FloatX4MulOp  = Just (MO_VF_Mul  4 W32)
+translateOp FloatX4DivOp  = Just (MO_VF_Quot 4 W32)
+translateOp FloatX4NegOp  = Just (MO_VF_Neg  4 W32)
 
 translateOp _ = Nothing
 

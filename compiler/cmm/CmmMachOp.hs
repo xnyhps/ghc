@@ -104,11 +104,15 @@ data MachOp
   | MO_FF_Conv Width Width      -- Float -> Float
 
   -- Vector element insertion and extraction operations
-  | MO_V_Insert Length Width
+  | MO_V_Insert  Length Width
   | MO_V_Extract Length Width
 
   -- Float vector operations
-  | MO_VF_Add Length Width  
+  | MO_VF_Add  Length Width  
+  | MO_VF_Sub  Length Width  
+  | MO_VF_Neg  Length Width             -- unary -
+  | MO_VF_Mul  Length Width
+  | MO_VF_Quot Length Width
   deriving (Eq, Show)
 
 pprMachOp :: MachOp -> SDoc
@@ -349,6 +353,10 @@ machOpResultType mop tys =
     MO_V_Extract {}     -> vecType ty1
 
     MO_VF_Add {}        -> ty1
+    MO_VF_Sub {}        -> ty1
+    MO_VF_Mul {}        -> ty1
+    MO_VF_Quot {}       -> ty1
+    MO_VF_Neg {}        -> ty1
   where
     (ty1:_) = tys
 
@@ -416,7 +424,14 @@ machOpArgReps op =
     MO_FS_Conv from _   -> [from]
     MO_FF_Conv from _   -> [from]
 
-    MO_VF_Add _ r       -> [r,r]
+    MO_V_Insert  l r    -> [typeWidth (vec l (cmmFloat r)),r,wordWidth]
+    MO_V_Extract l r    -> [typeWidth (vec l (cmmFloat r)),wordWidth]
+
+    MO_VF_Add  _ r      -> [r,r]
+    MO_VF_Sub  _ r      -> [r,r]
+    MO_VF_Mul  _ r      -> [r,r]
+    MO_VF_Quot _ r      -> [r,r]
+    MO_VF_Neg  _ r      -> [r]
 
 -----------------------------------------------------------------------------
 -- CallishMachOp

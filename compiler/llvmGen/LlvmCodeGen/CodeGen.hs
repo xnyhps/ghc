@@ -754,6 +754,13 @@ genMachOp env _ op [x] = case op of
     MO_FF_Conv from to
         -> sameConv from (widthToLlvmFloat to) LM_Fptrunc LM_Fpext
 
+    MO_VF_Neg len w ->
+        let ty    = widthToLlvmFloat w
+            vecty = LMVector len ty
+            all0  = LMFloatLit (-0) ty
+            all0s = LMLitVar $ LMVectorLit (replicate len all0) vecty
+        in negate vecty all0s LM_MO_FSub    
+
     a -> panic $ "genMachOp: unmatched unary CmmMachOp! (" ++ show a ++ ")"
 
     where
@@ -879,7 +886,10 @@ genMachOp_slow env opt op [x, y] = case op of
     MO_U_Shr _ -> genBinMach LM_MO_LShr
     MO_S_Shr _ -> genBinMach LM_MO_AShr
 
-    MO_VF_Add _ _ -> genBinMach LM_MO_FAdd
+    MO_VF_Add _ _  -> genBinMach LM_MO_FAdd
+    MO_VF_Sub _ _  -> genBinMach LM_MO_FSub
+    MO_VF_Mul _ _  -> genBinMach LM_MO_FMul
+    MO_VF_Quot _ _ -> genBinMach LM_MO_FDiv
 
     a -> panic $ "genMachOp: unmatched binary CmmMachOp! (" ++ show a ++ ")"
 
