@@ -1,0 +1,102 @@
+
+OVERALL SUMMARY for test run started at Thu Nov  3 14:18:47 GMT 2011
+    3072 total tests, which gave rise to
+   11029 test cases, of which
+       0 caused framework failures
+    8270 were skipped
+
+    2647 expected passes
+      59 expected failures
+       0 unexpected passes
+      53 unexpected failures
+
+Unexpected failures:
+   arrows/should_compile      T5283 [exit code non-0] (normal)
+   arrows/should_compile      arrowform1 [exit code non-0] (normal)
+        corner_ty `eqType` mkTyVarTy w_tv
+        we deferred this equality
+
+   dph/diophantine            dph-diophantine-fast [exit code non-0] (normal)
+   ffi/should_fail            ccfail001 [stderr mismatch] (normal)
+   ffi/should_fail            ccfail002 [stderr mismatch] (normal)
+   ffi/should_fail            ccfail004 [stderr mismatch] (normal)
+   ffi/should_fail            ccfail005 [stderr mismatch] (normal)
+        fail in HEAD too
+
+   gadt                       rw [stderr mismatch] (normal)
+        output
+
+   ghci/scripts               T5045 [bad stderr] (ghci)
+        related to arrows
+
+   ghci/scripts               ghci042 [bad stderr] (ghci)
+        overwriting defs
+
+   indexed-types/should_fail  T2664 [stderr mismatch] (normal)
+   indexed-types/should_fail  T3330c [stderr mismatch] (normal)
+        output
+
+   perf/compiler              T3064 [stat not good enough] (normal)
+        bytes allocated 148168000 is more than maximum allowed 140000000
+
+   perf/compiler              T5030 [stat not good enough] (normal)
+        bytes allocated 1325917392 is more than maximum allowed 1300000000
+
+   rename/should_compile      T1792_imports [bad stdout] (normal)
+   rename/should_compile      T4239 [bad stdout] (normal)
+   rename/should_compile      T4240 [bad stdout] (normal)
+   safeHaskell/safeInfered    Mixed01 [exit code 0] (normal)
+   safeHaskell/safeInfered    UnsafeInfered01 [exit code 0] (normal)
+   safeHaskell/safeInfered    UnsafeInfered05 [exit code 0] (normal)
+   safeHaskell/safeInfered    UnsafeInfered06 [exit code 0] (normal)
+   safeHaskell/safeInfered    UnsafeInfered07 [exit code 0] (normal)
+   safeHaskell/safeInfered    UnsafeInfered09 [exit code 0] (normal)
+        fail in HEAD too
+
+   safeHaskell/safeLanguage   SafeLang12 [stderr mismatch] (normal)
+        output, unexpected
+
+   simplCore/should_compile   T5329 [exit code non-0] (normal)
+        Trans coercion mis-match
+
+   simplCore/should_compile   rule2 [stderr mismatch] (optasm)
+        output, unexpected
+
+   simplCore/should_run       T5315 [exit code non-0] (optasm)
+        Non-refl kind coercion
+
+   th                         T3467 [exit code non-0] (normal)
+   th                         T5126 [exit code non-0] (normal)
+        found a type of kind AnyK in an expression type signature: $(conT n)
+
+   typecheck/should_compile   T5490 [exit code non-0] (normal)
+        lint: Argument value doesn't match argument type
+
+   typecheck/should_compile   tc167 [exit code non-0] (normal)
+        kind error in f :: (->) Int# Int#
+        See TysPrime.funTyCon
+
+   typecheck/should_compile   tc258 [exit code non-0] (normal)
+        <<loop>> (introduced recently)
+        see -ddump-tc-trace; only happens with associated type defaults
+
+   typecheck/should_fail      T2688 [stderr mismatch] (normal)
+   typecheck/should_fail      T3540 [stderr mismatch] (normal)
+   typecheck/should_fail      T5570 [stderr mismatch] (normal)
+   typecheck/should_fail      T5573a [stderr mismatch] (normal)
+   typecheck/should_fail      mc19 [stderr mismatch] (normal)
+   typecheck/should_fail      mc21 [stderr mismatch] (normal)
+   typecheck/should_fail      mc22 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail065 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail068 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail103 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail122 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail123 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail158 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail179 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail191 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail192 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail193 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail201 [stderr mismatch] (normal)
+   typecheck/should_fail      tcfail206 [stderr mismatch] (normal)
+        output, should have a look
