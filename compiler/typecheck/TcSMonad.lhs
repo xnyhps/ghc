@@ -49,6 +49,7 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
+    getTcSEvVarCacheMap,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
@@ -982,6 +983,10 @@ getTcEvBinds = TcS (return . tcs_ev_binds)
 getTcSEvVarCache :: TcS (IORef (TypeMap (EvVar,CtFlavor)))
 getTcSEvVarCache = TcS (return . tcs_evvar_cache)
 
+getTcSEvVarCacheMap :: TcS (TypeMap (EvVar,CtFlavor))
+getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache 
+                         ; wrapTcS $ TcM.readTcRef cache_var }
+
 getUntouchables :: TcS TcsUntouchables
 getUntouchables = TcS (return . tcs_untch)
 
@@ -1025,10 +1030,16 @@ setEvBind :: EvVar -> EvTerm -> TcS ()
 -- Internal
 setEvBind ev t
   = do { tc_evbinds <- getTcEvBinds
-       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t 
-       ; traceTcS "setEvBind1" (ppr ev <+> dcolon <+> ppr (evVarPred ev))
-       ; traceTcS "setEvBind2" (hang (ppr ev <+> dcolon <+> ppr (evVarPred ev))
-                                   2 (equals <+> ppr t)) }
+       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t }
+
+  --      ; ev_cache_var <- getTcSEvVarCache
+  --      ; the_cache <- wrapTcS $ TcM.readTcRef ev_cache_var 
+  --      ; let new_cache = alterTM (evVarPred ev) x_upd the_cache
+  --      ; wrapTcS $ TcM.writeTcRef ev_cache_var new_cache 
+
+  --      }
+  -- where x_upd Nothing = Just (ev, Given unused_g unused_g)
+  --       unused_g = panic "setEvBind: should not have accessed this loc!"
 
 warnTcS :: CtLoc orig -> Bool -> SDoc -> TcS ()
 warnTcS loc warn_if doc 

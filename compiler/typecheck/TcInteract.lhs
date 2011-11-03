@@ -206,7 +206,7 @@ React with (F Int ~ b) ==> IR Stop True []    -- after substituting we re-canoni
 
 \begin{code}
 thePipeline :: [(String,SimplifierStage)]
-thePipeline = [ ("rewrite from inert eqs",   rewriteFromInertEqsStage) 
+thePipeline = [ ("rewrite from inert eqs",     rewriteFromInertEqsStage) 
                 -- Always ContinueWith a potentially rewritten item
               , ("canonicalization",        canonicalizationStage)
                 -- If ContinueWith, will be canonical 
@@ -1199,7 +1199,7 @@ doTopReact _inerts workItem@(CDictCan { cc_flavor = Derived loc
        }
 
 -- Wanted dictionary
-doTopReact inerts workItem@(CDictCan { cc_flavor = Wanted loc
+doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                                      , cc_class = cls, cc_tyargs = xis })
   -- See Note [MATCHING-SYNONYMS]
   = do { traceTcS "doTopReact" (ppr workItem)
@@ -1259,6 +1259,8 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = Wanted loc
                  ; setEvBind (cc_id workItem) ev_term 
                         -- Solved and new wanted work produced, you may cache the 
                         -- (tentatively solved) dictionary as Solved given.
+                 ; let solved = workItem { cc_flavor = solved_fl }
+                       solved_fl = mkSolvedFlavor fl UnkSkol
                  ; let ct_from_wev (EvVarX v fl)
                            = CNonCanonical { cc_id = v, cc_flavor = Wanted fl
                                            , cc_depth  = cc_depth workItem + 1 }
@@ -1266,8 +1268,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = Wanted loc
                  ; updWorkListTcS (appendWorkListCt wtvs_cts)
                  ; return $ 
                    SomeTopInt { tir_rule     = "Dict/Top (solved, more work)"
-                              , tir_new_item = Stop } } -- DONT cache in inerts the Solved item, now the cache is 
-                                                        -- based on evidence variables.
+                              , tir_new_item = ContinueWith solved } } -- Cache in inerts the Solved item
 
 -- Type functions
 doTopReact _inerts (CFunEqCan { cc_flavor = fl })
@@ -1299,9 +1300,11 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                                                                     , cc_depth = cc_depth workItem + 1} 
                                              in updWorkListTcS (extendWorkListEq ct))
 
+                                       ; let solved = workItem { cc_flavor = solved_fl }
+                                             solved_fl = mkSolvedFlavor fl UnkSkol
                                        ; return $ 
                                          SomeTopInt { tir_rule = "Fun/Top (solved, more work)"
-                                                    , tir_new_item = Stop } } -- DONT cache in inerts the Solved item
+                                                    , tir_new_item = ContinueWith solved } } -- Cache in inerts the Solved item
 
                        Given {} -> do { eqv' <- newGivenEqVar fl xi rhs_ty $ 
                                                 mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe

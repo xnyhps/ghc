@@ -1,6 +1,6 @@
 \begin{code}
 module TcCanonical(
-    canonicalize, rewriteFromInerts,
+    canonicalize, rewriteFromInerts, solveFromEvVars,
     canOccursCheck, canEq, 
     rewriteWithFunDeps,
     emitFDWorkAsWanted, emitFDWorkAsDerived,
@@ -28,6 +28,7 @@ import Control.Monad    ( when, unless, zipWithM, foldM )
 import MonadUtils
 import Control.Applicative ( (<|>) )
 
+import TrieMap
 import VarSet
 import HsBinds
 import TcSMonad
@@ -107,6 +108,22 @@ rewriteFromInerts ct
         ev = cc_id ct
         fl = cc_flavor ct
         d  = cc_depth ct
+
+
+solveFromEvVars :: Ct -> TcS StopOrContinue
+solveFromEvVars ct
+  = do { the_cache <- getTcSEvVarCacheMap
+       ; case lookupTM pty the_cache of 
+           Just (ev',fl') 
+               | fl' `canSolve` fl 
+               -> do { when (isWanted fl) $ setEvBind ev (EvId ev')
+                     ; return Stop }
+           _ -> continueWith ct 
+       }
+
+  where ev  = cc_id ct
+        pty = evVarPred ev
+        fl  = cc_flavor ct
 
 {-
 -- Caching from current evidence bindings
