@@ -211,7 +211,7 @@ isSubKind k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
       True
 
   | otherwise = -- handles usual kinds (*, #, (#), etc.)
-                ASSERT( null k1s && null k2s )
+                ASSERT2( null k1s && null k2s, ppr k1 <+> ppr k2 )
                 kc1 `isSubKindCon` kc2
 
 
@@ -287,7 +287,8 @@ isPromotableTyVar = isLiftedTypeKind . varType
 
 -- | Promotes a type to a kind. Assumes the argument is promotable.
 promoteType :: Type -> Kind
-promoteType (TyConApp tc tys) = mkTyConApp (promoteTyCon tc) (map promoteType tys)
+promoteType (TyConApp tc tys) = mkTyConApp (mkPromotedTypeTyCon tc) 
+                                           (map promoteType tys)
   -- T t1 .. tn  ~~>  'T k1 .. kn  where  ti ~~> ki
 promoteType (FunTy arg res) = mkArrowKind (promoteType arg) (promoteType res)
   -- t1 -> t2  ~~>  k1 -> k2  where  ti ~~> ki
@@ -299,9 +300,6 @@ promoteType _ = panic "promoteType"  -- argument was not kind-shaped
 
 promoteTyVar :: TyVar -> KindVar
 promoteTyVar tvar = mkKindVar (tyVarName tvar) tySuperKind
-
-promoteTyCon :: TyCon -> TyCon
-promoteTyCon = mkPromotedTypeTyCon
 
 -- If kind is [ *^n -> * ] returns [ Just n ], else returns [ Nothing ]
 isPromotableKind :: Kind -> Maybe Int

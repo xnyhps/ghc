@@ -562,9 +562,9 @@ kcHsLPredType pred = kc_check_lhs_type pred ekConstraint
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
 kcTyVar name         -- Could be a tyvar, a tycon, or a datacon
-  = do { -- traceTc "lk1" (ppr name)
+  = do { traceTc "lk1" (ppr name)
        ; thing <- tcLookup name
-       ; -- traceTc "lk2" (ppr name <+> ppr thing)
+       ; traceTc "lk2" (ppr name <+> ppr thing)
        ; case thing of
            ATyVar _ ty           -> wrap_mono (typeKind ty)
            AThing kind           -> wrap_mono kind
