@@ -1289,7 +1289,7 @@ decl    :: { Located (OrdList (LHsDecl RdrName)) }
                                         pat <- checkPattern e;
                                         return $ LL $ unitOL $ LL $ ValD $
                                                PatBind pat (unLoc $3)
-                                                       placeHolderType placeHolderNames } }
+                                                       placeHolderType placeHolderNames (Nothing,[]) } }
                                 -- Turn it all into an expression so that
                                 -- checkPattern can check that bangs are enabled
 

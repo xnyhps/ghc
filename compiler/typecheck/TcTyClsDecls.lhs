@@ -71,24 +71,24 @@ Note [Grouping of type and class declarations]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 tcTyAndClassDecls is called on a list of `TyClGroup`s. Each group is a strongly
-connected component of mutually dependent types and classes. We first kind-check
-each group separately, and then type-check all groups together at once.
+connected component of mutually dependent types and classes. We first kind check
+each group separately, and then type check all groups together at once.
 
-Why do we kind-check in groups of dependent types? Take the following example:
+Why do we kind check in groups of dependent types? Take the following example:
 
   type Id a = a
   data X = X (Id Int)
 
-If we were to kind-check the two declarations together, we would give Id the
+If we were to kind check the two declarations together, we would give Id the
 kind * -> *, since we apply it to an Int in the definition of X. But we can do
 better than that, since Id really is kind polymorphic, and should get kind
 forall (k::BOX). k -> k. Since it does not depend on anything else, it can be
-kind-checked by itself, hence getting the most general kind. We then kind-check
+kind-checked by itself, hence getting the most general kind. We then kind check
 X, which works fine because we then know the polymorphic kind of Id, and simply
 instantiate k to *.
 
-Why do we type-check all the groups together, after having kind-checked
-separately? Previously we type-checked each group right after kind-checking, but
+Why do we type check all the groups together, after having kind checked
+separately? Previously we type checked each group right after kind checking, but
 that's not correct. Take the following example:
 
   module A where
@@ -276,17 +276,17 @@ kcTyClGroup decls
         ; setLclEnv tcl_env $  do
 
 	   -- Step 3: kind-check the synonyms
-        ; mapM_ (wrapLocM kcTyClDecl) non_syn_decls
+        { mapM_ (wrapLocM kcTyClDecl) non_syn_decls
 
 	     -- Step 4: generalisation
 	     -- Kind checking done for this group
              -- Now we have to kind generalize the flexis
-        ; mapM generalise (tyClsBinders decls) }}
+        ; mapM generalise (tyClsBinders decls) }}}
 
   where
     generalise :: Name -> TcM (Name, Kind)
     generalise name
-      = do { traceTc "Generalise type of class" (ppr name)
+      = do { traceTc "Generalise type of" (ppr name)
            ; thing <- tcLookup name
            ; let kc_kind = case thing of
                                AThing k -> k
@@ -1481,9 +1481,9 @@ mkRecSelBinds tycons
 
 mkRecSelBind :: (TyCon, FieldLabel) -> (LSig Name, LHsBinds Name)
 mkRecSelBind (tycon, sel_name)
-  = (L loc (IdSig sel_id), unitBag (L loc sel_bind))
+  = (L sel_loc (IdSig sel_id), unitBag (L sel_loc sel_bind))
   where
-    loc    	= getSrcSpan tycon    
+    sel_loc     = getSrcSpan tycon
     sel_id 	= Var.mkExportedLocalVar rec_details sel_name 
                                          sel_ty vanillaIdInfo
     rec_details = RecSelId { sel_tycon = tycon, sel_naughty = is_naughty }
@@ -1512,15 +1512,15 @@ mkRecSelBind (tycon, sel_name)
     --    where cons_w_field = [C2,C7]
     sel_bind | is_naughty = mkTopFunBind sel_lname [mkSimpleMatch [] unit_rhs]
              | otherwise  = mkTopFunBind sel_lname (map mk_match cons_w_field ++ deflt)
-    mk_match con = mkSimpleMatch [L loc (mk_sel_pat con)] 
-                                 (L loc (HsVar field_var))
-    mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon rec_fields)
+    mk_match con = mkSimpleMatch [noLoc (mk_sel_pat con)]
+                                 (noLoc (HsVar field_var))
+    mk_sel_pat con = ConPatIn (noLoc (getName con)) (RecCon rec_fields)
     rec_fields = HsRecFields { rec_flds = [rec_field], rec_dotdot = Nothing }
     rec_field  = HsRecField { hsRecFieldId = sel_lname
                             , hsRecFieldArg = nlVarPat field_var
                             , hsRecPun = False }
-    sel_lname = L loc sel_name
-    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) loc
+    sel_lname = L sel_loc sel_name
+    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) sel_loc
 
     -- Add catch-all default case unless the case is exhaustive
     -- We do this explicitly so that we get a nice error message that
