@@ -18,7 +18,6 @@ import Id
 import Name
 import InstEnv
 import Class
-import TyCon ( isClassTyCon )
 import Avail
 import CoreSyn
 import CoreSubst
@@ -91,7 +90,6 @@ deSugar hsc_env
         ; let export_set = availsToNameSet exports
         ; let target = hscTarget dflags
         ; let hpcInfo = emptyHpcInfo other_hpc_info
-        ; let onlyTcs = [ tc | tc <- tcs, not (isClassTyCon tc) ]
 	; (msgs, mb_res)
               <- case target of
 	           HscNothing ->
