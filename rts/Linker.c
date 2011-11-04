@@ -740,6 +740,7 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_gc_gen)                         \
       SymI_HasProto(stg_gc_gen_info)                    \
       SymI_HasProto(stg_gc_gen_hp)                      \
+      SymI_HasProto(stg_gc_vec)                         \
       SymI_HasProto(stg_gc_ut)                          \
       SymI_HasProto(stg_gen_yield)                      \
       SymI_HasProto(stg_yield_noregs)                   \

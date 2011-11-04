@@ -15,6 +15,7 @@
 module CgTailCall (
 	cgTailCall, performTailCall,
 	performReturn, performPrimReturn,
+        returnVector, pushVector,
 	returnUnboxedTuple, ccallReturnUnboxedTuple,
 	pushUnboxedTuple,
 	tailCallPrimOp,
@@ -304,12 +305,34 @@ performReturn finish_code
 
 performPrimReturn :: CgRep -> CmmExpr	-- The thing to return
 		  -> Code
+performPrimReturn rep@(VecArg {}) amode = 
+  returnVector rep amode
+
 performPrimReturn rep amode
   =  do { whenC (not (isVoidArg rep))
 		(stmtC (CmmAssign ret_reg amode))
 	; performReturn emitReturnInstr }
   where
     ret_reg = dataReturnConvPrim rep
+
+-- ---------------------------------------------------------------------------
+-- Vector tuple returns
+
+returnVector :: CgRep -> CmmExpr  -- The thing to return
+             -> Code
+returnVector rep amode = do
+    (EndOfBlockInfo args_sp _sequel) <- getEndOfBlockInfo
+    (final_sp, assts) <- pushVector args_sp rep amode
+    emitSimultaneously assts
+    doFinalJump final_sp False{-not a LNE-} emitReturnInstr
+
+pushVector :: VirtualSpOffset          -- Sp at which to start pushing
+           -> CgRep -> CmmExpr         -- vector to push
+           -> FCode (VirtualSpOffset,  -- final Sp
+                     CmmStmts)         -- assignments (regs+stack)
+pushVector sp rep amode = do
+    (final_sp, nptr_assts) <- mkStkAmodes sp [(rep, amode)]
+    returnFC (final_sp, nptr_assts)
 
 -- ---------------------------------------------------------------------------
 -- Unboxed tuple returns

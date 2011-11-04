@@ -17,7 +17,7 @@ module CgHeapery (
 	getHpRelOffset,	hpRel,
 
 	funEntryChecks, thunkEntryChecks, 
-	altHeapCheck, unbxTupleHeapCheck, 
+	altHeapCheck, vectorHeapCheck, unbxTupleHeapCheck, 
 	hpChkGen, hpChkNodePointsAssignSp0,
 	stkChkGen, stkChkNodePoints,
 
@@ -372,17 +372,36 @@ altHeapCheck alt_type code
 	  FloatArg      -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_f1")
 	  DoubleArg     -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_d1")
 	  LongArg       -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_l1")
-	  FloatVecArg _ -> panic "altHeapCheck: Float vector"
-				-- R1 is boxed but unlifted: 
-	  Int32VecArg _ -> panic "altHeapCheck: Int32 vector"
-				-- R1 is boxed but unlifted: 
 	  PtrArg        -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unpt_r1")
 				-- R1 is unboxed:
 	  NonPtrArg     -> mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_unbx_r1")
+	  VecArg {}     -> panic "altHeapCheck: vector"
 
-    rts_label (UbxTupAlt _) = panic "altHeapCheck"
+    rts_label (UbxTupAlt _) = panic "altHeapCheck: unboxed tuple"
 \end{code}
 
+\begin{code}
+vectorHeapCheck :: WordOff  -- no. of stack slots containing nonptrs
+	        -> CmmStmts -- code to insert in the failure path
+	        -> Code
+	        -> Code
+vectorHeapCheck nptrs fail_code code
+  -- We can't manage more than 255 pointers/non-pointers 
+  -- in a generic heap check.
+  | nptrs > 255 = panic "altHeapCheck"
+  | otherwise = initHeapUsage $ \ hpHw -> do
+	{ codeOnly $ do { do_checks 0 {- no stack check -} hpHw
+				    full_fail_code rts_label
+			; tickyAllocHeap hpHw }
+	; setRealHp hpHw
+	; code }
+  where
+    full_fail_code  = fail_code `plusStmts` oneStmt assign_liveness
+    assign_liveness = CmmAssign (CmmGlobal (VanillaReg 9 VNonGcPtr)) 	-- Ho ho ho!
+				(CmmLit (mkWordCLit liveness))
+    liveness 	    = mkRegLiveness [] 0 nptrs
+    rts_label	    = CmmLit (CmmLabel (mkCmmCodeLabel rtsPackageId (fsLit "stg_gc_vec")))
+\end{code}
 
 Unboxed tuple alternatives and let-no-escapes (the two most annoying
 constructs to generate code for!)  For unboxed tuple returns, there

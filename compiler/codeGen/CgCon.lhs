@@ -11,7 +11,7 @@ with {\em constructors} on the RHSs of let(rec)s.  See also
 \begin{code}
 module CgCon (
         cgTopRhsCon, buildDynCon,
-        bindConArgs, bindUnboxedTupleComponents,
+        bindConArgs, bindVector, bindUnboxedTupleComponents,
         cgReturnDataCon,
         cgTyCon
     ) where
@@ -255,6 +255,40 @@ bindConArgs con args
         --
        ASSERT(not (isUnboxedTupleCon con)) return ()
        mapCs bind_arg args_w_offsets
+\end{code}
+
+We treat vectors much like unboxed tuples, except we don't pass their individual
+components in registers---we put the whole vector directly on the stack.
+
+\begin{code}
+bindVector :: Id                       -- Binder
+           -> FCode (WordOff,          -- Number of non-pointer stack slots
+                     VirtualSpOffset)  -- Offset of return address slot
+                                       -- (= realSP on entry)
+bindVector arg = do
+    vsp <- getVirtSp
+    rsp <- getRealSp
+    
+    let -- Allocate the vector on the stack
+        -- The real SP points to the return address, above which the vector will
+        -- be allocated
+        (nptr_sp, nptr_offsets) = mkVirtStkOffsets rsp (addIdReps [arg])
+        nptrs = nptr_sp - rsp
+
+    -- The stack pointer points to the last stack-allocated component
+    setRealAndVirtualSp nptr_sp
+
+    -- We have just allocated slots starting at real SP + 1, and set the new
+    -- virtual SP to the topmost allocated slot.
+    -- If the virtual SP started *below* the real SP, we've just jumped over
+    -- some slots that won't be in the free-list, so put them there
+    -- This commonly happens because we've freed the return-address slot
+    -- (trimming back the virtual SP), but the real SP still points to that slot
+    freeStackSlots [vsp+1,vsp+2 .. rsp]
+
+    bindArgsToStack nptr_offsets
+
+    returnFC (nptrs, rsp)
 \end{code}
 
 Unboxed tuples are handled slightly differently - the object is

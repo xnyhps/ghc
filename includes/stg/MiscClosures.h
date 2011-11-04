@@ -298,6 +298,7 @@ RTS_FUN_DECL(stg_gc_gen);
 RTS_RET(stg_ut_1_0_unreg);
 
 RTS_FUN_DECL(stg_gc_gen_hp);
+RTS_FUN_DECL(stg_gc_vec);
 RTS_FUN_DECL(stg_gc_ut);
 RTS_FUN_DECL(stg_gen_yield);
 RTS_FUN_DECL(stg_yield_noregs);

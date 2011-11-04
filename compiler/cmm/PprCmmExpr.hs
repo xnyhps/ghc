@@ -264,23 +264,21 @@ pprGlobalReg gr
 -- Temp Jan08
 --        VanillaReg n VNonGcPtr -> char 'R' <> int n
 --        VanillaReg n VGcPtr    -> char 'P' <> int n
-        FloatReg      n    -> char 'F' <> int n
-        DoubleReg     n    -> char 'D' <> int n
-        LongReg       n    -> char 'L' <> int n
-        FloatVecReg l n    -> char 'F' <> int l <> char 'x' <> int n
-        Int32VecReg l n	   -> char 'N' <> int l <> char 'i' <> int n
-        Sp                 -> ptext (sLit "Sp")
-        SpLim              -> ptext (sLit "SpLim")
-        Hp                 -> ptext (sLit "Hp")
-        HpLim              -> ptext (sLit "HpLim")
-        CurrentTSO         -> ptext (sLit "CurrentTSO")
-        CurrentNursery     -> ptext (sLit "CurrentNursery")
-        HpAlloc            -> ptext (sLit "HpAlloc")
+        FloatReg   n   -> char 'F' <> int n
+        DoubleReg  n   -> char 'D' <> int n
+        LongReg    n   -> char 'L' <> int n
+        Sp             -> ptext (sLit "Sp")
+        SpLim          -> ptext (sLit "SpLim")
+        Hp             -> ptext (sLit "Hp")
+        HpLim          -> ptext (sLit "HpLim")
+        CurrentTSO     -> ptext (sLit "CurrentTSO")
+        CurrentNursery -> ptext (sLit "CurrentNursery")
+        HpAlloc        -> ptext (sLit "HpAlloc")
         EagerBlackholeInfo -> ptext (sLit "stg_EAGER_BLACKHOLE_info")
-        GCEnter1           -> ptext (sLit "stg_gc_enter_1")
-        GCFun              -> ptext (sLit "stg_gc_fun")
-        BaseReg            -> ptext (sLit "BaseReg")
-        PicBaseReg         -> ptext (sLit "PicBaseReg")
+        GCEnter1       -> ptext (sLit "stg_gc_enter_1")
+        GCFun          -> ptext (sLit "stg_gc_fun")
+        BaseReg        -> ptext (sLit "BaseReg")
+        PicBaseReg     -> ptext (sLit "PicBaseReg")
 
 -----------------------------------------------------------------------------
 

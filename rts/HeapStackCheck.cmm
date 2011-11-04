@@ -489,6 +489,16 @@ stg_gc_gen
     GC_GENERIC
 }
 
+// A heap check at a vector return point.  The return address
+// is on the stack, and we can find it by using the offsets given
+// to us in the liveness mask.
+stg_gc_vec
+{
+    R10 = %ENTRY_CODE(Sp(RET_DYN_NONPTRS(R9) + RET_DYN_PTRS(R9)));
+    SAVE_EVERYTHING;
+    GC_GENERIC
+}
+
 // A heap check at an unboxed tuple return point.  The return address
 // is on the stack, and we can find it by using the offsets given
 // to us in the liveness mask.

@@ -97,33 +97,31 @@ import Compiler.Hoopl hiding ( Unique )
 ---------------------------------------------------
 
 primRepCmmType :: PrimRep -> CmmType
-primRepCmmType VoidRep         = panic "primRepCmmType:VoidRep"
-primRepCmmType PtrRep          = gcWord
-primRepCmmType IntRep          = bWord
-primRepCmmType WordRep         = bWord
-primRepCmmType Int64Rep        = b64
-primRepCmmType Word64Rep       = b64
-primRepCmmType AddrRep         = bWord
-primRepCmmType FloatRep        = f32
-primRepCmmType DoubleRep       = f64
-primRepCmmType (FloatVecRep l) = vec l f32
-primRepCmmType (Int32VecRep l) = vec l f32
+primRepCmmType VoidRep          = panic "primRepCmmType:VoidRep"
+primRepCmmType PtrRep           = gcWord
+primRepCmmType IntRep           = bWord
+primRepCmmType WordRep          = bWord
+primRepCmmType Int64Rep         = b64
+primRepCmmType Word64Rep        = b64
+primRepCmmType AddrRep          = bWord
+primRepCmmType FloatRep         = f32
+primRepCmmType DoubleRep        = f64
+primRepCmmType (VecRep len rep) = vec len (primRepCmmType rep)
 
 typeCmmType :: Type -> CmmType
 typeCmmType ty = primRepCmmType (typePrimRep ty)
 
 primRepForeignHint :: PrimRep -> ForeignHint
-primRepForeignHint VoidRep         = panic "primRepForeignHint:VoidRep"
-primRepForeignHint PtrRep          = AddrHint
-primRepForeignHint IntRep          = SignedHint
-primRepForeignHint WordRep         = NoHint
-primRepForeignHint Int64Rep        = SignedHint
-primRepForeignHint Word64Rep       = NoHint
-primRepForeignHint AddrRep         = AddrHint -- NB! AddrHint, but NonPtrArg
-primRepForeignHint FloatRep        = NoHint
-primRepForeignHint DoubleRep       = NoHint
-primRepForeignHint (FloatVecRep _) = NoHint
-primRepForeignHing (Int32VecRep _) = NoHint
+primRepForeignHint VoidRep     = panic "primRepForeignHint:VoidRep"
+primRepForeignHint PtrRep      = AddrHint
+primRepForeignHint IntRep      = SignedHint
+primRepForeignHint WordRep     = NoHint
+primRepForeignHint Int64Rep    = SignedHint
+primRepForeignHint Word64Rep   = NoHint
+primRepForeignHint AddrRep     = AddrHint -- NB! AddrHint, but NonPtrArg
+primRepForeignHint FloatRep    = NoHint
+primRepForeignHint DoubleRep   = NoHint
+primRepForeignHint (VecRep {}) = NoHint
 
 typeForeignHint :: Type -> ForeignHint
 typeForeignHint = primRepForeignHint . typePrimRep

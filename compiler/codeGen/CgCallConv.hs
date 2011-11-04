@@ -209,14 +209,13 @@ slowCallPattern _ 					= panic "CgStackery.slowCallPattern"
 -------------------------------------------------------------------------
 
 dataReturnConvPrim :: CgRep -> CmmReg
-dataReturnConvPrim PtrArg          = CmmGlobal (VanillaReg 1 VGcPtr)
-dataReturnConvPrim NonPtrArg       = CmmGlobal (VanillaReg 1 VNonGcPtr)
-dataReturnConvPrim LongArg         = CmmGlobal (LongReg 1)
-dataReturnConvPrim FloatArg        = CmmGlobal (FloatReg 1)
-dataReturnConvPrim DoubleArg       = CmmGlobal (DoubleReg 1)
-dataReturnConvPrim (FloatVecArg l) = CmmGlobal (FloatVecReg l 1)
-dataReturnConvPrim (Int32VecArg l) = CmmGlobal (Int32VecReg l 1)
-dataReturnConvPrim VoidArg         = panic "dataReturnConvPrim: void"
+dataReturnConvPrim PtrArg      = CmmGlobal (VanillaReg 1 VGcPtr)
+dataReturnConvPrim NonPtrArg   = CmmGlobal (VanillaReg 1 VNonGcPtr)
+dataReturnConvPrim LongArg     = CmmGlobal (LongReg 1)
+dataReturnConvPrim FloatArg    = CmmGlobal (FloatReg 1)
+dataReturnConvPrim DoubleArg   = CmmGlobal (DoubleReg 1)
+dataReturnConvPrim VoidArg     = panic "dataReturnConvPrim: void"
+dataReturnConvPrim (VecArg {}) = panic "dataReturnConvPrim: vector"
 
 
 -- getSequelAmode returns an amode which refers to an info table.  The info
@@ -290,7 +289,7 @@ assignReturnRegs args
  -- Also, the bytecode compiler assumes this when compiling
  -- case expressions and ccalls, so it only needs to know one set of
  -- return conventions.
- | [(rep,arg)] <- non_void_args, CmmGlobal r <- dataReturnConvPrim rep
+ | [(rep,arg)] <- non_void_args, not (isVecArg rep), CmmGlobal r <- dataReturnConvPrim rep
     = ([(arg, r)], [])
  | otherwise
     = assign_regs args (mkRegTbl [])
@@ -298,6 +297,9 @@ assignReturnRegs args
 	-- we use all regs
  where 
        non_void_args = filter ((/= VoidArg).fst) args
+       
+       isVecArg (VecArg {}) = True
+       isVecArg _           = False
 
 assign_regs :: [(CgRep,a)]     	-- Arg or result values to assign
 	    -> AvailRegs	-- Regs still avail: Vanilla, Float, Double, Longs
@@ -313,14 +315,17 @@ assign_regs args supply
 		Just (reg, supply') -> go args ((arg,reg):acc) supply'
 		Nothing	   	    -> (acc, (rep,arg):args) 	-- No more regs
 
+-- XXX We bail fitting the rest of the return values in registers as soon as we
+-- hit one return value that won't fit...
 assign_reg :: CgRep -> AvailRegs -> Maybe (GlobalReg, AvailRegs)
-assign_reg FloatArg  (vs, f:fs, ds, ls) = Just (FloatReg f,   (vs, fs, ds, ls))
-assign_reg DoubleArg (vs, fs, d:ds, ls) = Just (DoubleReg d,  (vs, fs, ds, ls))
-assign_reg LongArg   (vs, fs, ds, l:ls) = Just (LongReg l,    (vs, fs, ds, ls))
-assign_reg PtrArg    (v:vs, fs, ds, ls) = Just (VanillaReg v VGcPtr, (vs, fs, ds, ls))
-assign_reg NonPtrArg (v:vs, fs, ds, ls) = Just (VanillaReg v VNonGcPtr, (vs, fs, ds, ls))
+assign_reg FloatArg    (vs, f:fs, ds, ls) = Just (FloatReg f,   (vs, fs, ds, ls))
+assign_reg DoubleArg   (vs, fs, d:ds, ls) = Just (DoubleReg d,  (vs, fs, ds, ls))
+assign_reg LongArg     (vs, fs, ds, l:ls) = Just (LongReg l,    (vs, fs, ds, ls))
+assign_reg PtrArg      (v:vs, fs, ds, ls) = Just (VanillaReg v VGcPtr, (vs, fs, ds, ls))
+assign_reg NonPtrArg   (v:vs, fs, ds, ls) = Just (VanillaReg v VNonGcPtr, (vs, fs, ds, ls))
+assign_reg (VecArg {}) _                  = Nothing
     -- PtrArg and NonPtrArg both go in a vanilla register
-assign_reg _         _                  = Nothing
+assign_reg _           _                  = Nothing
 
 
 -------------------------------------------------------------------------

@@ -411,20 +411,39 @@ cgEvalAlts :: Maybe VirtualSpOffset	-- Offset of cost-centre to be restored, if 
 				-- to be a label so that we can duplicate it 
 				-- without risk of duplicating code
 
-cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
-  = do	{ let   rep = tyConCgRep tycon
-		reg = dataReturnConvPrim rep	-- Bottom for voidRep
+cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts =
+    cgEvalPrimAlts (tyConCgRep tycon) alts
+  where
+    cgEvalPrimAlts :: CgRep -> [StgAlt] -> FCode Sequel
+    cgEvalPrimAlts (VecArg {}) [(_,[],_,rhs)] = do
+        abs_c <- forkProc $ do
+            (nptrs, _) <- bindVector bndr
+            -- Restore the CC *after* binding the vector, so that we get the
+            -- stack offset of the saved CC right.
+            restoreCurrentCostCentre cc_slot True
+            -- Generate a heap check if necessary and finally the code for the
+            -- alternative
+            vectorHeapCheck nptrs noStmts (cgExpr rhs)
+        lbl <- emitReturnTarget (idName bndr) abs_c
+        returnFC (CaseAlts lbl Nothing bndr)
 
-	; abs_c <- forkProc $ do
-		{ 	-- Bind the case binder, except if it's void
-			-- (reg is bottom in that case)
-		  whenC (nonVoidArg rep) $
-		  bindNewToReg bndr reg (mkLFArgument bndr)
-		; restoreCurrentCostCentre cc_slot True
-		; cgPrimAlts GCMayHappen alt_type reg alts }
+    cgEvalPrimAlts (VecArg {}) _ =
+        panic $ "cgEvalPrimAlts: bad vector case alternative"
 
-	; lbl <- emitReturnTarget (idName bndr) abs_c
-	; returnFC (CaseAlts lbl Nothing bndr) }
+    cgEvalPrimAlts rep alts = do
+        abs_c <- forkProc $ do
+            -- Bind the case binder, except if it's void (reg is bottom in that
+            -- case)
+            whenC (nonVoidArg rep) $
+                bindNewToReg bndr reg (mkLFArgument bndr)
+            restoreCurrentCostCentre cc_slot True
+            cgPrimAlts GCMayHappen alt_type reg alts
+
+        lbl <- emitReturnTarget (idName bndr) abs_c
+        returnFC (CaseAlts lbl Nothing bndr)
+      where
+        reg :: CmmReg
+        reg = dataReturnConvPrim rep  -- Bottom for voidRep
 
 cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
   =	-- Unboxed tuple case
