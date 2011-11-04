@@ -37,6 +37,8 @@ import TcSMonad
 import Maybes( orElse )
 import Bag
 
+import Control.Monad ( foldM )
+import TrieMap
 
 import Control.Monad( when )
 import UniqFM
@@ -74,9 +76,35 @@ If in Step 1 no such element exists, we have exceeded our context-stack
 depth and will simply fail.
 \begin{code}
 
-solveInteractCts :: [Ct] -> TcS () 
+solveInteractCts :: [Ct] -> TcS ()
 solveInteractCts cts 
-  = updWorkListTcS (appendWorkListCt cts) >> solveInteract
+  = do { evvar_cache <- getTcSEvVarCacheMap
+       ; (cts_thinner, new_evvar_cache) <- add_cts_in_cache evvar_cache cts
+       ; traceTcS "solveInteractCts" (vcat [ text "cts_original =" <+> ppr cts, 
+                                             text "cts_thinner  =" <+> ppr cts_thinner
+                                           ])
+                 
+       ; setTcSEvVarCacheMap new_evvar_cache 
+       ; updWorkListTcS (appendWorkListCt cts_thinner) >> solveInteract }
+ 
+  where add_cts_in_cache evvar_cache = foldM solve_or_cache ([],evvar_cache)
+        solve_or_cache :: ([Ct],TypeMap (EvVar,CtFlavor)) 
+                       -> Ct
+                       -> TcS ([Ct],TypeMap (EvVar,CtFlavor))
+        solve_or_cache (acc_cts,acc_cache) ct
+          | isIPPred pty
+          = return (ct:acc_cts,acc_cache) -- Do not use the cache, 
+                                          -- nor update it for IPPreds due to subtle shadowing
+          | Just (ev',fl') <- lookupTM pty acc_cache
+          , fl' `canSolve` fl
+          , isWanted fl
+          = do { setEvBind ev (EvId ev')
+               ; return (acc_cts,acc_cache) }
+          | otherwise -- If it's a given keep it in the work list, even if it exist in the cache!
+          = return (ct:acc_cts, alterTM pty (\_ -> Just (ev,fl)) acc_cache)
+          where fl = cc_flavor ct
+                ev = cc_id ct
+                pty = evVarPred ev
 
 
 solveInteractGiven :: GivenLoc -> [EvVar] -> TcS () 
@@ -210,7 +238,7 @@ thePipeline = [ ("rewrite from inert eqs",     rewriteFromInertEqsStage)
                 -- Always ContinueWith a potentially rewritten item
               , ("canonicalization",        canonicalizationStage)
                 -- If ContinueWith, will be canonical 
-              , ("interact with inert eqs", interactWithInertEqsStage)
+              , ("interact the inert eqs", interactWithInertEqsStage)
                 -- If ContinueWith, will be wanted/derived eq or non-eq
                 -- but can't rewrite not can be rewritten by the inerts
               , ("spontaneous solve",       spontaneousSolveStage)
@@ -1259,8 +1287,8 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                  ; setEvBind (cc_id workItem) ev_term 
                         -- Solved and new wanted work produced, you may cache the 
                         -- (tentatively solved) dictionary as Solved given.
-                 ; let solved = workItem { cc_flavor = solved_fl }
-                       solved_fl = mkSolvedFlavor fl UnkSkol
+                 ; let _solved = workItem { cc_flavor = _solved_fl }
+                       _solved_fl = mkSolvedFlavor fl UnkSkol
                  ; let ct_from_wev (EvVarX v fl)
                            = CNonCanonical { cc_id = v, cc_flavor = Wanted fl
                                            , cc_depth  = cc_depth workItem + 1 }
@@ -1268,7 +1296,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                  ; updWorkListTcS (appendWorkListCt wtvs_cts)
                  ; return $ 
                    SomeTopInt { tir_rule     = "Dict/Top (solved, more work)"
-                              , tir_new_item = ContinueWith solved } } -- Cache in inerts the Solved item
+                              , tir_new_item = Stop } } -- Cache in inerts the Solved item
 
 -- Type functions
 doTopReact _inerts (CFunEqCan { cc_flavor = fl })
@@ -1300,11 +1328,11 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                                                                     , cc_depth = cc_depth workItem + 1} 
                                              in updWorkListTcS (extendWorkListEq ct))
 
-                                       ; let solved = workItem { cc_flavor = solved_fl }
-                                             solved_fl = mkSolvedFlavor fl UnkSkol
+                                       ; let _solved = workItem { cc_flavor = _solved_fl }
+                                             _solved_fl = mkSolvedFlavor fl UnkSkol
                                        ; return $ 
                                          SomeTopInt { tir_rule = "Fun/Top (solved, more work)"
-                                                    , tir_new_item = ContinueWith solved } } -- Cache in inerts the Solved item
+                                                    , tir_new_item = Stop } } -- Cache in inerts the Solved item
 
                        Given {} -> do { eqv' <- newGivenEqVar fl xi rhs_ty $ 
                                                 mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe

@@ -34,6 +34,8 @@ import BasicTypes       ( RuleName )
 import Control.Monad    ( when )
 import Outputable
 import FastString
+import TrieMap
+
 \end{code}
 
 
@@ -355,12 +357,27 @@ mkMinimalBySCs does. Then, simplifyInfer uses the minimal constraint
 to check the original wanted.
 
 \begin{code}
+
 simplifyWithApprox :: WantedConstraints -> TcS WantedConstraints
 simplifyWithApprox wanted
  = do { traceTcS "simplifyApproxLoop" (ppr wanted)
 
-      ; results <- solve_wanteds wanted 
+      ; let all_flats = wc_flat wanted `unionBags` keepWanted (wc_insol wanted) 
+      ; solveInteractCts $ bagToList all_flats
+      ; unsolved_implics <- simpl_loop 1 (wc_impl wanted)
+      ; let (residual_implics,floats) = approximateImplications unsolved_implics
 
+      -- Solve extra stuff for real: notice that all the extra unsolved constraints will 
+      -- be in the inerts of the monad, so we are OK
+      ; solve_wanteds (WC { wc_flat  = floats -- They are floated so they are not in the evvar cache
+                          , wc_impl  = residual_implics
+                          , wc_insol = emptyBag })
+      }
+
+
+{-
+     ; results <- solve_wanteds wanted 
+ 
       ; let (residual_implics, floats) = approximateImplications (wc_impl results)
 
         -- If no new work was produced then we are done with simplifyApproxLoop
@@ -371,6 +388,8 @@ simplifyWithApprox wanted
                 (WC { wc_flat = floats `unionBags` wc_flat results
                     , wc_impl = residual_implics
                     , wc_insol = emptyBag }) }
+-}
+
 
 approximateImplications :: Bag Implication -> (Bag Implication, Cts)
 -- Extracts any nested constraints that don't mention the skolems
@@ -731,31 +750,39 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
             , wc_impl  = mapBag (substImplication subst) unsolved_implics
             , wc_insol = mapBag (substCt subst) insoluble_flats }
        }
-  where
-    simpl_loop :: Int
-               -> Bag Implication
-               -> TcS (Bag Implication)
-    simpl_loop n implics
-      | n > 10 
-      = traceTcS "solveWanteds: loop!" empty >> return implics
-      | otherwise 
-      = do { (implic_eqs, unsolved_implics) <- solveNestedImplications implics
 
-           ; inerts <- getTcSInerts
-           ; let ((_,unsolved_flats),_) = extractUnsolved inerts
+simpl_loop :: Int
+           -> Bag Implication
+           -> TcS (Bag Implication)
+simpl_loop n implics
+  | n > 10 
+  = traceTcS "solveWanteds: loop!" empty >> return implics
+  | otherwise 
+  = do { (implic_eqs, unsolved_implics) <- solveNestedImplications implics
 
-           ; improve_eqs <- if not (isEmptyBag implic_eqs)
-                            then return implic_eqs
-                            else applyDefaultingRules unsolved_flats
+       ; inerts <- getTcSInerts
+       ; let ((_,unsolved_flats),_) = extractUnsolved inerts
 
-           ; traceTcS "solveWanteds: simpl_loop end" $
-                 vcat [ text "improve_eqs      =" <+> ppr improve_eqs
-                      , text "unsolved_flats   =" <+> ppr unsolved_flats
-                      , text "unsolved_implics =" <+> ppr unsolved_implics ]
+       ; ecache_pre <- getTcSEvVarCacheMap
+       ; let pr = ppr ((\k z m -> foldTM k m z) (:) [] ecache_pre)
+       ; traceTcS "ecache_pre"  $ pr
 
-           ; if isEmptyBag improve_eqs then return unsolved_implics 
-             else do { solveInteractCts $ bagToList improve_eqs
-                     ; simpl_loop (n+1) unsolved_implics } }
+       ; improve_eqs <- if not (isEmptyBag implic_eqs)
+                        then return implic_eqs
+                        else applyDefaultingRules unsolved_flats
+
+       ; ecache_post <- getTcSEvVarCacheMap
+       ; let po = ppr ((\k z m -> foldTM k m z) (:) [] ecache_post)
+       ; traceTcS "ecache_po"  $ po
+
+       ; traceTcS "solveWanteds: simpl_loop end" $
+             vcat [ text "improve_eqs      =" <+> ppr improve_eqs
+                  , text "unsolved_flats   =" <+> ppr unsolved_flats
+                  , text "unsolved_implics =" <+> ppr unsolved_implics ]
+
+       ; if isEmptyBag improve_eqs then return unsolved_implics 
+         else do { solveInteractCts $ bagToList improve_eqs
+                 ; simpl_loop (n+1) unsolved_implics } }
 
 solveNestedImplications :: Bag Implication
                         -> TcS (Cts, Bag Implication)
@@ -768,7 +795,7 @@ solveNestedImplications implics
   = do { inerts <- getTcSInerts
        ; let ((_insoluble_flats, unsolved_flats),thinner_inerts) = extractUnsolved inerts 
 
-       ; (implic_eqs, unsolved_implics) 
+       ; (implic_eqs, unsolved_implics)
            <- doWithInert thinner_inerts $ 
               do { let pushed_givens = givens_from_wanteds unsolved_flats
                        tcs_untouchables = filterVarSet isFlexiTcsTv $ 
@@ -1140,19 +1167,53 @@ applyDefaultingRules wanteds
   | isEmptyBag wanteds 
   = return emptyBag
   | otherwise
-  = do { untch <- getUntouchables
-       ; tv_cts <- mapM (defaultTyVar untch) $
+  = do { traceTcS "applyDefaultingRules { " $ 
+                  text "wanteds =" <+> ppr wanteds
+       ; untch <- getUntouchables
+       ; tv_cts <- tryTcS $  -- Why tryTcS? See Note [tryTcS in defaulting] 
+                   mapM (defaultTyVar untch) $
                    varSetElems (tyVarsOfCDicts wanteds)
 
        ; info@(_, default_tys, _) <- getDefaultInfo
        ; let groups = findDefaultableGroups info untch wanteds
-       ; deflt_cts <- mapM (disambigGroup default_tys) groups
+       ; traceTcS "findDefaultableGroups" $ vcat [ text "groups=" <+> ppr groups
+                                                 , text "untouchables=" <+> ppr  untch 
+                                                 , text "info=" <+> ppr info ]
+       ; deflt_cts <- tryTcS $ -- Why tryTcS? See Note [tryTcS in defaulting]
+                      mapM (disambigGroup default_tys) groups
 
-       ; traceTcS "deflt2" (vcat [ text "Tyvar defaults =" <+> ppr tv_cts
-                                 , text "Type defaults =" <+> ppr deflt_cts])
+       ; traceTcS "applyDefaultingRules }" $ 
+                  vcat [ text "Tyvar defaults =" <+> ppr tv_cts
+                       , text "Type defaults =" <+> ppr deflt_cts]
 
        ; return (unionManyBags deflt_cts `unionBags` unionManyBags tv_cts) }
+\end{code}
 
+Note [tryTcS in defaulting]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+defaultTyVar and disambigGroup create new evidence variables for
+default equations, and hence update the EvVar cache. However, after
+applyDefaultingRules we will try to solve these default equations
+using solveInteractCts, which will consult the cache and solve those
+EvVars from themselves! That's wrong.
+
+To avoid this problem we guard defaulting under a @tryTcS@ which leaves
+the original cache unmodified.
+
+There is a second reason for @tryTcS@ in defaulting: disambGroup does
+some constraint solving to determine if a default equation is
+``useful'' in solving some wanted constraints, but we want to
+discharge all evidence and unifications that may have happened during
+this constraint solving.
+
+Finally, @tryTcS@ importantly does not inherit the original cache from
+the higher level but makes up a new cache, the reason is that disambigGroup
+will call solveInteractCts so the new derived and the wanteds must not be 
+in the cache!
+
+
+\begin{code}
 ------------------
 defaultTyVar :: TcsUntouchables -> TcTyVar -> TcS Cts
 -- defaultTyVar is used on any un-instantiated meta type variables to
@@ -1216,10 +1277,15 @@ findDefaultableGroups (ctxt, default_tys, (ovl_strings, extended_defaults))
     cmp_tv (_,tv1) (_,tv2) = tv1 `compare` tv2
 
     is_defaultable_group ds@((_,tv):_)
-        = isTyConableTyVar tv	-- Note [Avoiding spurious errors]
-        && not (tv `elemVarSet` bad_tvs)
-        && isTouchableMetaTyVar_InRange untch tv 
-        && defaultable_classes [cc_class cc | (cc,_) <- ds]
+        = let b1 = isTyConableTyVar tv	-- Note [Avoiding spurious errors]
+              b2 = not (tv `elemVarSet` bad_tvs)
+              b3 = isTouchableMetaTyVar_InRange untch tv 
+              b4 = defaultable_classes [cc_class cc | (cc,_) <- ds]
+          in pprTrace "is_defaultable_group" (vcat [ text "isTyConable   " <+> ppr tv <+> ppr b1 
+                                                   , text "is not in bad " <+> ppr tv <+> ppr b2 
+                                                   , text "is touchable  " <+> ppr tv <+> ppr b3
+                                                   , text "is defaultable" <+> ppr tv <+> ppr b4 ]) 
+                                             (b1 && b2 && b3 && b4)
     is_defaultable_group [] = panic "defaultable_group"
 
     defaultable_classes clss 
@@ -1235,7 +1301,8 @@ findDefaultableGroups (ctxt, default_tys, (ovl_strings, extended_defaults))
     -- is_num_class adds IsString to the standard numeric classes, 
     -- when -foverloaded-strings is enabled
 
-    is_std_class cls = isStandardClass cls || (ovl_strings && (cls `hasKey` isStringClassKey))
+    is_std_class cls = let b = isStandardClass cls || (ovl_strings && (cls `hasKey` isStringClassKey))
+                       in pprTrace "is_std_class" (text "cls =" <+> ppr cls <+> ppr b) $ b
     -- Similarly is_std_class
 
 ------------------------------
@@ -1250,15 +1317,20 @@ disambigGroup (default_ty:default_tys) group
   = do { traceTcS "disambigGroup" (ppr group $$ ppr default_ty)
        ; let der_flav = mk_derived_flavor (cc_flavor the_ct) 
        ; eqv <- TcSMonad.newEqVar der_flav (mkTyVarTy the_tv) default_ty
+
        ; let derived_eq 
                | isNewEvVar eqv 
                = [ CNonCanonical { cc_id = evc_the_evvar eqv
                                  , cc_flavor = der_flav, cc_depth = 0 } ]
                | otherwise 
                = []
-       ; success <- tryTcS $
-                    do { solveInteractCts (derived_eq ++ wanteds)
+       ; success <- tryTcS $ 
+                    do { traceTcS "disambigGroup (solving) {" 
+                                  (text "trying to solve constraints along with default equations ...") 
+                       ; solveInteractCts (derived_eq ++ wanteds)
                        ; (_,unsolved) <- extractUnsolvedTcS 
+                       ; traceTcS "disambigGroup (solving) }"
+                                  (text "disambigGroup unsolved =" <+> ppr (keepWanted unsolved))
                        ; return (isEmptyBag (keepWanted unsolved)) } 
                                             -- Don't care about Derived's
        ; case success of

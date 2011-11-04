@@ -49,7 +49,7 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
-    getTcSEvVarCacheMap,
+    getTcSEvVarCacheMap, setTcSEvVarCacheMap,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
@@ -867,6 +867,7 @@ doWithInert inert (TcS action)
 nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a 
 nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside) 
   = TcS $ \ TcSEnv { tcs_ty_binds = ty_binds
+                   , tcs_evvar_cache = orig_evvar_cache_var
                    , tcs_untch = (_outer_range, outer_tcs)
                    , tcs_count = count
                    , tcs_ic_depth = idepth
@@ -883,11 +884,12 @@ nestImplicTcS ref (inner_range, inner_tcs) (TcS thing_inside)
        ; orig_inerts <- TcM.readTcRef inert_var
        ; new_inert_var <- TcM.newTcRef orig_inerts
                           
-         -- Make a new cache
-       ; ev_var_cache <- TcM.newTcRef emptyTM
-                             
+         -- Inherit EvVar cache
+       ; orig_evvar_cache <- TcM.readTcRef orig_evvar_cache_var
+       ; evvar_cache <- TcM.newTcRef orig_evvar_cache
+ 
        ; let nest_env = TcSEnv { tcs_ev_binds    = ref
-                               , tcs_evvar_cache = ev_var_cache
+                               , tcs_evvar_cache = evvar_cache
                                , tcs_ty_binds    = ty_binds
                                , tcs_untch       = inner_untch
                                , tcs_count       = count
@@ -922,7 +924,10 @@ tryTcS tcs
 
                 ; ty_binds_var <- TcM.newTcRef emptyVarEnv
                 ; ev_binds_var <- TcM.newTcEvBinds
+
                 ; ev_binds_cache_var <- TcM.newTcRef emptyTM
+                    -- Empty cache: Don't inherit cache from above, see 
+                    -- Note [tryTcS for defaulting] in TcSimplify
 
                 ; let env1 = env { tcs_ev_binds = ev_binds_var
                                  , tcs_evvar_cache = ev_binds_cache_var
@@ -986,6 +991,10 @@ getTcSEvVarCache = TcS (return . tcs_evvar_cache)
 getTcSEvVarCacheMap :: TcS (TypeMap (EvVar,CtFlavor))
 getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache 
                          ; wrapTcS $ TcM.readTcRef cache_var }
+
+setTcSEvVarCacheMap :: TypeMap (EvVar,CtFlavor) -> TcS () 
+setTcSEvVarCacheMap cache = do { cache_var <- getTcSEvVarCache 
+                               ; wrapTcS $ TcM.writeTcRef cache_var cache }
 
 getUntouchables :: TcS TcsUntouchables
 getUntouchables = TcS (return . tcs_untch)
@@ -1209,8 +1218,10 @@ newEvVar fl pty
 
         do_update_cache eref ecache
           = do { new_evvar <- wrapTcS (TcM.newEvVar pty)
-               ; let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) ecache
-               ; wrapTcS (TcM.writeTcRef eref ecache')
+                 -- Only update the cache if not an IP
+               ; when (not (isIPPred pty)) $
+                   do { let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) ecache  
+                      ; wrapTcS (TcM.writeTcRef eref ecache') } 
                ; return (EvVarCreated True new_evvar) }
 
 newGivenEqVar :: CtFlavor -> TcType -> TcType -> Coercion -> TcS EvVar
