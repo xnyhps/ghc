@@ -83,7 +83,6 @@ solveInteractCts cts
        ; traceTcS "solveInteractCts" (vcat [ text "cts_original =" <+> ppr cts, 
                                              text "cts_thinner  =" <+> ppr cts_thinner
                                            ])
-                 
        ; setTcSEvVarCacheMap new_evvar_cache 
        ; updWorkListTcS (appendWorkListCt cts_thinner) >> solveInteract }
  
@@ -100,7 +99,7 @@ solveInteractCts cts
           , isWanted fl
           = do { setEvBind ev (EvId ev')
                ; return (acc_cts,acc_cache) }
-          | otherwise -- If it's a given keep it in the work list, even if it exist in the cache!
+          | otherwise -- If it's a given keep it in the work list, even if it exists in the cache!
           = return (ct:acc_cts, alterTM pty (\_ -> Just (ev,fl)) acc_cache)
           where fl = cc_flavor ct
                 ev = cc_id ct

@@ -724,6 +724,10 @@ data TcSEnv
 
       tcs_inerts   :: IORef InertSet, -- Current inert set
       tcs_worklist :: IORef WorkList  -- Current worklist
+
+
+    -- TcSEnv invariant: the tcs_evvar_cache is a superset of tcs_inerts, tcs_worklist, tcs_ev_binds which must 
+    --                   all be disjoint with each other.
     }
 
 type TcsUntouchables = (Untouchables,TcTyVarSet)
@@ -1201,28 +1205,32 @@ isNewEvVar = evc_is_new
 newEvVar :: CtFlavor -> TcPredType -> TcS EvVarCreated
 -- Post: If Given then evc_is_new is True
 -- Hence it is safe to do a setEvBind right after a newEvVar with a Given flavor
+-- NB: newEvVar may temporarily break the TcSEnv invariant but it is expected in 
+--     the call sites for this invariant to be quickly restored.
 newEvVar fl pty
   = do { eref <- getTcSEvVarCache
        ; ecache <- wrapTcS (TcM.readTcRef eref)
-       ; lkup_upd_cache eref ecache (lookupTM pty ecache) }
-  where -- Not cached
-        lkup_upd_cache eref ecache Nothing
-          = do_update_cache eref ecache
-        -- Cached ...
-        lkup_upd_cache eref ecache (Just (cached_evvar,cached_flavor))
-          | cached_flavor `canSolve` fl  
-          , not (isGivenOrSolved fl) -- ... with a better flavor
-          = return (EvVarCreated False cached_evvar) 
-          | otherwise                -- ... with a worse flavor
-          = do_update_cache eref ecache
+       ; if isGivenOrSolved fl then 
+             upd_cache eref ecache 
+             -- Create new variable and update the cache
+         else
+             -- Otherwise lookup first
+             lkup_upd_cache eref ecache (lookupTM pty ecache) 
+       }
+  where lkup_upd_cache _eref _ecache (Just (cached_evvar,cached_flavor))
+          | cached_flavor `canSolve` fl -- cached with a better flavor
+          = return (EvVarCreated False cached_evvar)
+        lkup_upd_cache eref ecache _    -- not cached or cached with worse flavor
+          = upd_cache eref ecache
 
-        do_update_cache eref ecache
+        upd_cache eref ecache
           = do { new_evvar <- wrapTcS (TcM.newEvVar pty)
                  -- Only update the cache if not an IP
                ; when (not (isIPPred pty)) $
                    do { let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) ecache  
-                      ; wrapTcS (TcM.writeTcRef eref ecache') } 
+                      ; wrapTcS (TcM.writeTcRef eref ecache') }
                ; return (EvVarCreated True new_evvar) }
+
 
 newGivenEqVar :: CtFlavor -> TcType -> TcType -> Coercion -> TcS EvVar
 -- Pre: fl is Given
