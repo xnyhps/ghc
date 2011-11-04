@@ -865,7 +865,10 @@ runTcS context untouch is wl tcs
 doWithInert :: InertSet -> TcS a -> TcS a 
 doWithInert inert (TcS action)
   = TcS $ \env -> do { new_inert_var <- TcM.newTcRef inert
-                     ; action (env { tcs_inerts = new_inert_var }) }
+                     ; orig_cache_var <- TcM.readTcRef (tcs_evvar_cache env)
+                     ; new_cache_var <- TcM.newTcRef orig_cache_var
+                     ; action (env { tcs_inerts = new_inert_var 
+                                   , tcs_evvar_cache = new_cache_var }) }
 
 
 nestImplicTcS :: EvBindsVar -> TcsUntouchables -> TcS a -> TcS a 
