@@ -370,6 +370,7 @@ simplifyWithApprox wanted
 
       -- Solve extra stuff for real: notice that all the extra unsolved constraints will 
       -- be in the inerts of the monad, so we are OK
+      ; traceTcS "simplifyApproxLoop" $ text "Calling solve_wanteds!"
       ; solve_wanteds (WC { wc_flat  = floats -- They are floated so they are not in the evvar cache
                           , wc_impl  = residual_implics
                           , wc_insol = emptyBag })
@@ -1315,14 +1316,11 @@ disambigGroup (default_ty:default_tys) group
   = do { traceTcS "disambigGroup" (ppr group $$ ppr default_ty)
        ; success <- tryTcS $ -- Why tryTcS? See Note [tryTcS in defaulting]
                     do { let der_flav = mk_derived_flavor (cc_flavor the_ct) 
-                       ; eqv <- TcSMonad.newEqVar der_flav (mkTyVarTy the_tv) default_ty
-                       ; let derived_eq 
-                               | isNewEvVar eqv 
-                               = [ CNonCanonical { cc_id = evc_the_evvar eqv
-                                                 , cc_flavor = der_flav, cc_depth = 0 } ]
-                               | otherwise 
-                               = []
-
+                       ; derived_eq <- tryTcS $
+                                       -- I need a new tryTcS because we will call solveInteractCts below!
+                                       do { eqv <- TcSMonad.newEqVar der_flav (mkTyVarTy the_tv) default_ty
+                                          ; return [ CNonCanonical { cc_id = evc_the_evvar eqv
+                                                                   , cc_flavor = der_flav, cc_depth = 0 } ] }
                        ; traceTcS "disambigGroup (solving) {" 
                                   (text "trying to solve constraints along with default equations ...") 
                        ; solveInteractCts (derived_eq ++ wanteds)
