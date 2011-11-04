@@ -71,24 +71,24 @@ Note [Grouping of type and class declarations]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 tcTyAndClassDecls is called on a list of `TyClGroup`s. Each group is a strongly
-connected component of mutually dependent types and classes. We first kind-check
-each group separately, and then type-check all groups together at once.
+connected component of mutually dependent types and classes. We first kind check
+each group separately, and then type check all groups together at once.
 
-Why do we kind-check in groups of dependent types? Take the following example:
+Why do we kind check in groups of dependent types? Take the following example:
 
   type Id a = a
   data X = X (Id Int)
 
-If we were to kind-check the two declarations together, we would give Id the
+If we were to kind check the two declarations together, we would give Id the
 kind * -> *, since we apply it to an Int in the definition of X. But we can do
 better than that, since Id really is kind polymorphic, and should get kind
 forall (k::BOX). k -> k. Since it does not depend on anything else, it can be
-kind-checked by itself, hence getting the most general kind. We then kind-check
+kind-checked by itself, hence getting the most general kind. We then kind check
 X, which works fine because we then know the polymorphic kind of Id, and simply
 instantiate k to *.
 
-Why do we type-check all the groups together, after having kind-checked
-separately? Previously we type-checked each group right after kind-checking, but
+Why do we type check all the groups together, after having kind checked
+separately? Previously we type checked each group right after kind checking, but
 that's not correct. Take the following example:
 
   module A where
