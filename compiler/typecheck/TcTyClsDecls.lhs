@@ -276,17 +276,17 @@ kcTyClGroup decls
         ; setLclEnv tcl_env $  do
 
 	   -- Step 3: kind-check the synonyms
-        ; mapM_ (wrapLocM kcTyClDecl) non_syn_decls
+        { mapM_ (wrapLocM kcTyClDecl) non_syn_decls
 
 	     -- Step 4: generalisation
 	     -- Kind checking done for this group
              -- Now we have to kind generalize the flexis
-        ; mapM generalise (tyClsBinders decls) }}
+        ; mapM generalise (tyClsBinders decls) }}}
 
   where
     generalise :: Name -> TcM (Name, Kind)
     generalise name
-      = do { traceTc "Generalise type of class" (ppr name)
+      = do { traceTc "Generalise type of" (ppr name)
            ; thing <- tcLookup name
            ; let kc_kind = case thing of
                                AThing k -> k
