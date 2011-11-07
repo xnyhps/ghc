@@ -727,7 +727,9 @@ ds_type (HsDocTy ty _)  -- Remove the doc comment
   = dsHsType ty
 
 ds_type (HsSpliceTy _ _ kind) 
-  = do { kind' <- zonkTcKindToKind kind
+  = do { kind' <- zonkType (mkZonkTcTyVar (\ _ -> return liftedTypeKind) mkTyVarTy) 
+                           kind
+                     -- See Note [Kind of a type splice]
        ; newFlexiTyVarTy kind' }
 
 ds_type (HsQuasiQuoteTy {}) = panic "ds_type"	-- Eliminated by renamer
@@ -754,6 +756,21 @@ ds_type (HsWrapTy (WpKiApps kappas) ty) = do
 dsHsTypes :: [LHsType Name] -> TcM [Type]
 dsHsTypes arg_tys = mapM dsHsType arg_tys
 \end{code}
+
+Note [Kind of a type splice]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider these terms, each with TH type splice inside:
+     [| e1 :: Maybe $(..blah..) |]
+     [| e2 :: $(..blah..) |]
+When kind-checking the type signature, we'll kind-check the splice
+$(..blah..); we want to give it a kind that can fit in any context,
+as if $(..blah..) :: forall k. k.  
+
+In the e1 example, the context of the splice fixes kappa to *.  But
+in the e2 example, we'll desugar the type, zonking the kind unification
+variables as we go.  When we encournter the unconstrained kappa, we
+want to default it to '*', not to AnyK.
+
 
 Help functions for type applications
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
