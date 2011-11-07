@@ -43,7 +43,7 @@ import SrcLoc
 import DynFlags
 import HscTypes		( HscEnv, hsc_dflags )
 import ListSetOps       ( findDupsEq )
-import Digraph		( SCC, flattenSCC, stronglyConnCompFromEdgedVertices )
+import Digraph		( SCC, flattenSCCs, stronglyConnCompFromEdgedVertices )
 
 import Control.Monad
 import Maybes( orElse )
@@ -704,7 +704,13 @@ rnTyClDecls tycl_ds
 
              all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs
 
-       ; return (map flattenSCC sccs, all_fvs) }
+       ; return ([flattenSCCs sccs], all_fvs) }
+-- JPM: This is wrong. We are calculating the SCCs but then ignore them and
+-- merge into a single, big group. This is a quick fix to allow
+-- mutually-recursive types across modules to work, given the new way of kind
+-- checking and type checking declarations in groups (see
+-- Note [Grouping of type and class declarations] in TcTyClsDecls). This "fix"
+-- fully breaks promotion; we will fix that later.
 
 rnTyClDecl :: Maybe Name  -- Just cls => this TyClDecl is nested 
 	      	    	  --             inside an *instance decl* for cls

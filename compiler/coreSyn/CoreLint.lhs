@@ -741,7 +741,8 @@ lintCoercion (AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
                                    , co_ax_lhs = lhs
                                    , co_ax_rhs = rhs })
                            cos)
-  = do   -- see Note [Kind instantiation in coercions]
+  = ASSERT2 (not (any isKiVar tvs), ppr ktvs)
+    do   -- see Note [Kind instantiation in coercions]
        { kis <- checkKiCoKinds kvs kcos
        ; let tvs' = map (updateTyVarKind (Type.substTy subst)) tvs
              subst = zipOpenTvSubst kvs kis

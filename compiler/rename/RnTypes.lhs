@@ -188,12 +188,15 @@ rnHsTyKi isType doc (HsFunTy ty1 ty2) = do
       then mkHsOpTyRn HsFunTy funTyConName funTyFixity ty1' ty2'
       else return (HsFunTy ty1' ty2')
 
-rnHsTyKi isType doc (HsListTy ty) = do
+rnHsTyKi isType doc listTy@(HsListTy ty) = do
+    poly_kinds <- xoptM Opt_PolyKinds
+    unless (poly_kinds || isType) (addErr (polyKindsErr listTy))
     ty' <- rnLHsTyKi isType doc ty
     return (HsListTy ty')
 
 rnHsTyKi isType doc (HsKindSig ty k)
-  = ASSERT ( isType ) do { kind_sigs_ok <- xoptM Opt_KindSignatures
+  = ASSERT ( isType ) do { 
+       ; kind_sigs_ok <- xoptM Opt_KindSignatures
        ; unless kind_sigs_ok (addErr (kindSigErr ty))
        ; ty' <- rnLHsType doc ty
        ; k' <- rnLHsKind doc k
@@ -205,7 +208,9 @@ rnHsTyKi isType doc (HsPArrTy ty) = ASSERT ( isType ) do
 
 -- Unboxed tuples are allowed to have poly-typed arguments.  These
 -- sometimes crop up as a result of CPR worker-wrappering dictionaries.
-rnHsTyKi isType doc (HsTupleTy tup_con tys) = do
+rnHsTyKi isType doc tupleTy@(HsTupleTy tup_con tys) = do
+    poly_kinds <- xoptM Opt_PolyKinds
+    unless (poly_kinds || isType) (addErr (polyKindsErr tupleTy))
     tys' <- mapM (rnLHsTyKi isType doc) tys
     return (HsTupleTy tup_con tys')
 
@@ -242,12 +247,17 @@ rnHsTyKi isType doc (HsQuasiQuoteTy qq) = ASSERT ( isType ) do { ty <- runQuasiQ
 rnHsTyKi isType _ (HsCoreTy ty) = ASSERT ( isType ) return (HsCoreTy ty)
 rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 
-rnHsTyKi isType doc (HsExplicitListTy k tys) = ASSERT( isType ) do
-    tys' <- mapM (rnLHsType doc) tys
-    return (HsExplicitListTy k tys')
-rnHsTyKi isType doc (HsExplicitTupleTy kis tys) = ASSERT( isType ) do
-    tys' <- mapM (rnLHsType doc) tys
-    return (HsExplicitTupleTy kis tys')
+rnHsTyKi isType doc (HsExplicitListTy k tys) = 
+  ASSERT( isType )
+  WARN ( True, ppr (HsExplicitListTy k tys) )    -- JPM: ever happens?
+  do tys' <- mapM (rnLHsType doc) tys
+     return (HsExplicitListTy k tys')
+
+rnHsTyKi isType doc (HsExplicitTupleTy kis tys) =
+  ASSERT( isType ) 
+  WARN ( True, ppr (HsExplicitTupleTy kis tys) ) -- JPM: ever happens?
+  do tys' <- mapM (rnLHsType doc) tys
+     return (HsExplicitTupleTy kis tys')
 
 --------------
 rnLHsTypes :: HsDocContext -> [LHsType RdrName]
