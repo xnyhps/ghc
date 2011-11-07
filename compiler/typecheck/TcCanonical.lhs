@@ -104,6 +104,8 @@ rewriteFromInerts ct
           | evc_is_new evc -- Rewritten and fresh
           = ContinueWith $ CNonCanonical { cc_id = evc_the_evvar evc
                                          , cc_flavor = fl, cc_depth = d }
+            -- DV: This is very pessimistic, fix in the case of CTyFunEqs and CDictCans
+
           | otherwise = Stop -- Rewritten but cached: nothing to do
         ev = cc_id ct
         fl = cc_flavor ct
@@ -557,9 +559,11 @@ flatten d fl (TyConApp tc tys)
 		 -- be dealt with by AppTys
                fam_ty = mkTyConApp tc xi_args
          ; (ret_co, rhs_var, ct) <-
-             do { is_cached <- getRelevantInertFunEq tc xi_args fl 
-                ; case is_cached of 
-                    Just (rhs_var,ret_eq) -> return (ret_eq, rhs_var, [])
+             do { is_cached <- getCachedFlatEq tc xi_args fl
+                ; case is_cached of
+                    Just (rhs_var,ret_eq) -> 
+                        do { traceTcS "is_cached!" $ ppr ret_eq
+                           ; return (ret_eq, rhs_var, []) }
                     Nothing
                         | isGivenOrSolved fl ->
                             do { rhs_var <- newFlattenSkolemTy fam_ty

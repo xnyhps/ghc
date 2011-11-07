@@ -55,7 +55,7 @@ module TcSMonad (
 
         -- Inerts 
     InertSet(..), 
-    getInertEqs, getRelevantInertFunEq, rewriteFromInertEqs,
+    getInertEqs, getCachedFlatEq, rewriteFromInertEqs,
     tyVarsOfInert, emptyInert, getTcSInerts, updInertSet, extractUnsolved,
     extractUnsolvedTcS,
     updInertSetTcS, partitionCCanMap, partitionEqMap,
@@ -102,6 +102,7 @@ import qualified TcEnv as TcM
 import Kind
 import TcType
 import DynFlags
+import Type
 
 import Coercion
 import Class
@@ -708,7 +709,7 @@ added.  This is initialised from the innermost implication constraint.
 data TcSEnv
   = TcSEnv { 
       tcs_ev_binds    :: EvBindsVar,
-      tcs_evvar_cache :: IORef (TypeMap (EvVar,CtFlavor)), 
+      tcs_evvar_cache :: IORef EvVarCache,
           -- Evidence bindings and a cache from predicate types to the created evidence 
           -- variables. The scope of the cache will be the same as the scope of tcs_ev_binds
 
@@ -729,6 +730,14 @@ data TcSEnv
     -- TcSEnv invariant: the tcs_evvar_cache is a superset of tcs_inerts, tcs_worklist, tcs_ev_binds which must 
     --                   all be disjoint with each other.
     }
+
+data EvVarCache
+  = EvVarCache { evc_cache     :: TypeMap (EvVar,CtFlavor)    
+                     -- Map from PredTys to Evidence variables
+               , evc_flat_cache :: TypeMap (EvVar,Xi,CtFlavor) }
+                     -- Map from family-free heads (F xi) to family-free types.
+                     -- If (F xi) |-> ev,xi_rhs,fl in evc_flat_cache
+                     -- then (F xi ~ xi_rhs) |-> (ev,fl) must also exist in the evc_cache
 
 type TcsUntouchables = (Untouchables,TcTyVarSet)
 -- Like the TcM Untouchables, 
@@ -826,7 +835,8 @@ runTcS :: SimplContext
        -> TcM (a, Bag EvBind)
 runTcS context untouch is wl tcs 
   = do { ty_binds_var <- TcM.newTcRef emptyVarEnv
-       ; ev_cache_var <- TcM.newTcRef emptyTM
+       ; ev_cache_var <- TcM.newTcRef $ 
+                         EvVarCache { evc_cache = emptyTM, evc_flat_cache = emptyTM }
        ; ev_binds_var@(EvBindsVar evb_ref _) <- TcM.newTcEvBinds
        ; step_count <- TcM.newTcRef 0
 
@@ -932,7 +942,7 @@ tryTcS tcs
                 ; ty_binds_var <- TcM.newTcRef emptyVarEnv
                 ; ev_binds_var <- TcM.newTcEvBinds
 
-                ; ev_binds_cache_var <- TcM.newTcRef emptyTM
+                ; ev_binds_cache_var <- TcM.newTcRef (EvVarCache emptyTM emptyTM)
                     -- Empty cache: Don't inherit cache from above, see 
                     -- Note [tryTcS for defaulting] in TcSimplify
 
@@ -992,16 +1002,19 @@ getTcSContext = TcS (return . tcs_context)
 getTcEvBinds :: TcS EvBindsVar
 getTcEvBinds = TcS (return . tcs_ev_binds) 
 
-getTcSEvVarCache :: TcS (IORef (TypeMap (EvVar,CtFlavor)))
+getTcSEvVarCache :: TcS (IORef EvVarCache)
 getTcSEvVarCache = TcS (return . tcs_evvar_cache)
 
 getTcSEvVarCacheMap :: TcS (TypeMap (EvVar,CtFlavor))
 getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache 
-                         ; wrapTcS $ TcM.readTcRef cache_var }
+                         ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
+                         ; return (evc_cache the_cache) }
 
 setTcSEvVarCacheMap :: TypeMap (EvVar,CtFlavor) -> TcS () 
 setTcSEvVarCacheMap cache = do { cache_var <- getTcSEvVarCache 
-                               ; wrapTcS $ TcM.writeTcRef cache_var cache }
+                               ; orig_cache <- wrapTcS $ TcM.readTcRef cache_var
+                               ; let new_cache = orig_cache { evc_cache = cache } 
+                               ; wrapTcS $ TcM.writeTcRef cache_var new_cache }
 
 getUntouchables :: TcS TcsUntouchables
 getUntouchables = TcS (return . tcs_untch)
@@ -1211,28 +1224,107 @@ newEvVar :: CtFlavor -> TcPredType -> TcS EvVarCreated
 -- NB: newEvVar may temporarily break the TcSEnv invariant but it is expected in 
 --     the call sites for this invariant to be quickly restored.
 newEvVar fl pty
-  = do { eref <- getTcSEvVarCache
+  = do { traceTcS "newEvVar" $ ppr fl <+> ppr pty
+       ; eref <- getTcSEvVarCache
        ; ecache <- wrapTcS (TcM.readTcRef eref)
        ; if isGivenOrSolved fl then 
              upd_cache eref ecache 
              -- Create new variable and update the cache
          else
              -- Otherwise lookup first
-             lkup_upd_cache eref ecache (lookupTM pty ecache) 
+             lkup_upd_cache eref ecache $ lookupTM pty (evc_cache ecache)
        }
   where lkup_upd_cache _eref _ecache (Just (cached_evvar,cached_flavor))
           | cached_flavor `canSolve` fl -- cached with a better flavor
-          = return (EvVarCreated False cached_evvar)
+          = do { traceTcS "newEvVar"  $  text "already cached, doing nothing" 
+               ; return (EvVarCreated False cached_evvar) }
         lkup_upd_cache eref ecache _    -- not cached or cached with worse flavor
           = upd_cache eref ecache
 
         upd_cache eref ecache
-          = do { new_evvar <- wrapTcS (TcM.newEvVar pty)
+          = do { traceTcS "newEvVar"  $  text "updating cache"
+               ; new_evvar <- wrapTcS (TcM.newEvVar pty)
+
+               ; let new_cache = updateCache ecache (new_evvar,fl,pty)
+               ; wrapTcS (TcM.writeTcRef eref new_cache) 
+               ; return (EvVarCreated True new_evvar) }
+
+updateCache :: EvVarCache -> (EvVar,CtFlavor,Type) -> EvVarCache 
+updateCache ecache (ev,fl,pty)
+  | IPPred {} <- classifier
+  = ecache 
+  | EqPred ty1 ty2 <- classifier
+  , Just (tc,args) <- splitTyConApp_maybe ty1
+  , isSynFamilyTyCon tc && all is_function_free (ty2 : args)
+  = ecache { evc_cache = ecache', evc_flat_cache = flat_cache' ty1 ty2 }
+  | otherwise 
+  = ecache { evc_cache = ecache' }
+  where classifier          = classifyPredType pty
+        ecache'             = alterTM pty (\_ -> Just (ev,fl)) $
+                              evc_cache ecache
+        flat_cache' ty1 ty2 = alterTM ty1 (\_ -> Just (ev,ty2,fl)) $
+                              evc_flat_cache ecache
+
+        is_function_free ty@(TyConApp tc tys) 
+            | Just ty' <- tcView ty = is_function_free ty'
+            | isSynFamilyTyCon tc   = False
+            | otherwise             = all is_function_free tys
+        is_function_free (TyVarTy {}) = True
+        is_function_free (FunTy arg res) = is_function_free arg && 
+                                             is_function_free res
+        is_function_free (AppTy fun arg) = is_function_free fun && 
+                                             is_function_free arg
+        is_function_free (ForAllTy _ ty) = is_function_free ty
+
+
+
+{- 
+
+  = case classifyPredType pty
+  where clsifier = classifyPredType pty 
+
                  -- Only update the cache if not an IP
                ; when (not (isIPPred pty)) $
-                   do { let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) ecache  
-                      ; wrapTcS (TcM.writeTcRef eref ecache') }
+                   do { let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) $
+                                      evc_cache ecache
+
+                      ; traceTcS "Updating flat_cache" $ 
+                                 text "before =" <+> ppr_triemap (evc_flat_cache ecache)
+
+                      ; let flat_cache'
+                             | EqPred ty1 ty2 <- classifyPredType pty
+                             , Just (tc,args) <- splitTyConApp_maybe ty1
+                             , isSynFamilyTyCon tc && is_function_free ty1 && is_function_free ty2
+                             = alterTM ty1 (\_ -> Just (new_evvar,ty2,fl)) $ 
+                               evc_flat_cache ecache
+
+                             | otherwise = evc_flat_cache ecache 
+
+                      ; let new_cache = ecache { evc_cache     = ecache'
+                                               , evc_flat_cache = flat_cache'}
+
+                      ; traceTcS "Updating flat_cache" $ 
+                                 text "after =" <+> ppr_triemap flat_cache'
+
+                      ; wrapTcS (TcM.writeTcRef eref new_cache) }
                ; return (EvVarCreated True new_evvar) }
+        is_function_free ty = go ty
+    ********************* 
+          where go (TyConApp tc tys)
+                    | isSynFamilyTyCon tc
+                    = False
+                    | otherwise
+                    = all go tys
+                go (TyVarTy {})    = True
+                go (FunTy arg res) = go arg && go res
+                go (AppTy fun arg) = go fun && go arg
+                go (ForAllTy _ ty) = go ty
+-}
+
+
+ppr_triemap :: TypeMap (EvVar,b,c) -> SDoc
+ppr_triemap tm = ppr pairs
+ where pairs = foldTM (\(ev,_,_) evrs -> (ev,evVarPred ev):evrs) tm []
 
 
 newGivenEqVar :: CtFlavor -> TcType -> TcType -> Coercion -> TcS EvVar
@@ -1304,10 +1396,24 @@ getInertEqs :: TcS (TyVarEnv (Ct,Coercion), InScopeSet)
 getInertEqs = do { inert <- getTcSInerts
                  ; return (inert_eqs inert, inert_eq_tvs inert) }
 
-getRelevantInertFunEq :: TyCon -> [Xi] -> CtFlavor -> TcS (Maybe (Xi,Coercion)) 
+getCachedFlatEq :: TyCon -> [Xi] -> CtFlavor -> TcS (Maybe (Xi,Coercion)) 
 -- Returns a coercion between (tc xi_args ~  xi) if such an inert item exists
-getRelevantInertFunEq tc xi_args fl 
-  = do { inert <- getTcSInerts
+getCachedFlatEq tc xi_args fl 
+  = do { traceTcS "getCachedFlatEq" $ ppr (mkTyConApp tc xi_args)
+       ; cache_var <- getTcSEvVarCache
+       ; cache <- wrapTcS $ TcM.readTcRef cache_var
+       ; let flat_cache = evc_flat_cache cache
+       ; case lookupTM (mkTyConApp tc xi_args) flat_cache of
+           Just (ev',xi',fl') 
+             | fl' `canRewrite` fl 
+             -> do { traceTcS "getCachedFlatEq" $ text "success!"
+                   ; return (Just (xi', mkEqVarLCo ev')) }
+           _ -> do { traceTcS "getCachedFlatEq" $ 
+                              text "failure" <+> ppr_triemap flat_cache                             
+                   ; return Nothing }
+       }
+{-
+       ; inert <- getTcSInerts
        ; let (fun_eq_relevants,_) = getRelevantCts tc (inert_funeqs inert)
        ; let acceptables = filterBag fun_match fun_eq_relevants
        ; case bagToList acceptables of 
@@ -1317,6 +1423,7 @@ getRelevantInertFunEq tc xi_args fl
             = eqTypes xi_args ixis && ifl `canRewrite` fl
         fun_match _ = False -- Should be an assertion failure, really
 
+-}
 
 
 rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
