@@ -721,7 +721,7 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
        -- See Note [Checking consistent instantiation]
        -- We only want to check this on the *class* TyVars,
        -- not the *family* TyVars (there may be more of these)
-MOVE TO CHECK VALID CLASS
+-- JPM: MOVE TO CHECK VALID CLASS
        ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
 
        ; return (ATD at_tvs at_tys at_rhs) }
