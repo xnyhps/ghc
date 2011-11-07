@@ -514,11 +514,13 @@ allowed to put it (lazily) in the returned structures.  But when
 kind-checking the RHS of T's decl, we *do* need to know T's kind (so
 that we can correctly elaboarate (T k f a).  How can we get T's kind
 without looking at T?  Delicate answer: during tcTyClDecl, we extend
+
   *Global* env with T -> ATyCon (the (not yet built) TyCon for T)
   *Local*  env with T -> AThing (polymorphic kind of T)
+
 Then:
 
-  * During TcHsType.kc_hs_type we look in the *local* env, to get the
+  * During TcHsType.kcTyVar we look in the *local* env, to get the
     known kind for T.
 
   * But in TcHsType.ds_type (and ds_var_app in particular) we look in
@@ -611,11 +613,14 @@ tcTyClDecl1 _parent calc_isrec
 	      , tcdCtxt = ctxt, tcdMeths = meths
 	      , tcdFDs = fundeps, tcdSigs = sigs, tcdATs = ats, tcdATDefs = at_defs })
   = ASSERT( isNoParent _parent )
-    tcTyClTyVars class_name tvs $ \ tvs' kind -> do
-  { MASSERT( isConstraintKind kind )
-  ; ctxt' <- tcHsKindedContext =<< kcHsContext ctxt
-  ; fds' <- mapM (addLocM tc_fundep) fundeps
-  ; (sig_stuff, gen_dm_env) <- tcClassSigs class_name sigs meths
+    do 
+  { (tvs', ctxt', fds', sig_stuff, gen_dm_env)
+       <- tcTyClTyVars class_name tvs $ \ tvs' kind -> do
+          { MASSERT( isConstraintKind kind )
+          ; ctxt' <- tcHsKindedContext =<< kcHsContext ctxt
+          ; fds' <- mapM (addLocM tc_fundep) fundeps
+          ; (sig_stuff, gen_dm_env) <- tcClassSigs class_name sigs meths
+          ; return (tvs', ctxt', fds', sig_stuff, gen_dm_env) }
   ; clas <- fixM $ \ clas -> do
 	    { let 	-- This little knot is just so we can get
 			-- hold of the name of the class TyCon, which we
@@ -716,6 +721,7 @@ tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
        -- See Note [Checking consistent instantiation]
        -- We only want to check this on the *class* TyVars,
        -- not the *family* TyVars (there may be more of these)
+MOVE TO CHECK VALID CLASS
        ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
 
        ; return (ATD at_tvs at_tys at_rhs) }
@@ -733,10 +739,16 @@ tcSynFamInstDecl fam_tc (TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
 
        ; let kc_rhs rhs kind = kcCheckLHsType rhs (EK kind EkUnk) 
 
+       ; lcl_env <- getLclEnv
+       ; traceTc "tc-lcl-env1" (ppr (tcl_env lcl_env))
        ; tcFamTyPats fam_tc tvs pats (kc_rhs rhs)
                 $ \tvs' pats' res_kind -> do
 
-       { rhs'  <- kc_rhs rhs res_kind
+       { lcl_env <- getLclEnv
+       ; traceTc "tc-lcl-env2" (ppr (tcl_env lcl_env))
+       ; rhs'  <- kc_rhs rhs res_kind
+       ; lcl_env <- getLclEnv
+       ; traceTc "tc-lcl-env3" (ppr (tcl_env lcl_env))
        ; rhs'' <- tcHsKindedType rhs'
 
        ; return (tvs', pats', rhs'') } }
@@ -797,15 +809,16 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
 	 -- See Note [Quantifying over family patterns]
-       ; zapLclTypeEnv $
+       ; -- zapLclTypeEnv $
          tcTyVarBndrsKindGen tvs $ \tvs' -> do {
+
        ; (t_kvs, fam_arg_kinds') <- kindGeneralizeKinds fam_arg_kinds
        ; k_typats <- mapM tcHsKindedType typats
 
          -- Check that left-hand side contains no type family applications
          -- (vanilla synonyms are fine, though, and we checked for
          -- foralls earlier)
-       ; mapM_ checkTyFamFreeness k_typats
+--       ; mapM_ checkTyFamFreeness k_typats
 
        ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resKind }
        }

@@ -561,6 +561,8 @@ kcHsLPredType pred = kc_check_lhs_type pred ekConstraint
 
 ---------------------------
 kcTyVar :: Name -> TcM (HsType Name, TcKind)
+-- See Note [Type checking recursive type and class declarations]
+-- in TcTyClsDecls
 kcTyVar name         -- Could be a tyvar, a tycon, or a datacon
   = do { traceTc "lk1" (ppr name)
        ; thing <- tcLookup name
@@ -803,31 +805,7 @@ ds_var_app name arg_tys
            ATyCon tc   -> return (mkTyConApp tc arg_tys)
            ADataCon dc -> return (mkTyConApp (buildPromotedDataTyCon dc) arg_tys) 
 	   _           -> wrongThingErr "type" (AGlobal thing) name }
-\end{code}
 
-Note [Looking up names when typechecking types]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-There is a delicate point here.  Consider typechecking a data type decl
-   data T = MkT T Int
-First we kind-check the decl, to determine the final kind of T, * in
-this case.  Then we enter the knot-tied bit in tcTyClGroup that build
-the TyCon for T.  Doing so involves typechecking MkT's arguments. While
-doing so we extend
-  *Global* env with T -> ATyCon (the (not yet built) TyCon for T)
-  *Local*  env with T -> AThing (kind of T)
-
-Then:
-
-  * During kc_hs_type we look in the *local* env, to get the known
-    kind for T.  
-
-  * But in ds_type (and ds_var_app in particular) we look
-    in the *global* env to get the TyCon. But we must be careful 
-    not to force the TyCon or we'll get a loop.
-
-This is a bit delicate, but OK once you understand the plan.
-
-\begin{code}
 addKcTypeCtxt :: LHsType Name -> TcM a -> TcM a
 	-- Wrap a context around only if we want to show that contexts.  
 	-- Omit invisble ones and ones user's won't grok

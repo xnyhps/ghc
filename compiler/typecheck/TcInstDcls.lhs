@@ -620,7 +620,7 @@ tcAssocDecl clas mini_env (L loc decl)
        ; checkTc (Just clas == tyConAssoc_maybe fam_tc)
                  (badATErr (className clas) (tyConName at_tc))
 
-       -- See Note [Checking consistent instantiation]
+       -- See Note [Checking consistent instantiation] in TcTyClsDecls
        ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
 
        ; return at_tc }
