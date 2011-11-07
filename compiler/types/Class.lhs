@@ -92,6 +92,8 @@ type ClassATItem = (TyCon, [ATDefault])
   -- Default associated types from these templates. If the template list is empty,
   -- we assume that there is no default -- not that the default is to generate no
   -- instances (this only makes a difference for warnings).
+  -- We can have more than one default per type; see
+  -- Note [Associated type defaults] in TcTyClsDecls
 
 data ATDefault = ATD [TyVar] [Type] Type
   -- Each associated type default template is a triple of:

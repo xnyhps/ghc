@@ -667,15 +667,22 @@ tcTyClDecl1 _ _
 %*									*
 %************************************************************************
 
-Example:     class C a where
+Note [Associated type defaults]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The following is an example of associated type defaults:
+             class C a where
                data D a 
 
                type F a b :: *
                type F a Z = [a]        -- Default
                type F a (S n) = F a n  -- Default
 
-We can get default defns only for type families, not data families
-	
+Note that:
+  - We can have more than one default definition for a single associated type,
+    as long as they do not overlap (same rules as for instances)
+  - We can get default definitions only for type families, not data families
+
 \begin{code}
 tcClassATs :: Name             -- The class name (not knot-tied)
            -> TyConParent      -- The class parent of this associated type
@@ -697,13 +704,11 @@ tcClassATs class_name parent clas_tvs ats at_defs
     at_defs_map = foldr (\at_def nenv -> extendNameEnv_C (++) nenv (tcdName (unLoc at_def)) [at_def]) 
                         emptyNameEnv at_defs
 
-    tc_at at = do { traceTc "tcClassATs1" (ppr at)
-                  ; [ATyCon fam_tc] <- addLocM (tcTyClDecl1 parent
-                                                              (const Recursive)) at
-                  ; let at_defs = lookupNameEnv at_defs_map (tcdName (unLoc at)) `orElse` []
-                  ; traceTc "tcClassATs2" (ppr at_defs)
+    tc_at at = do { [ATyCon fam_tc] <- addLocM (tcTyClDecl1 parent
+                                                           (const Recursive)) at
+                  ; let at_defs = lookupNameEnv at_defs_map (tcdName (unLoc at))
+                                        `orElse` []
                   ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs) at_defs
-                  ; traceTc "tcClassATs3" (ppr at)
                   ; return (fam_tc, atd) }
 
 
@@ -818,7 +823,8 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
          -- Check that left-hand side contains no type family applications
          -- (vanilla synonyms are fine, though, and we checked for
          -- foralls earlier)
---       ; mapM_ checkTyFamFreeness k_typats
+       -- JPM: MOVE TO CHECK VALID CLASS
+       ; mapM_ checkTyFamFreeness k_typats
 
        ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resKind }
        }
