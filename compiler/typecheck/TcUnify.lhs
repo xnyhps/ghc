@@ -823,7 +823,8 @@ uUnfilledVars :: [EqOrigin]
 uUnfilledVars origin swapped tv1 details1 tv2 details2
   = do { traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
                                   <+> text "with"            <+> ppr k2)
-       ; sub_kind <- unifyKind (mkKindErrorMsg ty1 ty2 k1 k2) k1 k2
+       ; ctxt <- mkKindErrorMsg ty1 ty2 k1 k2
+       ; sub_kind <- unifyKind ctxt k1 k2
 
        ; case (sub_kind, details1, details2) of
            -- k1 <= k2, so update tv2
@@ -877,8 +878,8 @@ checkTauTvUpdate tv ty
   = do { ty' <- zonkTcType ty
        ; let k2 = typeKind ty'
        ; k1 <- zonkTcKind (tyVarKind tv)
-       ; sub_k <- unifyKind (mkKindErrorMsg tv ty' k1 k2)
-                            (tyVarKind tv) (typeKind ty')
+       ; ctxt <- mkKindErrorMsg (mkTyVarTy tv) ty' k1 k2
+       ; sub_k <- unifyKind ctxt (tyVarKind tv) (typeKind ty')
 
        ; case sub_k of
            LT -> return Nothing
@@ -1219,13 +1220,17 @@ kindSimpleKind k
   | isArgTypeKind k  = liftedTypeKind
   | otherwise        = k
 
--- Overloaded because it is used with both Type/Kind and TyVar/KiVar
-mkKindErrorMsg :: (Outputable a, Outputable b, Outputable c, Outputable d)
-               => a -> b -> c -> d -> SDoc
-mkKindErrorMsg ty1 ty2 k1 k2 = 
-        vcat [ ptext (sLit "Kind incompatibility when matching types:")
-             , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
-                            , ppr ty2 <+> dcolon <+> ppr k2 ]) ]
+mkKindErrorMsg :: Type -> Type -> Kind -> Kind -> TcM SDoc
+mkKindErrorMsg ty1 ty2 k1 k2 = do
+        env0 <- tcInitTidyEnv
+        let (env1, ty1') = tidyOpenType env0 ty1
+            (env2, ty2') = tidyOpenType env1 ty2
+            (env3, k1' ) = tidyOpenKind env2 k1
+            (_   , k2' ) = tidyOpenKind env3 k2
+        return $
+                vcat [ ptext (sLit "Kind incompatibility when matching types:")
+                     , nest 2 (vcat [ ppr ty1' <+> dcolon <+> ppr k1'
+                                    , ppr ty2' <+> dcolon <+> ppr k2' ]) ]
 
 unifyKindMisMatch :: SDoc -> TcKind -> TcKind -> TcM a
 unifyKindMisMatch ctxt ki1 ki2 = do
