@@ -684,14 +684,13 @@ lintTyBndrKind tv =
 -------------------
 lintKindCoercion :: OutCoercion -> LintM OutKind
 -- Kind coercions are only reflexivity because they mean kind
--- instantiation.
-lintKindCoercion (Refl k)
-  = do { lintKind k
-       ; return k }
-lintKindCoercion co 
-  = failWithL (hang (ptext (sLit "Non-refl kind coercion"))
-                  2 (ppr co))
-  -- We should never produce a non-refl kind coercion
+-- instantiation.  See Note [Kind coercions] in Coercion
+lintKindCoercion co
+  = do { (k1,k2) <- lintCoercion co
+       ; checkL (k1 `eqKind` k2) 
+                (hang (ptext (sLit "Non-refl kind coercion")) 
+                    2 (ppr co))
+       ; return k1 }
 
 lintCoercion :: OutCoercion -> LintM (OutType, OutType)
 -- Check the kind of a coercion term, returning the kind

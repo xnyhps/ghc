@@ -154,21 +154,22 @@ data Coercion
   deriving (Data.Data, Data.Typeable)
 \end{code}
 
+Note [LCoercions]
+~~~~~~~~~~~~~~~~~
+| LCoercions are a hack used by the typechecker. Normally,
+Coercions have free variables of type (a ~# b): we call these
+CoVars. However, the type checker passes around equality evidence
+(boxed up) at type (a ~ b).
+
+An LCoercion is simply a Coercion whose free variables have the
+boxed type (a ~ b). After we are done with typechecking the
+desugarer finds the free variables, unboxes them, and creates a
+resulting real Coercion with kosher free variables.
+
+We can use most of the Coercion "smart constructors" to build LCoercions. However,
+mkCoVarCo will not work! The equivalent is mkEqVarLCo.
+
 \begin{code}
--- Note [LCoercions]
--- ~~~~~~~~~~~~~~~~~
--- | LCoercions are a hack used by the typechecker. Normally,
--- Coercions have free variables of type (a ~# b): we call these
--- CoVars. However, the type checker passes around equality evidence
--- (boxed up) at type (a ~ b).
---
--- An LCoercion is simply a Coercion whose free variables have the
--- boxed type (a ~ b). After we are done with typechecking the
--- desugarer finds the free variables, unboxes them, and creates a
--- resulting real Coercion with kosher free variables.
---
--- We can use most of the Coercion "smart constructors" to build LCoercions. However,
--- mkCoVarCo will not work! The equivalent is mkEqVarLCo.
 type LCoercion = Coercion
 \end{code}
 
@@ -273,6 +274,30 @@ in Coercion.  This is important because we need Nth to work on
 predicates too:
     Nth 1 ((~) [c] g) = g
 See Simplify.simplCoercionF, which generates such selections.
+
+Note [Kind coercions]
+~~~~~~~~~~~~~~~~~~~~~
+Suppose T :: * -> *, and g :: A ~ B
+Then the coercion
+   TyConAppCo T [g]      T g : T A ~ T B
+
+Now suppose S :: forall k. k -> *, and g :: A ~ B
+Then the coercion
+   TyConAppCo S [Refl *, g]   T <*> g : T * A ~ T * B
+
+Notice that the arguments to TyConAppCo are coercions, but the first
+represents a *kind* coercion. Now, we don't allow any non-trivial kind
+coercions, so it's an invariant that any such kind coercions are Refl.
+Lint checks this. 
+
+However it's inconvenient to insist that these kind coercions are always
+*structurally* (Refl k), because the key function exprIsConApp_maybe
+pushes coercions into constructor arguments, so 
+       C k ty e |> g
+may turn into
+       C (Nth 0 g) ....
+Now (Nth 0 g) will optimise to Refl, but perhaps not instantly.
+
 
 %************************************************************************
 %*									*
