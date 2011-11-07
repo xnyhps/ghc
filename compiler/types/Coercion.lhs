@@ -439,6 +439,7 @@ pprCoAxiom ax
 -- > decomposeCo 3 c = [nth 0 c, nth 1 c, nth 2 c]
 decomposeCo :: Arity -> Coercion -> [Coercion]
 decomposeCo arity co = [mkNthCo n co | n <- [0..(arity-1)] ]
+                       -- Remember, Nth is zero-indexed
 
 -- | Attempts to obtain the type variable underlying a 'Coercion'
 getCoVar_maybe :: Coercion -> Maybe CoVar
@@ -1079,6 +1080,7 @@ coercionKinds :: [Coercion] -> Pair [Type]
 coercionKinds tys = sequenceA $ map coercionKind tys
 
 getNth :: Int -> Type -> Type
+-- Executing Nth
 getNth n ty | Just tys <- tyConAppArgs_maybe ty
             = ASSERT2( n < length tys, ppr n <+> ppr tys ) tys !! n
 getNth n ty = pprPanic "getNth" (ppr n <+> ppr ty)
@@ -1094,7 +1096,6 @@ applyCo _            _ = panic "applyCo"
 
 Note [Kind coercions]
 ~~~~~~~~~~~~~~~~~~~~~
-
 Kind coercions are only of the form: Refl kind. They are only used to
 instantiate kind polymorphic type constructors in TyConAppCo. Remember
 that kind instantiation only happens with TyConApp, not AppTy.

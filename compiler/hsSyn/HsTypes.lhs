@@ -166,8 +166,13 @@ data HsType name
   | HsCoreTy Type	-- An escape hatch for tunnelling a *closed* 
     	       		-- Core Type through HsSyn.  
 
-  | HsExplicitListTy PostTcKind [LHsType name]  -- A promoted explicit list, see Note [Promotions (HsExplicitListTy)]
-  | HsExplicitTupleTy [PostTcKind] [LHsType name]  -- A promoted explicit tuple, see Note [Promotions (HsExplicitTupleTy)]
+  | HsExplicitListTy     -- A promoted explicit list
+        PostTcKind       -- See Note [Promoted lists and tuples]
+        [LHsType name]   
+                         
+  | HsExplicitTupleTy    -- A promoted explicit tuple
+        [PostTcKind]     -- See Note [Promoted lists and tuples]
+        [LHsType name]   
 
   | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
   deriving (Data, Typeable)
@@ -181,10 +186,10 @@ type HsTyOp name = (HsTyWrapper, name)
 
 mkHsOpTy :: LHsType name -> Located name -> LHsType name -> HsType name
 mkHsOpTy ty1 op ty2 = HsOpTy ty1 (WpKiApps [], op) ty2
+\end{code}
 
-{- Note [Promotions]
-   ~~~~~~~~~~~~~~~~~
-
+Note [Promotions (HsTyVar)]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 HsTyVar: A name in a type or kind.
   Here are the allowed namespaces for the name.
     In a type:
@@ -199,34 +204,28 @@ HsTyVar: A name in a type or kind.
       TcCls: kind constructor or promoted type constructor
 
 
-HsExplicitListTy: A promoted explicit list.
-  This happens only in the context of type.
-  When we see
-    '[Int]
-    [Char,Bool]
-  we parse it as
-    HsExplicitListTy [Int]
-    HsExplicitListTy [Char,Bool]
+Note [Promoted lists and tuples]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Notice the difference between
+   HsListTy    HsExplicitListTy
+   HsTupleTy   HsExplicitListTupleTy
 
-  Notice the difference between types [Int] and '[Int].
-  - [Int] is a type of list of ints.  It is inhabited ([0,1,2] for
-    instance) since its kind is star: [Int] :: *.
-  - '[Int] is a list of types at the type-level.  Its kind is
-    [*]. Hence this type is not inhabited.
+E.g.    f :: [Int]                      HsListTy                
 
-HsExplicitTupleTy: A promoted explicit tuple.
-  This happens only in the context of type.
-  When we see
-    '(Int,Float,Bool)
-  we parse it as
-    HsExplicitTupleTy [Int,Float,Bool]
+        g3  :: T '[]                   All these use  
+        g2  :: T '[True]                  HsExplicitListTy        
+        g1  :: T '[True,False]          
+        g1a :: T [True,False]             (can omit ' where unambiguous)
 
-  Notice the difference between types (Char,Bool) and '(Char,Bool).
-  - ('c',True) :: (Char,Bool) :: *
-  -              '(Char,Bool) :: (*,*)
+  kind of T :: [Bool] -> *        This kind uses HsListTy!
 
--}
+E.g.    h :: (Int,Bool)                 HsTupleTy; f is a pair               
+        k :: S '(True,False)            HsExplicitTypleTy; S is indexed by   
+                                           a type-level pair of booleans 
+        kind of S :: (Bool,Bool) -> *   This kind uses HsExplicitTupleTy
 
+
+\begin{code}
 data HsTupleSort = HsUnboxedTuple
                  | HsBoxyTuple PostTcKind -- Either a Constraint or normal tuple: resolved during type checking
                  deriving (Data, Typeable)
