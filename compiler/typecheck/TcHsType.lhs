@@ -1276,81 +1276,89 @@ checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
 %*                                                                      *
 %************************************************************************
 
-JPM: add comments on this function; maybe rename ti to tcLHsKind.
-One-pass algorithm!  Main purpose: from HsType to Type
-Give an example of something that can fail.
+scDsLHsKind converts a user-written kind to an internal, sort-checked kind.
+It does sort checking and desugaring at the same time, in one single pass.
+It fails when the kinds are not well-formed (eg. data A :: * Int), or if there
+are non-promotable or non-fully applied kinds.
 
 \begin{code}
-
 scDsLHsKind :: LHsKind Name -> TcM Kind
-scDsLHsKind k =
-  addErrCtxt (ptext (sLit "In the kind") <+> quotes (ppr k)) $
-  sc_ds_lhs_kind k
+scDsLHsKind k = addErrCtxt (ptext (sLit "In the kind") <+> quotes (ppr k)) $
+                  sc_ds_lhs_kind k
 
 scDsLHsMaybeKind :: Maybe (LHsKind Name) -> TcM (Maybe Kind)
-scDsLHsMaybeKind Nothing = return Nothing
-scDsLHsMaybeKind (Just k) = do
-  k' <- scDsLHsKind k
-  return (Just k')
+scDsLHsMaybeKind Nothing  = return Nothing
+scDsLHsMaybeKind (Just k) = do k' <- scDsLHsKind k
+                               return (Just k')
 
 sc_ds_lhs_kind :: LHsKind Name -> TcM Kind
 sc_ds_lhs_kind (L span ki) = setSrcSpan span (sc_ds_hs_kind ki)
 
+-- The main worker
 sc_ds_hs_kind :: HsKind Name -> TcM Kind
-sc_ds_hs_kind k@(HsTyVar _) = sc_ds_app k []
+sc_ds_hs_kind k@(HsTyVar _)   = sc_ds_app k []
 sc_ds_hs_kind k@(HsAppTy _ _) = sc_ds_app k []
-sc_ds_hs_kind (HsParTy ki) = sc_ds_lhs_kind ki
-sc_ds_hs_kind (HsFunTy ki1 ki2) = do
-  kappa_ki1 <- sc_ds_lhs_kind ki1
-  kappa_ki2 <- sc_ds_lhs_kind ki2
-  return (mkArrowKind kappa_ki1 kappa_ki2)
-sc_ds_hs_kind (HsListTy ki) = do
-  kappa <- sc_ds_lhs_kind ki
-  checkWiredInTyCon listTyCon
-  return $ mkListTy kappa
-sc_ds_hs_kind (HsTupleTy _ kis) = do
-  kappas <- mapM sc_ds_lhs_kind kis
-  checkWiredInTyCon tycon
-  return $ mkTyConApp tycon kappas
-  where tycon = tupleTyCon BoxedTuple (length kis)
-sc_ds_hs_kind _ = panic "sc_ds_hs_kind"  -- argument not kind-shaped
 
+sc_ds_hs_kind (HsParTy ki) = sc_ds_lhs_kind ki
+
+sc_ds_hs_kind (HsFunTy ki1 ki2) =
+  do kappa_ki1 <- sc_ds_lhs_kind ki1
+     kappa_ki2 <- sc_ds_lhs_kind ki2
+     return (mkArrowKind kappa_ki1 kappa_ki2)
+
+sc_ds_hs_kind (HsListTy ki) =
+  do kappa <- sc_ds_lhs_kind ki
+     checkWiredInTyCon listTyCon
+     return $ mkListTy kappa
+
+sc_ds_hs_kind (HsTupleTy _ kis) =
+  do kappas <- mapM sc_ds_lhs_kind kis
+     checkWiredInTyCon tycon
+     return $ mkTyConApp tycon kappas
+  where tycon = tupleTyCon BoxedTuple (length kis)
+
+-- Argument not kind-shaped
+sc_ds_hs_kind k = panic ("sc_ds_hs_kind: " ++ showPpr k)
+
+-- Special case for kind application
 sc_ds_app :: HsKind Name -> [LHsKind Name] -> TcM Kind
 sc_ds_app (HsAppTy ki1 ki2) kis = sc_ds_app (unLoc ki1) (ki2:kis)
-sc_ds_app ki kis = do
-  arg_kis <- mapM sc_ds_lhs_kind kis
-  case ki of
-    HsTyVar tc -> sc_ds_var_app tc arg_kis
-    _ -> failWithTc (quotes (ppr ki) <+> ptext (sLit "is not a kind constructor"))
+sc_ds_app (HsTyVar tc)      kis =
+  do arg_kis <- mapM sc_ds_lhs_kind kis
+     sc_ds_var_app tc arg_kis
+sc_ds_app _                 kis = failWithTc (quotes (ppr ki) <+> 
+                                    ptext (sLit "is not a kind constructor"))
 
 -- IA0_TODO: With explicit kind polymorphism I might need to add ATyVar
 sc_ds_var_app :: Name -> [Kind] -> TcM Kind
+-- Special case for * and Constraint kinds
 sc_ds_var_app name arg_kis
-  |  name == liftedTypeKindTyConName
-  || name == constraintKindTyConName = do
-    unless (null arg_kis) (failWithTc (text "Kind" <+> ppr name <+> text "cannot be applied"))
-    traceTc "lps3" (ppr name)
+  |    name == liftedTypeKindTyConName
+    || name == constraintKindTyConName = do
+    unless (null arg_kis)
+      (failWithTc (text "Kind" <+> ppr name <+> text "cannot be applied"))
     thing <- tcLookup name
-    traceTc "lps4" (ppr name <+> ppr thing)
     case thing of
       AGlobal (ATyCon tc) -> return (mkTyConApp tc [])
-      _ -> panic "sc_ds_var_app 1"
+      _                   -> panic "sc_ds_var_app 1"
+
+-- General case
 sc_ds_var_app name arg_kis = do
-  traceTc "lps1" (ppr name)
   thing <- tcLookup name
-  traceTc "lps2" (ppr name <+> ppr thing)
   case thing of
     AGlobal (ATyCon tc)
       | isAlgTyCon tc || isTupleTyCon tc -> do
       let tc_kind = tyConKind tc
       case isPromotableKind tc_kind of
-        Just n | n == length arg_kis -> return (mkTyConApp (mkPromotedTypeTyCon tc) arg_kis)
-        Just _ -> err tc_kind "is not fully applied"
+        Just n | n == length arg_kis ->
+          return (mkTyConApp (mkPromotedTypeTyCon tc) arg_kis)
+        Just _  -> err tc_kind "is not fully applied"
         Nothing -> err tc_kind "is not promotable"
+
     _ -> wrongThingErr "promoted type" thing name
-  where
-    err k m = failWithTc (quotes (ppr name) <+> ptext (sLit "of kind")
-                          <+> quotes (ppr k) <+> ptext (sLit m))
+
+  where err k m = failWithTc (    quotes (ppr name) <+> ptext (sLit "of kind")
+                              <+> quotes (ppr k)    <+> ptext (sLit m))
 
 \end{code}
 

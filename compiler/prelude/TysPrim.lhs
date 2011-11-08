@@ -326,6 +326,7 @@ kindTyConType kind = TyConApp kind []
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, argTypeKind, ubxTupleKind, constraintKind :: Kind
 
+-- See Note [Any kinds]
 anyKind          = kindTyConType anyKindTyCon
 liftedTypeKind   = kindTyConType liftedTypeKindTyCon
 unliftedTypeKind = kindTyConType unliftedTypeKindTyCon
@@ -628,11 +629,9 @@ threadIdPrimTyCon = pcPrimTyCon0 threadIdPrimTyConName PtrRep
 %*									*
 %************************************************************************
 
-JPM Todo: Document AnyK
-
 Note [Any types]
 ~~~~~~~~~~~~~~~~
-The type constructor Any::* has these properties
+The type constructor Any of kind forall k. k -> k has these properties:
 
   * It is defined in module GHC.Prim, and exported so that it is 
     available to users.  For this reason it's treated like any other 
@@ -654,6 +653,19 @@ The type constructor Any::* has these properties
   * It is used to instantiate otherwise un-constrained type variables of kind *
     For example   	length Any []
     See Note [Strangely-kinded void TyCons]
+
+Note [Any kinds]
+~~~~~~~~~~~~~~~~
+
+The type constructor AnyK (of sort BOX) is used internally only to zonk kind
+variables with no constraints on them. It appears in similar circumstances to
+Any, but at the kind level. For example:
+
+  type family Length (l :: [k]) :: Nat
+  type instance Length [] = Zero
+
+Length is kind-polymorphic, and when applied to the empty (promoted) list it
+will be supplied the kind AnyL: Length AnyK [].
 
 Note [Strangely-kinded void TyCons]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

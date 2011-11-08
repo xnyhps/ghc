@@ -256,13 +256,11 @@ rnHsTyKi _ _ (HsWrapTy {}) = panic "rnHsTyKi"
 
 rnHsTyKi isType doc (HsExplicitListTy k tys) = 
   ASSERT( isType )
-  WARN ( True, ppr (HsExplicitListTy k tys) )    -- JPM: ever happens?
   do tys' <- mapM (rnLHsType doc) tys
      return (HsExplicitListTy k tys')
 
 rnHsTyKi isType doc (HsExplicitTupleTy kis tys) =
-  ASSERT( isType ) 
-  WARN ( True, ppr (HsExplicitTupleTy kis tys) ) -- JPM: ever happens?
+  ASSERT( isType )
   do tys' <- mapM (rnLHsType doc) tys
      return (HsExplicitTupleTy kis tys')
 

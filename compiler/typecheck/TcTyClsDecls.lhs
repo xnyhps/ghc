@@ -310,7 +310,7 @@ getInitialKinds (L _ decl)
 	; inner_pairs <- get_inner_kinds decl
 	; return (main_pair : inner_pairs) }
   where
-    mk_arg_kind (UserTyVar _ _)        = newMetaKindVar -- liftedTypeKind -- JPM
+    mk_arg_kind (UserTyVar _ _)        = newMetaKindVar
     mk_arg_kind (KindedTyVar _ kind _) = scDsLHsKind kind
 
     mk_res_kind (TyFamily { tcdKind    = Just kind }) = scDsLHsKind kind

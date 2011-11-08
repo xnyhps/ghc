@@ -889,16 +889,7 @@ bindQTvs doc mb_cls tyvars thing_inside
        ; mapM_ dupBoundTyVar (findDupRdrNames tv_rdr_names)
 
        ; rdr_env <- getLocalRdrEnv
-{- JPM
-       ; tv_nbs <- mapM (mk_tv_name rdr_env) tv_rdr_names
-       ; let tv_ns, fresh_ns :: [Name]
-             tv_ns = map fst tv_nbs
-	     fresh_ns = [n | (n,True)  <- tv_nbs]
 
-       ; tyvars' <- zipWithM (\old new -> replaceLTyVarName old new (rnLHsKind doc)) tyvars tv_ns
-       ; (thing, fvs) <- bindLocalNames tv_ns $ thing_inside tyvars'
-       ; return (thing, delFVs fresh_ns fvs) }
--}
        ; tv_ns <- mapM (mk_tv_name rdr_env) tv_rdr_names
        ; tyvars' <- zipWithM (\old new -> replaceLTyVarName old new (rnLHsKind doc)) tyvars tv_ns
        ; (thing, fvs) <- bindLocalNamesFV tv_ns $ thing_inside tyvars'
