@@ -240,10 +240,8 @@ React with (F Int ~ b) ==> IR Stop True []    -- after substituting we re-canoni
 
 \begin{code}
 thePipeline :: [(String,SimplifierStage)]
-thePipeline = [ ("rewrite from inert eqs",     rewriteFromInertEqsStage) 
-                -- Always ContinueWith a potentially rewritten item
-              , ("canonicalization",        canonicalizationStage)
-                -- If ContinueWith, will be canonical 
+thePipeline = [ ("canonicalization",        canonicalizationStage)
+                -- If ContinueWith, will be canonical and fully rewritten wrt inert eqs
               , ("interact the inert eqs", interactWithInertEqsStage)
                 -- If ContinueWith, will be wanted/derived eq or non-eq
                 -- but can't rewrite not can be rewritten by the inerts
@@ -255,12 +253,6 @@ thePipeline = [ ("rewrite from inert eqs",     rewriteFromInertEqsStage)
 
 
 \begin{code}
-
--- Rewriting from inert equalities stage, see TcCanonical for details
-----------------------------------------------------------------------
-rewriteFromInertEqsStage :: SimplifierStage
-rewriteFromInertEqsStage = TcCanonical.rewriteFromInerts
-
 
 -- The canonicalization stage, see TcCanonical for details
 ----------------------------------------------------------

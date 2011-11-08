@@ -56,13 +56,13 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
-    getTcSEvVarCacheMap, setTcSEvVarCacheMap,
+    getTcSEvVarCacheMap, getTcSEvVarFlatCache, setTcSEvVarCacheMap, ppr_triemap,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
         -- Inerts 
     InertSet(..), 
-    getInertEqs, getCachedFlatEq, rewriteFromInertEqs,
+    getInertEqs, rewriteFromInertEqs, liftInertEqsTy,
     tyVarsOfInert, emptyInert, getTcSInerts, updInertSet, extractUnsolved,
     extractUnsolvedTcS,
     updInertSetTcS, partitionCCanMap, partitionEqMap,
@@ -468,7 +468,7 @@ updInertSetTcS item
               -- A non-derived eq must: (1) be non-rewritable by anything in the inerts
               --                        (2) not be able to rewrite anything in the inerts
             = do { let b1 = isReflCo $ 
-                            liftInertEqsPred subst inscope fl (evVarPred ev)
+                            liftInertEqsTy (subst,inscope) fl (evVarPred ev)
                  ; when (not b1)
                      (pprPanic "check_good_update" $ 
                       text "Fail, item can still be rewritten by inerts:" 
@@ -488,7 +488,7 @@ updInertSetTcS item
                      ) }
          check_good_update ct subst inscope
              = do { let b1 = isReflCo $ 
-                             liftInertEqsPred subst inscope (cc_flavor ct) 
+                             liftInertEqsTy (subst,inscope) (cc_flavor ct) 
                                                             (evVarPred (cc_id ct))
                   ; when (not b1)
                      (pprPanic "check_good_update" $ 
@@ -1017,6 +1017,11 @@ getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache
                          ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
                          ; return (evc_cache the_cache) }
 
+getTcSEvVarFlatCache :: TcS (TypeMap (EvVar,Type,CtFlavor))
+getTcSEvVarFlatCache = do { cache_var <- getTcSEvVarCache 
+                          ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
+                          ; return (evc_flat_cache the_cache) }
+
 setTcSEvVarCacheMap :: TypeMap (EvVar,CtFlavor) -> TcS () 
 setTcSEvVarCacheMap cache = do { cache_var <- getTcSEvVarCache 
                                ; orig_cache <- wrapTcS $ TcM.readTcRef cache_var
@@ -1403,22 +1408,6 @@ getInertEqs :: TcS (TyVarEnv (Ct,Coercion), InScopeSet)
 getInertEqs = do { inert <- getTcSInerts
                  ; return (inert_eqs inert, inert_eq_tvs inert) }
 
-getCachedFlatEq :: TyCon -> [Xi] -> CtFlavor -> TcS (Maybe (Xi,Coercion)) 
--- Returns a coercion between (tc xi_args ~  xi) if such an inert item exists
-getCachedFlatEq tc xi_args fl 
-  = do { traceTcS "getCachedFlatEq" $ ppr (mkTyConApp tc xi_args)
-       ; cache_var <- getTcSEvVarCache
-       ; cache <- wrapTcS $ TcM.readTcRef cache_var
-       ; let flat_cache = evc_flat_cache cache
-       ; case lookupTM (mkTyConApp tc xi_args) flat_cache of
-           Just (ev',xi',fl') 
-             | fl' `canRewrite` fl 
-             -> do { traceTcS "getCachedFlatEq" $ text "success!"
-                   ; return (Just (xi', mkEqVarLCo ev')) }
-           _ -> do { traceTcS "getCachedFlatEq" $ 
-                              text "failure" <+> ppr_triemap flat_cache                             
-                   ; return Nothing }
-       }
 {-
        ; inert <- getTcSInerts
        ; let (fun_eq_relevants,_) = getRelevantCts tc (inert_funeqs inert)
@@ -1440,7 +1429,7 @@ rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -> TcS (EvVarCreated,Bool)
 -- Boolean flag returned: True <-> no rewriting happened
 rewriteFromInertEqs (subst,inscope) fl v 
-  = do { let co = liftInertEqsPred subst inscope fl (evVarPred v)
+  = do { let co = liftInertEqsTy (subst,inscope) fl (evVarPred v)
        ; if isReflCo co then return (EvVarCreated False v,True)
          else do { traceTcS "rewriteFromInertEqs" $
                    text "Original item =" <+> ppr v <+> dcolon <+> ppr (evVarPred v)
@@ -1456,11 +1445,10 @@ rewriteFromInertEqs (subst,inscope) fl v
 
 
 -- See Note [LiftInertEqs]
-liftInertEqsPred :: TyVarEnv (Ct,Coercion)
-                 -> InScopeSet
+liftInertEqsTy :: (TyVarEnv (Ct,Coercion),InScopeSet)
                  -> CtFlavor
                  -> PredType -> Coercion
-liftInertEqsPred subst inscope fl pty
+liftInertEqsTy (subst,inscope) fl pty
   = ty_cts_subst subst inscope fl pty
 
 
