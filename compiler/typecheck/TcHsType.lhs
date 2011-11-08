@@ -47,6 +47,7 @@ import {-# SOURCE #-}	TcSplice( kcSpliceType )
 import HsSyn
 import RnHsSyn
 import TcRnMonad
+import RnEnv   ( polyKindsErr )
 import TcHsSyn ( mkZonkTcTyVar )
 import TcEnv
 import TcMType
@@ -67,7 +68,7 @@ import NameSet
 import TysWiredIn
 import BasicTypes
 import SrcLoc
-import DynFlags ( ExtensionFlag( Opt_ConstraintKinds ) )
+import DynFlags ( ExtensionFlag( Opt_ConstraintKinds, Opt_PolyKinds ) )
 import Util
 import UniqSupply
 import Outputable
@@ -1326,7 +1327,7 @@ sc_ds_app (HsAppTy ki1 ki2) kis = sc_ds_app (unLoc ki1) (ki2:kis)
 sc_ds_app (HsTyVar tc)      kis =
   do arg_kis <- mapM sc_ds_lhs_kind kis
      sc_ds_var_app tc arg_kis
-sc_ds_app _                 kis = failWithTc (quotes (ppr ki) <+> 
+sc_ds_app ki                _   = failWithTc (quotes (ppr ki) <+> 
                                     ptext (sLit "is not a kind constructor"))
 
 -- IA0_TODO: With explicit kind polymorphism I might need to add ATyVar
@@ -1348,6 +1349,8 @@ sc_ds_var_app name arg_kis = do
   case thing of
     AGlobal (ATyCon tc)
       | isAlgTyCon tc || isTupleTyCon tc -> do
+      poly_kinds <- xoptM Opt_PolyKinds
+      unless poly_kinds $ addErr (polyKindsErr name)
       let tc_kind = tyConKind tc
       case isPromotableKind tc_kind of
         Just n | n == length arg_kis ->
