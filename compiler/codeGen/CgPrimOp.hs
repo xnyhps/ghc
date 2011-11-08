@@ -401,6 +401,12 @@ emitPrimOp [res] PopCnt64Op [w] live = emitPopCntCall res w W64 live
 emitPrimOp [res] PopCntOp [w] live = emitPopCntCall res w wordWidth live
 
 -- SIMD vector packing and unpacking
+emitPrimOp [res] Float2FloatX4Op [e] _ =
+    doVecPack vec4f32 [e,e,e,e] res
+
+emitPrimOp [res] FloatX4InsertOp [v,e,i] _ =
+    doVecInsert vec4f32 v e i res
+
 emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
     doVecPack vec4f32 es res
 
@@ -703,6 +709,17 @@ mkBasicIndexedWrite off (Just cast) write_rep base idx val
 
 ------------------------------------------------------------------------------
 -- Helpers for translating vector packing and unpacking.
+
+doVecInsert :: CmmType -> CmmExpr -> CmmExpr -> CmmExpr -> CmmFormal -> Code
+doVecInsert ty src e idx res =
+    stmtC $ CmmAssign (CmmLocal res)
+                      (CmmMachOp (MO_V_Insert len wid) [src, e, idx])
+  where
+    len :: Length
+    len = vecLength ty 
+
+    wid :: Width
+    wid = typeWidth (vecType ty)
 
 doVecPack :: CmmType -> [CmmExpr] -> CmmFormal -> Code
 doVecPack ty es res = do

@@ -1939,6 +1939,14 @@ section "SIMD"
 
 primtype FloatX4#
 
+primop Float2FloatX4Op "float2FloatX4#" GenPrimOp     
+   Float# -> FloatX4#
+   with
+   code_size = 4
+
+primop FloatX4InsertOp "insertFloatX4#" GenPrimOp     
+   FloatX4# -> Float# -> Int# -> FloatX4#
+
 primop FloatX4PackOp "packFloatX4#" GenPrimOp         
    Float# -> Float# -> Float# -> Float# -> FloatX4#
    with
