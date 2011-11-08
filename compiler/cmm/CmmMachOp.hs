@@ -104,8 +104,8 @@ data MachOp
   | MO_FF_Conv Width Width      -- Float -> Float
 
   -- Vector element insertion and extraction operations
-  | MO_V_Insert  Length Width
-  | MO_V_Extract Length Width
+  | MO_V_Insert  Length Width   -- Insert scalar into vector
+  | MO_V_Extract Length Width   -- Extract scalar from vector
 
   -- Float vector operations
   | MO_VF_Add  Length Width  
