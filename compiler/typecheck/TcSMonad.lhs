@@ -56,7 +56,7 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
-    getTcSEvVarCacheMap, getTcSEvVarFlatCache, setTcSEvVarCacheMap, ppr_triemap,
+    getTcSEvVarCacheMap, getTcSEvVarFlatCache, setTcSEvVarCacheMap, pprFlatCache,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
@@ -1289,53 +1289,8 @@ updateCache ecache (ev,fl,pty)
         is_function_free (ForAllTy _ ty) = is_function_free ty
 
 
-
-{- 
-
-  = case classifyPredType pty
-  where clsifier = classifyPredType pty 
-
-                 -- Only update the cache if not an IP
-               ; when (not (isIPPred pty)) $
-                   do { let ecache' = alterTM pty (\_ -> Just (new_evvar,fl)) $
-                                      evc_cache ecache
-
-                      ; traceTcS "Updating flat_cache" $ 
-                                 text "before =" <+> ppr_triemap (evc_flat_cache ecache)
-
-                      ; let flat_cache'
-                             | EqPred ty1 ty2 <- classifyPredType pty
-                             , Just (tc,args) <- splitTyConApp_maybe ty1
-                             , isSynFamilyTyCon tc && is_function_free ty1 && is_function_free ty2
-                             = alterTM ty1 (\_ -> Just (new_evvar,ty2,fl)) $ 
-                               evc_flat_cache ecache
-
-                             | otherwise = evc_flat_cache ecache 
-
-                      ; let new_cache = ecache { evc_cache     = ecache'
-                                               , evc_flat_cache = flat_cache'}
-
-                      ; traceTcS "Updating flat_cache" $ 
-                                 text "after =" <+> ppr_triemap flat_cache'
-
-                      ; wrapTcS (TcM.writeTcRef eref new_cache) }
-               ; return (EvVarCreated True new_evvar) }
-        is_function_free ty = go ty
-    ********************* 
-          where go (TyConApp tc tys)
-                    | isSynFamilyTyCon tc
-                    = False
-                    | otherwise
-                    = all go tys
-                go (TyVarTy {})    = True
-                go (FunTy arg res) = go arg && go res
-                go (AppTy fun arg) = go fun && go arg
-                go (ForAllTy _ ty) = go ty
--}
-
-
-ppr_triemap :: TypeMap (EvVar,b,c) -> SDoc
-ppr_triemap tm = ppr pairs
+pprFlatCache :: TypeMap (EvVar,b,c) -> SDoc
+pprFlatCache tm = ppr pairs
  where pairs = foldTM (\(ev,_,_) evrs -> (ev,evVarPred ev):evrs) tm []
 
 
@@ -1407,20 +1362,6 @@ matchFam tycon args = wrapTcS $ tcLookupFamInst tycon args
 getInertEqs :: TcS (TyVarEnv (Ct,Coercion), InScopeSet)
 getInertEqs = do { inert <- getTcSInerts
                  ; return (inert_eqs inert, inert_eq_tvs inert) }
-
-{-
-       ; inert <- getTcSInerts
-       ; let (fun_eq_relevants,_) = getRelevantCts tc (inert_funeqs inert)
-       ; let acceptables = filterBag fun_match fun_eq_relevants
-       ; case bagToList acceptables of 
-           []     -> return Nothing
-           (cc:_) -> return $ Just (cc_rhs cc, mkEqVarLCo (cc_id cc)) }
-  where fun_match (CFunEqCan { cc_flavor = ifl, cc_tyargs = ixis }) 
-            = eqTypes xi_args ixis && ifl `canRewrite` fl
-        fun_match _ = False -- Should be an assertion failure, really
-
--}
-
 
 rewriteFromInertEqs :: (TyVarEnv (Ct,Coercion), InScopeSet)
                     -- Precondition: Ct are CTyEqCans only!

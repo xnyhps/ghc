@@ -7,7 +7,7 @@
 -- for details
 
 module TcCanonical(
-    canonicalize, -- rewriteFromInerts, solveFromEvVars,
+    canonicalize,
     canOccursCheck, canEq, 
     rewriteWithFunDeps,
     emitFDWorkAsWanted, emitFDWorkAsDerived,
@@ -242,11 +242,11 @@ canIP :: SubGoalDepth -- Depth
       -> IPName Name -> Type -> TcS StopOrContinue
 -- Precondition: EvVar is implicit parameter evidence
 canIP d fl v nm ty
-  =    -- Note [Canonical implicit parameter constraints] explains why it's possible
-       -- in principle to not flatten, but since flattening applies the inert substitution
-       -- we choose to flatten anyway.
+  =    -- Note [Canonical implicit parameter constraints] explains why it's 
+       -- possible in principle to not flatten, but since flattening applies 
+       -- the inert substitution we choose to flatten anyway.
     do { (xi,co) <- flatten d fl (mkIPPred nm ty)
-       ; if isReflCo co then 
+       ; if isReflCo co then
              continueWith $ CIPCan { cc_id = v, cc_flavor = fl
                                    , cc_ip_nm = nm, cc_ip_ty = ty
                                    , cc_depth = d }
@@ -291,7 +291,7 @@ canClass d fl v cls tys
        ; let co = mkTyConAppCo (classTyCon cls) cos 
              xi = mkClassPred cls xis
 
-                  -- No flattening, get superclasses and continue with canonical
+                  -- No flattening, continue with canonical
        ; if isReflCo co then 
              continueWith $ CDictCan { cc_id = v, cc_flavor = fl
                                      , cc_tyargs = xis, cc_class = cls
@@ -303,7 +303,7 @@ canClass d fl v cls tys
                      Wanted  {} -> setEvBind v (EvCast v_new co)
                      Given   {} -> setEvBind v_new (EvCast v (mkSymCo co))
                      Derived {} -> return ()
-                    -- Emit superclasses and continue only if flat constraint is new
+                    -- Continue only if flat constraint is new
                  ; if isNewEvVar evc then
                         continueWith $ CDictCan { cc_id = v_new, cc_flavor = fl
                                                 , cc_tyargs = xis, cc_class = cls
@@ -628,10 +628,8 @@ flatten d fl (TyConApp tc tys)
                        | fl' `canRewrite` fl 
                        -> do { traceTcS "getCachedFlatEq" $ text "success!"
                              ; (xi'',co) <- flatten 0 fl' xi' -- co :: xi'' ~ xi'
-                             ; return $ Just (xi'', mkEqVarLCo ev' `mkTransCo` (mkSymCo co)) 
-                             }
-                   _ -> do { traceTcS "getCachedFlatEq" $ 
-                             text "failure" <+> ppr_triemap flat_cache                             
+                             ; return $ Just (xi'', mkEqVarLCo ev' `mkTransCo` (mkSymCo co)) }
+                   _ -> do { traceTcS "getCachedFlatEq" $ text "failure!" <+> pprFlatCache flat_cache
                            ; return Nothing }
                }
 

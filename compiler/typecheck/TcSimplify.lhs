@@ -1287,11 +1287,11 @@ findDefaultableGroups (ctxt, default_tys, (ovl_strings, extended_defaults))
               b2 = not (tv `elemVarSet` bad_tvs)
               b3 = isTouchableMetaTyVar_InRange untch tv 
               b4 = defaultable_classes [cc_class cc | (cc,_) <- ds]
-          in pprTrace "is_defaultable_group" (vcat [ text "isTyConable   " <+> ppr tv <+> ppr b1 
+          in (b1 && b2 && b3 && b4)
+          {- pprTrace "is_defaultable_group" (vcat [ text "isTyConable   " <+> ppr tv <+> ppr b1 
                                                    , text "is not in bad " <+> ppr tv <+> ppr b2 
                                                    , text "is touchable  " <+> ppr tv <+> ppr b3
-                                                   , text "is defaultable" <+> ppr tv <+> ppr b4 ]) 
-                                             (b1 && b2 && b3 && b4)
+                                                   , text "is defaultable" <+> ppr tv <+> ppr b4 ]) -}
     is_defaultable_group [] = panic "defaultable_group"
 
     defaultable_classes clss 
@@ -1307,8 +1307,7 @@ findDefaultableGroups (ctxt, default_tys, (ovl_strings, extended_defaults))
     -- is_num_class adds IsString to the standard numeric classes, 
     -- when -foverloaded-strings is enabled
 
-    is_std_class cls = let b = isStandardClass cls || (ovl_strings && (cls `hasKey` isStringClassKey))
-                       in pprTrace "is_std_class" (text "cls =" <+> ppr cls <+> ppr b) $ b
+    is_std_class cls = isStandardClass cls || (ovl_strings && (cls `hasKey` isStringClassKey))
     -- Similarly is_std_class
 
 ------------------------------
