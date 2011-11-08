@@ -577,8 +577,13 @@ tcFamInstDecl1 fam_tc (decl@TyData { tcdND = new_or_data, tcdCtxt = ctxt
        ; tcFamTyPats fam_tc tvs pats (\_always_star -> kcDataDecl decl) $ 
            \tvs' pats' resultKind -> do
 
+         -- Check that left-hand side contains no type family applications
+         -- (vanilla synonyms are fine, though, and we checked for
+         -- foralls earlier)
+       { mapM_ checkTyFamFreeness pats'
+         
          -- Result kind must be '*' (otherwise, we have too few patterns)
-       { checkTc (isLiftedTypeKind resultKind) $ tooFewParmsErr (tyConArity fam_tc)
+       ; checkTc (isLiftedTypeKind resultKind) $ tooFewParmsErr (tyConArity fam_tc)
 
        ; stupid_theta <- tcHsKindedContext =<< kcHsContext ctxt
        ; dataDeclChecks (tcdName decl) new_or_data stupid_theta cons

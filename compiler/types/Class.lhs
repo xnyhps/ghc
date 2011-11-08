@@ -102,11 +102,14 @@ type ClassATItem = (TyCon, [ATDefault])
   -- We can have more than one default per type; see
   -- Note [Associated type defaults] in TcTyClsDecls
 
-data ATDefault = ATD [TyVar] [Type] Type
-  -- Each associated type default template is a triple of:
-  --   1. TyVars of the RHS and family arguments (including the class TVs)
-  --   3. The instantiated family arguments
-  --   2. The RHS of the synonym
+-- Each associated type default template is a triple of:
+data ATDefault = ATD { -- TyVars of the RHS and family arguments 
+                       -- (including the class TVs)
+                       atDefaultTys     :: [TyVar],
+                       -- The instantiated family arguments
+                       atDefaultPats    :: [Type],
+                       -- The RHS of the synonym
+                       atDefaultRhs     ::  Type }
 
 -- | Convert a `DefMethSpec` to a `DefMeth`, which discards the name field in
 --   the `DefMeth` constructor of the `DefMeth`.

@@ -635,7 +635,7 @@ tcTyClDecl1 _parent calc_isrec
 		    tycon_name = tyConName (classTyCon clas)
 		    tc_isrec = calc_isrec tycon_name
 
-            ; at_stuff <- tcClassATs class_name (AssocFamilyTyCon clas) tvs' ats at_defs
+            ; at_stuff <- tcClassATs class_name (AssocFamilyTyCon clas) ats at_defs
             -- NB: 'ats' only contains "type family" and "data family" declarations
             -- and 'at_defs' only contains associated-type defaults
 
@@ -693,11 +693,10 @@ Note that:
 \begin{code}
 tcClassATs :: Name             -- The class name (not knot-tied)
            -> TyConParent      -- The class parent of this associated type
-           -> [TyVar]          -- Class type variables (can't look them up in class b/c its knot-tied)
            -> [LTyClDecl Name] -- Associated types. All FamTyCon
            -> [LTyClDecl Name] -- Associated type defaults. All SynTyCon
            -> TcM [ClassATItem]
-tcClassATs class_name parent clas_tvs ats at_defs
+tcClassATs class_name parent ats at_defs
   = do {  -- Complain about associated type defaults for non associated-types
          sequence_ [ failWithTc (badATErr class_name n)
                    | n <- map (tcdName . unLoc) at_defs
@@ -715,33 +714,21 @@ tcClassATs class_name parent clas_tvs ats at_defs
                                                            (const Recursive)) at
                   ; let at_defs = lookupNameEnv at_defs_map (tcdName (unLoc at))
                                         `orElse` []
-                  ; atd <- mapM (tcDefaultAssocDecl fam_tc clas_tvs) at_defs
+                  ; atd <- mapM (tcDefaultAssocDecl fam_tc) at_defs
                   ; return (fam_tc, atd) }
 
 
 -------------------------
 tcDefaultAssocDecl :: TyCon              -- ^ Family TyCon
-                   -> [TyVar]            -- ^ TyVars of associated type's class
                    -> LTyClDecl Name     -- ^ RHS
                    -> TcM ATDefault      -- ^ Type checked RHS and free TyVars
-tcDefaultAssocDecl fam_tc clas_tvs (L loc decl)
+tcDefaultAssocDecl fam_tc (L loc decl)
   = setSrcSpan loc $
-    tcAddDefaultAssocDeclCtxt decl $
+    tcAddDefaultAssocDeclCtxt (tcdName decl) $
     do { traceTc "tcDefaultAssocDecl" (ppr decl)
        ; (at_tvs, at_tys, at_rhs) <- tcSynFamInstDecl fam_tc decl
-       
-       -- See Note [Checking consistent instantiation]
-       -- We only want to check this on the *class* TyVars,
-       -- not the *family* TyVars (there may be more of these)
--- JPM: MOVE TO CHECK VALID CLASS
-       ; zipWithM_ check_arg (tyConTyVars fam_tc) at_tys
-
        ; return (ATD at_tvs at_tys at_rhs) }
-  where
-    check_arg fam_tc_tv at_ty
-      = checkTc (not (fam_tc_tv `elem` clas_tvs) || mkTyVarTy fam_tc_tv `eqType` at_ty) 
-                (wrongATArgErr at_ty (mkTyVarTy fam_tc_tv))
-
+-- We check for well-formedness and validity later, in checkValidClass
 -------------------------
 
 tcSynFamInstDecl :: TyCon -> TyClDecl Name -> TcM ([TyVar], [Type], Type)
@@ -751,16 +738,10 @@ tcSynFamInstDecl fam_tc (TySynonym { tcdTyVars = tvs, tcdTyPats = Just pats
 
        ; let kc_rhs rhs kind = kcCheckLHsType rhs (EK kind EkUnk) 
 
-       ; lcl_env <- getLclEnv
-       ; traceTc "tc-lcl-env1" (ppr (tcl_env lcl_env))
        ; tcFamTyPats fam_tc tvs pats (kc_rhs rhs)
                 $ \tvs' pats' res_kind -> do
 
-       { lcl_env <- getLclEnv
-       ; traceTc "tc-lcl-env2" (ppr (tcl_env lcl_env))
-       ; rhs'  <- kc_rhs rhs res_kind
-       ; lcl_env <- getLclEnv
-       ; traceTc "tc-lcl-env3" (ppr (tcl_env lcl_env))
+       { rhs'  <- kc_rhs rhs res_kind
        ; rhs'' <- tcHsKindedType rhs'
 
        ; return (tvs', pats', rhs'') } }
@@ -814,24 +795,17 @@ tcFamTyPats fam_tc tyvars pats kind_checker thing_inside
                             | (kind,n) <- kinds `zip` [1..]]
 
         -- Kind check the "thing inside"; this just works by 
-	-- side-effecting any kind unification variables
+        -- side-effecting any kind unification variables
        ; _ <- kind_checker resKind
 
          -- Type check indexed data type declaration
          -- We kind generalize the kind patterns since they contain
          -- all the meta kind variables
-	 -- See Note [Quantifying over family patterns]
-       ; -- zapLclTypeEnv $
-         tcTyVarBndrsKindGen tvs $ \tvs' -> do {
+         -- See Note [Quantifying over family patterns]
+       ; tcTyVarBndrsKindGen tvs $ \tvs' -> do {
 
        ; (t_kvs, fam_arg_kinds') <- kindGeneralizeKinds fam_arg_kinds
        ; k_typats <- mapM tcHsKindedType typats
-
-         -- Check that left-hand side contains no type family applications
-         -- (vanilla synonyms are fine, though, and we checked for
-         -- foralls earlier)
-       -- JPM: MOVE TO CHECK VALID CLASS
-       ; mapM_ checkTyFamFreeness k_typats
 
        ; thing_inside (t_kvs ++ tvs') (fam_arg_kinds' ++ k_typats) resKind }
        }
@@ -1382,8 +1356,9 @@ checkValidClass cls
 	-- Check the class operations
 	; mapM_ (check_op constrained_class_methods) op_stuff
 
-        -- Check the associated type defaults are well-formed
-        ; mapM_ check_at at_stuff
+        -- Check the associated type defaults are well-formed and instantiated
+        -- See Note [Checking consistent instantiation]
+        ; mapM_ check_at_defs at_stuff
 
   	-- Check that if the class has generic methods, then the
 	-- class has only one parameter.  We can't do generic
@@ -1434,8 +1409,17 @@ checkValidClass cls
 		-- in the context of a for-all must mention at least one quantified
 		-- type variable.  What a mess!
 
-    check_at (_fam_tc, defs)
-      = mapM_ (\(ATD _tvs pats rhs) -> checkValidFamInst pats rhs) defs
+    check_at_defs (fam_tc, defs)
+      = do mapM_ (\(ATD _tvs pats rhs) -> checkValidFamInst pats rhs) defs
+           tcAddDefaultAssocDeclCtxt (tyConName fam_tc) $ 
+             mapM_ (zipWithM_ check_arg (tyConTyVars fam_tc)) (map atDefaultPats defs)
+
+    -- We only want to check this on the *class* TyVars,
+    -- not the *family* TyVars (there may be more of these)
+    check_arg fam_tc_tv at_ty
+      = checkTc (   not (fam_tc_tv `elem` tyvars)
+                 || mkTyVarTy fam_tc_tv `eqType` at_ty) 
+          (wrongATArgErr at_ty (mkTyVarTy fam_tc_tv))
 
 checkFamFlag :: Name -> TcM ()
 -- Check that we don't use families without -XTypeFamilies
@@ -1660,12 +1644,12 @@ gotten by appying the eq_spec to the univ_tvs of the data con.
 %************************************************************************
 
 \begin{code}
-tcAddDefaultAssocDeclCtxt :: TyClDecl Name -> TcM a -> TcM a
-tcAddDefaultAssocDeclCtxt decl thing_inside
+tcAddDefaultAssocDeclCtxt :: Name -> TcM a -> TcM a
+tcAddDefaultAssocDeclCtxt name thing_inside
   = addErrCtxt ctxt thing_inside
   where
      ctxt = hsep [ptext (sLit "In the type synonym instance default declaration for"),
-                  quotes (ppr (tcdName decl))]
+                  quotes (ppr name)]
 
 resultTypeMisMatch :: Name -> DataCon -> DataCon -> SDoc
 resultTypeMisMatch field_name con1 con2
