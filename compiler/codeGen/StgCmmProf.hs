@@ -6,6 +6,13 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module StgCmmProf (
 	initCostCentres, ccType, ccsType,
 	mkCCostCentre, mkCCostCentreStack,
@@ -206,9 +213,11 @@ initCostCentres (local_CCs, ___extern_CCs, singleton_CCSs)
 
 emitCostCentreDecl :: CostCentre -> FCode ()
 emitCostCentreDecl cc = do 
-  { label <- newStringCLit (costCentreUserName cc)
-  ; modl  <- newStringCLit (Module.moduleNameString 
-               	               (Module.moduleName (cc_mod cc)))
+                        -- NB. bytesFS: we want the UTF-8 bytes here (#5559)
+  { label <- newByteStringCLit (bytesFS $ costCentreUserNameFS cc)
+  ; modl  <- newByteStringCLit (bytesFS $ Module.moduleNameFS
+                                        $ Module.moduleName
+                                        $ cc_mod cc)
                 -- All cost centres will be in the main package, since we
                 -- don't normally use -auto-all or add SCCs to other packages.
                 -- Hence don't emit the package name in the module here.

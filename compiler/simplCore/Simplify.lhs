@@ -4,6 +4,13 @@
 \section[Simplify]{The main module of the simplifier}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Simplify ( simplTopBinds, simplExpr ) where
 
 #include "HsVersions.h"
@@ -1052,6 +1059,10 @@ simplTick env tickish expr cont
        ; return (env'', wrapFloats env expr'')
        }
 
+  | Just expr' <- want_to_push_tick_inside
+    -- see Note [case-of-scc-of-case]
+  = simplExprF env expr' cont
+
   | otherwise
   = do { let (inc,outc) = splitCont cont
        ; (env', expr') <- simplExprF (zapFloats env) expr inc
@@ -1060,6 +1071,21 @@ simplTick env tickish expr cont
        ; rebuild env'' expr' (TickIt tickish' outc)
        }
  where
+  want_to_push_tick_inside
+     | not interesting_cont = Nothing
+     | otherwise
+       = case expr of
+           Case scrut bndr ty alts
+              -> Just (Case (mkTick tickish scrut) bndr ty alts')
+             where t_scope = mkNoTick tickish -- drop the tick on the dup'd ones
+                   alts'   = [ (c,bs, mkTick t_scope e) | (c,bs,e) <- alts]
+           _other -> Nothing
+
+  interesting_cont = case cont of
+                          Select _ _ _ _ _ -> True
+                          _ -> False
+
+
   simplTickish env tickish
     | Breakpoint n ids <- tickish
           = Breakpoint n (map (getDoneId . substId env) ids)
@@ -1076,6 +1102,38 @@ simplTick env tickish expr cont
   getDoneId (DoneId id) = id
   getDoneId (DoneEx e)  = getIdFromTrivialExpr e -- Note [substTickish] in CoreSubst
   getDoneId other = pprPanic "getDoneId" (ppr other)
+
+-- Note [case-of-scc-of-case]
+-- It's pretty important to be able to transform case-of-case when
+-- there's an SCC in the way.  For example, the following comes up
+-- in nofib/real/compress/Encode.hs:
+--
+--        case scctick<code_string.r1>
+--             case $wcode_string_r13s wild_XC w1_s137 w2_s138 l_aje
+--             of _ { (# ww1_s13f, ww2_s13g, ww3_s13h #) ->
+--             (ww1_s13f, ww2_s13g, ww3_s13h)
+--             }
+--        of _ { (ww_s12Y, ww1_s12Z, ww2_s130) ->
+--        tick<code_string.f1>
+--        (ww_s12Y,
+--         ww1_s12Z,
+--         PTTrees.PT
+--           @ GHC.Types.Char @ GHC.Types.Int wild2_Xj ww2_s130 r_ajf)
+--        }
+--  
+-- We really want this case-of-case to fire, because then the 3-tuple
+-- will go away (indeed, the CPR optimisation is relying on this
+-- happening).  But the scctick is in the way - we need to push it
+-- inside to expose the case-of-case.  So we perform this
+-- transformation on the inner case:
+--
+--   scctick c (case e of { p1 -> e1; ...; pn -> en })
+--    ==>
+--   case (scctick c e) of { p1 -> scc c e1; ...; pn -> scc c en }
+--
+-- So we've moved a constant amount of work out of the scc to expose
+-- the case.  We only do this when the continuation is interesting: in
+-- for now, it has to be another Case (maybe generalise this later).
 \end{code}
 
 

@@ -1,4 +1,11 @@
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# LANGUAGE BangPatterns, DeriveDataTypeable #-}
 
 module CostCentre (
@@ -17,7 +24,7 @@ module CostCentre (
         isCafCCS, isCafCC, isSccCountCC, sccAbleCC, ccFromThisModule,
 
 	pprCostCentreCore,
-	costCentreUserName,
+        costCentreUserName, costCentreUserNameFS,
 
 	cmpCostCentre	-- used for removing dups in a list
     ) where
@@ -273,9 +280,13 @@ ppCostCentreLbl (NormalCC {cc_name = n, cc_mod = m, cc_is_caf = is_caf})
 -- This is the name to go in the user-displayed string, 
 -- recorded in the cost centre declaration
 costCentreUserName :: CostCentre -> String
-costCentreUserName (NoCostCentre)  = "NO_CC"
-costCentreUserName (AllCafsCC {})  = "CAF"
-costCentreUserName (NormalCC {cc_name = name, cc_is_caf = is_caf})
-  =  case is_caf of { CafCC -> "CAF:";   _ -> "" } ++ unpackFS name
+costCentreUserName = unpackFS . costCentreUserNameFS
 
+costCentreUserNameFS :: CostCentre -> FastString
+costCentreUserNameFS (NoCostCentre)  = mkFastString "NO_CC"
+costCentreUserNameFS (AllCafsCC {})  = mkFastString "CAF"
+costCentreUserNameFS (NormalCC {cc_name = name, cc_is_caf = is_caf})
+  =  case is_caf of
+      CafCC -> mkFastString "CAF:" `appendFS` name
+      _     -> name
 \end{code}

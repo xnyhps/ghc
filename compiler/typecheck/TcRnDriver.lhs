@@ -5,6 +5,13 @@
 \section[TcMovectle]{Typechecking a whole module}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module TcRnDriver (
 #ifdef GHCI
 	tcRnStmt, tcRnExpr, tcRnType,
@@ -78,6 +85,7 @@ import Class
 import TcType   ( orphNamesOfDFunHead )
 import Inst	( tcGetInstEnvs )
 import Data.List ( sortBy )
+import Data.IORef ( readIORef )
 
 #ifdef GHCI
 import TcType   ( isUnitTy, isTauTy )
@@ -326,12 +334,14 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
 	-- Just discard the auxiliary bindings; they are generated 
 	-- only for Haskell source code, and should already be in Core
    tcg_env <- tcTyAndClassDecls emptyModDetails rn_decls ;
+   dep_files <- liftIO $ readIORef (tcg_dependent_files tcg_env) ;
 
    setGblEnv tcg_env $ do {
 	-- Make the new type env available to stuff slurped from interface files
    
 	-- Now the core bindings
    core_binds <- initIfaceExtCore (tcExtCoreBindings src_binds) ;
+
 
 	-- Wrap up
    let {
@@ -364,7 +374,8 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
                                 mg_hpc_info  = emptyHpcInfo False,
                                 mg_modBreaks = emptyModBreaks,
                                 mg_vect_info = noVectInfo,
-                                mg_trust_pkg = False
+                                mg_trust_pkg = False,
+                                mg_dependent_files = dep_files
                             } } ;
 
    tcCoreDump mod_guts ;

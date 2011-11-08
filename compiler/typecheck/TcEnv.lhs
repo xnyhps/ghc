@@ -13,40 +13,40 @@ module TcEnv(
 
         -- Global environment
         tcExtendGlobalEnv, tcExtendGlobalEnvImplicit, setGlobalTypeEnv,
-	tcExtendGlobalValEnv,
-	tcLookupLocatedGlobal,	tcLookupGlobal, 
-	tcLookupField, tcLookupTyCon, tcLookupClass, tcLookupDataCon,
-	tcLookupLocatedGlobalId, tcLookupLocatedTyCon,
+        tcExtendGlobalValEnv,
+        tcLookupLocatedGlobal, tcLookupGlobal, 
+        tcLookupField, tcLookupTyCon, tcLookupClass, tcLookupDataCon,
+        tcLookupLocatedGlobalId, tcLookupLocatedTyCon,
         tcLookupLocatedClass, tcLookupInstance,
-	
-	-- Local environment
-	tcExtendKindEnv, tcExtendKindEnvTvs, tcExtendTcTyThingEnv,
-	tcExtendTyVarEnv, tcExtendTyVarEnv2, 
-	tcExtendGhciEnv, tcExtendLetEnv,
-	tcExtendIdEnv, tcExtendIdEnv1, tcExtendIdEnv2, 
-	tcLookup, tcLookupLocated, tcLookupLocalIds, 
-	tcLookupId, tcLookupTyVar, getScopedTyVarBinds,
-	getInLocalScope,
-	wrongThingErr, pprBinders,
+        
+        -- Local environment
+        tcExtendKindEnv, tcExtendKindEnvTvs, tcExtendTcTyThingEnv,
+        tcExtendTyVarEnv, tcExtendTyVarEnv2, 
+        tcExtendGhciEnv, tcExtendLetEnv,
+        tcExtendIdEnv, tcExtendIdEnv1, tcExtendIdEnv2, 
+        tcLookup, tcLookupLocated, tcLookupLocalIds, 
+        tcLookupId, tcLookupTyVar, getScopedTyVarBinds,
+        getInLocalScope,
+        wrongThingErr, pprBinders,
 
-	tcExtendRecEnv,    	-- For knot-tying
+        tcExtendRecEnv,         -- For knot-tying
 
-	-- Rules
- 	tcExtendRules,
+        -- Rules
+         tcExtendRules,
 
-	-- Defaults
-	tcGetDefaultTys,
+        -- Defaults
+        tcGetDefaultTys,
 
-	-- Global type variables
-	tcGetGlobalTyVars, zapLclTypeEnv,
+        -- Global type variables
+        tcGetGlobalTyVars, zapLclTypeEnv,
 
-	-- Template Haskell stuff
-	checkWellStaged, tcMetaTy, thLevel, 
-	topIdLvl, thTopLevelId, thRnBrack, isBrackStage,
+        -- Template Haskell stuff
+        checkWellStaged, tcMetaTy, thLevel, 
+        topIdLvl, thTopLevelId, thRnBrack, isBrackStage,
 
-	-- New Ids
-	newLocalName, newDFunName, newFamInstTyConName, 
-	mkStableIdFromString, mkStableIdFromName
+        -- New Ids
+        newLocalName, newDFunName, newFamInstTyConName, 
+        mkStableIdFromString, mkStableIdFromName
   ) where
 
 #include "HsVersions.h"

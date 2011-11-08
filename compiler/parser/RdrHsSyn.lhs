@@ -37,25 +37,25 @@ module RdrHsSyn (
         checkKindSigs,        -- [LTyClDecl RdrName] -> P ()
         checkPattern,         -- HsExp -> P HsPat
         bang_RDR,
-	checkPatterns,	      -- SrcLoc -> [HsExp] -> P [HsPat]
-	checkMonadComp,       -- P (HsStmtContext RdrName)
-	checkValDef,	      -- (SrcLoc, HsExp, HsRhs, [HsDecl]) -> P HsDecl
-	checkValSig,	      -- (SrcLoc, HsExp, HsRhs, [HsDecl]) -> P HsDecl
-	checkDoAndIfThenElse,
+        checkPatterns,        -- SrcLoc -> [HsExp] -> P [HsPat]
+        checkMonadComp,       -- P (HsStmtContext RdrName)
+        checkValDef,          -- (SrcLoc, HsExp, HsRhs, [HsDecl]) -> P HsDecl
+        checkValSig,          -- (SrcLoc, HsExp, HsRhs, [HsDecl]) -> P HsDecl
+        checkDoAndIfThenElse,
         checkRecordSyntax,
-	parseError,	    
-	parseErrorSDoc,	    
+        parseError,
+        parseErrorSDoc,
     ) where
 
 import HsSyn            -- Lots of it
 import Class            ( FunDep )
-import RdrName		( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc, 
-			  isRdrDataCon, isUnqual, getRdrName, setRdrNameSpace )
+import RdrName          ( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc, 
+                          isRdrDataCon, isUnqual, getRdrName, setRdrNameSpace )
 import Name             ( Name )
-import BasicTypes	( maxPrecedence, Activation(..), RuleMatchInfo,
+import BasicTypes       ( maxPrecedence, Activation(..), RuleMatchInfo,
                           InlinePragma(..), InlineSpec(..) )
 import Lexer
-import TysWiredIn	( unitTyCon )
+import TysWiredIn       ( unitTyCon )
 import ForeignCall
 import OccName          ( srcDataName, varName, isDataOcc, isTcOcc,
                           occNameString )
@@ -122,7 +122,7 @@ extract_lty (L loc ty) acc
       HsIParamTy _ ty           -> extract_lty ty acc
       HsEqTy ty1 ty2            -> extract_lty ty1 (extract_lty ty2 acc)
       HsOpTy ty1 (_, (L loc tv)) ty2 -> extract_tv loc tv (extract_lty ty1 (extract_lty ty2 acc))
-      HsParTy ty               	-> extract_lty ty acc
+      HsParTy ty                -> extract_lty ty acc
       HsCoreTy {}               -> acc  -- The type is closed
       HsQuasiQuoteTy {}         -> acc  -- Quasi quotes mention no type variables
       HsSpliceTy {}             -> acc  -- Type splices mention no type variables
@@ -219,8 +219,8 @@ mkTySynonym loc is_family lhs rhs
 
 mkTyFamily :: SrcSpan
            -> FamilyFlavour
-	   -> LHsType RdrName   -- LHS
-	   -> Maybe (LHsKind RdrName) -- Optional kind signature
+           -> LHsType RdrName   -- LHS
+           -> Maybe (LHsKind RdrName) -- Optional kind signature
            -> P (LTyClDecl RdrName)
 mkTyFamily loc flavour lhs ksig
   = do { (tc, tparams) <- checkTyClHdr lhs
@@ -494,7 +494,7 @@ checkTyVars tycl_hdr tparms = mapM chk tparms
   where
         -- Check that the name space is correct!
     chk (L l (HsKindSig (L _ (HsTyVar tv)) k))
-	| isRdrTyVar tv    = return (L l (KindedTyVar tv k placeHolderKind))
+        | isRdrTyVar tv    = return (L l (KindedTyVar tv k placeHolderKind))
     chk (L l (HsTyVar tv))
         | isRdrTyVar tv    = return (L l (UserTyVar tv placeHolderKind))
     chk t@(L l _)
@@ -534,10 +534,10 @@ checkTyClHdr ty
     goL (L l ty) acc = go l ty acc
 
     go l (HsTyVar tc) acc 
-	| isRdrTc tc 	     = return (L l tc, acc)
-				     
+        | isRdrTc tc         = return (L l tc, acc)
+                                     
     go _ (HsOpTy t1 (_, ltc@(L _ tc)) t2) acc
-	| isRdrTc tc	     = return (ltc, t1:t2:acc)
+        | isRdrTc tc         = return (ltc, t1:t2:acc)
     go _ (HsParTy ty)    acc = goL ty acc
     go _ (HsAppTy t1 t2) acc = goL t1 (t2:acc)
     go l _               _   = parseErrorSDoc l (text "Malformed head of type or class declaration:" <+> ppr ty)

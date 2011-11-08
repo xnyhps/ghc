@@ -1235,16 +1235,16 @@ tcIfaceGlobal name
 -- emasculated form (e.g. lacking data constructors).
 
 tcIfaceTyCon :: IfaceTyCon -> IfL TyCon
-tcIfaceTyCon IfaceIntTc       	= tcWiredInTyCon intTyCon
-tcIfaceTyCon IfaceBoolTc      	= tcWiredInTyCon boolTyCon
-tcIfaceTyCon IfaceCharTc      	= tcWiredInTyCon charTyCon
-tcIfaceTyCon IfaceListTc      	= tcWiredInTyCon listTyCon
-tcIfaceTyCon IfacePArrTc      	= tcWiredInTyCon parrTyCon
+tcIfaceTyCon IfaceIntTc         = tcWiredInTyCon intTyCon
+tcIfaceTyCon IfaceBoolTc        = tcWiredInTyCon boolTyCon
+tcIfaceTyCon IfaceCharTc        = tcWiredInTyCon charTyCon
+tcIfaceTyCon IfaceListTc        = tcWiredInTyCon listTyCon
+tcIfaceTyCon IfacePArrTc        = tcWiredInTyCon parrTyCon
 tcIfaceTyCon (IfaceTupTc bx ar) = tcWiredInTyCon (tupleTyCon bx ar)
 tcIfaceTyCon (IfaceIPTc n)      = do { n' <- newIPName n
                                      ; tcWiredInTyCon (ipTyCon n') }
 tcIfaceTyCon (IfaceTc name)     = do { thing <- tcIfaceGlobal name
-				     ; return (check_tc (tyThingTyCon thing)) }
+                                     ; return (check_tc (tyThingTyCon thing)) }
   where
     check_tc tc
      | debugIsOn = case toIfaceTyCon tc of

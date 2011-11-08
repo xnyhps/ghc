@@ -6,6 +6,13 @@
 The @Class@ datatype
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Class (
 	Class,
         ClassOpItem, DefMeth (..),
@@ -34,7 +41,7 @@ import Util
 import Outputable
 import FastString
 
-import Data.Typeable hiding (TyCon)
+import Data.Typeable (Typeable)
 import qualified Data.Data as Data
 \end{code}
 

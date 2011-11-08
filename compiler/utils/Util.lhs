@@ -4,10 +4,18 @@
 %
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | Highly random utility functions
 module Util (
         -- * Flags dependent on the compiler build
-        ghciSupported, debugIsOn, ghciTablesNextToCode, isDynamicGhcLib,
+        ghciSupported, debugIsOn, ncgDebugIsOn,
+        ghciTablesNextToCode, isDynamicGhcLib,
         isWindowsHost, isWindowsTarget, isDarwinTarget,
 
         -- * General list processing
@@ -151,6 +159,13 @@ debugIsOn :: Bool
 debugIsOn = True
 #else
 debugIsOn = False
+#endif
+
+ncgDebugIsOn :: Bool
+#ifdef NCG_DEBUG
+ncgDebugIsOn = True
+#else
+ncgDebugIsOn = False
 #endif
 
 ghciTablesNextToCode :: Bool

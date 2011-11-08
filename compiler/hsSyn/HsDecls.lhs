@@ -442,10 +442,10 @@ data TyClDecl name
 
 
   | -- | @type/data family T :: *->*@
-    TyFamily {  tcdFlavour:: FamilyFlavour,	        -- type or data
-		tcdLName  :: Located name,	        -- type constructor
-		tcdTyVars :: [LHsTyVarBndr name],	-- type variables
-		tcdKind   :: Maybe (LHsKind name)       -- result kind
+    TyFamily {  tcdFlavour:: FamilyFlavour,             -- type or data
+                tcdLName  :: Located name,              -- type constructor
+                tcdTyVars :: [LHsTyVarBndr name],       -- type variables
+                tcdKind   :: Maybe (LHsKind name)       -- result kind
     }
 
 
@@ -462,7 +462,7 @@ data TyClDecl name
                 tcdTyPats :: Maybe [LHsType name],      -- ^ Type patterns.
                   -- See Note [tcdTyVars and tcdTyPats] 
 
-		tcdKindSig:: Maybe (LHsKind name),
+                tcdKindSig:: Maybe (LHsKind name),
                         -- ^ Optional kind signature.
                         --
                         -- @(Just k)@ for a GADT-style @data@, or @data
@@ -635,8 +635,8 @@ instance OutputableBndr name
                          DataFamily -> ptext (sLit "data family")
 
           pp_kind = case mb_kind of
-		      Nothing   -> empty
-		      Just kind -> dcolon <+> ppr kind
+                      Nothing   -> empty
+                      Just kind -> dcolon <+> ppr kind
 
     ppr (TySynonym {tcdLName = ltycon, tcdTyVars = tyvars, tcdTyPats = typats,
                     tcdSynRhs = mono_ty})
@@ -657,8 +657,8 @@ instance OutputableBndr name
                   (pp_condecls condecls)
                   derivings
       where
-	ppr_sigx Nothing     = empty
-	ppr_sigx (Just kind) = dcolon <+> ppr kind
+        ppr_sigx Nothing     = empty
+        ppr_sigx (Just kind) = dcolon <+> ppr kind
 
     ppr (ClassDecl {tcdCtxt = context, tcdLName = lclas, tcdTyVars = tyvars, 
                     tcdFDs  = fds,
