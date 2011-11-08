@@ -23,9 +23,20 @@ import Control.Arrow
 --------------------------------------------------------------------------------
 -- Type-level peano naturals
 --------------------------------------------------------------------------------
+{-
+-- Crashes (also in HEAD)
+class CX a where
+  type AD1 a
+
+instance CX a where
+  type AD1 a = Int
+  type AD1 a = Int
+-}
 
 data Nat = Ze | Su Nat
 data List a = Nil | Cons a (List a)
+
+--data AB :: Nat
 
 {-
 data Vec :: * -> Nat -> * where
