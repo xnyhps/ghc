@@ -291,7 +291,7 @@ tcExpr exp@(OpApp arg1 op fix arg2) res_ty
 
        -- Make sure that the argument and result types have kind '*'
        -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
-       ; let ctxt = ptext (    sLit "When kind checking ($) application")
+       ; let ctxt = ptext (    sLit "When kind checking application")
                            <+> ppr exp
        ; _ <- unifyKind ctxt (typeKind arg2_ty) liftedTypeKind
        ; _ <- unifyKind ctxt (typeKind res_ty)  liftedTypeKind
