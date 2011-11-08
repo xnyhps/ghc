@@ -1,4 +1,11 @@
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | Simple vectorised constructors and projections.
 module Vectorise.Vect (
 	Vect, VVar, VExpr, VBind,
@@ -12,7 +19,7 @@ module Vectorise.Vect (
 	vRec,
 	vVar,
 	vType,
-	vNote,
+        vTick,
 	vLet,
 	vLams,
 	vLamsWithoutLC,
@@ -66,8 +73,8 @@ vType ty = (Type ty, Type ty)
 
 
 -- | Make a vectorised note.
-vNote :: Note -> VExpr -> VExpr
-vNote = mapVect . Note
+vTick :: Tickish Id -> VExpr -> VExpr
+vTick = mapVect . Tick
 
 
 -- | Make a vectorised non-recursive binding.

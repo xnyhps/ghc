@@ -4,6 +4,13 @@
 \section[StgLint]{A ``lint'' pass to check for Stg correctness}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module StgLint ( lintStgBindings ) where
 
 import StgSyn
@@ -191,7 +198,7 @@ lintStgExpr (StgLetNoEscape _ _ binds body) = do
       addInScopeVars binders $
         lintStgExpr body
 
-lintStgExpr (StgSCC _ expr) = lintStgExpr expr
+lintStgExpr (StgSCC _ _ _ expr) = lintStgExpr expr
 
 lintStgExpr (StgCase scrut _ _ bndr _ alts_type alts) = runMaybeT $ do
     _ <- MaybeT $ lintStgExpr scrut

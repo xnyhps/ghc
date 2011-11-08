@@ -2,6 +2,13 @@
 % (c) The University of Glasgow 2001-2006
 %
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module MkExternalCore (
 	emitExternalCore
 ) where
@@ -160,8 +167,7 @@ make_exp (Case e v ty alts) = do
   scrut <- make_exp e
   newAlts  <- mapM make_alt alts
   return $ C.Case scrut (make_vbind v) (make_ty ty) newAlts
-make_exp (Note (SCC _) e) = make_exp e >>= (return . C.Note "SCC") -- temporary
-make_exp (Note (CoreNote s) e) = make_exp e >>= (return . C.Note s)  -- hdaume: core annotations
+make_exp (Tick _ e) = make_exp e >>= (return . C.Tick "SCC") -- temporary
 make_exp _ = error "MkExternalCore died: make_exp"
 
 make_alt :: CoreAlt -> CoreM C.Alt

@@ -4,6 +4,13 @@
 \section[RnEnv]{Environment manipulation for the renamer monad}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module RnEnv ( 
 	newTopSrcBinder, 
 	lookupLocatedTopBndrRn, lookupTopBndrRn,
@@ -1152,12 +1159,10 @@ unknownNameSuggestErr where_look tried_rdr_name
        ; return extra_err }
   where
     pp_item :: (RdrName, HowInScope) -> SDoc
-    pp_item (rdr, Left loc) = quotes (ppr rdr) <+>   -- Locally defined
-                              parens (ptext (sLit "line") <+> int (srcSpanStartLine loc'))
+    pp_item (rdr, Left loc) = quotes (ppr rdr) <+> loc' -- Locally defined
         where loc' = case loc of
-                     UnhelpfulSpan _ ->
-                         panic "unknownNameSuggestErr UnhelpfulSpan"
-                     RealSrcSpan l -> l
+                     UnhelpfulSpan l -> parens (ppr l)
+                     RealSrcSpan l -> parens (ptext (sLit "line") <+> int (srcSpanStartLine l))
     pp_item (rdr, Right is) = quotes (ppr rdr) <+>   -- Imported
                               parens (ptext (sLit "imported from") <+> ppr (is_mod is))
 

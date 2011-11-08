@@ -4,6 +4,13 @@
 \section[SimplCore]{Driver for simplifying @Core@ programs}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module SimplCore ( core2core, simplifyExpr ) where
 
 #include "HsVersions.h"
@@ -628,7 +635,7 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
            case initSmpl dflags rule_base2 fam_envs us1 sz simpl_binds of {
                 (env1, counts1) -> do {
 
-           let  { binds1 = getFloats env1
+           let  { binds1 = getFloatBinds env1
                 ; rules1 = substRulesForImportedIds (mkCoreSubst (text "imp-rules") env1) rules
                 } ;
 

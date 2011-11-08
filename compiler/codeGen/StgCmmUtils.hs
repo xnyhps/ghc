@@ -6,6 +6,13 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module StgCmmUtils (
 	cgLit, mkSimpleLit,
 	emitDataLits, mkDataLits,
@@ -319,6 +326,12 @@ callerSaves (VanillaReg 7 _)	= True
 #endif
 #ifdef CALLER_SAVES_R8
 callerSaves (VanillaReg 8 _)	= True
+#endif
+#ifdef CALLER_SAVES_R9
+callerSaves (VanillaReg 9 _)	= True
+#endif
+#ifdef CALLER_SAVES_R10
+callerSaves (VanillaReg 10 _)	= True
 #endif
 #ifdef CALLER_SAVES_F1
 callerSaves (FloatReg 1)	= True

@@ -7,6 +7,13 @@
 -- -----------------------------------------------------------------------------
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module AsmCodeGen ( nativeCodeGen ) where
 
 #include "HsVersions.h"
@@ -821,7 +828,8 @@ Ideas for other things we could do (put these in Hoopl please!):
 cmmToCmm :: DynFlags -> RawCmmDecl -> (RawCmmDecl, [CLabel])
 cmmToCmm _ top@(CmmData _ _) = (top, [])
 cmmToCmm dflags (CmmProc info lbl (ListGraph blocks)) = runCmmOpt dflags $ do
-  blocks' <- mapM cmmBlockConFold (cmmMiniInline (cmmEliminateDeadBlocks blocks))
+  let platform = targetPlatform dflags
+  blocks' <- mapM cmmBlockConFold (cmmMiniInline platform (cmmEliminateDeadBlocks blocks))
   return $ CmmProc info lbl (ListGraph blocks')
 
 newtype CmmOptM a = CmmOptM (([CLabel], DynFlags) -> (# a, [CLabel] #))
@@ -914,20 +922,22 @@ cmmExprConFold referenceKind expr = do
     -- (this optimization is done in Hoopl)
     let expr' = if dopt Opt_TryNewCodeGen dflags
                     then expr
-                    else cmmExprCon expr
+                    else cmmExprCon (targetPlatform dflags) expr
     cmmExprNative referenceKind expr'
 
-cmmExprCon :: CmmExpr -> CmmExpr
-cmmExprCon (CmmLoad addr rep) = CmmLoad (cmmExprCon addr) rep
-cmmExprCon (CmmMachOp mop args) = cmmMachOpFold mop (map cmmExprCon args)
-cmmExprCon other = other
+cmmExprCon :: Platform -> CmmExpr -> CmmExpr
+cmmExprCon platform (CmmLoad addr rep) = CmmLoad (cmmExprCon platform addr) rep
+cmmExprCon platform (CmmMachOp mop args)
+    = cmmMachOpFold platform mop (map (cmmExprCon platform) args)
+cmmExprCon _ other = other
 
 -- handles both PIC and non-PIC cases... a very strange mixture
 -- of things to do.
 cmmExprNative :: ReferenceKind -> CmmExpr -> CmmOptM CmmExpr
 cmmExprNative referenceKind expr = do
      dflags <- getDynFlagsCmmOpt
-     let arch = platformArch (targetPlatform dflags)
+     let platform = targetPlatform dflags
+         arch = platformArch platform
      case expr of
         CmmLoad addr rep
            -> do addr' <- cmmExprNative DataReference addr
@@ -944,7 +954,7 @@ cmmExprNative referenceKind expr = do
            -> do
                  dynRef <- cmmMakeDynamicReference dflags addImportCmmOpt referenceKind lbl
                  -- need to optimize here, since it's late
-                 return $ cmmMachOpFold (MO_Add wordWidth) [
+                 return $ cmmMachOpFold platform (MO_Add wordWidth) [
                      dynRef,
                      (CmmLit $ CmmInt (fromIntegral off) wordWidth)
                    ]
