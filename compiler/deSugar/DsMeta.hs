@@ -82,7 +82,7 @@ dsBracket brack splices
   where
     new_bit = mkNameEnv [(n, Splice (unLoc e)) | (n,e) <- splices]
 
-    do_brack (VarBr n)   = do { MkC e1  <- lookupOcc n ; return e1 }
+    do_brack (VarBr _ n) = do { MkC e1  <- lookupOcc n ; return e1 }
     do_brack (ExpBr e)   = do { MkC e1  <- repLE e     ; return e1 }
     do_brack (PatBr p)   = do { MkC p1  <- repTopP p   ; return p1 }
     do_brack (TypBr t)   = do { MkC t1  <- repLTy t    ; return t1 }

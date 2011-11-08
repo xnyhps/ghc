@@ -1457,10 +1457,10 @@ aexp2   :: { LHsExpr RdrName }
 	| '$(' exp ')'   	{ LL $ HsSpliceE (mkHsSplice $2) }               
 
 
-	| SIMPLEQUOTE  qvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
-	| SIMPLEQUOTE  qcon 	{ LL $ HsBracket (VarBr (unLoc $2)) }
-	| TH_TY_QUOTE tyvar 	{ LL $ HsBracket (VarBr (unLoc $2)) }
- 	| TH_TY_QUOTE gtycon	{ LL $ HsBracket (VarBr (unLoc $2)) }
+	| SIMPLEQUOTE  qvar 	{ LL $ HsBracket (VarBr True  (unLoc $2)) }
+	| SIMPLEQUOTE  qcon 	{ LL $ HsBracket (VarBr True  (unLoc $2)) }
+	| TH_TY_QUOTE tyvar 	{ LL $ HsBracket (VarBr False (unLoc $2)) }
+ 	| TH_TY_QUOTE gtycon	{ LL $ HsBracket (VarBr False (unLoc $2)) }
 	| '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }                       
 	| '[t|' ctype '|]'      { LL $ HsBracket (TypBr $2) }                       
 	| '[p|' infixexp '|]'   {% checkPattern $2 >>= \p ->

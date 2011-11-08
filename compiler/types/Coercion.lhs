@@ -19,19 +19,7 @@ module Coercion (
         Coercion(..), Var, CoVar,
         LCoercion,
 
-        -- ** Deconstructing Kinds 
-        kindFunResult, kindAppResult, synTyConResKind,
-        splitKindFunTys, splitKindFunTysN, splitKindFunTy_maybe,
-
-        -- ** Predicates on Kinds
-        isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
-        isUbxTupleKind, isArgTypeKind, isKind,
-        isSuperKind, 
-	mkArrowKind, mkArrowKinds,
-
-        isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind, eqKind,
-        isSubKindCon,
-
+        -- ** Functions over coercions
         coVarKind, coVarKind_maybe,
         coercionType, coercionKind, coercionKinds, isReflCo,
         mkCoercionType,

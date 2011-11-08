@@ -172,7 +172,7 @@ rnExpr e@(HsBracket br_body)
   = do
     thEnabled <- xoptM Opt_TemplateHaskell
     unless thEnabled $
-      failWith ( vcat [ ptext (sLit "Syntax error on") <+> quotes (ppr e)
+      failWith ( vcat [ ptext (sLit "Syntax error on") <+> ppr e
                       , ptext (sLit "Perhaps you intended to use -XTemplateHaskell") ] )
     checkTH e "bracket"
     (body', fvs_e) <- rnBracket br_body
@@ -591,14 +591,14 @@ rnArithSeq (FromThenTo expr1 expr2 expr3)
 
 \begin{code}
 rnBracket :: HsBracket RdrName -> RnM (HsBracket Name, FreeVars)
-rnBracket (VarBr n) 
+rnBracket (VarBr flg n) 
   = do { name <- lookupOccRn n
        ; this_mod <- getModule
        ; unless (nameIsLocalOrFrom this_mod name) $  -- Reason: deprecation checking assumes
          do { _ <- loadInterfaceForName msg name     -- the home interface is loaded, and
             ; return () }			     -- this is the only way that is going
 	      	     				     -- to happen
-       ; return (VarBr name, unitFV name) }
+       ; return (VarBr flg name, unitFV name) }
   where
     msg = ptext (sLit "Need interface for Template Haskell quoted Name")
 

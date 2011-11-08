@@ -364,7 +364,7 @@ tcBracket brack res_ty
        ; return (noLoc (HsBracketOut brack pendings)) }
 
 tc_bracket :: ThStage -> HsBracket Name -> TcM TcType
-tc_bracket outer_stage (VarBr name)     -- Note [Quoting names]
+tc_bracket outer_stage br@(VarBr _ name)     -- Note [Quoting names]
   = do  { thing <- tcLookup name
         ; case thing of
             AGlobal _ -> return ()
@@ -373,7 +373,7 @@ tc_bracket outer_stage (VarBr name)     -- Note [Quoting names]
                 -> keepAliveTc id
                 | otherwise
                 -> do { checkTc (thLevel outer_stage + 1 == bind_lvl)
-                                (quotedNameStageErr name) }
+                                (quotedNameStageErr br) }
             _ -> pprPanic "th_bracket" (ppr name)
 
         ; tcMetaTy nameTyConName        -- Result type is Var (not Q-monadic)
@@ -410,9 +410,9 @@ tc_bracket _ (PatBr pat)
 tc_bracket _ (DecBrL _)
   = panic "tc_bracket: Unexpected DecBrL"
 
-quotedNameStageErr :: Name -> SDoc
-quotedNameStageErr v
-  = sep [ ptext (sLit "Stage error: the non-top-level quoted name") <+> ppr (VarBr v)
+quotedNameStageErr :: HsBracket Name -> SDoc
+quotedNameStageErr br
+  = sep [ ptext (sLit "Stage error: the non-top-level quoted name") <+> ppr br
         , ptext (sLit "must be used at the same stage at which is is bound")]
 \end{code}
 

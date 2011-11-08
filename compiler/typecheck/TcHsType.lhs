@@ -513,10 +513,11 @@ kc_hs_type (HsQuasiQuoteTy {}) = panic "kc_hs_type"	-- Eliminated by renamer
 kc_hs_type (HsDocTy ty _)
   = kc_hs_type (unLoc ty) 
 
-kc_hs_type (HsExplicitListTy _ tys) = do
-  ty_k_s <- mapM kc_lhs_type tys
-  kind <- unifyKinds (text "promoted list") ty_k_s
-  return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind)
+kc_hs_type (HsExplicitListTy _ tys) 
+  = do { ty_k_s <- mapM kc_lhs_type tys
+       ; kind <- addErrCtxt (ptext (sLit "In a promoted list")) $
+                 unifyKinds ty_k_s
+       ; return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind) }
 kc_hs_type (HsExplicitTupleTy _ tys) = do
   ty_k_s <- mapM kc_lhs_type tys
   return ( HsExplicitTupleTy (map snd ty_k_s) (map fst ty_k_s)

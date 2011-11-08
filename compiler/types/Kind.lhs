@@ -234,8 +234,8 @@ isSubKindCon kc1 kc2
 
 -- This is a variant on isSubKindCon used during type checking, where
 -- we don't want Constraint to be a subkind of anything.
-isSubKindConTc :: TyCon -> TyCon -> Bool
-isSubKindConTc kc1 kc2
+tcIsSubKindCon :: TyCon -> TyCon -> Bool
+tcIsSubKindCon kc1 kc2
   | kc1 == kc2                                         = True
   | isConstraintKindCon kc1 || isConstraintKindCon kc2 = False
   | otherwise                                          = isSubKindCon kc1 kc2

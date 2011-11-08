@@ -249,6 +249,8 @@ tcInstSkolTyVars tyvars
 tcInstSuperSkolTyVars :: [TyVar] -> TcM [TcTyVar]
 -- Precondition: tyvars should be ordered (kind vars first)
 -- see Note [Kind substitution when instantiating]
+
+-- JPM: do this with mapAccumLM
 tcInstSuperSkolTyVars tyvars
   = do { kvs' <- mapM (tcInstSkolTyVar True (mkTopTvSubst [])) kvs
        ; tvs' <- mapM (tcInstSkolTyVar True (zipTopTvSubst kvs (map mkTyVarTy kvs'))) tvs
