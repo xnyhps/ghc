@@ -762,7 +762,7 @@ genMachOp env _ op [x] = case op of
         in negate vecty all0s LM_MO_FSub    
 
     MO_VN_Neg len w ->
-        let ty    = widthToLlvmFloat w
+        let ty    = widthToLlvmInt w
             vecty = LMVector len ty
             all0  = LMIntLit (-0) ty
             all0s = LMLitVar $ LMVectorLit (replicate len all0) vecty
