@@ -39,6 +39,7 @@ import BasicTypes
 import Unique
 import Util
 import Outputable
+import SrcLoc
 import FastString
 
 import Data.Typeable (Typeable)
@@ -109,7 +110,9 @@ data ATDefault = ATD { -- TyVars of the RHS and family arguments
                        -- The instantiated family arguments
                        atDefaultPats    :: [Type],
                        -- The RHS of the synonym
-                       atDefaultRhs     ::  Type }
+                       atDefaultRhs     :: Type,
+                       -- The source location of the synonym
+                       atDefaultSrcSpan :: SrcSpan }
 
 -- | Convert a `DefMethSpec` to a `DefMeth`, which discards the name field in
 --   the `DefMeth` constructor of the `DefMeth`.

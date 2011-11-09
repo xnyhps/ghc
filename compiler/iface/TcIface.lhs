@@ -502,7 +502,9 @@ tc_iface_decl _parent ignore_prags
        return tc
 
    tc_iface_at_def (IfaceATD tvs pat_tys ty) =
-       bindIfaceTyVars_AT tvs $ \tvs' -> liftM2 (ATD tvs') (mapM tcIfaceType pat_tys) (tcIfaceType ty)
+       bindIfaceTyVars_AT tvs $
+         \tvs' -> liftM2 (\pats tys -> ATD tvs' pats tys noSrcSpan)
+                           (mapM tcIfaceType pat_tys) (tcIfaceType ty)
 
    mk_doc op_name op_ty = ptext (sLit "Class op") <+> sep [ppr op_name, ppr op_ty]
 

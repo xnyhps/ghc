@@ -745,7 +745,8 @@ checkBootTyCon tc1 tc2
          = checkBootTyCon tc1 tc2 &&
            eqListBy eqATDef def_ats1 def_ats2
 
-       eqATDef (ATD tvs1 ty_pats1 ty1) (ATD tvs2 ty_pats2 ty2)
+       -- Ignore the location of the defaults
+       eqATDef (ATD tvs1 ty_pats1 ty1 _loc1) (ATD tvs2 ty_pats2 ty2 _loc2)
          = eqListBy same_kind tvs1 tvs2 &&
            eqListBy (eqTypeX env) ty_pats1 ty_pats2 &&
            eqTypeX env ty1 ty2

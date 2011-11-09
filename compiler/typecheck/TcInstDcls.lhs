@@ -472,7 +472,7 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
                 | null defs                                  = return (Just (tyConName fam_tc), [])
                  -- No user instance, have defaults ==> instatiate them
                 | otherwise = do
-                    defs' <- forM defs $ \(ATD tvs pat_tys rhs) -> do
+                    defs' <- forM defs $ \(ATD tvs pat_tys rhs _loc) -> do
                       let mini_env_subst = mkTvSubst (mkInScopeSet (mkVarSet tvs)) mini_env
                           tvs' = varSetElems (tyVarsOfType rhs')
                           pat_tys' = substTys mini_env_subst pat_tys

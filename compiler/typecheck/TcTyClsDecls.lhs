@@ -727,7 +727,7 @@ tcDefaultAssocDecl fam_tc (L loc decl)
     tcAddDefaultAssocDeclCtxt (tcdName decl) $
     do { traceTc "tcDefaultAssocDecl" (ppr decl)
        ; (at_tvs, at_tys, at_rhs) <- tcSynFamInstDecl fam_tc decl
-       ; return (ATD at_tvs at_tys at_rhs) }
+       ; return (ATD at_tvs at_tys at_rhs loc) }
 -- We check for well-formedness and validity later, in checkValidClass
 -------------------------
 
@@ -1410,9 +1410,13 @@ checkValidClass cls
 		-- type variable.  What a mess!
 
     check_at_defs (fam_tc, defs)
-      = do mapM_ (\(ATD _tvs pats rhs) -> checkValidFamInst pats rhs) defs
+      = do mapM_ (\(ATD _tvs pats rhs _loc) -> checkValidFamInst pats rhs) defs
            tcAddDefaultAssocDeclCtxt (tyConName fam_tc) $ 
-             mapM_ (zipWithM_ check_arg (tyConTyVars fam_tc)) (map atDefaultPats defs)
+             mapM_ (check_loc_at_def fam_tc) defs
+
+    check_loc_at_def fam_tc (ATD _tvs pats _rhs loc)
+      -- Set the location for each of the default declarations
+      = setSrcSpan loc $ zipWithM_ check_arg (tyConTyVars fam_tc) pats
 
     -- We only want to check this on the *class* TyVars,
     -- not the *family* TyVars (there may be more of these)
