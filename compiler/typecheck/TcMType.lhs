@@ -67,8 +67,7 @@ module TcMType (
   zonkTcTypeAndSubst,
   tcGetGlobalTyVars, 
 
-
-  readMetaKindVar, writeMetaKindVar, compatKindTcM, isSubKindTcM
+  compatKindTcM, isSubKindTcM
   ) where
 
 #include "HsVersions.h"
@@ -324,6 +323,7 @@ mkTcTyVarName :: Unique -> FastString -> Name
 -- leaving the un-cluttered names free for user names
 mkTcTyVarName uniq str = mkSysTvName uniq str
 
+-- Works for both type and kind variables
 readMetaTyVar :: TyVar -> TcM MetaDetails
 readMetaTyVar tyvar = ASSERT2( isMetaTyVar tyvar, ppr tyvar )
 		      readMutVar (metaTvRef tyvar)
@@ -347,6 +347,7 @@ isFlexiMetaTyVar tv
   | otherwise = return False
 
 --------------------
+-- Works with both type and kind variables
 writeMetaTyVar :: TcTyVar -> TcType -> TcM ()
 -- Write into a currently-empty MetaTyVar
 
@@ -581,7 +582,7 @@ defaultKindVarToStar :: TcTyVar -> TcM ()
 -- We have a meta-kind: unify it with '*'
 defaultKindVarToStar kv 
   = ASSERT ( isKiVar kv && isMetaTyVar kv )
-    writeMetaKindVar kv liftedTypeKind
+    writeMetaTyVar kv liftedTypeKind
 
 zonkQuantifiedTyVars :: TcTyVarSet -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
@@ -653,10 +654,7 @@ skolemiseUnboundMetaTyVar tv details
               final_name = mkInternalName uniq (getOccName tv) span
               final_tv   = mkTcTyVar final_name final_kind details
 
-              -- JPM: combine writeMetaKindVar, writeMetaTyVar
-        ; (if isSuperKind final_kind
-           then writeMetaKindVar
-           else writeMetaTyVar) tv (mkTyVarTy final_tv)
+        ; writeMetaTyVar tv (mkTyVarTy final_tv)
         ; return final_tv }
 \end{code}
 
@@ -838,13 +836,6 @@ zonkType zonk_tc_tyvar ty
 %************************************************************************
 
 \begin{code}
-readMetaKindVar  :: MetaKindVar -> TcM (MetaDetails)
-writeMetaKindVar :: MetaKindVar -> TcKind -> TcM ()
-readMetaKindVar  kv = readMutVar (kindVarRef kv)
-writeMetaKindVar kv val
-  = do { traceTc "writeMetaKindVar" (ppr kv <+> text ":=" <+> ppr val)
-       ; writeMutVar (kindVarRef kv) (Indirect val) }
-
 compatKindTcM :: Kind -> Kind -> TcM Bool
 compatKindTcM k1 k2
   = do { k1' <- zonkTcKind k1
@@ -941,11 +932,11 @@ checkValidType ctxt ty = do
 			TySynCtxt _  -> True -- Any kind will do
 			ThBrackCtxt  -> True -- ditto
                         GhciCtxt     -> True -- ditto
-			ResSigCtxt   -> isSubOpenTypeKind actual_kind
-			ExprSigCtxt  -> isSubOpenTypeKind actual_kind
+			ResSigCtxt   -> tcIsSubOpenTypeKind actual_kind
+			ExprSigCtxt  -> tcIsSubOpenTypeKind actual_kind
 			GenPatCtxt   -> isLiftedTypeKind actual_kind
 			ForSigCtxt _ -> isLiftedTypeKind actual_kind
-			_            -> isSubArgTypeKind actual_kind
+			_            -> tcIsSubArgTypeKind actual_kind
 	
 	ubx_tup 
          | not unboxed = UT_NotOk

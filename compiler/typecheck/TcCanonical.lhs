@@ -21,6 +21,7 @@ import FunDeps
 import qualified TcMType as TcM
 import TcType
 import Type
+import Kind
 import Coercion
 import Class
 import TyCon

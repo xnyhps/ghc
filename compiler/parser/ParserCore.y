@@ -20,7 +20,7 @@ import Type ( Kind,
               liftedTypeKindTyCon, openTypeKindTyCon, unliftedTypeKindTyCon,
               argTypeKindTyCon, ubxTupleKindTyCon, mkTyConApp
             )
-import Coercion( mkArrowKind )
+import Kind( mkArrowKind )
 import Name( Name, nameOccName, nameModule, mkExternalName, wiredInNameTyThing_maybe )
 import Module
 import ParserCoreUtils

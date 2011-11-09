@@ -78,7 +78,6 @@ import Unify	( MatchEnv(..), matchList )
 import TypeRep
 import qualified Type
 import Type hiding( substTy, substTyVarBndr, extendTvSubst )
-import Kind
 import TyCon
 import Var
 import VarEnv

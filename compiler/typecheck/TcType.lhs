@@ -118,7 +118,7 @@ module TcType (
   openTypeKind, constraintKind, mkArrowKind, mkArrowKinds, 
   isLiftedTypeKind, isUnliftedTypeKind, isSubOpenTypeKind, 
   isSubArgTypeKind, isSubKind, splitKindFunTys, defaultKind,
-  kindVarRef, mkMetaKindVar,
+  mkMetaKindVar,
 
   --------------------------------
   -- Rexported from Type
@@ -388,13 +388,6 @@ data UserTypeCtxt
 \begin{code}
 mkKindName :: Unique -> Name
 mkKindName unique = mkSystemName unique kind_var_occ
-
-kindVarRef :: MetaKindVar -> IORef MetaDetails
-kindVarRef tc = 
-  ASSERT ( isTcTyVar tc )
-  case tcTyVarDetails tc of
-    MetaTv TauTv ref -> ref
-    _                -> pprPanic "kindVarRef" (ppr tc)
 
 mkMetaKindVar :: Unique -> IORef MetaDetails -> MetaKindVar
 mkMetaKindVar u r
@@ -1172,9 +1165,7 @@ deNoteType :: Type -> Type
 -- Remove all *outermost* type synonyms and other notes
 deNoteType ty | Just ty' <- tcView ty = deNoteType ty'
 deNoteType ty = ty
-\end{code}
 
-\begin{code}
 tcTyVarsOfType :: Type -> TcTyVarSet
 -- Just the *TcTyVars* free in the type
 -- (Types.tyVarsOfTypes finds all free TyVars)

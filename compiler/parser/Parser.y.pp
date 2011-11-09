@@ -45,8 +45,7 @@ import DataCon		( DataCon, dataConName )
 import SrcLoc
 import Module
 import StaticFlags	( opt_SccProfilingOn, opt_Hpc )
-import Type             ( Kind, liftedTypeKind, unliftedTypeKind )
-import Coercion         ( mkArrowKind )
+import Kind             ( Kind, liftedTypeKind, unliftedTypeKind, mkArrowKind )
 import Class		( FunDep )
 import BasicTypes
 import DynFlags

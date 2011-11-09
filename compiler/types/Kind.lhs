@@ -40,21 +40,23 @@ module Kind (
         isLiftedTypeKindCon, isConstraintKindCon,
         isAnyKind, isAnyKindCon,
 
-        isSubArgTypeKind, isSubOpenTypeKind, isSubKind, defaultKind,
-        isSubKindCon, isSubKindConTc, isSubOpenTypeKindCon,
+        isSubArgTypeKind, tcIsSubArgTypeKind, 
+        isSubOpenTypeKind, tcIsSubOpenTypeKind,
+        isSubKind, defaultKind,
+        isSubKindCon, tcIsSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Functions on variables
         isKiVar, splitKiTyVars, partitionKiTyVars,
         kiVarsOfKind, kiVarsOfKinds,
 
         -- ** Promotion related functions
-        promoteType, isPromotableType, isPromotableKind
+        promoteType, isPromotableType, isPromotableKind,
 
        ) where
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-} Type ( typeKind, substKiWith, eqKind )
+import {-# SOURCE #-} Type      ( typeKind, substKiWith, eqKind )
 
 import TypeRep
 import TysPrim
@@ -135,9 +137,13 @@ synTyConResKind :: TyCon -> Kind
 synTyConResKind tycon = kindAppResult (tyConKind tycon) (map mkTyVarTy (tyConTyVars tycon))
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
-isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind, isConstraintKind, isAnyKind :: Kind -> Bool
+isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind,
+  isConstraintKind, isAnyKind :: Kind -> Bool
+
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
-        isUnliftedTypeKindCon, isSubArgTypeKindCon, isSubOpenTypeKindCon, isConstraintKindCon, isAnyKindCon :: TyCon -> Bool
+  isUnliftedTypeKindCon, isSubArgTypeKindCon, tcIsSubArgTypeKindCon,
+  isSubOpenTypeKindCon, tcIsSubOpenTypeKindCon, isConstraintKindCon,
+  isAnyKindCon :: TyCon -> Bool
 
 isAnyKindCon tc     = tyConUnique tc == anyKindTyConKey
 
@@ -169,13 +175,28 @@ isConstraintKindCon tc = tyConUnique tc == constraintKindTyConKey
 isConstraintKind (TyConApp tc _) = isConstraintKindCon tc
 isConstraintKind _               = False
 
-isSubOpenTypeKind :: Kind -> Bool
+
+-- Subkinding
+-- The tc variants are used during type-checking, where we don't want the
+-- Constraint kind to be a subkind of anything
+-- After type-checking (in core), Constraint is a subkind of argTypeKind
+isSubOpenTypeKind, tcIsSubOpenTypeKind :: Kind -> Bool
 -- ^ True of any sub-kind of OpenTypeKind
 isSubOpenTypeKind (TyConApp kc []) = isSubOpenTypeKindCon kc
 isSubOpenTypeKind _                = False
 
+-- ^ True of any sub-kind of OpenTypeKind
+tcIsSubOpenTypeKind (TyConApp kc []) = tcIsSubOpenTypeKindCon kc
+tcIsSubOpenTypeKind _                = False
+
 isSubOpenTypeKindCon kc
   | isSubArgTypeKindCon kc   = True
+  | isUbxTupleKindCon kc     = True
+  | isOpenTypeKindCon kc     = True
+  | otherwise                = False
+
+tcIsSubOpenTypeKindCon kc
+  | tcIsSubArgTypeKindCon kc = True
   | isUbxTupleKindCon kc     = True
   | isOpenTypeKindCon kc     = True
   | otherwise                = False
@@ -187,10 +208,17 @@ isSubArgTypeKindCon kc
   | isConstraintKindCon kc   = True
   | otherwise                = False
 
-isSubArgTypeKind :: Kind -> Bool
+tcIsSubArgTypeKindCon kc
+  | isConstraintKindCon kc   = False
+  | otherwise                = isSubArgTypeKindCon kc
+
+isSubArgTypeKind, tcIsSubArgTypeKind :: Kind -> Bool
 -- ^ True of any sub-kind of ArgTypeKind 
 isSubArgTypeKind (TyConApp kc []) = isSubArgTypeKindCon kc
 isSubArgTypeKind _                = False
+
+tcIsSubArgTypeKind (TyConApp kc []) = tcIsSubArgTypeKindCon kc
+tcIsSubArgTypeKind _                = False
 
 -- | Is this a super-kind (i.e. a type-of-kinds)?
 isSuperKind :: Type -> Bool
@@ -232,8 +260,6 @@ isSubKindCon kc1 kc2
   | isSubOpenTypeKindCon kc1  && isOpenTypeKindCon kc2     = True
   | otherwise                                              = False
 
--- This is a variant on isSubKindCon used during type checking, where
--- we don't want Constraint to be a subkind of anything.
 tcIsSubKindCon :: TyCon -> TyCon -> Bool
 tcIsSubKindCon kc1 kc2
   | kc1 == kc2                                         = True
@@ -328,7 +354,4 @@ We only promote the followings.
 - Polymorphic types over type variables of kind star:
   forall (a::*). tau
 -}
-
-
 \end{code}
-

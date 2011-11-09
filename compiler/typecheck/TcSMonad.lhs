@@ -96,7 +96,7 @@ import qualified TcRnMonad as TcM
 import qualified TcMType as TcM
 import qualified TcEnv as TcM 
        ( checkWellStaged, topIdLvl, tcGetDefaultTys )
-import {-# SOURCE #-} qualified TcUnify as TcM ( unifyKindEq )
+import {-# SOURCE #-} qualified TcUnify as TcM ( unifyKindEq, mkKindErrorCtxt )
 import Kind
 import TcType
 import DynFlags
@@ -215,13 +215,9 @@ isSubKindTcS k1 k2 = wrapTcS (TcM.isSubKindTcM k1 k2)
 unifyKindTcS :: Type -> Type     -- Context
              -> Kind -> Kind     -- Corresponding kinds
              -> TcS ()
--- IA0_TODO: Remember to tidy the types for the error context message.
 unifyKindTcS ty1 ty2 ki1 ki2
-  = wrapTcS (TcM.unifyKindEq ctxt ki1 ki2)
-  where ctxt = vcat [ ptext (sLit "Kind incompatibility when matching types:")
-                    , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr ki1
-                                   , ppr ty2 <+> dcolon <+> ppr ki2 ]) ]
-               -- kindErrorMsg from TcErrors is obsolete
+  = wrapTcS (TcM.addErrCtxtM ctxt (TcM.unifyKindEq ki1 ki2))
+  where ctxt = TcM.mkKindErrorCtxt ty1 ki1 ty2 ki2
 
 deCanonicalise :: CanonicalCt -> FlavoredEvVar
 deCanonicalise ct = mkEvVarX (cc_id ct) (cc_flavor ct)

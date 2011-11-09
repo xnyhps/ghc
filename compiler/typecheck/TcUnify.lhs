@@ -14,11 +14,11 @@ Type subsumption and unification
 -- for details
 
 module TcUnify (
-        -- Full-blown subsumption
+  -- Full-blown subsumption
   tcWrapResult, tcSubType, tcGen, 
   checkConstraints, newImplication, sigCtxt,
 
-        -- Various unifications
+  -- Various unifications
   unifyType, unifyTypeList, unifyTheta, unifyKind, unifyKindEq,
 
   --------------------------------
@@ -31,7 +31,12 @@ module TcUnify (
   matchExpectedFunTys,
   matchExpectedFunKind,
   wrapFunResCoercion,
-  failWithMisMatch
+  failWithMisMatch,
+
+  --------------------------------
+  -- Errors
+  mkKindErrorCtxt
+
   ) where
 
 #include "HsVersions.h"
@@ -830,8 +835,8 @@ uUnfilledVars :: [EqOrigin]
 uUnfilledVars origin swapped tv1 details1 tv2 details2
   = do { traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
                                   <+> text "with"            <+> ppr k2)
-       ; ctxt <- mkKindErrorMsg ty1 ty2 k1 k2
-       ; sub_kind <- addErrCtxt ctxt $ unifyKind k1 k2
+       ; let ctxt = mkKindErrorCtxt ty1 ty2 k1 k2
+       ; sub_kind <- addErrCtxtM ctxt $ unifyKind k1 k2
 
        ; case (sub_kind, details1, details2) of
            -- k1 <= k2, so update tv2
@@ -1113,119 +1118,118 @@ matchExpectedFunKind :: TcKind -> TcM (Maybe (TcKind, TcKind))
 -- Like unifyFunTy, but does not fail; instead just returns Nothing
 
 matchExpectedFunKind (TyVarTy kvar) = do
-    maybe_kind <- readMetaKindVar kvar
+    maybe_kind <- readMetaTyVar kvar
     case maybe_kind of
       Indirect fun_kind -> matchExpectedFunKind fun_kind
       Flexi ->
           do { arg_kind <- newMetaKindVar
              ; res_kind <- newMetaKindVar
-             ; writeMetaKindVar kvar (mkArrowKind arg_kind res_kind)
+             ; writeMetaTyVar kvar (mkArrowKind arg_kind res_kind)
              ; return (Just (arg_kind,res_kind)) }
 
 matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind))
 matchExpectedFunKind _                         = return Nothing
 
 -----------------  
-unifyKind :: SDoc             -- Error message
-          -> TcKind	      -- k1 (actual)
-          -> TcKind  	      -- k2 (expected)
+unifyKind :: TcKind           -- k1 (actual)
+          -> TcKind           -- k2 (expected)
           -> TcM Ordering     -- Returns the relation between the kinds
-	     	 	      -- LT <=> k1 is a sub-kind of k2
+                              -- LT <=> k1 is a sub-kind of k2
 
-unifyKind ctxt (TyVarTy kv1) k2 = uKVar False ctxt kv1 k2
-unifyKind ctxt k1 (TyVarTy kv2) = uKVar True  ctxt kv2 k1
+unifyKind (TyVarTy kv1) k2 = uKVar False kv1 k2
+unifyKind k1 (TyVarTy kv2) = uKVar True  kv2 k1
 
-unifyKind ctxt k1 k2	   -- See Note [Expanding synonyms during unification]
-  | Just k1' <- tcView k1 = unifyKind ctxt k1' k2
-  | Just k2' <- tcView k2 = unifyKind ctxt k1  k2'
+unifyKind k1 k2       -- See Note [Expanding synonyms during unification]
+  | Just k1' <- tcView k1 = unifyKind k1' k2
+  | Just k2' <- tcView k2 = unifyKind k1  k2'
 
-unifyKind ctxt k1@(TyConApp kc1 []) k2@(TyConApp kc2 [])
+unifyKind k1@(TyConApp kc1 []) k2@(TyConApp kc2 [])
   | kc1 == kc2               = return EQ
-  | kc1 `isSubKindConTc` kc2 = return LT
-  | kc2 `isSubKindConTc` kc1 = return GT
-  | otherwise                = unifyKindMisMatch ctxt k1 k2
+  | kc1 `tcIsSubKindCon` kc2 = return LT
+  | kc2 `tcIsSubKindCon` kc1 = return GT
+  | otherwise                = unifyKindMisMatch k1 k2
 
-unifyKind ctxt k1 k2 = do { unifyKindEq ctxt k1 k2; return EQ }
+unifyKind k1 k2 = do { unifyKindEq k1 k2; return EQ }
   -- In all other cases, let unifyKindEq do the work
 
-uKVar :: Bool -> SDoc -> MetaKindVar -> TcKind -> TcM Ordering
-uKVar isFlipped ctxt kv1 k2
+uKVar :: Bool -> MetaKindVar -> TcKind -> TcM Ordering
+uKVar isFlipped kv1 k2
   | isMetaTyVar kv1
-  = do  { mb_k1 <- readMetaKindVar kv1
+  = do  { mb_k1 <- readMetaTyVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar ctxt kv1 k2 >> return EQ
-            Indirect k1 -> unifyKind ctxt k1 k2 }
+            Flexi -> uUnboundKVar kv1 k2 >> return EQ
+            Indirect k1 -> unifyKind k1 k2 }
   | TyVarTy kv2 <- k2, isMetaTyVar kv2
-  = uKVar (not isFlipped) ctxt kv2 (TyVarTy kv1)
+  = uKVar (not isFlipped) kv2 (TyVarTy kv1)
   | TyVarTy kv2 <- k2, kv1 == kv2 = return EQ
   | otherwise = if isFlipped 
-                then unifyKindMisMatch ctxt k2 (TyVarTy kv1)
-                else unifyKindMisMatch ctxt (TyVarTy kv1) k2
+                then unifyKindMisMatch k2 (TyVarTy kv1)
+                else unifyKindMisMatch (TyVarTy kv1) k2
 
 ---------------------------
-unifyKindEq :: SDoc -> TcKind -> TcKind -> TcM ()
-unifyKindEq ctxt (TyVarTy kv1) k2 = uKVarEq False ctxt kv1 k2
-unifyKindEq ctxt k1 (TyVarTy kv2) = uKVarEq True  ctxt kv2 k1
+unifyKindEq :: TcKind -> TcKind -> TcM ()
+unifyKindEq (TyVarTy kv1) k2 = uKVarEq False kv1 k2
+unifyKindEq k1 (TyVarTy kv2) = uKVarEq True  kv2 k1
 
-unifyKindEq ctxt (FunTy a1 r1) (FunTy a2 r2)
-  = do { unifyKindEq ctxt a1 a2; unifyKindEq ctxt r1 r2 }
+unifyKindEq (FunTy a1 r1) (FunTy a2 r2)
+  = do { unifyKindEq a1 a2; unifyKindEq r1 r2 }
   
-unifyKindEq ctxt (TyConApp kc1 k1s) (TyConApp kc2 k2s)
+unifyKindEq (TyConApp kc1 k1s) (TyConApp kc2 k2s)
   | kc1 == kc2
   = ASSERT (length k1s == length k2s)
        -- Should succeed since the kind constructors are the same, 
        -- and the kinds are sort-checked, thus fully applied
-    zipWithM_ (unifyKindEq ctxt) k1s k2s
+    zipWithM_ unifyKindEq k1s k2s
 
-unifyKindEq ctxt k1 k2 = unifyKindMisMatch ctxt k1 k2
+unifyKindEq k1 k2 = unifyKindMisMatch k1 k2
 
 ----------------
 -- For better error messages, we record whether we've flipped the kinds
 -- during the process.
-uKVarEq :: Bool -> SDoc -> MetaKindVar -> TcKind -> TcM ()
-uKVarEq isFlipped ctxt kv1 k2
+uKVarEq :: Bool -> MetaKindVar -> TcKind -> TcM ()
+uKVarEq isFlipped kv1 k2
   | isMetaTyVar kv1
-  = do  { mb_k1 <- readMetaKindVar kv1
+  = do  { mb_k1 <- readMetaTyVar kv1
         ; case mb_k1 of
-            Flexi -> uUnboundKVar ctxt kv1 k2
-            Indirect k1 -> unifyKindEq ctxt k1 k2 }
+            Flexi -> uUnboundKVar kv1 k2
+            Indirect k1 -> unifyKindEq k1 k2 }
   | TyVarTy kv2 <- k2, isMetaTyVar kv2
-  = uKVarEq (not isFlipped) ctxt kv2 (TyVarTy kv1)
+  = uKVarEq (not isFlipped) kv2 (TyVarTy kv1)
   | TyVarTy kv2 <- k2, kv1 == kv2 = return ()
   | otherwise = if isFlipped 
-                then unifyKindMisMatch ctxt k2 (TyVarTy kv1)
-                else unifyKindMisMatch ctxt (TyVarTy kv1) k2
+                then unifyKindMisMatch k2 (TyVarTy kv1)
+                else unifyKindMisMatch (TyVarTy kv1) k2
 
 ----------------
-uUnboundKVar :: SDoc -> MetaKindVar -> TcKind -> TcM ()
-uUnboundKVar ctxt kv1 k2@(TyVarTy kv2)
+uUnboundKVar :: MetaKindVar -> TcKind -> TcM ()
+uUnboundKVar kv1 k2@(TyVarTy kv2)
   | kv1 == kv2 = return ()
   | isMetaTyVar kv2   -- Distinct kind variables
-  = do  { mb_k2 <- readMetaKindVar kv2
+  = do  { mb_k2 <- readMetaTyVar kv2
         ; case mb_k2 of
-            Indirect k2 -> uUnboundKVar ctxt kv1 k2
-            Flexi -> writeMetaKindVar kv1 k2 }
-  | otherwise = writeMetaKindVar kv1 k2
+            Indirect k2 -> uUnboundKVar kv1 k2
+            Flexi -> writeMetaTyVar kv1 k2 }
+  | otherwise = writeMetaTyVar kv1 k2
 
-uUnboundKVar ctxt kv1 non_var_k2
+uUnboundKVar kv1 non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
-        ; kindOccurCheck ctxt kv1 k2'
+        ; kindOccurCheck kv1 k2'
         ; let k2'' = kindSimpleKind k2'
                 -- MetaKindVars must be bound only to simple kinds
-        ; writeMetaKindVar kv1 k2'' }
+        ; writeMetaTyVar kv1 k2'' }
 
 ----------------
-kindOccurCheck :: SDoc -> TyVar -> Type -> TcM ()
-kindOccurCheck ctxt kv1 k2   -- k2 is zonked
+kindOccurCheck :: TyVar -> Type -> TcM ()
+kindOccurCheck kv1 k2   -- k2 is zonked
   = if elemVarSet kv1 (tyVarsOfType k2)
-    then addErrCtxt ctxt (failWithTc (kindOccurCheckErr kv1 k2))
+    then failWithTc (kindOccurCheckErr kv1 k2)
     else return ()
 
 kindSimpleKind :: Kind -> SimpleKind
 -- (kindSimpleKind k) returns a simple kind k' such that k' <= k
 kindSimpleKind k
   | isOpenTypeKind k = liftedTypeKind
-  | isArgTypeKind k  = liftedTypeKind
+  | isArgTypeKind  k = liftedTypeKind
   | otherwise        = k
 
 mkKindErrorCtxt :: Type -> Type -> Kind -> Kind -> TidyEnv -> TcM (TidyEnv, SDoc)
@@ -1234,19 +1238,24 @@ mkKindErrorCtxt ty1 ty2 k1 k2 env0
         (env2, ty2') = tidyOpenType env1 ty2
         (env3, k1' ) = tidyOpenKind env2 k1
         (env4, k2' ) = tidyOpenKind env3 k2
-    in return (env4, vcat [ ptext (sLit "Kind incompatibility when matching types:")
-                          , nest 2 (vcat [ ppr ty1' <+> dcolon <+> ppr k1'
-                                         , ppr ty2' <+> dcolon <+> ppr k2' ]) ])
+    in do ty1 <- zonkTcType ty1'
+          ty2 <- zonkTcType ty2'
+          k1  <- zonkTcKind k1'
+          k2  <- zonkTcKind k2'
+          return (env4, 
+                  vcat [ ptext (sLit "Kind incompatibility when matching types:")
+                       , nest 2 (vcat [ ppr ty1 <+> dcolon <+> ppr k1
+                                      , ppr ty2 <+> dcolon <+> ppr k2 ]) ])
 
-unifyKindMisMatch :: SDoc -> TcKind -> TcKind -> TcM a
-unifyKindMisMatch ctxt ki1 ki2 = do
+unifyKindMisMatch :: TcKind -> TcKind -> TcM a
+unifyKindMisMatch ki1 ki2 = do
     ki1' <- zonkTcKind ki1
     ki2' <- zonkTcKind ki2
     let msg = hang (ptext (sLit "Couldn't match kind"))
               2 (sep [quotes (ppr ki1'),
                       ptext (sLit "against"),
                       quotes (ppr ki2')])
-    addErrCtxt ctxt $ failWithTc msg
+    failWithTc msg
 
 ----------------
 kindOccurCheckErr :: Var -> Type -> SDoc

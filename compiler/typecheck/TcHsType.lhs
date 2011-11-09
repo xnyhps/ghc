@@ -515,8 +515,7 @@ kc_hs_type (HsDocTy ty _)
 
 kc_hs_type (HsExplicitListTy _ tys) 
   = do { ty_k_s <- mapM kc_lhs_type tys
-       ; kind <- addErrCtxt (ptext (sLit "In a promoted list")) $
-                 unifyKinds ty_k_s
+       ; kind <- unifyKinds (ptext (sLit "In a promoted list")) ty_k_s
        ; return (HsExplicitListTy kind (map fst ty_k_s), mkListTy kind) }
 kc_hs_type (HsExplicitTupleTy _ tys) = do
   ty_k_s <- mapM kc_lhs_type tys
@@ -697,7 +696,10 @@ ds_type (HsTupleTy hs_con tys) = do
     con <- case hs_con of
         HsUnboxedTuple -> return UnboxedTuple
         HsBoxyTuple kind -> do
-          kind' <- zonkTcKind kind -- JPM: add note
+          -- Here we use zonkTcKind instead of zonkTcKindToKind because pairs
+          -- are a special case: we use them both for types (eg. (Int, Bool))
+          -- and for constraints (eg. (Show a, Eq a))
+          kind' <- zonkTcKind kind
           case () of
             _ | kind' `eqKind` constraintKind -> return ConstraintTuple
             _ | kind' `eqKind` liftedTypeKind -> return BoxedTuple
@@ -949,7 +951,9 @@ tcTyClTyVars tycon tyvars thing_inside
              ; all_vs = kvs ++ tvs }
        ; tcExtendTyVarEnv all_vs (thing_inside all_vs res) }
 
--- JPM: document
+-- Used when generalizing binders and type family patterns
+-- It takes a kind from the type checker (like `k0 -> *`), and returns the 
+-- final, kind-generalized kind (`forall k::BOX. k -> *`)
 kindGeneralizeKinds :: [TcKind] -> TcM ([KindVar], [Kind])
 -- INVARIANT: the returned kinds are zonked, and
 --            mention the returned kind variables
@@ -1213,8 +1217,9 @@ checkExpectedKind :: Outputable a => a -> TcKind -> ExpKind -> TcM ()
 -- checks that the actual kind act_kind is compatible
 --      with the expected kind exp_kind
 -- The first argument, ty, is used only in the error message generation
-checkExpectedKind ty act_kind (EK exp_kind ek_ctxt) = do
-    (_errs, mb_r) <- tryTc (unifyKind empty act_kind exp_kind)
+checkExpectedKind ty act_kind ek@(EK exp_kind ek_ctxt) = do
+    traceTc "checkExpectedKind" (ppr ty $$ ppr act_kind $$ ppr ek)
+    (_errs, mb_r) <- tryTc (unifyKind act_kind exp_kind)
     case mb_r of
         Just _  -> return ()  -- Unification succeeded
         Nothing -> do

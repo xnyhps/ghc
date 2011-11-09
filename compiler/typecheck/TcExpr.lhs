@@ -291,8 +291,8 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
 
        -- Make sure that the argument and result types have kind '*'
        -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
-       ; _ <- unifyKind empty (typeKind arg2_ty) liftedTypeKind
-       ; _ <- unifyKind empty (typeKind res_ty)  liftedTypeKind
+       ; _ <- unifyKind (typeKind arg2_ty) liftedTypeKind
+       ; _ <- unifyKind (typeKind res_ty)  liftedTypeKind
 
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
        ; co_res <- unifyType op_res_ty res_ty
