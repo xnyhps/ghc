@@ -907,9 +907,6 @@ checkValidType ctxt ty = do
 		 LamPatSigCtxt	-> gen_rank 0
 		 BindPatSigCtxt	-> gen_rank 0
 		 TySynCtxt _    -> gen_rank 0
-		 GenPatCtxt	-> gen_rank 1
-			-- This one is a bit of a hack
-			-- See the forall-wrapping in TcClassDcl.mkGenericInstance		
 
 		 ExprSigCtxt 	-> gen_rank 1
 		 FunSigCtxt _   -> gen_rank 1
@@ -934,7 +931,6 @@ checkValidType ctxt ty = do
                         GhciCtxt     -> True -- ditto
 			ResSigCtxt   -> tcIsSubOpenTypeKind actual_kind
 			ExprSigCtxt  -> tcIsSubOpenTypeKind actual_kind
-			GenPatCtxt   -> isLiftedTypeKind actual_kind
 			ForSigCtxt _ -> isLiftedTypeKind actual_kind
 			_            -> tcIsSubArgTypeKind actual_kind
 	

@@ -347,15 +347,13 @@ data UserTypeCtxt
   | ExprSigCtxt		-- Expression type signature
   | ConArgCtxt Name	-- Data constructor argument
   | TySynCtxt Name	-- RHS of a type synonym decl
-  | GenPatCtxt		-- Pattern in generic decl
-			-- 	f{| a+b |} (Inl x) = ...
   | LamPatSigCtxt		-- Type sig in lambda pattern
 			-- 	f (x::t) = ...
   | BindPatSigCtxt	-- Type sig in pattern binding pattern
 			--	(x::t, y) = e
   | ResSigCtxt		-- Result type sig
 			-- 	f x :: t = ....
-  | ForSigCtxt Name	-- Foreign inport or export signature
+  | ForSigCtxt Name	-- Foreign import or export signature
   | DefaultDeclCtxt	-- Types in a default declaration
   | InstDeclCtxt        -- An instance declaration
   | SpecInstCtxt	-- SPECIALISE instance pragma
@@ -425,7 +423,6 @@ pprUserTypeCtxt (FunSigCtxt n)    = ptext (sLit "the type signature for") <+> qu
 pprUserTypeCtxt ExprSigCtxt       = ptext (sLit "an expression type signature")
 pprUserTypeCtxt (ConArgCtxt c)    = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
 pprUserTypeCtxt (TySynCtxt c)     = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
-pprUserTypeCtxt GenPatCtxt        = ptext (sLit "the type pattern of a generic definition")
 pprUserTypeCtxt ThBrackCtxt       = ptext (sLit "a Template Haskell quotation [t|...|]")
 pprUserTypeCtxt LamPatSigCtxt     = ptext (sLit "a pattern type signature")
 pprUserTypeCtxt BindPatSigCtxt    = ptext (sLit "a pattern type signature")
