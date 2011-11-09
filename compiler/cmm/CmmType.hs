@@ -15,7 +15,6 @@ module CmmType
     , Length
     , vec, vec2, vec4, vec8, vec16
     , vec2f64, vec2b64, vec4f32, vec4b32, vec8b16, vec16b8
-    , vec4bWord
     , vecLength, vecType
     , isVecType
    )
@@ -269,12 +268,11 @@ vec4  = vec 4
 vec8  = vec 8
 vec16 = vec 16
 
-vec2f64, vec2b64, vec4f32, vec4b32, vec4bWord, vec8b16, vec16b8 :: CmmType
+vec2f64, vec2b64, vec4f32, vec4b32, vec8b16, vec16b8 :: CmmType
 vec2f64 = vec 2 f64
 vec2b64 = vec 2 b64
 vec4f32 = vec 4 f32
 vec4b32 = vec 4 b32
-vec4bWord = vec 4 b32
 vec8b16 = vec 8 b16
 vec16b8 = vec 16 b8
 
