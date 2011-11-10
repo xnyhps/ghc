@@ -832,7 +832,7 @@ typeCtxt ty = ptext (sLit "In the type") <+> quotes (ppr ty)
 %*									*
 %************************************************************************
 
-Note [Kind-checking kind-polymorphic types]  IA0_TODO: add explicit kind polymorphism
+Note [Kind-checking kind-polymorphic types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider:
   f :: forall (f::k -> *) a. f a -> Int

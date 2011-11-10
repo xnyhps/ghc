@@ -243,7 +243,7 @@ funTyConName = mkPrimTyConName (fsLit "(->)") funTyConKey funTyCon
 
 funTyCon :: TyCon
 funTyCon = mkFunTyCon funTyConName (mkArrowKinds [liftedTypeKind, liftedTypeKind] liftedTypeKind)
--- IA0_NOTE: One step to remove subkinding.
+-- One step to remove subkinding.
 -- (->) :: * -> * -> *
 -- but we should have (and want) the following typing rule for fully applied arrows
 --      Gamma |- tau   :: k1    k1 in {*, #}
@@ -256,16 +256,6 @@ funTyCon = mkFunTyCon funTyConName (mkArrowKinds [liftedTypeKind, liftedTypeKind
 --      --------------------------
 --      Gamma |- tau -> sigma :: *
 -- In the end we don't want subkinding at all.
-
--- funTyCon = mkFunTyCon funTyConName (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind)
-        -- You might think that (->) should have type (?? -> ? -> *), and you'd be right
-	-- But if we do that we get kind errors when saying
-	--	instance Control.Arrow (->)
-	-- becuase the expected kind is (*->*->*).  The trouble is that the
-	-- expected/actual stuff in the unifier does not go contra-variant, whereas
-	-- the kind sub-typing does.  Sigh.  It really only matters if you use (->) in
-	-- a prefix way, thus:  (->) Int# Int#.  And this is unusual.
-        -- because they are never in scope in the source
 \end{code}
 
 
