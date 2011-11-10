@@ -1939,7 +1939,7 @@ section "SIMD"
 
 primtype FloatX4#
 
-primop Float2FloatX4Op "float2FloatX4#" GenPrimOp     
+primop FloatToFloatX4Op "floatToFloatX4#" GenPrimOp     
    Float# -> FloatX4#
    with
    code_size = 4
@@ -1999,13 +1999,21 @@ primop  WriteOffAddrOp_FloatX4 "writeFloatX4OffAddr#" GenPrimOp
 
 primtype Int32X4#
 
+primop Int32ToInt32X4Op "int32ToInt32X4#" GenPrimOp     
+   INT32 -> Int32X4#
+   with
+   code_size = 4
+
+primop Int32X4InsertOp "insertInt32X4#" GenPrimOp     
+   Int32X4# -> INT32 -> Int# -> Int32X4#
+
 primop Int32X4PackOp "packInt32X4#" GenPrimOp         
-   Int32# -> Int32# -> Int32# -> Int32# -> Int32X4#
+   INT32 -> INT32 -> INT32 -> INT32 -> Int32X4#
    with
    code_size = 4
 
 primop Int32X4UnpackOp "unpackInt32X4#" GenPrimOp         
-   Int32X4# -> (# Int32#, Int32#, Int32#, Int32# #)
+   Int32X4# -> (# INT32, INT32, INT32, INT32 #)
    with
    code_size = 4
 
@@ -2020,21 +2028,13 @@ primop Int32X4MulOp "timesInt32X4#" Dyadic
    Int32X4# -> Int32X4# -> Int32X4#
    with commutable = True
 
-primop Int32X4SDivOp "divideSInt32X4#" Dyadic  
+primop Int32X4QuotOp "quotInt32X4#" Dyadic  
    Int32X4# -> Int32X4# -> Int32X4#
    with can_fail = True
    
-primop Int32X4SRemOp "remainSInt32X4#" Dyadic  
+primop Int32X4RemOp "remInt32X4#" Dyadic  
    Int32X4# -> Int32X4# -> Int32X4#
    with can_fail = True
-   
-primop Int32X4UDivOp "divideUInt32X4#" Dyadic  
-   Int32X4# -> Int32X4# -> Int32X4#
-   with can_fail = True
-   
-primop Int32X4URemOp "remainUInt32X4#" Dyadic  
-   Int32X4# -> Int32X4# -> Int32X4#
-   with can_fail = True        
 
 primop Int32X4NegOp "negateInt32X4#" Monadic
    Int32X4# -> Int32X4#

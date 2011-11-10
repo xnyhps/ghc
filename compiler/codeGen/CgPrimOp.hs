@@ -401,23 +401,29 @@ emitPrimOp [res] PopCnt64Op [w] live = emitPopCntCall res w W64 live
 emitPrimOp [res] PopCntOp [w] live = emitPopCntCall res w wordWidth live
 
 -- SIMD vector packing and unpacking
-emitPrimOp [res] Float2FloatX4Op [e] _ =
-    doVecPack vec4f32 [e,e,e,e] res
+emitPrimOp [res] FloatToFloatX4Op [e] _ =
+    doVecPack Nothing vec4f32 [e,e,e,e] res
 
 emitPrimOp [res] FloatX4InsertOp [v,e,i] _ =
-    doVecInsert vec4f32 v e i res
+    doVecInsert Nothing vec4f32 v e i res
 
 emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
-    doVecPack vec4f32 es res
+    doVecPack Nothing vec4f32 es res
 
 emitPrimOp res@[_,_,_,_] FloatX4UnpackOp [arg] _ =
-    doVecUnpack vec4f32 arg res
+    doVecUnpack Nothing vec4f32 arg res
+
+emitPrimOp [res] Int32ToInt32X4Op [e] _ =
+    doVecPack (Just mo_WordTo32) vec4b32 [e,e,e,e] res
+
+emitPrimOp [res] Int32X4InsertOp [v,e,i] _ =
+    doVecInsert (Just mo_WordTo32) vec4b32 v e i res
 
 emitPrimOp [res] Int32X4PackOp es@[_,_,_,_] _ =
-    doVecPack vec4b32 es res
+    doVecPack (Just mo_WordTo32) vec4b32 es res
 
 emitPrimOp res@[_,_,_,_] Int32X4UnpackOp [arg] _ =
-    doVecUnpack vec4b32 arg res
+    doVecUnpack (Just mo_s_32ToWord) vec4b32 arg res
 
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg] _
@@ -597,10 +603,8 @@ translateOp FloatX4NegOp  = Just (MO_VF_Neg  4 W32)
 translateOp Int32X4AddOp   = Just (MO_VN_Add   4 W32)
 translateOp Int32X4SubOp   = Just (MO_VN_Sub   4 W32)
 translateOp Int32X4MulOp   = Just (MO_VN_Mul   4 W32)
-translateOp Int32X4SDivOp  = Just (MO_VN_SQuot 4 W32)
-translateOp Int32X4SRemOp  = Just (MO_VN_SRem  4 W32)
-translateOp Int32X4UDivOp  = Just (MO_VN_UQuot 4 W32)
-translateOp Int32X4URemOp  = Just (MO_VN_URem  4 W32)
+translateOp Int32X4QuotOp  = Just (MO_VN_SQuot 4 W32)
+translateOp Int32X4RemOp   = Just (MO_VN_SRem  4 W32)
 translateOp Int32X4NegOp   = Just (MO_VN_Neg   4 W32)
 
 translateOp _ = Nothing
@@ -710,34 +714,54 @@ mkBasicIndexedWrite off (Just cast) write_rep base idx val
 ------------------------------------------------------------------------------
 -- Helpers for translating vector packing and unpacking.
 
-doVecInsert :: CmmType -> CmmExpr -> CmmExpr -> CmmExpr -> CmmFormal -> Code
-doVecInsert ty src e idx res =
+doVecInsert :: Maybe MachOp  -- Cast from element to vector component
+            -> CmmType       -- Vector type
+            -> CmmExpr       -- Source vector
+            -> CmmExpr       -- Element
+            -> CmmExpr       -- Index at which to insert element
+            -> CmmFormal     -- Destination for result
+            -> Code
+doVecInsert maybe_pre_write_cast ty src e idx res =
     stmtC $ CmmAssign (CmmLocal res)
-                      (CmmMachOp (MO_V_Insert len wid) [src, e, idx])
+                      (CmmMachOp (MO_V_Insert len wid) [src, cast e, idx])
   where
+    cast :: CmmExpr -> CmmExpr
+    cast val = case maybe_pre_write_cast of
+                 Nothing   -> val
+                 Just cast -> CmmMachOp cast [val]
+
     len :: Length
     len = vecLength ty 
 
     wid :: Width
     wid = typeWidth (vecType ty)
 
-doVecPack :: CmmType -> [CmmExpr] -> CmmFormal -> Code
-doVecPack ty es res = do
+doVecPack :: Maybe MachOp  -- Cast from element to vector component
+          -> CmmType       -- Type of vector
+          -> [CmmExpr]     -- Elements
+          -> CmmFormal     -- Destination for result
+          -> Code
+doVecPack maybe_pre_write_cast ty es res = do
     dst <- newTemp ty
     vecPack dst es 0
   where
     vecPack :: CmmFormal -> [CmmExpr] -> Int -> Code
     vecPack src [] _ =
-        stmtC (CmmAssign (CmmLocal res) (CmmReg (CmmLocal src)))
+        stmtC $ CmmAssign (CmmLocal res) (CmmReg (CmmLocal src))
 
     vecPack src (e : es) i = do
         dst <- newTemp ty
         stmtC $ CmmAssign (CmmLocal dst)
                           (CmmMachOp (MO_V_Insert len wid)
-                                     [CmmReg (CmmLocal src), e, iLit])
+                                     [CmmReg (CmmLocal src), cast e, iLit])
         vecPack dst es (i + 1)
       where
         iLit = CmmLit (mkIntCLit i)
+
+    cast :: CmmExpr -> CmmExpr
+    cast val = case maybe_pre_write_cast of
+                 Nothing   -> val
+                 Just cast -> CmmMachOp cast [val]
 
     len :: Length
     len = vecLength ty 
@@ -745,8 +769,12 @@ doVecPack ty es res = do
     wid :: Width
     wid = typeWidth (vecType ty)
 
-doVecUnpack :: CmmType -> CmmExpr -> [CmmFormal] -> Code
-doVecUnpack ty e res =
+doVecUnpack :: Maybe MachOp  -- Cast from vector component to element result
+            -> CmmType       -- Type of vector
+            -> CmmExpr       -- Vector
+            -> [CmmFormal]   -- Element results
+            -> Code
+doVecUnpack maybe_post_read_cast ty e res =
     vecUnpack res 0
   where
     vecUnpack :: [CmmFormal] -> Int -> Code
@@ -755,11 +783,16 @@ doVecUnpack ty e res =
 
     vecUnpack (r : rs) i = do
         stmtC $ CmmAssign (CmmLocal r)
-                          (CmmMachOp (MO_V_Extract len wid)
-                                     [e, iLit])
+                          (cast (CmmMachOp (MO_V_Extract len wid)
+                                           [e, iLit]))
         vecUnpack rs (i + 1)
       where
         iLit = CmmLit (mkIntCLit i)
+
+    cast :: CmmExpr -> CmmExpr
+    cast val = case maybe_post_read_cast of
+                 Nothing   -> val
+                 Just cast -> CmmMachOp cast [val]
 
     len :: Length
     len = vecLength ty 
