@@ -345,20 +345,18 @@ ppAsm asm constraints rty vars sideeffect alignstack =
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
 
-ppExtract :: LlvmVar -> Int -> Doc
+ppExtract :: LlvmVar -> LlvmVar -> Doc
 ppExtract vec idx =
-  let idx' = LMLitVar $ LMIntLit (toInteger idx) i32
-  in text "extractelement"
-        <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
-        <+> (texts idx')
+    text "extractelement"
+    <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
+    <+> (texts idx)
 
-ppInsert :: LlvmVar -> LlvmVar -> Int -> Doc
+ppInsert :: LlvmVar -> LlvmVar -> LlvmVar -> Doc
 ppInsert vec elt idx =
-  let idx' = LMLitVar $ LMIntLit (toInteger idx) i32
-  in text "insertelement"
-        <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
-        <+> (texts (getVarType elt)) <+> (text $ getName elt) <> comma
-        <+> (texts idx')
+    text "insertelement"
+    <+> (texts (getVarType vec)) <+> (text $ getName vec) <> comma
+    <+> (texts (getVarType elt)) <+> (text $ getName elt) <> comma
+    <+> (texts idx)
 
 --------------------------------------------------------------------------------
 -- * Misc functions

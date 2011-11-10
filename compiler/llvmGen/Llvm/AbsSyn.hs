@@ -171,7 +171,7 @@ data LlvmExpression
       * val: The vector
       * idx: The index of the scalar within the vector
   -}
-  | Extract LlvmVar Int
+  | Extract LlvmVar LlvmVar
 
   {- |
     Insert a scalar element into a vector
@@ -179,7 +179,7 @@ data LlvmExpression
       * elt:   The scalar to insert
       * index: The index at which to insert the scalar
   -}
-  | Insert LlvmVar LlvmVar Int
+  | Insert LlvmVar LlvmVar LlvmVar
 
   {- |
     Allocate amount * sizeof(tp) bytes on the heap

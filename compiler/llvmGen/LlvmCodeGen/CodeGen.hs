@@ -829,20 +829,22 @@ genMachOp_fast env opt op r n e
 genMachOp_slow :: LlvmEnv -> EOption -> MachOp -> [CmmExpr] -> UniqSM ExprData
 
 -- Element extraction
-genMachOp_slow env _ (MO_V_Extract {}) [val, CmmLit (CmmInt idx _)] = do
-    (env1, vval, stmts, top) <- exprToVar env val
-    let (LMVector _ ty)      =  getVarType vval
-    (v1, s1) <- doExpr ty $ Extract vval (fromInteger idx)
-    return (env1, v1, stmts `snocOL` s1, top)
+genMachOp_slow env _ (MO_V_Extract {}) [val, idx] = do
+    (env1, vval, stmts1, top1) <- exprToVar env  val
+    (env2, vidx, stmts2, top2) <- exprToVar env1 idx
+    let (LMVector _ ty)        =  getVarType vval
+    (v1, s1)                   <- doExpr ty $ Extract vval vidx
+    return (env2, v1, stmts1 `appOL` stmts2 `snocOL` s1, top1 ++ top2)
 
 -- Element insertion
-genMachOp_slow env _ (MO_V_Insert {}) [val, elt, CmmLit (CmmInt idx _)] = do
-    (env1, vval, stmts1, top1) <- exprToVar env val
+genMachOp_slow env _ (MO_V_Insert {}) [val, elt, idx] = do
+    (env1, vval, stmts1, top1) <- exprToVar env  val
     (env2, velt, stmts2, top2) <- exprToVar env1 elt
+    (env3, vidx, stmts3, top3) <- exprToVar env2 idx
     let ty                     =  getVarType vval
-    (v1, s1) <- doExpr ty $ Insert vval velt (fromInteger idx)
-    return (env2, v1, stmts1 `appOL` stmts2 `snocOL` s1,
-            top1 ++ top2)
+    (v1, s1)                   <- doExpr ty $ Insert vval velt vidx
+    return (env3, v1, stmts1 `appOL` stmts2 `appOL` stmts3 `snocOL` s1,
+            top1 ++ top2 ++ top3)
     
 -- Binary MachOp
 genMachOp_slow env opt op [x, y] = case op of
