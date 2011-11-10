@@ -5,6 +5,13 @@
 \section[Name]{@Name@: to transmit name info from renamer to typechecker}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- |
 -- #name_types#
 -- GHC uses several kinds of name internally:
@@ -40,9 +47,8 @@ module Name (
 	mkSystemName, mkSystemNameAt,
         mkInternalName, mkDerivedInternalName, 
 	mkSystemVarName, mkSysTvName, 
-	mkFCallName,
-        mkTickBoxOpName,
-	mkExternalName, mkWiredInName,
+        mkFCallName,
+        mkExternalName, mkWiredInName,
 
 	-- ** Manipulating and deconstructing 'Name's
 	nameUnique, setNameUnique,
@@ -254,8 +260,8 @@ mkInternalName uniq occ loc = Name { n_uniq = getKeyFastInt uniq
 	--	* the insides of the compiler don't care: they use the Unique
 	--	* when printing for -ddump-xxx you can switch on -dppr-debug to get the
 	--	  uniques if you get confused
-	--	* for interface files we tidyCore first, which puts the uniques
-	--	  into the print name (see setNameVisibility below)
+        --      * for interface files we tidyCore first, which makes
+        --        the OccNames distinct when they need to be
 
 mkDerivedInternalName :: (OccName -> OccName) -> Unique -> Name -> Name
 mkDerivedInternalName derive_occ uniq (Name { n_occ = occ, n_loc = loc })
@@ -291,15 +297,8 @@ mkSysTvName uniq fs = mkSystemName uniq (mkOccNameFS tvName fs)
 
 -- | Make a name for a foreign call
 mkFCallName :: Unique -> String -> Name
-	-- The encoded string completely describes the ccall
-mkFCallName uniq str =  Name { n_uniq = getKeyFastInt uniq, n_sort = Internal, 
-			       n_occ = mkVarOcc str, n_loc = noSrcSpan }
-
-
-mkTickBoxOpName :: Unique -> String -> Name
-mkTickBoxOpName uniq str 
-   = Name { n_uniq = getKeyFastInt uniq, n_sort = Internal, 
-	    n_occ = mkVarOcc str, n_loc = noSrcSpan }
+mkFCallName uniq str = mkInternalName uniq (mkVarOcc str) noSrcSpan
+   -- The encoded string completely describes the ccall
 \end{code}
 
 \begin{code}

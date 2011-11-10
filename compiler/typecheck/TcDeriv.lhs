@@ -6,6 +6,13 @@
 Handles @deriving@ clauses on @data@ declarations.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module TcDeriv ( tcDeriving ) where
 
 #include "HsVersions.h"
@@ -326,11 +333,7 @@ tcDeriving tycl_decls inst_decls deriv_decls
 
 	; dflags <- getDOpts
 	; liftIO (dumpIfSet_dyn dflags Opt_D_dump_deriv "Derived instances"
-	         (ddump_deriving inst_info rn_binds newTyCons famInsts extraInstances))
-{-
-        ; when (not (null inst_info)) $
-          dumpDerivingInfo (ddump_deriving inst_info rn_binds)
--}
+	         (ddump_deriving inst_info rn_binds newTyCons famInsts))
 
   ; let all_tycons = map ATyCon (bagToList newTyCons)
   ; gbl_env <- tcExtendGlobalEnv all_tycons $
@@ -343,22 +346,18 @@ tcDeriving tycl_decls inst_decls deriv_decls
     ddump_deriving :: Bag (InstInfo Name) -> HsValBinds Name 
                    -> Bag TyCon  -- ^ Empty data constructors
                    -> Bag TyCon  -- ^ Rep type family instances
-                   -> Bag (InstInfo RdrName)
-                      -- ^ Instances for the repMetaTys
                    -> SDoc
-    ddump_deriving inst_infos extra_binds repMetaTys repTyCons metaInsts
+    ddump_deriving inst_infos extra_binds repMetaTys repTyCons
       =    hang (ptext (sLit "Derived instances:"))
               2 (vcat (map (\i -> pprInstInfoDetails i $$ text "") (bagToList inst_infos))
                  $$ ppr extra_binds)
         $$ hangP "Generic representation:" (
               hangP "Generated datatypes for meta-information:"
                (vcat (map ppr (bagToList repMetaTys)))
-           -- The Outputable instance for TyCon unfortunately only prints the name...
            $$ hangP "Representation types:"
-                (vcat (map ppr (bagToList repTyCons)))
-           $$ hangP "Meta-information instances:"
-                (vcat (map pprInstInfoDetails (bagToList metaInsts))))
+                (vcat (map pprTyFamInst (bagToList repTyCons))))
     
+    pprTyFamInst t = ppr t <+> text "=" <+> ppr (synTyConType t)
     hangP s x = text "" $$ hang (ptext (sLit s)) 2 x
 
 

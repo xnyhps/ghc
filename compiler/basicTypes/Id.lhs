@@ -5,6 +5,13 @@
 \section[Id]{@Ids@: Value and constructor identifiers}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- |
 -- #name_types#
 -- GHC uses several kinds of name internally:
@@ -21,6 +28,7 @@
 --   be global or local, see "Var#globalvslocal"
 --
 -- * 'Var.Var': see "Var#name_types"
+
 module Id (
         -- * The main types
 	Var, Id, isId,
@@ -54,8 +62,7 @@ module Id (
 	isFCallId, isFCallId_maybe,
 	isDataConWorkId, isDataConWorkId_maybe, isDataConId_maybe, idDataCon,
         isConLikeId, isBottomingId, idIsFrom,
-        isTickBoxOp, isTickBoxOp_maybe,
-	hasNoBinding, 
+        hasNoBinding,
 
 	-- ** Evidence variables
 	DictId, isDictId, isEvVar,
@@ -424,20 +431,6 @@ used by GHCi, which does not implement primops direct at all.
 isDeadBinder :: Id -> Bool
 isDeadBinder bndr | isId bndr = isDeadOcc (idOccInfo bndr)
 		  | otherwise = False	-- TyVars count as not dead
-\end{code}
-
-\begin{code}
-isTickBoxOp :: Id -> Bool
-isTickBoxOp id = 
-  case Var.idDetails id of
-    TickBoxOpId _    -> True
-    _                -> False
-
-isTickBoxOp_maybe :: Id -> Maybe TickBoxOp
-isTickBoxOp_maybe id = 
-  case Var.idDetails id of
-    TickBoxOpId tick -> Just tick
-    _                -> Nothing
 \end{code}
 
 %************************************************************************

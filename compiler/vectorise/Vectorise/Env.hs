@@ -145,7 +145,8 @@ initGlobalEnv info vectDecls instEnvs famInstEnvs
                                         -- FIXME: we currently only allow RHSes consisting of a
                                         --   single variable to be able to obtain the type without
                                         --   inference — see also 'TcBinds.tcVect'
-    scalar_vars   = [var              | Vect     var   Nothing                  <- vectDecls]
+    scalar_vars   = [var              | Vect     var   Nothing                  <- vectDecls] ++
+                    [var              | VectInst True var                       <- vectDecls]
     novects       = [var              | NoVect   var                            <- vectDecls]
     scalar_tycons = [tyConName tycon  | VectType True tycon _                   <- vectDecls]
 
@@ -198,7 +199,8 @@ modVectInfo env mg_ids mg_tyCons vectDecls info
     }
   where
     vectIds        = [id    | Vect     id    _   <- vectDecls]
-    vectTypeTyCons = [tycon | VectType _ tycon _ <- vectDecls]
+    vectTypeTyCons = [tycon | VectType _ tycon _ <- vectDecls] ++
+                     [tycon | VectClass tycon    <- vectDecls]
     vectDataCons   = concatMap tyConDataCons vectTypeTyCons
     ids            = mg_ids ++ vectIds
     tyCons         = mg_tyCons ++ vectTypeTyCons

@@ -7,6 +7,13 @@
 Datatype for: @BindGroup@, @Bind@, @Sig@, @Bind@.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module HsBinds where
@@ -18,6 +25,7 @@ import {-# SOURCE #-} HsPat  ( LPat )
 
 import HsTypes
 import PprCore ()
+import CoreSyn
 import Coercion
 import Type
 import Name
@@ -120,7 +128,7 @@ data HsBindLR idL idR
                                 -- See Note [Bind free vars]
 
 
-        fun_tick :: Maybe (Int,[Id])   -- ^ This is the (optional) module-local tick number.
+        fun_tick :: Maybe (Tickish Id)  -- ^ Tick to put on the rhs, if any
     }
 
   | PatBind {   -- The pattern is never a simple variable;
@@ -128,7 +136,10 @@ data HsBindLR idL idR
         pat_lhs    :: LPat idL,
         pat_rhs    :: GRHSs idR,
         pat_rhs_ty :: PostTcType,       -- Type of the GRHSs
-        bind_fvs   :: NameSet           -- See Note [Bind free vars]
+        bind_fvs   :: NameSet,          -- See Note [Bind free vars]
+        pat_ticks  :: (Maybe (Tickish Id), [Maybe (Tickish Id)])
+               -- ^ Tick to put on the rhs, if any, and ticks to put on
+               -- the bound variables.
     }
 
   | VarBind {   -- Dictionary binding and suchlike
@@ -383,9 +394,12 @@ instance (OutputableBndr id) => Outputable (ABExport id) where
 pprTicks :: SDoc -> SDoc -> SDoc
 -- Print stuff about ticks only when -dppr-debug is on, to avoid
 -- them appearing in error messages (from the desugarer); see Trac # 3263
+-- Also print ticks in dumpStyle, so that -ddump-hpc actually does
+-- something useful.
 pprTicks pp_no_debug pp_when_debug
-  = getPprStyle (\ sty -> if debugStyle sty then pp_when_debug
-                                            else pp_no_debug)
+  = getPprStyle (\ sty -> if debugStyle sty || dumpStyle sty
+                             then pp_when_debug
+                             else pp_no_debug)
 \end{code}
 
 %************************************************************************

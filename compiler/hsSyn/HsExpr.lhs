@@ -3,6 +3,13 @@
 % (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 %
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# LANGUAGE DeriveDataTypeable, ScopedTypeVariables #-}
 
 -- | Abstract Haskell syntax for expressions.
@@ -18,6 +25,7 @@ import HsTypes
 import HsBinds
 
 -- others:
+import CoreSyn
 import Var
 import Name
 import BasicTypes
@@ -248,8 +256,7 @@ data HsExpr id
   -- Haskell program coverage (Hpc) Support
 
   | HsTick
-     Int                                -- module-local tick number
-     [id]                               -- variables in scope
+     (Tickish id)
      (LHsExpr id)                       -- sub-expression
 
   | HsBinTick
@@ -298,6 +305,7 @@ tupArgPresent (Missing {}) = False
 
 type PendingSplice = (Name, LHsExpr Id) -- Typechecked splices, waiting to be
                                         -- pasted back in by the desugarer
+
 \end{code}
 
 Note [Parens in HsSyn]
@@ -503,14 +511,9 @@ ppr_expr (HsQuasiQuoteE qq)  = ppr qq
 ppr_expr (HsProc pat (L _ (HsCmdTop cmd _ _ _)))
   = hsep [ptext (sLit "proc"), ppr pat, ptext (sLit "->"), ppr cmd]
 
-ppr_expr (HsTick tickId vars exp)
+ppr_expr (HsTick tickish exp)
   = pprTicks (ppr exp) $
-    hcat [ptext (sLit "tick<"),
-    ppr tickId,
-    ptext (sLit ">("),
-    hsep (map pprHsVar vars),
-    ppr exp,
-    ptext (sLit ")")]
+    ppr tickish <+> ppr exp
 ppr_expr (HsBinTick tickIdTrue tickIdFalse exp)
   = pprTicks (ppr exp) $
     hcat [ptext (sLit "bintick<"),

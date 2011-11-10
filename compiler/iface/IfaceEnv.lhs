@@ -1,6 +1,13 @@
 (c) The University of Glasgow 2002-2006
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module IfaceEnv (
 	newGlobalBinder, newImplicitBinder, 
 	lookupIfaceTop,
@@ -8,7 +15,6 @@ module IfaceEnv (
 	newIPName, newIfaceName, newIfaceNames,
 	extendIfaceIdEnv, extendIfaceTyVarEnv, 
 	tcIfaceLclId, tcIfaceTyVar, lookupIfaceTyVar,
-	tcIfaceTick,
 
 	ifaceExportNames,
 
@@ -34,7 +40,6 @@ import UniqFM
 import FastString
 import UniqSupply
 import SrcLoc
-import MkId
 import BasicTypes
 
 import Outputable
@@ -320,19 +325,3 @@ newIfaceNames occs
 	; return [ mkInternalName uniq occ noSrcSpan
 		 | (occ,uniq) <- occs `zip` uniqsFromSupply uniqs] }
 \end{code}
-
-%************************************************************************
-%*									*
-		(Re)creating tick boxes
-%*									*
-%************************************************************************
-
-\begin{code}
-tcIfaceTick :: Module -> Int -> IfL Id
-tcIfaceTick modName tickNo 
-  = do { uniq <- newUnique
-       ; return $ mkTickBoxOpId uniq modName tickNo
-       }
-\end{code}
-
-

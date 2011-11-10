@@ -1,3 +1,10 @@
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# OPTIONS_GHC -O #-}
 -- We always optimise this, otherwise performance of a non-optimised
 -- compiler is severely affected
@@ -53,6 +60,7 @@ import Data.Word
 import Data.Array
 import Data.IORef
 import Control.Monad
+import System.Time ( ClockTime(..) )
 
 data CheckHiWay = CheckHiWay | IgnoreHiWay
     deriving Eq
@@ -462,7 +470,6 @@ data BinDictionary = BinDictionary {
 
 -- CostCentre
 {-! for IsCafCC derive: Binary !-}
-{-! for IsDupdCC derive: Binary !-}
 {-! for CostCentre derive: Binary !-}
 
 
@@ -615,19 +622,35 @@ instance Binary AvailInfo where
 		      ac <- get bh
 		      return (AvailTC ab ac)
 
+    
+-- where should this be located?
+instance Binary ClockTime where
+    put_ bh (TOD x y) = put_ bh x >> put_ bh y
+    
+    get bh = do
+        x <- get bh
+        y <- get bh
+        return $ TOD x y
+
 instance Binary Usage where
     put_ bh usg@UsagePackageModule{} = do 
         putByte bh 0
-	put_ bh (usg_mod usg)
-	put_ bh (usg_mod_hash usg)
-	put_ bh (usg_safe     usg)
+        put_ bh (usg_mod usg)
+        put_ bh (usg_mod_hash usg)
+        put_ bh (usg_safe     usg)
+
     put_ bh usg@UsageHomeModule{} = do 
         putByte bh 1
-	put_ bh (usg_mod_name usg)
-	put_ bh (usg_mod_hash usg)
-	put_ bh (usg_exports  usg)
-	put_ bh (usg_entities usg)
-	put_ bh (usg_safe     usg)
+        put_ bh (usg_mod_name usg)
+        put_ bh (usg_mod_hash usg)
+        put_ bh (usg_exports  usg)
+        put_ bh (usg_entities usg)
+        put_ bh (usg_safe     usg)
+
+    put_ bh usg@UsageFile{} = do 
+        putByte bh 2
+        put_ bh (usg_file_path usg)
+        put_ bh (usg_mtime     usg)
 
     get bh = do
         h <- getByte bh
@@ -637,7 +660,7 @@ instance Binary Usage where
             mod   <- get bh
             safe  <- get bh
             return UsagePackageModule { usg_mod = nm, usg_mod_hash = mod, usg_safe = safe }
-          _ -> do
+          1 -> do
             nm    <- get bh
             mod   <- get bh
             exps  <- get bh
@@ -645,6 +668,11 @@ instance Binary Usage where
             safe  <- get bh
             return UsageHomeModule { usg_mod_name = nm, usg_mod_hash = mod,
                      usg_exports = exps, usg_entities = ents, usg_safe = safe }
+          2 -> do
+            fp    <- get bh
+            mtime <- get bh
+            return UsageFile { usg_file_path = fp, usg_mtime = mtime }
+          i -> error ("Binary.get(Usage): " ++ show i)
 
 instance Binary Warnings where
     put_ bh NoWarnings     = putByte bh 0
@@ -745,13 +773,15 @@ instance Binary HsBang where
     put_ bh HsStrict        = putByte bh 1
     put_ bh HsUnpack        = putByte bh 2
     put_ bh HsUnpackFailed  = putByte bh 3
+    put_ bh HsNoUnpack      = putByte bh 4
     get bh = do
 	    h <- getByte bh
 	    case h of
 	      0 -> do return HsNoBang
 	      1 -> do return HsStrict
 	      2 -> do return HsUnpack
-	      _ -> do return HsUnpackFailed
+	      3 -> do return HsUnpackFailed
+              _ -> do return HsNoUnpack
 
 instance Binary TupleSort where
     put_ bh BoxedTuple      = putByte bh 0
@@ -911,26 +941,14 @@ instance Binary IsCafCC where
 	      0 -> do return CafCC
 	      _ -> do return NotCafCC
 
-instance Binary IsDupdCC where
-    put_ bh OriginalCC = do
-	    putByte bh 0
-    put_ bh DupdCC = do
-	    putByte bh 1
-    get bh = do
-	    h <- getByte bh
-	    case h of
-	      0 -> do return OriginalCC
-	      _ -> do return DupdCC
-
 instance Binary CostCentre where
     put_ bh NoCostCentre = do
 	    putByte bh 0
-    put_ bh (NormalCC aa ab ac ad) = do
+    put_ bh (NormalCC aa ab ac) = do
 	    putByte bh 1
 	    put_ bh aa
 	    put_ bh ab
 	    put_ bh ac
-	    put_ bh ad
     put_ bh (AllCafsCC ae) = do
 	    putByte bh 2
 	    put_ bh ae
@@ -941,8 +959,7 @@ instance Binary CostCentre where
 	      1 -> do aa <- get bh
 		      ab <- get bh
 		      ac <- get bh
-		      ad <- get bh
-		      return (NormalCC aa ab ac ad)
+                      return (NormalCC aa ab ac)
 	      _ -> do ae <- get bh
 		      return (AllCafsCC ae)
 
@@ -1085,7 +1102,7 @@ instance Binary IfaceExpr where
 	    putByte bh 7
 	    put_ bh al
 	    put_ bh am
-    put_ bh (IfaceNote an ao) = do
+    put_ bh (IfaceTick an ao) = do
 	    putByte bh 8
 	    put_ bh an
 	    put_ bh ao
@@ -1103,10 +1120,6 @@ instance Binary IfaceExpr where
             putByte bh 12
             put_ bh ie
             put_ bh ico
-    put_ bh (IfaceTick m ix) = do
-            putByte bh 13
-            put_ bh m
-            put_ bh ix
     get bh = do
 	    h <- getByte bh
 	    case h of
@@ -1134,7 +1147,7 @@ instance Binary IfaceExpr where
 		      return (IfaceLet al am)
 	      8 -> do an <- get bh
 		      ao <- get bh
-		      return (IfaceNote an ao)
+                      return (IfaceTick an ao)
 	      9 -> do ap <- get bh
 		      return (IfaceLit ap)
 	      10 -> do as <- get bh
@@ -1145,9 +1158,6 @@ instance Binary IfaceExpr where
               12 -> do ie <- get bh
                        ico <- get bh
                        return (IfaceCast ie ico)
-              13 -> do m <- get bh
-                       ix <- get bh
-                       return (IfaceTick m ix)
               _ -> panic ("get IfaceExpr " ++ show h)
 
 instance Binary IfaceConAlt where
@@ -1288,21 +1298,28 @@ instance Binary IfaceUnfolding where
 	  _ -> do e <- get bh
 		  return (IfCompulsory e)
 
-instance Binary IfaceNote where
-    put_ bh (IfaceSCC aa) = do
-	    putByte bh 0
-	    put_ bh aa
-    put_ bh (IfaceCoreNote s) = do
-            putByte bh 4
-            put_ bh s
+instance Binary IfaceTickish where
+    put_ bh (IfaceHpcTick m ix) = do
+      putByte bh 0
+      put_ bh m
+      put_ bh ix
+    put_ bh (IfaceSCC cc tick push) = do
+      putByte bh 1
+      put_ bh cc
+      put_ bh tick
+      put_ bh push
+
     get bh = do
-	    h <- getByte bh
-	    case h of
-	      0 -> do aa <- get bh
-		      return (IfaceSCC aa)
-              4 -> do ac <- get bh
-                      return (IfaceCoreNote ac)
-              _ -> panic ("get IfaceNote " ++ show h)
+      h <- getByte bh
+      case h of
+        0 -> do m <- get bh
+                ix <- get bh
+                return (IfaceHpcTick m ix)
+        1 -> do cc <- get bh
+                tick <- get bh
+                push <- get bh
+                return (IfaceSCC cc tick push)
+        _ -> panic ("get IfaceTickish " ++ show h)
 
 -------------------------------------------------------------------------
 --		IfaceDecl and friends

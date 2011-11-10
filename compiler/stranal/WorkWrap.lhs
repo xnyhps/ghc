@@ -4,6 +4,13 @@
 \section[WorkWrap]{Worker/wrapper-generating back-end of strictness analyser}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module WorkWrap ( wwTopBinds, mkWrapper ) where
 
 import CoreSyn
@@ -110,8 +117,8 @@ wwExpr (Lam binder expr)
 wwExpr (App f a)
   = App <$> wwExpr f <*> wwExpr a
 
-wwExpr (Note note expr)
-  = Note note <$> wwExpr expr
+wwExpr (Tick note expr)
+  = Tick note <$> wwExpr expr
 
 wwExpr (Cast expr co) = do
     new_expr <- wwExpr expr
@@ -379,7 +386,7 @@ get_one_shots :: Expr Var -> [Bool]
 get_one_shots (Lam b e)
   | isId b    = isOneShotLambda b : get_one_shots e
   | otherwise = get_one_shots e
-get_one_shots (Note _ e) = get_one_shots e
+get_one_shots (Tick _ e) = get_one_shots e
 get_one_shots _    	 = noOneShotInfo
 \end{code}
 

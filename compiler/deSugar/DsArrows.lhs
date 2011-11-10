@@ -6,6 +6,13 @@
 Desugaring arrow commands
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module DsArrows ( dsProcExpr ) where
 
 #include "HsVersions.h"
@@ -557,10 +564,9 @@ dsCmd _ids local_vars env_ids _stack _res_ty (HsArrForm op _ args) = do
             unionVarSets fv_sets)
 
 
-dsCmd ids local_vars env_ids stack res_ty (HsTick ix vars expr) = do
+dsCmd ids local_vars env_ids stack res_ty (HsTick tickish expr) = do
     (expr1,id_set) <- dsLCmd ids local_vars env_ids stack res_ty expr
-    expr2 <- mkTickBox ix vars expr1
-    return (expr2,id_set)
+    return (Tick tickish expr1, id_set)
 
 dsCmd _ _ _ _ _ c = pprPanic "dsCmd" (ppr c)
 

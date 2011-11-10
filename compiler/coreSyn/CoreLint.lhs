@@ -7,6 +7,13 @@
 A ``lint'' pass to check for Core correctness
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module CoreLint ( lintCoreBindings, lintUnfolding ) where
 
 #include "HsVersions.h"
@@ -249,7 +256,13 @@ lintCoreExpr (Cast expr co)
        ; checkTys from_ty expr_ty (mkCastErr from_ty expr_ty)
        ; return to_ty }
 
-lintCoreExpr (Note _ expr)
+lintCoreExpr (Tick (Breakpoint _ ids) expr)
+  = do forM_ ids $ \id -> do
+         checkDeadIdOcc id
+         lookupIdInScope id
+       lintCoreExpr expr
+
+lintCoreExpr (Tick _other_tickish expr)
   = lintCoreExpr expr
 
 lintCoreExpr (Let (NonRec tv (Type ty)) body)

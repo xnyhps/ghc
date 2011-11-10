@@ -920,7 +920,10 @@ checkSafeImports dflags hsc_env tcg_env
     condense :: (Module, [ImportedModsVal]) -> Hsc (Module, SrcSpan, IsSafeImport)
     condense (_, [])   = panic "HscMain.condense: Pattern match failure!"
     condense (m, x:xs) = do (_,_,l,s) <- foldlM cond' x xs
-                            return (m, l, s)
+                            -- we turn all imports into safe ones when
+                            -- inference mode is on.
+                            let s' = if safeInferOn dflags then True else s
+                            return (m, l, s')
         
     -- ImportedModsVal = (ModuleName, Bool, SrcSpan, IsSafeImport)
     cond' :: ImportedModsVal -> ImportedModsVal -> Hsc ImportedModsVal
@@ -1177,7 +1180,8 @@ hscInteractive (iface, details, cgguts) mod_summary = do
     prepd_binds <- {-# SCC "CorePrep" #-}
                    liftIO $ corePrepPgm dflags core_binds data_tycons ;
     -----------------  Generate byte code ------------------
-    comp_bc <- liftIO $ byteCodeGen dflags prepd_binds data_tycons mod_breaks
+    comp_bc <- liftIO $ byteCodeGen dflags this_mod prepd_binds
+                                    data_tycons mod_breaks
     ------------------ Create f-x-dynamic C-side stuff ---
     (_istub_h_exists, istub_c_exists) 
         <- liftIO $ outputForeignStubs dflags this_mod
@@ -1361,9 +1365,10 @@ hscDeclsWithLocation hsc_env str source linenumber = runHsc hsc_env $ do
     (tidy_cg, _mod_details) <- liftIO $ tidyProgram hsc_env simpl_mg
 
     let dflags = hsc_dflags hsc_env
-        CgGuts{ cg_binds     = core_binds,
-                cg_tycons    = tycons,
-                cg_modBreaks = mod_breaks } = tidy_cg
+        !CgGuts{ cg_module    = this_mod,
+                 cg_binds     = core_binds,
+                 cg_tycons    = tycons,
+                 cg_modBreaks = mod_breaks } = tidy_cg
         data_tycons = filter isDataTyCon tycons
 
     {- Prepare For Code Generation -}
@@ -1372,7 +1377,8 @@ hscDeclsWithLocation hsc_env str source linenumber = runHsc hsc_env $ do
                     liftIO $ corePrepPgm dflags core_binds data_tycons
 
     {- Generate byte code -}
-    cbc <- liftIO $ byteCodeGen dflags prepd_binds data_tycons mod_breaks
+    cbc <- liftIO $ byteCodeGen dflags this_mod
+                                prepd_binds data_tycons mod_breaks
 
     let src_span = srcLocSpan interactiveSrcLoc
     hsc_env <- getHscEnv
@@ -1382,7 +1388,7 @@ hscDeclsWithLocation hsc_env str source linenumber = runHsc hsc_env $ do
         clss = mg_clss simpl_mg
 
         ext_vars = filter (isExternalName . idName) $
-                       bindersOfBinds (cg_binds tidy_cg)
+                      bindersOfBinds core_binds
 
         (sys_vars, user_vars) = partition is_sys_var ext_vars
         is_sys_var id =  isDFunId id
@@ -1514,7 +1520,8 @@ mkModGuts mod binds =
         mg_vect_info    = noVectInfo,
         mg_inst_env     = emptyInstEnv,
         mg_fam_inst_env = emptyFamInstEnv,
-        mg_trust_pkg    = False
+        mg_trust_pkg    = False,
+        mg_dependent_files = []
     }
 
 
@@ -1556,7 +1563,7 @@ hscCompileCoreExpr hsc_env srcspan ds_expr
                    Nothing  -> return ()
 
         {- Convert to BCOs -}
-        bcos <- coreExprToBCOs dflags prepd_expr
+        bcos <- coreExprToBCOs dflags iNTERACTIVE prepd_expr
 
         {- link it -}
         hval <- linkExpr hsc_env srcspan bcos

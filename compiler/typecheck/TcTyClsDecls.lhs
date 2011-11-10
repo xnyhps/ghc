@@ -6,6 +6,13 @@
 TcTyClsDecls: Typecheck type and class declarations
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module TcTyClsDecls (
 	tcTyAndClassDecls, mkRecSelBinds,
 
@@ -919,6 +926,7 @@ chooseBoxingStrategy arg_ty bang
 	HsStrict -> do { unbox_strict <- doptM Opt_UnboxStrictFields
                        ; if unbox_strict then return (can_unbox HsStrict arg_ty)
                                          else return HsStrict }
+	HsNoUnpack -> return HsStrict
 	HsUnpack -> do { omit_prags <- doptM Opt_OmitInterfacePragmas
             -- Do not respect UNPACK pragmas if OmitInterfacePragmas is on
 	    -- See Trac #5252: unpacking means we must not conceal the
@@ -1277,9 +1285,9 @@ mkRecSelBinds tycons
 
 mkRecSelBind :: (TyCon, FieldLabel) -> (LSig Name, LHsBinds Name)
 mkRecSelBind (tycon, sel_name)
-  = (L loc (IdSig sel_id), unitBag (L loc sel_bind))
+  = (L sel_loc (IdSig sel_id), unitBag (L sel_loc sel_bind))
   where
-    loc    	= getSrcSpan tycon    
+    sel_loc     = getSrcSpan tycon
     sel_id 	= Var.mkExportedLocalVar rec_details sel_name 
                                          sel_ty vanillaIdInfo
     rec_details = RecSelId { sel_tycon = tycon, sel_naughty = is_naughty }
@@ -1307,15 +1315,15 @@ mkRecSelBind (tycon, sel_name)
     --    where cons_w_field = [C2,C7]
     sel_bind | is_naughty = mkTopFunBind sel_lname [mkSimpleMatch [] unit_rhs]
              | otherwise  = mkTopFunBind sel_lname (map mk_match cons_w_field ++ deflt)
-    mk_match con = mkSimpleMatch [L loc (mk_sel_pat con)] 
-                                 (L loc (HsVar field_var))
-    mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon rec_fields)
+    mk_match con = mkSimpleMatch [noLoc (mk_sel_pat con)]
+                                 (noLoc (HsVar field_var))
+    mk_sel_pat con = ConPatIn (noLoc (getName con)) (RecCon rec_fields)
     rec_fields = HsRecFields { rec_flds = [rec_field], rec_dotdot = Nothing }
     rec_field  = HsRecField { hsRecFieldId = sel_lname
                             , hsRecFieldArg = nlVarPat field_var
                             , hsRecPun = False }
-    sel_lname = L loc sel_name
-    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) loc
+    sel_lname = L sel_loc sel_name
+    field_var = mkInternalName (mkBuiltinUnique 1) (getOccName sel_name) sel_loc
 
     -- Add catch-all default case unless the case is exhaustive
     -- We do this explicitly so that we get a nice error message that

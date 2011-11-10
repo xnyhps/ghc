@@ -7,6 +7,13 @@
 \begin{code}
 {-# LANGUAGE DeriveDataTypeable #-}
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Literal
         (
         -- * Main data type
@@ -136,7 +143,9 @@ easier to write RULEs for them.
    in TcIface.
 
  * When looking for CAF-hood (in TidyPgm), we must take account of the
-   CAF-hood of the mk_integer field in LitInteger; see TidyPgm.cafRefsL
+   CAF-hood of the mk_integer field in LitInteger; see TidyPgm.cafRefsL.
+   Indeed this is the only reason we put the mk_integer field in the 
+   literal -- otherwise we could just look it up in CorePrep.
 
 
 Binary instance

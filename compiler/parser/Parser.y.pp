@@ -263,6 +263,7 @@ incorrect.
  '{-# DEPRECATED'         { L _ ITdeprecated_prag }
  '{-# WARNING'            { L _ ITwarning_prag }
  '{-# UNPACK'             { L _ ITunpack_prag }
+ '{-# NOUNPACK'           { L _ ITnounpack_prag }
  '{-# ANN'                { L _ ITann_prag }
  '{-# VECTORISE'          { L _ ITvect_prag }
  '{-# VECTORISE_SCALAR'   { L _ ITvect_scalar_prag }
@@ -973,6 +974,7 @@ infixtype :: { LHsType RdrName }
 strict_mark :: { Located HsBang }
         : '!'                           { L1 HsStrict }
         | '{-# UNPACK' '#-}' '!'        { LL HsUnpack }
+        | '{-# NOUNPACK' '#-}' '!'      { LL HsNoUnpack }
 
 -- A ctype is a for-all type
 ctype   :: { LHsType RdrName }
@@ -1241,7 +1243,7 @@ decl    :: { Located (OrdList (LHsDecl RdrName)) }
                                         pat <- checkPattern e;
                                         return $ LL $ unitOL $ LL $ ValD $
                                                PatBind pat (unLoc $3)
-                                                       placeHolderType placeHolderNames } }
+                                                       placeHolderType placeHolderNames (Nothing,[]) } }
                                 -- Turn it all into an expression so that
                                 -- checkPattern can check that bangs are enabled
 

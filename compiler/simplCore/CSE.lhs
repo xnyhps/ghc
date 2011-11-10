@@ -4,6 +4,13 @@
 \section{Common subexpression}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module CSE (
 	cseProgram
     ) where
@@ -233,7 +240,7 @@ cseExpr env (Coercion c)           = Coercion (substCo (csEnvSubst env) c)
 cseExpr _   (Lit lit)              = Lit lit
 cseExpr env (Var v)		   = lookupSubst env v
 cseExpr env (App f a)        	   = App (cseExpr env f) (tryForCSE env a)
-cseExpr env (Note n e)       	   = Note n (cseExpr env e)
+cseExpr env (Tick t e)           = Tick t (cseExpr env e)
 cseExpr env (Cast e co)            = Cast (cseExpr env e) (substCo (csEnvSubst env) co)
 cseExpr env (Lam b e)	     	   = let (env', b') = addBinder env b
 				     in Lam b' (cseExpr env' e)

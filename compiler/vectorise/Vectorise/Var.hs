@@ -1,4 +1,11 @@
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | Vectorise variables and literals.
 module Vectorise.Var (
 	vectBndr,
@@ -10,6 +17,7 @@ module Vectorise.Var (
 	vectPolyVar,
 	vectLiteral
 ) where
+
 import Vectorise.Utils
 import Vectorise.Monad
 import Vectorise.Env
@@ -25,6 +33,7 @@ import Control.Monad
 
 
 -- Binders ----------------------------------------------------------------------------------------
+
 -- | Vectorise a binder variable, along with its attached type.
 vectBndr :: Var -> VM VVar
 vectBndr v
@@ -38,7 +47,6 @@ vectBndr v
   where
     mapTo vv lv env = env { local_vars = extendVarEnv (local_vars env) v (vv, lv) }
 
-
 -- | Vectorise a binder variable, along with its attached type, 
 --   but give the result a new name.
 vectBndrNew :: Var -> FastString -> VM VVar
@@ -50,7 +58,6 @@ vectBndrNew v fs
   where
     upd vv env = env { local_vars = extendVarEnv (local_vars env) v vv }
 
-
 -- | Vectorise a binder then run a computation with that binder in scope.
 vectBndrIn :: Var -> VM a -> VM (VVar, a)
 vectBndrIn v p
@@ -59,7 +66,6 @@ vectBndrIn v p
       x <- p
       return (vv, x)
 
-
 -- | Vectorise a binder, give it a new name, then run a computation with that binder in scope.
 vectBndrNewIn :: Var -> FastString -> VM a -> VM (VVar, a)
 vectBndrNewIn v fs p
@@ -67,7 +73,6 @@ vectBndrNewIn v fs p
  $ do vv <- vectBndrNew v fs
       x  <- p
       return (vv, x)
-
 
 -- | Vectorise some binders, then run a computation with them in scope.
 vectBndrsIn :: [Var] -> VM a -> VM ([VVar], a)
@@ -79,6 +84,7 @@ vectBndrsIn vs p
 
 
 -- Variables --------------------------------------------------------------------------------------
+
 -- | Vectorise a variable, producing the vectorised and lifted versions.
 vectVar :: Var -> VM VExpr
 vectVar v
@@ -98,8 +104,9 @@ vectVar v
                lexpr <- liftPD vexpr
                return (vexpr, lexpr)
 
-
 -- | Like `vectVar` but also add type applications to the variables.
+-- FIXME: 'vectVar' is really just a special case, which 'vectPolyVar' should handle fine as well —
+--        MERGE the two functions!
 vectPolyVar :: Var -> [Type] -> VM VExpr
 vectPolyVar v tys
  = do vtys	<- mapM vectType tys
@@ -116,6 +123,7 @@ vectPolyVar v tys
 
 
 -- Literals ---------------------------------------------------------------------------------------
+
 -- | Lifted literals are created by replicating them
 --   We use the the integer context in the `VM` state for the number
 --   of elements in the output array.
@@ -123,4 +131,3 @@ vectLiteral :: Literal -> VM VExpr
 vectLiteral lit
  = do lexpr <- liftPD (Lit lit)
       return (Lit lit, lexpr)
-

@@ -4,6 +4,13 @@
 %
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module MkIface ( 
         mkUsedNames,
         mkDependencies,
@@ -43,6 +50,8 @@ Basic idea:
     of the external reference when computing the fingerprint of A.f.  So
     if anything that A.f depends on changes, then A.f's fingerprint will
     change.
+    Also record any dependent files added with addDependentFile.
+    In the future record any #include usages.
 
   * In checkOldIface we compare the mi_usages for the module with
     the actual fingerprint for all each thing recorded in mi_usages
@@ -102,6 +111,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.IORef
 import System.FilePath
+import System.Directory (getModificationTime)
 \end{code}
 
 
@@ -134,10 +144,12 @@ mkIface hsc_env maybe_old_fingerprint mod_details
                       mg_fix_env    = fix_env,
                       mg_warns      = warns,
                       mg_hpc_info   = hpc_info,
-                      mg_trust_pkg  = self_trust }
+                      mg_trust_pkg  = self_trust,
+                      mg_dependent_files = dependent_files
+                    }
         = mkIface_ hsc_env maybe_old_fingerprint
                    this_mod is_boot used_names used_th deps rdr_env fix_env
-                   warns hpc_info dir_imp_mods self_trust mod_details
+                   warns hpc_info dir_imp_mods self_trust dependent_files mod_details
 
 -- | make an interface from the results of typechecking only.  Useful
 -- for non-optimising compilation, or where we aren't generating any
@@ -155,17 +167,19 @@ mkIfaceTc hsc_env maybe_old_fingerprint mod_details
                       tcg_fix_env = fix_env,
                       tcg_warns = warns,
                       tcg_hpc = other_hpc_info,
-                      tcg_th_splice_used = tc_splice_used
+                      tcg_th_splice_used = tc_splice_used,
+                      tcg_dependent_files = dependent_files
                     }
   = do
           let used_names = mkUsedNames tc_result
           deps <- mkDependencies tc_result
           let hpc_info = emptyHpcInfo other_hpc_info
           used_th <- readIORef tc_splice_used
+          dep_files <- (readIORef dependent_files)
           mkIface_ hsc_env maybe_old_fingerprint
                    this_mod (isHsBoot hsc_src) used_names used_th deps rdr_env
                    fix_env warns hpc_info (imp_mods imports)
-                   (imp_trust_own_pkg imports) mod_details
+                   (imp_trust_own_pkg imports) dep_files mod_details
         
 
 mkUsedNames :: TcGblEnv -> NameSet
@@ -210,11 +224,12 @@ mkIface_ :: HscEnv -> Maybe Fingerprint -> Module -> IsBootInterface
          -> NameSet -> Bool -> Dependencies -> GlobalRdrEnv
          -> NameEnv FixItem -> Warnings -> HpcInfo
          -> ImportedMods -> Bool
+         -> [FilePath]
          -> ModDetails
          -> IO (Messages, Maybe (ModIface, Bool))
 mkIface_ hsc_env maybe_old_fingerprint 
          this_mod is_boot used_names used_th deps rdr_env fix_env src_warns
-         hpc_info dir_imp_mods pkg_trust_req
+         hpc_info dir_imp_mods pkg_trust_req dependent_files
 	 ModDetails{  md_insts 	   = insts, 
 		      md_fam_insts = fam_insts,
 		      md_rules 	   = rules,
@@ -227,7 +242,8 @@ mkIface_ hsc_env maybe_old_fingerprint
 --	put exactly the info into the TypeEnv that we want
 --	to expose in the interface
 
-  = do	{ usages <- mkUsageInfo hsc_env this_mod dir_imp_mods used_names
+  = do	{ usages  <- mkUsageInfo hsc_env this_mod dir_imp_mods used_names dependent_files
+        ; safeInf <- hscGetSafeInf hsc_env
 
 	; let	{ entities = typeEnvElts type_env ;
                   decls  = [ tyThingToIfaceDecl entity
@@ -246,7 +262,10 @@ mkIface_ hsc_env maybe_old_fingerprint
 		; iface_insts = map instanceToIfaceInst insts
 		; iface_fam_insts = map famInstToIfaceFamInst fam_insts
                 ; iface_vect_info = flattenVectInfo vect_info
-                ; trust_info  = (setSafeMode . safeHaskell) dflags
+                ; safeMode    = if safeInferOn dflags  && not safeInf
+                                    then Sf_None
+                                    else safeHaskell dflags
+                ; trust_info  = setSafeMode safeMode
 
 	        ; intermediate_iface = ModIface { 
 			mi_module   = this_mod,
@@ -835,23 +854,27 @@ mkOrphMap get_key decls
 %************************************************************************
 
 \begin{code}
-mkUsageInfo :: HscEnv -> Module -> ImportedMods -> NameSet -> IO [Usage]
-mkUsageInfo hsc_env this_mod dir_imp_mods used_names
+mkUsageInfo :: HscEnv -> Module -> ImportedMods -> NameSet -> [FilePath] -> IO [Usage]
+mkUsageInfo hsc_env this_mod dir_imp_mods used_names dependent_files
   = do	{ eps <- hscEPS hsc_env
-	; let usages = mk_usage_info (eps_PIT eps) hsc_env this_mod
+    ; mtimes <- mapM getModificationTime dependent_files
+	; let mod_usages = mk_mod_usage_info (eps_PIT eps) hsc_env this_mod
 				     dir_imp_mods used_names
+	; let usages = mod_usages ++ map to_file_usage (zip dependent_files mtimes)
 	; usages `seqList`  return usages }
 	 -- seq the list of Usages returned: occasionally these
 	 -- don't get evaluated for a while and we can end up hanging on to
 	 -- the entire collection of Ifaces.
+   where
+     to_file_usage (f, mtime) = UsageFile { usg_file_path = f, usg_mtime = mtime }
 
-mk_usage_info :: PackageIfaceTable
+mk_mod_usage_info :: PackageIfaceTable
               -> HscEnv
               -> Module
               -> ImportedMods
               -> NameSet
               -> [Usage]
-mk_usage_info pit hsc_env this_mod direct_imports used_names
+mk_mod_usage_info pit hsc_env this_mod direct_imports used_names
   = mapCatMaybes mkUsage usage_mods
   where
     hpt = hsc_HPT hsc_env
@@ -1255,6 +1278,13 @@ checkModUsage this_pkg UsageHomeModule{
     if recompile 
       then return outOfDate	-- This one failed, so just bail out now
       else up_to_date (ptext (sLit "  Great!  The bits I use are up to date"))
+ 
+
+checkModUsage _this_pkg UsageFile{ usg_file_path = file, usg_mtime = old_mtime } = do
+  new_mtime <- liftIO $ getModificationTime file
+  return $ old_mtime /= new_mtime
+
+
 
 ------------------------
 checkModuleFingerprint :: Fingerprint -> Fingerprint -> IfG Bool
@@ -1629,12 +1659,13 @@ toIfaceExpr (App f a)       = toIfaceApp f [a]
 toIfaceExpr (Case s x _ as) = IfaceCase (toIfaceExpr s) (getFS x) (map toIfaceAlt as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
 toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (coToIfaceType co)
-toIfaceExpr (Note n e)      = IfaceNote (toIfaceNote n) (toIfaceExpr e)
+toIfaceExpr (Tick t e)    = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
 
 ---------------------
-toIfaceNote :: Note -> IfaceNote
-toIfaceNote (SCC cc)      = IfaceSCC cc
-toIfaceNote (CoreNote s)  = IfaceCoreNote s
+toIfaceTickish :: Tickish Id -> IfaceTickish
+toIfaceTickish (ProfNote cc tick push) = IfaceSCC cc tick push
+toIfaceTickish (HpcTick modl ix)       = IfaceHpcTick modl ix
+toIfaceTickish _ = panic "toIfaceTickish"
 
 ---------------------
 toIfaceBind :: Bind Id -> IfaceBinding
@@ -1679,7 +1710,6 @@ toIfaceVar v
     | Just fcall <- isFCallId_maybe v            = IfaceFCall fcall (toIfaceType (idType v))
        -- Foreign calls have special syntax
     | isExternalName name		         = IfaceExt name
-    | Just (TickBox m ix) <- isTickBoxOp_maybe v = IfaceTick m ix
-    | otherwise		                         = IfaceLcl (getFS name)
+    | otherwise                                  = IfaceLcl (getFS name)
   where name = idName v
 \end{code}
