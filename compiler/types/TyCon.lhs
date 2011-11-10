@@ -82,9 +82,9 @@ module TyCon(
 	newTyConCo, newTyConCo_maybe,
 
         -- * Primitive representations of Types
-	PrimRep(..),
+	PrimRep(..), PrimElemRep(..),
 	tyConPrimRep,
-        primRepSizeW
+        primRepSizeW, primElemRepSizeB
 ) where
 
 #include "HsVersions.h"
@@ -773,7 +773,20 @@ data PrimRep
   | AddrRep		-- ^ A pointer, but /not/ to a Haskell value (use 'PtrRep')
   | FloatRep
   | DoubleRep
-  | VecRep Int PrimRep  -- ^ A vector of another PrimRep
+  | VecRep Int PrimElemRep  -- ^ A vector
+  deriving( Eq, Show )
+
+data PrimElemRep
+  = Int8ElemRep
+  | Int16ElemRep
+  | Int32ElemRep
+  | Int64ElemRep
+  | Word8ElemRep
+  | Word16ElemRep
+  | Word32ElemRep
+  | Word64ElemRep
+  | FloatElemRep
+  | DoubleElemRep
   deriving( Eq, Show )
 
 instance Outputable PrimRep where
@@ -787,10 +800,22 @@ primRepSizeW Int64Rep         = wORD64_SIZE `quot` wORD_SIZE
 primRepSizeW Word64Rep        = wORD64_SIZE `quot` wORD_SIZE
 primRepSizeW FloatRep         = 1    -- NB. might not take a full word
 primRepSizeW DoubleRep        = dOUBLE_SIZE `quot` wORD_SIZE
-primRepSizeW (VecRep len rep) = len * primRepSizeW rep
+primRepSizeW (VecRep len rep) = len * primElemRepSizeB rep `quot` wORD_SIZE
 primRepSizeW AddrRep          = 1
 primRepSizeW PtrRep           = 1
 primRepSizeW VoidRep          = 0
+
+primElemRepSizeB :: PrimElemRep -> Int
+primElemRepSizeB Int8ElemRep  = 1
+primElemRepSizeB Int16ElemRep  = 2
+primElemRepSizeB Int32ElemRep  = 4
+primElemRepSizeB Int64ElemRep  = 8
+primElemRepSizeB Word8ElemRep  = 1
+primElemRepSizeB Word16ElemRep = 2
+primElemRepSizeB Word32ElemRep = 4
+primElemRepSizeB Word64ElemRep = 8
+primElemRepSizeB FloatElemRep  = 4
+primElemRepSizeB DoubleElemRep = 8
 \end{code}
 
 %************************************************************************

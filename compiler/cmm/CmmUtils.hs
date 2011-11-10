@@ -71,7 +71,7 @@ module CmmUtils(
 
 #include "HsVersions.h"
 
-import TyCon	( PrimRep(..) )
+import TyCon	( PrimRep(..), PrimElemRep(..) )
 import Type	( Type, typePrimRep )
 
 import SMRep
@@ -97,16 +97,28 @@ import Compiler.Hoopl hiding ( Unique )
 ---------------------------------------------------
 
 primRepCmmType :: PrimRep -> CmmType
-primRepCmmType VoidRep          = panic "primRepCmmType:VoidRep"
-primRepCmmType PtrRep           = gcWord
-primRepCmmType IntRep           = bWord
-primRepCmmType WordRep          = bWord
-primRepCmmType Int64Rep         = b64
-primRepCmmType Word64Rep        = b64
-primRepCmmType AddrRep          = bWord
-primRepCmmType FloatRep         = f32
-primRepCmmType DoubleRep        = f64
-primRepCmmType (VecRep len rep) = vec len (primRepCmmType rep)
+primRepCmmType VoidRep           = panic "primRepCmmType:VoidRep"
+primRepCmmType PtrRep            = gcWord
+primRepCmmType IntRep            = bWord
+primRepCmmType WordRep           = bWord
+primRepCmmType Int64Rep          = b64
+primRepCmmType Word64Rep         = b64
+primRepCmmType AddrRep           = bWord
+primRepCmmType FloatRep          = f32
+primRepCmmType DoubleRep         = f64
+primRepCmmType (VecRep len elem) = vec len (primElemRepCmmType elem)
+
+primElemRepCmmType :: PrimElemRep -> CmmType
+primElemRepCmmType Int8ElemRep   = b8
+primElemRepCmmType Int16ElemRep  = b16
+primElemRepCmmType Int32ElemRep  = b32
+primElemRepCmmType Int64ElemRep  = b64
+primElemRepCmmType Word8ElemRep  = b8
+primElemRepCmmType Word16ElemRep = b16
+primElemRepCmmType Word32ElemRep = b32
+primElemRepCmmType Word64ElemRep = b64
+primElemRepCmmType FloatElemRep  = f32
+primElemRepCmmType DoubleElemRep = f64
 
 typeCmmType :: Type -> CmmType
 typeCmmType ty = primRepCmmType (typePrimRep ty)

@@ -49,7 +49,7 @@ import CLabel
 import StgSyn
 import Id
 import Name
-import TyCon		( PrimRep(..) )
+import TyCon		( PrimRep(..), primElemRepSizeB )
 import BasicTypes	( Arity )
 import DynFlags
 import StaticFlags
@@ -213,33 +213,33 @@ slowCallPattern []		      = (fsLit "stg_ap_0", 0)
 -- ArgRep is not exported (even abstractly)
 -- It's a local helper type for classification
 
-data ArgRep = P            -- GC Ptr
-            | N            -- One-word non-ptr
-            | L            -- Two-word non-ptr (long)
-            | V            -- Void
-            | F            -- Float
-            | D            -- Double
-            | X Int ArgRep -- Vector
+data ArgRep = P     -- GC Ptr
+            | N     -- One-word non-ptr
+            | L     -- Two-word non-ptr (long)
+            | V     -- Void
+            | F     -- Float
+            | D     -- Double
+            | X Int -- Vector, size in bytes
 instance Outputable ArgRep where
-  ppr P           = text "P"
-  ppr N           = text "N"
-  ppr L           = text "L"
-  ppr V           = text "V"
-  ppr F           = text "F"
-  ppr D           = text "D"
-  ppr (X len rep) = text "X" <> ppr len <> ppr rep
+  ppr P       = text "P"
+  ppr N       = text "N"
+  ppr L       = text "L"
+  ppr V       = text "V"
+  ppr F       = text "F"
+  ppr D       = text "D"
+  ppr (X len) = text "X" <> ppr len
 
 toArgRep :: PrimRep -> ArgRep
-toArgRep VoidRep          = V
-toArgRep PtrRep           = P
-toArgRep IntRep           = N
-toArgRep WordRep          = N
-toArgRep AddrRep          = N
-toArgRep Int64Rep         = L
-toArgRep Word64Rep        = L
-toArgRep FloatRep         = F
-toArgRep DoubleRep        = D
-toArgRep (VecRep len rep) = X len (toArgRep rep)
+toArgRep VoidRep           = V
+toArgRep PtrRep            = P
+toArgRep IntRep            = N
+toArgRep WordRep           = N
+toArgRep AddrRep           = N
+toArgRep Int64Rep          = L
+toArgRep Word64Rep         = L
+toArgRep FloatRep          = F
+toArgRep DoubleRep         = D
+toArgRep (VecRep len elem) = X (len*primElemRepSizeB elem)
 
 isNonV :: ArgRep -> Bool
 isNonV V = False
@@ -249,13 +249,13 @@ argsReps :: [StgArg] -> [ArgRep]
 argsReps = map (toArgRep . argPrimRep)
 
 argRepSizeW :: ArgRep -> WordOff		-- Size in words
-argRepSizeW N           = 1
-argRepSizeW P           = 1
-argRepSizeW F           = 1
-argRepSizeW L           = wORD64_SIZE `quot` wORD_SIZE
-argRepSizeW D           = dOUBLE_SIZE `quot` wORD_SIZE
-argRepSizeW V           = 0
-argRepSizeW (X len rep) = len*argRepSizeW rep
+argRepSizeW N       = 1
+argRepSizeW P       = 1
+argRepSizeW F       = 1
+argRepSizeW L       = wORD64_SIZE `quot` wORD_SIZE
+argRepSizeW D       = dOUBLE_SIZE `quot` wORD_SIZE
+argRepSizeW V       = 0
+argRepSizeW (X len) = len `quot` wORD_SIZE
 
 idArgRep :: Id -> ArgRep
 idArgRep = toArgRep . idPrimRep

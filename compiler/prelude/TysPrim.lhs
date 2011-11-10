@@ -725,10 +725,10 @@ anyTyConOfKind kind
 floatX4PrimTy	:: Type
 floatX4PrimTy	= mkTyConTy floatX4PrimTyCon
 floatX4PrimTyCon :: TyCon
-floatX4PrimTyCon = pcPrimTyCon0 floatX4PrimTyConName (VecRep 4 FloatRep)
+floatX4PrimTyCon = pcPrimTyCon0 floatX4PrimTyConName (VecRep 4 FloatElemRep)
 
 int32X4PrimTy	:: Type
 int32X4PrimTy	= mkTyConTy int32X4PrimTyCon
 int32X4PrimTyCon :: TyCon
-int32X4PrimTyCon = pcPrimTyCon0 int32X4PrimTyConName (VecRep 4 IntRep)
+int32X4PrimTyCon = pcPrimTyCon0 int32X4PrimTyConName (VecRep 4 Int32ElemRep)
 \end{code}

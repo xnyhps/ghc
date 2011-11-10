@@ -245,25 +245,50 @@ entry to the garbage collector.
 
 \begin{code}
 data CgRep 
-  = VoidArg             -- Void
-  | PtrArg              -- Word-sized heap pointer, followed
-                        -- by the garbage collector
-  | NonPtrArg           -- Word-sized non-pointer
-                        -- (including addresses not followed by GC)
-  | LongArg             -- 64-bit non-pointer
-  | FloatArg            -- 32-bit float
-  | DoubleArg           -- 64-bit float
-  | VecArg Length CgRep -- Vector
+  = VoidArg                 -- Void
+  | PtrArg                  -- Word-sized heap pointer, followed
+                            -- by the garbage collector
+  | NonPtrArg               -- Word-sized non-pointer
+                            -- (including addresses not followed by GC)
+  | LongArg                 -- 64-bit non-pointer
+  | FloatArg                -- 32-bit float
+  | DoubleArg               -- 64-bit float
+  | VecArg Length CgElemRep -- Vector
+  deriving Eq
+
+data CgElemRep
+  = Int8ArgElem
+  | Int16ArgElem
+  | Int32ArgElem
+  | Int64ArgElem
+  | Word8ArgElem
+  | Word16ArgElem
+  | Word32ArgElem
+  | Word64ArgElem
+  | FloatArgElem
+  | DoubleArgElem
   deriving Eq
 
 instance Outputable CgRep where
-    ppr VoidArg          = ptext (sLit "V_")
-    ppr PtrArg           = ptext (sLit "P_")
-    ppr NonPtrArg        = ptext (sLit "I_")
-    ppr LongArg          = ptext (sLit "L_")
-    ppr FloatArg         = ptext (sLit "F_")
-    ppr DoubleArg        = ptext (sLit "D_")
-    ppr (VecArg len rep) = text ("X" ++ show len) <> ppr rep
+    ppr VoidArg           = ptext (sLit "V_")
+    ppr PtrArg            = ptext (sLit "P_")
+    ppr NonPtrArg         = ptext (sLit "I_")
+    ppr LongArg           = ptext (sLit "L_")
+    ppr FloatArg          = ptext (sLit "F_")
+    ppr DoubleArg         = ptext (sLit "D_")
+    ppr (VecArg len elem) = ptext (sLit (showArgElem elem ++ "X" ++ show len ++ "_"))
+      where
+        showArgElem :: CgElemRep -> String
+        showArgElem Int8ArgElem   = "I8"
+        showArgElem Int16ArgElem  = "I16"
+        showArgElem Int32ArgElem  = "I32"
+        showArgElem Int64ArgElem  = "I64"
+        showArgElem Word8ArgElem  = "W8"
+        showArgElem Word16ArgElem = "W16"
+        showArgElem Word32ArgElem = "W32"
+        showArgElem Word64ArgElem = "W64"
+        showArgElem FloatArgElem  = "F"
+        showArgElem DoubleArgElem = "D"
 
 argMachRep :: CgRep -> CmmType
 argMachRep PtrArg            = gcWord
@@ -272,7 +297,19 @@ argMachRep LongArg           = b64
 argMachRep FloatArg          = f32
 argMachRep DoubleArg         = f64
 argMachRep VoidArg           = panic "argMachRep:VoidRep"
-argMachRep (VecArg len rep)  = vec len (argMachRep rep)
+argMachRep (VecArg len rep)  = vec len (elemMachRep rep)
+
+elemMachRep :: CgElemRep -> CmmType
+elemMachRep Int8ArgElem   = b8
+elemMachRep Int16ArgElem  = b16
+elemMachRep Int32ArgElem  = b32
+elemMachRep Int64ArgElem  = b64
+elemMachRep Word8ArgElem  = b8
+elemMachRep Word16ArgElem = b16
+elemMachRep Word32ArgElem = b32
+elemMachRep Word64ArgElem = b64
+elemMachRep FloatArgElem  = f32
+elemMachRep DoubleArgElem = f64
 
 primRepToCgRep :: PrimRep -> CgRep
 primRepToCgRep VoidRep          = VoidArg
@@ -284,7 +321,19 @@ primRepToCgRep Word64Rep        = LongArg
 primRepToCgRep AddrRep          = NonPtrArg
 primRepToCgRep FloatRep         = FloatArg
 primRepToCgRep DoubleRep        = DoubleArg
-primRepToCgRep (VecRep len rep) = VecArg len (primRepToCgRep rep)
+primRepToCgRep (VecRep len rep) = VecArg len (primElemRepToCgElemRep rep)
+
+primElemRepToCgElemRep :: PrimElemRep -> CgElemRep
+primElemRepToCgElemRep Int8ElemRep   = Int8ArgElem
+primElemRepToCgElemRep Int16ElemRep  = Int16ArgElem
+primElemRepToCgElemRep Int32ElemRep  = Int32ArgElem
+primElemRepToCgElemRep Int64ElemRep  = Int64ArgElem
+primElemRepToCgElemRep Word8ElemRep  = Word8ArgElem
+primElemRepToCgElemRep Word16ElemRep = Word16ArgElem
+primElemRepToCgElemRep Word32ElemRep = Word32ArgElem
+primElemRepToCgElemRep Word64ElemRep = Word64ArgElem
+primElemRepToCgElemRep FloatElemRep  = FloatArgElem
+primElemRepToCgElemRep DoubleElemRep = DoubleArgElem
 
 idCgRep :: Id -> CgRep
 idCgRep x = typeCgRep . idType $ x
@@ -345,18 +394,30 @@ separateByPtrFollowness things
 
 \begin{code}
 cgRepSizeB :: CgRep -> ByteOff
-cgRepSizeB DoubleArg        = dOUBLE_SIZE
-cgRepSizeB LongArg          = wORD64_SIZE
-cgRepSizeB VoidArg          = 0
-cgRepSizeB (VecArg len rep) = len*cgRepSizeB rep
-cgRepSizeB _                = wORD_SIZE
+cgRepSizeB DoubleArg         = dOUBLE_SIZE
+cgRepSizeB LongArg           = wORD64_SIZE
+cgRepSizeB VoidArg           = 0
+cgRepSizeB (VecArg len elem) = len*cgElemRepSizeB elem
+cgRepSizeB _                 = wORD_SIZE
+
+cgElemRepSizeB :: CgElemRep -> ByteOff
+cgElemRepSizeB Int8ArgElem   = 1
+cgElemRepSizeB Int16ArgElem  = 2
+cgElemRepSizeB Int32ArgElem  = 4
+cgElemRepSizeB Int64ArgElem  = 8
+cgElemRepSizeB Word8ArgElem  = 1
+cgElemRepSizeB Word16ArgElem = 2
+cgElemRepSizeB Word32ArgElem = 4
+cgElemRepSizeB Word64ArgElem = 8
+cgElemRepSizeB FloatArgElem  = 4
+cgElemRepSizeB DoubleArgElem = 8
 
 cgRepSizeW :: CgRep -> ByteOff
-cgRepSizeW DoubleArg        = dOUBLE_SIZE `quot` wORD_SIZE
-cgRepSizeW LongArg          = wORD64_SIZE `quot` wORD_SIZE
-cgRepSizeW VoidArg          = 0
-cgRepSizeW (VecArg len rep) = len*cgRepSizeW rep
-cgRepSizeW _                = 1
+cgRepSizeW DoubleArg         = dOUBLE_SIZE `quot` wORD_SIZE
+cgRepSizeW LongArg           = wORD64_SIZE `quot` wORD_SIZE
+cgRepSizeW VoidArg           = 0
+cgRepSizeW (VecArg len elem) = len*cgElemRepSizeB elem `quot` wORD_SIZE
+cgRepSizeW _                 = 1
 
 retAddrSizeW :: WordOff
 retAddrSizeW = 1	-- One word
