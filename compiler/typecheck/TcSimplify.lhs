@@ -711,12 +711,6 @@ solveWanteds ctxt untch wanted
                       -- Discard Derived
        ; return (wc_ret, ev_binds) }
 
-keepWanted :: Cts -> Cts
-keepWanted = filterBag isWantedCt
-    -- DV: there used to be a note here that read: 
-    -- ``Important: use fold*r*Bag to preserve the order of the evidence variables'' 
-    -- DV: Is this still relevant? 
-
 solve_wanteds :: WantedConstraints
               -> TcS WantedConstraints  -- NB: wc_flats may be wanted *or* derived now
 solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols }) 

@@ -763,7 +763,7 @@ rewriteEqLHS LeftComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2)
        ; when (isNewEvVar evc) $ 
               updWorkListTcS (extendWorkListEq (CNonCanonical { cc_id     = eqv2'
                                                               , cc_flavor = gw
-                                                              , cc_depth  = d  } ) ) }
+                                                              , cc_depth  = d } ) ) }
 
 rewriteEqLHS RightComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2) 
   = do { evc <- newEqVar gw xi1 xi2

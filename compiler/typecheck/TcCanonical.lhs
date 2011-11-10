@@ -1057,7 +1057,33 @@ canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1 ~ s2
                                       , cc_tyargs = xis1 
                                       , cc_rhs    = xi2 
                                       , cc_depth  = d }
-         else do { evc <- newEqVar fl (unClassify (FunCls fn xis1)) xi2 
+
+         else do { eqv' <- forceNewEvVar fl (mkEqPred (unClassify (FunCls fn xis1), xi2))
+                 ; let -- cv' : F xis1 ~ xi2
+                       cv' = mkEqVarLCo eqv'
+                       -- cv  : F tys1 ~ s2
+                       cv  = mkEqVarLCo eqv
+                       -- fun_co :: F xis1 ~ F tys1
+                       fun_co = mkTyConAppCo fn cos1
+                 ; case fl of 
+                     Wanted {} -> setEqBind eqv  
+                                      -- F tys1 ~ F xis1 ~ xi2 ~ s2
+                                      ((mkSymCo fun_co) `mkTransCo` cv' `mkTransCo` co2)
+                     Given {} -> setEqBind eqv'
+                                   -- F xis ~ F tys1 ~  s2 ~ xi2
+                                     (fun_co `mkTransCo` cv `mkTransCo` (mkSymCo co2))
+                     Derived {} -> return () 
+
+                  ; continueWith $
+                       CFunEqCan { cc_id     = eqv'
+                                 , cc_flavor = fl
+                                 , cc_fun    = fn
+                                 , cc_tyargs = xis1 
+                                 , cc_rhs    = xi2 
+                                 , cc_depth  = d } } }
+{-
+         else do { evc <- tryTcS $  -- DV: EXPERIMENT!
+                          newEqVar fl (unClassify (FunCls fn xis1)) xi2 
                  ; let eqv' = evc_the_evvar evc 
                  ; let -- cv' : F xis1 ~ xi2
                        cv' = mkEqVarLCo eqv'
@@ -1084,7 +1110,7 @@ canEqLeafOriented d fl eqv cls1@(FunCls fn tys1) s2         -- cv : F tys1 ~ s2
                                  , cc_depth  = d }
                    else
                        return Stop } }
-
+-}
 
 -- Otherwise, we have a variable on the left, so call canEqLeafTyVarLeft
 canEqLeafOriented d fl eqv (FskCls tv) s2 
@@ -1102,7 +1128,18 @@ canEqLeafTyVarLeftRec d fl eqv tv s2         -- eqv :: tv ~ s2
        ; if isReflCo co1 then
              canEqLeafTyVarLeft d fl eqv tv s2
          else
-             do { evc <- newEqVar fl xi1 s2  -- new_ev :: xi1 ~ s2
+             do { new_ev <- forceNewEvVar fl (mkEqPred (xi1,s2)) -- new_ev :: xi1 ~ s2
+                ; case fl of 
+                    Wanted  {} -> setEqBind eqv $ 
+                                     mkSymCo co1 `mkTransCo` mkEqVarLCo new_ev
+                    Given   {} -> setEqBind new_ev $ 
+                                     co1 `mkTransCo` mkEqVarLCo eqv
+                    Derived {} -> return ()
+                 ; canEq d fl new_ev xi1 s2 } }
+
+
+{-
+             do { evc <- tryTcS $ newEqVar fl xi1 s2  -- new_ev :: xi1 ~ s2
                 ; let new_ev = evc_the_evvar evc
                 ; case fl of 
                     Wanted  {} -> setEqBind eqv $ 
@@ -1115,6 +1152,7 @@ canEqLeafTyVarLeftRec d fl eqv tv s2         -- eqv :: tv ~ s2
                   else return Stop
                 }
        }
+-}
 
 canEqLeafTyVarLeft :: SubGoalDepth -- Depth
                    -> CtFlavor -> EqVar
@@ -1150,7 +1188,25 @@ canEqLeafTyVarLeft d fl eqv tv s2       -- eqv : tv ~ s2
                                      , cc_tyvar  = tv
                                      , cc_rhs    = xi2' 
                                      , cc_depth  = d }
-         else do { evc <- newEqVar fl (mkTyVarTy tv) xi2' 
+
+         else do { eqv' <- forceNewEvVar fl (mkEqPred (mkTyVarTy tv, xi2'))
+                 ; let                          -- eqv' : tv ~ xi2'
+                       cv   = mkEqVarLCo eqv    -- cv : tv ~ s2
+                       cv'  = mkEqVarLCo eqv'   -- cv': tv ~ xi2'
+                 ; case fl of 
+                     Wanted {}  -> setEqBind eqv (cv' `mkTransCo` co)         -- tv ~ xi2' ~ s2
+                     Given {}   -> setEqBind eqv' (cv `mkTransCo` mkSymCo co) -- tv ~ s2 ~ xi2'
+                     Derived {} -> return ()
+
+                 ; continueWith $
+                       CTyEqCan { cc_id     = eqv'
+                                , cc_flavor = fl
+                                , cc_tyvar  = tv
+                                , cc_rhs    = xi2' 
+                                , cc_depth  = d } } } } }  }
+
+{-
+         else do { evc <- tryTcS $ newEqVar fl (mkTyVarTy tv) xi2' 
                  ; let eqv' = evc_the_evvar evc -- eqv' : tv ~ xi2'
                        cv   = mkEqVarLCo eqv    -- cv : tv ~ s2
                        cv'  = mkEqVarLCo eqv'   -- cv': tv ~ xi2'
@@ -1168,6 +1224,8 @@ canEqLeafTyVarLeft d fl eqv tv s2       -- eqv : tv ~ s2
                                 , cc_depth  = d }
                    else 
                        return Stop } } } } }
+-}
+
   where
     k1 = tyVarKind tv
     k2 = typeKind s2

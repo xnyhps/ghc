@@ -16,7 +16,7 @@ module TcSMonad (
     extendWorkListEq, extendWorkListNonEq, extendWorkListCt, 
     appendWorkListCt, appendWorkListEqs,
 
-    getTcSWorkList, updWorkListTcS, updWorkListTcS_return,
+    getTcSWorkList, updWorkListTcS, updWorkListTcS_return, keepWanted,
 
     Ct(..), Xi, tyVarsOfCt, tyVarsOfCts, tyVarsOfCDicts, 
     emitFrozenError,
@@ -40,7 +40,7 @@ module TcSMonad (
     SimplContext(..), isInteractive, simplEqsOnly, performDefaulting,
 
        -- Creation of evidence variables
-    newEvVar,
+    newEvVar, forceNewEvVar,
     newGivenEqVar,
     newEqVar, newKindConstraint,
     EvVarCreated (..), isNewEvVar,
@@ -241,6 +241,12 @@ instance Outputable WorkList where
   ppr wl = vcat [ text "WorkList (eqs)   = " <+> ppr (wl_eqs wl)
                 , text "WorkList (rest)  = " <+> ppr (wl_rest wl)
                 ]
+
+keepWanted :: Cts -> Cts
+keepWanted = filterBag isWantedCt
+    -- DV: there used to be a note here that read: 
+    -- ``Important: use fold*r*Bag to preserve the order of the evidence variables'' 
+    -- DV: Is this still relevant? 
 
 \end{code}
 
@@ -557,8 +563,16 @@ kickOutRewritableInerts :: Ct -> TcS ()
 -- Post: the TcS monad is left with the thinner non-rewritable inerts; the 
 --       rewritable end up in the worklist
 kickOutRewritableInerts ct 
-  = do { wl <- modifyInertTcS (kick_out_rewritable ct)
+  = do { wl @ WorkList { wl_eqs = _eqs
+                       , wl_rest = rest } 
+                <- modifyInertTcS (kick_out_rewritable ct)
        ; traceTcS "Kick out" (ppr ct $$ ppr wl)
+
+{-
+       ; let any_wanteds = any isWantedCt eqs || any isWantedCt rest
+       ; when any_wanteds $ flushTcSEvVarCache
+-}
+
        ; updWorkListTcS (unionWorkList wl) }
 
 kick_out_rewritable :: Ct -> InertSet -> (WorkList,InertSet)
@@ -586,7 +600,7 @@ kick_out_rewritable ct (IS { inert_eqs    = eqmap
     fl = cc_flavor ct
     tv = cc_tyvar ct
 
-    (eqs_out,   eqs_in)    = partitionEqMap rewritable eqmap
+    (eqs_out,   eqs_in)   = partitionEqMap rewritable eqmap
     (dicts_out, dicts_in) = partitionCCanMap rewritable dictmap
     (ips_out,   ips_in)   = partitionCCanMap rewritable ipmap 
     (feqs_out,  feqs_in)  = partitionCCanMap rewritable funeqmap
@@ -1012,6 +1026,11 @@ getTcEvBinds = TcS (return . tcs_ev_binds)
 getTcSEvVarCache :: TcS (IORef EvVarCache)
 getTcSEvVarCache = TcS (return . tcs_evvar_cache)
 
+flushTcSEvVarCache :: TcS ()
+flushTcSEvVarCache
+  = do { cache_var <- getTcSEvVarCache
+       ; wrapTcS $ TcM.writeTcRef cache_var (EvVarCache emptyTM emptyTM) }
+
 getTcSEvVarCacheMap :: TcS (TypeMap (EvVar,CtFlavor))
 getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache 
                          ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
@@ -1071,16 +1090,34 @@ setEvBind :: EvVar -> EvTerm -> TcS ()
 -- Internal
 setEvBind ev t
   = do { tc_evbinds <- getTcEvBinds
-       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t }
+       ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t
 
-  --      ; ev_cache_var <- getTcSEvVarCache
-  --      ; the_cache <- wrapTcS $ TcM.readTcRef ev_cache_var 
-  --      ; let new_cache = alterTM (evVarPred ev) x_upd the_cache
-  --      ; wrapTcS $ TcM.writeTcRef ev_cache_var new_cache 
+   -- TODO: enable this only in debug mode!
+ 
+       ; binds <- getTcEvBindsMap
+       ; let cycle = any (reaches binds) (evterm_evs t)
+       ; when cycle $ 
+           pprTrace "setEvBind" (text "Cycle in evidence binds:" <+> 
+                                           ppr (evBindMapBinds binds)) (return ())
+       }
+  where reaches :: EvBindMap -> Var -> Bool 
+        -- Does this evvar reach ev? 
+        reaches ebm ev0 = go ev0
+          where go ev0
+                  | ev0 == ev = True
+                  | Just (EvBind _ evtrm) <- lookupEvBind ebm ev0
+                  = any go (evterm_evs evtrm)
+                  | otherwise = False
 
-  --      }
-  -- where x_upd Nothing = Just (ev, Given unused_g unused_g)
-  --       unused_g = panic "setEvBind: should not have accessed this loc!"
+        evterm_evs (EvId v) = [v]
+        evterm_evs (EvCoercionBox lco) = varSetElems $ coVarsOfCo lco
+        evterm_evs (EvDFunApp _ _ evs) = evs
+        evterm_evs (EvTupleSel v _)    = [v]
+        evterm_evs (EvSuperClass v _)  = [v]
+        evterm_evs (EvCast v co)       = v : varSetElems (coVarsOfCo co)
+        evterm_evs (EvTupleMk evs)     = evs
+
+
 
 warnTcS :: CtLoc orig -> Bool -> SDoc -> TcS ()
 warnTcS loc warn_if doc 
@@ -1240,7 +1277,8 @@ newEvVar fl pty
        ; eref <- getTcSEvVarCache
        ; ecache <- wrapTcS (TcM.readTcRef eref)
        ; if isGivenOrSolved fl then 
-             upd_cache eref ecache 
+             do { new <- upd_cache eref ecache fl pty
+                ; return (EvVarCreated True new) }
              -- Create new variable and update the cache
          else
              -- Otherwise lookup first
@@ -1251,15 +1289,24 @@ newEvVar fl pty
           = do { traceTcS "newEvVar"  $  text "already cached, doing nothing" 
                ; return (EvVarCreated False cached_evvar) }
         lkup_upd_cache eref ecache _    -- not cached or cached with worse flavor
-          = upd_cache eref ecache
+          = do { new <- upd_cache eref ecache fl pty
+               ; return (EvVarCreated True new) }
 
-        upd_cache eref ecache
-          = do { traceTcS "newEvVar"  $  text "updating cache"
-               ; new_evvar <- wrapTcS (TcM.newEvVar pty)
+upd_cache :: IORef EvVarCache -> EvVarCache -> CtFlavor -> TcPredType -> TcS EvVar
+upd_cache eref ecache fl pty
+  = do { traceTcS "newEvVar"  $  text "updating cache"
+       ; new_evvar <- wrapTcS (TcM.newEvVar pty)
 
-               ; let new_cache = updateCache ecache (new_evvar,fl,pty)
-               ; wrapTcS (TcM.writeTcRef eref new_cache) 
-               ; return (EvVarCreated True new_evvar) }
+       ; let new_cache = updateCache ecache (new_evvar,fl,pty)
+       ; wrapTcS (TcM.writeTcRef eref new_cache) 
+       ; return new_evvar }
+
+forceNewEvVar :: CtFlavor -> TcPredType -> TcS EvVar
+-- Forces an update to the cache and a new variable to be created
+forceNewEvVar fl pty 
+  = do { eref <- getTcSEvVarCache
+       ; ecache <- wrapTcS (TcM.readTcRef eref)
+       ; upd_cache eref ecache fl pty }
 
 updateCache :: EvVarCache -> (EvVar,CtFlavor,Type) -> EvVarCache 
 updateCache ecache (ev,fl,pty)
