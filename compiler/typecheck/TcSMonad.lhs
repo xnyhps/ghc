@@ -1,5 +1,5 @@
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# OPTIONS -Wwarn -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -564,7 +564,7 @@ kickOutRewritableInerts :: Ct -> TcS ()
 --       rewritable end up in the worklist
 kickOutRewritableInerts ct 
   = do { wl @ WorkList { wl_eqs = _eqs
-                       , wl_rest = rest } 
+                       , wl_rest = _rest } 
                 <- modifyInertTcS (kick_out_rewritable ct)
        ; traceTcS "Kick out" (ppr ct $$ ppr wl)
 
@@ -830,7 +830,7 @@ failTcS      = wrapTcS . TcM.failWith
 panicTcS doc = pprPanic "TcCanonical" doc
 
 traceTcS :: String -> SDoc -> TcS ()
-traceTcS herald doc = TcS $ \_env -> TcM.traceTc herald doc
+traceTcS herald doc = wrapTcS (TcM.traceTc herald doc)
 
 bumpStepCountTcS :: TcS ()
 bumpStepCountTcS = TcS $ \env -> do { let ref = tcs_count env
@@ -1273,49 +1273,53 @@ newEvVar :: CtFlavor -> TcPredType -> TcS EvVarCreated
 -- NB: newEvVar may temporarily break the TcSEnv invariant but it is expected in 
 --     the call sites for this invariant to be quickly restored.
 newEvVar fl pty
-  = do { traceTcS "newEvVar" $ ppr fl <+> ppr pty
-       ; eref <- getTcSEvVarCache
-       ; ecache <- wrapTcS (TcM.readTcRef eref)
-       ; if isGivenOrSolved fl then 
-             do { new <- upd_cache eref ecache fl pty
-                ; return (EvVarCreated True new) }
-             -- Create new variable and update the cache
-         else
-             -- Otherwise lookup first
-             lkup_upd_cache eref ecache $ lookupTM pty (evc_cache ecache)
-       }
-  where lkup_upd_cache _eref _ecache (Just (cached_evvar,cached_flavor))
-          | cached_flavor `canSolve` fl -- cached with a better flavor
-          = do { traceTcS "newEvVar"  $  text "already cached, doing nothing" 
-               ; return (EvVarCreated False cached_evvar) }
-        lkup_upd_cache eref ecache _    -- not cached or cached with worse flavor
-          = do { new <- upd_cache eref ecache fl pty
-               ; return (EvVarCreated True new) }
+  | isGivenOrSolved fl    -- Create new variable and update the cache
+  = do { traceTcS "newEvVar 1" $ ppr fl <+> ppr pty
+       ; new <- forceNewEvVar fl pty
+       ; return (EvVarCreated True new) }
 
-upd_cache :: IORef EvVarCache -> EvVarCache -> CtFlavor -> TcPredType -> TcS EvVar
-upd_cache eref ecache fl pty
-  = do { traceTcS "newEvVar"  $  text "updating cache"
-       ; new_evvar <- wrapTcS (TcM.newEvVar pty)
-
-       ; let new_cache = updateCache ecache (new_evvar,fl,pty)
-       ; wrapTcS (TcM.writeTcRef eref new_cache) 
-       ; return new_evvar }
-
-forceNewEvVar :: CtFlavor -> TcPredType -> TcS EvVar
--- Forces an update to the cache and a new variable to be created
-forceNewEvVar fl pty 
+  | otherwise             -- Otherwise lookup first
   = do { eref <- getTcSEvVarCache
        ; ecache <- wrapTcS (TcM.readTcRef eref)
-       ; upd_cache eref ecache fl pty }
+       ; case lookupTM pty (evc_cache ecache) of
+           Just (cached_evvar, _cached_flavor)
+             -> do { traceTcS "newEvVar"  $  text "already cached, doing nothing" 
+                   ; return (EvVarCreated False cached_evvar) }
+           Nothing   -- Not cached or cached with worse flavor
+             -> do { new <- force_new_ev_var eref ecache fl pty
+                   ; return (EvVarCreated True new) } }
+
+forceNewEvVar :: CtFlavor -> TcPredType -> TcS EvVar
+-- Create a new EvVar, regardless of whether or not the
+-- cache already contains one like it, and update the cache
+forceNewEvVar fl pty 
+  = do { eref   <- getTcSEvVarCache
+       ; ecache <- wrapTcS (TcM.readTcRef eref)
+       ; force_new_ev_var eref ecache fl pty }
+
+force_new_ev_var :: IORef EvVarCache -> EvVarCache -> CtFlavor -> TcPredType -> TcS EvVar
+-- Create a new EvVar, and update the cache with it
+force_new_ev_var eref ecache fl pty
+  = wrapTcS $
+    do { TcM.traceTc "newEvVar" $ text "updating cache"
+
+       ; new_evvar <-TcM.newEvVar pty
+            -- This is THE PLACE where we finally call TcM.newEvVar
+
+       ; let new_cache = updateCache ecache (new_evvar,fl,pty)
+       ; TcM.writeTcRef eref new_cache 
+       ; return new_evvar } 
 
 updateCache :: EvVarCache -> (EvVar,CtFlavor,Type) -> EvVarCache 
 updateCache ecache (ev,fl,pty)
   | IPPred {} <- classifier
   = ecache 
+
   | EqPred ty1 ty2 <- classifier
   , Just (tc,args) <- splitTyConApp_maybe ty1
   , isSynFamilyTyCon tc && all is_function_free (ty2 : args)
   = ecache { evc_cache = ecache', evc_flat_cache = flat_cache' ty1 ty2 }
+
   | otherwise 
   = ecache { evc_cache = ecache' }
   where classifier          = classifyPredType pty
