@@ -563,15 +563,10 @@ kickOutRewritableInerts :: Ct -> TcS ()
 -- Post: the TcS monad is left with the thinner non-rewritable inerts; the 
 --       rewritable end up in the worklist
 kickOutRewritableInerts ct 
-  = do { wl @ WorkList { wl_eqs = _eqs
-                       , wl_rest = rest } 
+  = do { wl @ WorkList { wl_eqs  = _eqs
+                       , wl_rest = _rest }
                 <- modifyInertTcS (kick_out_rewritable ct)
        ; traceTcS "Kick out" (ppr ct $$ ppr wl)
-
-{-
-       ; let any_wanteds = any isWantedCt eqs || any isWantedCt rest
-       ; when any_wanteds $ flushTcSEvVarCache
--}
 
        ; updWorkListTcS (unionWorkList wl) }
 
@@ -1026,10 +1021,12 @@ getTcEvBinds = TcS (return . tcs_ev_binds)
 getTcSEvVarCache :: TcS (IORef EvVarCache)
 getTcSEvVarCache = TcS (return . tcs_evvar_cache)
 
+{- 
 flushTcSEvVarCache :: TcS ()
 flushTcSEvVarCache
   = do { cache_var <- getTcSEvVarCache
        ; wrapTcS $ TcM.writeTcRef cache_var (EvVarCache emptyTM emptyTM) }
+-}
 
 getTcSEvVarCacheMap :: TcS (TypeMap (EvVar,CtFlavor))
 getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache 
