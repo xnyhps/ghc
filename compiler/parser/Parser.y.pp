@@ -33,20 +33,20 @@ import HscTypes         ( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
 import TysPrim          ( liftedTypeKindTyConName, eqPrimTyCon )
-import TysWiredIn	( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
-			  unboxedSingletonTyCon, unboxedSingletonDataCon,
-			  listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR, eqTyCon_RDR )
-import Type		( funTyCon )
-import ForeignCall	( Safety(..), CExportSpec(..), CLabelString,
-			  CCallConv(..), CCallTarget(..), defaultCCallConv
-			)
-import OccName		( varName, dataName, tcClsName, tvName )
-import DataCon		( DataCon, dataConName )
+import TysWiredIn       ( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
+                          unboxedSingletonTyCon, unboxedSingletonDataCon,
+                          listTyCon_RDR, parrTyCon_RDR, consDataCon_RDR, eqTyCon_RDR )
+import Type             ( funTyCon )
+import ForeignCall      ( Safety(..), CExportSpec(..), CLabelString,
+                          CCallConv(..), CCallTarget(..), defaultCCallConv
+                        )
+import OccName          ( varName, dataName, tcClsName, tvName )
+import DataCon          ( DataCon, dataConName )
 import SrcLoc
 import Module
-import StaticFlags	( opt_SccProfilingOn, opt_Hpc )
+import StaticFlags      ( opt_SccProfilingOn, opt_Hpc )
 import Kind             ( Kind, liftedTypeKind, unliftedTypeKind, mkArrowKind )
-import Class		( FunDep )
+import Class            ( FunDep )
 import BasicTypes
 import DynFlags
 import OrdList
@@ -294,31 +294,31 @@ incorrect.
  '}'            { L _ ITccurly }
  '{|'           { L _ ITocurlybar }
  '|}'           { L _ ITccurlybar }
- vocurly	{ L _ ITvocurly } -- virtual open curly (from layout)
- vccurly	{ L _ ITvccurly } -- virtual close curly (from layout)
- '['		{ L _ ITobrack }
- ']'		{ L _ ITcbrack }
- '[:'		{ L _ ITopabrack }
- ':]'		{ L _ ITcpabrack }
- '('		{ L _ IToparen }
- ')'		{ L _ ITcparen }
- '(#'		{ L _ IToubxparen }
- '#)'		{ L _ ITcubxparen }
- '(|'		{ L _ IToparenbar }
- '|)'		{ L _ ITcparenbar }
- ';'		{ L _ ITsemi }
- ','		{ L _ ITcomma }
- '`'		{ L _ ITbackquote }
- SIMPLEQUOTE 	{ L _ ITsimpleQuote      }     -- 'x
+ vocurly        { L _ ITvocurly } -- virtual open curly (from layout)
+ vccurly        { L _ ITvccurly } -- virtual close curly (from layout)
+ '['            { L _ ITobrack }
+ ']'            { L _ ITcbrack }
+ '[:'           { L _ ITopabrack }
+ ':]'           { L _ ITcpabrack }
+ '('            { L _ IToparen }
+ ')'            { L _ ITcparen }
+ '(#'           { L _ IToubxparen }
+ '#)'           { L _ ITcubxparen }
+ '(|'           { L _ IToparenbar }
+ '|)'           { L _ ITcparenbar }
+ ';'            { L _ ITsemi }
+ ','            { L _ ITcomma }
+ '`'            { L _ ITbackquote }
+ SIMPLEQUOTE    { L _ ITsimpleQuote      }     -- 'x
 
- VARID   	{ L _ (ITvarid    _) }		-- identifiers
- CONID   	{ L _ (ITconid    _) }
- VARSYM  	{ L _ (ITvarsym   _) }
- CONSYM  	{ L _ (ITconsym   _) }
- QVARID  	{ L _ (ITqvarid   _) }
- QCONID  	{ L _ (ITqconid   _) }
- QVARSYM 	{ L _ (ITqvarsym  _) }
- QCONSYM 	{ L _ (ITqconsym  _) }
+ VARID          { L _ (ITvarid    _) }          -- identifiers
+ CONID          { L _ (ITconid    _) }
+ VARSYM         { L _ (ITvarsym   _) }
+ CONSYM         { L _ (ITconsym   _) }
+ QVARID         { L _ (ITqvarid   _) }
+ QCONID         { L _ (ITqconid   _) }
+ QVARSYM        { L _ (ITqvarsym  _) }
+ QCONSYM        { L _ (ITqconsym  _) }
  PREFIXQVARSYM  { L _ (ITprefixqvarsym  _) }
  PREFIXQCONSYM  { L _ (ITprefixqconsym  _) }
 
@@ -348,9 +348,9 @@ incorrect.
 '[d|'           { L _ ITopenDecQuote  }      
 '|]'            { L _ ITcloseQuote    }
 TH_ID_SPLICE    { L _ (ITidEscape _)  }     -- $x
-'$('	        { L _ ITparenEscape   }     -- $( exp )
-TH_TY_QUOTE	{ L _ ITtyQuote       }      -- ''T
-TH_QUASIQUOTE	{ L _ (ITquasiQuote _) }
+'$('            { L _ ITparenEscape   }     -- $( exp )
+TH_TY_QUOTE     { L _ ITtyQuote       }      -- ''T
+TH_QUASIQUOTE   { L _ (ITquasiQuote _) }
 
 %monad { P } { >>= } { return }
 %lexer { lexer } { L _ ITeof }
@@ -718,8 +718,8 @@ data_or_newtype :: { Located NewOrData }
         | 'newtype'     { L1 NewType }
 
 opt_kind_sig :: { Located (Maybe (LHsKind RdrName)) }
-	: 				{ noLoc Nothing }
-	| '::' kind			{ LL (Just $2) }
+        :                               { noLoc Nothing }
+        | '::' kind                     { LL (Just $2) }
 
 -- tycl_hdr parses the header of a class or data type decl,
 -- which takes the form
@@ -967,8 +967,8 @@ sigtypes1 :: { [LHsType RdrName] }      -- Always HsForAllTys
 -- Types
 
 infixtype :: { LHsType RdrName }
-	: btype qtyconop type         { LL $ mkHsOpTy $1 $2 $3 }
-        | btype tyvarop  type  	 { LL $ mkHsOpTy $1 $2 $3 }
+        : btype qtyconop type         { LL $ mkHsOpTy $1 $2 $3 }
+        | btype tyvarop  type    { LL $ mkHsOpTy $1 $2 $3 }
 
 strict_mark :: { Located HsBang }
         : '!'                           { L1 HsStrict }
@@ -1020,9 +1020,9 @@ context :: { LHsContext RdrName }
 type :: { LHsType RdrName }
         : btype                         { $1 }
         | btype qtyconop type           { LL $ mkHsOpTy $1 $2 $3 }
-        | btype tyvarop  type     	{ LL $ mkHsOpTy $1 $2 $3 }
- 	| btype '->'     ctype		{ LL $ HsFunTy $1 $3 }
-        | btype '~'      btype  	{ LL $ HsEqTy $1 $3 }
+        | btype tyvarop  type           { LL $ mkHsOpTy $1 $2 $3 }
+        | btype '->'     ctype          { LL $ HsFunTy $1 $3 }
+        | btype '~'      btype          { LL $ HsEqTy $1 $3 }
                                         -- see Note [Promotion]
         | btype SIMPLEQUOTE qconop type     { LL $ mkHsOpTy $1 $3 $4 }
         | btype SIMPLEQUOTE varop  type     { LL $ mkHsOpTy $1 $3 $4 }
@@ -1047,16 +1047,16 @@ atype :: { LHsType RdrName }
 	| tyvar				{ L1 (HsTyVar (unLoc $1)) }
 	| strict_mark atype		{ LL (HsBangTy (unLoc $1) $2) }  -- Constructor sigs only
         | '{' fielddecls '}'            {% checkRecordSyntax (LL $ HsRecTy $2) } -- Constructor sigs only
-	| '(' ctype ',' comma_types1 ')'  { LL $ HsTupleTy (HsBoxyTuple placeHolderKind)  ($2:$4) }
-	| '(#' comma_types1 '#)'	{ LL $ HsTupleTy HsUnboxedTuple $2     }
-	| '[' ctype ']'			{ LL $ HsListTy  $2 }
-	| '[:' ctype ':]'		{ LL $ HsPArrTy  $2 }
-	| '(' ctype ')'		        { LL $ HsParTy   $2 }
-	| '(' ctype '::' kind ')'	{ LL $ HsKindSig $2 $4 }
-	| quasiquote       	        { L1 (HsQuasiQuoteTy (unLoc $1)) }
-	| '$(' exp ')'	      		{ LL $ mkHsSpliceTy $2 }
-	| TH_ID_SPLICE	      		{ LL $ mkHsSpliceTy $ L1 $ HsVar $
-					  mkUnqual varName (getTH_ID_SPLICE $1) }
+        | '(' ctype ',' comma_types1 ')'  { LL $ HsTupleTy (HsBoxyTuple placeHolderKind)  ($2:$4) }
+        | '(#' comma_types1 '#)'        { LL $ HsTupleTy HsUnboxedTuple $2     }
+        | '[' ctype ']'                 { LL $ HsListTy  $2 }
+        | '[:' ctype ':]'               { LL $ HsPArrTy  $2 }
+        | '(' ctype ')'                 { LL $ HsParTy   $2 }
+        | '(' ctype '::' kind ')'       { LL $ HsKindSig $2 $4 }
+        | quasiquote                    { L1 (HsQuasiQuoteTy (unLoc $1)) }
+        | '$(' exp ')'                  { LL $ mkHsSpliceTy $2 }
+        | TH_ID_SPLICE                  { LL $ mkHsSpliceTy $ L1 $ HsVar $
+                                          mkUnqual varName (getTH_ID_SPLICE $1) }
                                                       -- see Note [Promotion] for the followings
         | SIMPLEQUOTE qconid                          { LL $ HsTyVar $ unLoc $2 }
         | SIMPLEQUOTE  '(' ')'                        { LL $ HsTyVar $ getRdrName unitDataCon }
@@ -1088,8 +1088,8 @@ tv_bndrs :: { [LHsTyVarBndr RdrName] }
          | {- empty -}                  { [] }
 
 tv_bndr :: { LHsTyVarBndr RdrName }
-	: tyvar				{ L1 (UserTyVar (unLoc $1) placeHolderKind) }
-	| '(' tyvar '::' kind ')'	{ LL (KindedTyVar (unLoc $2) $4 placeHolderKind) }
+        : tyvar                         { L1 (UserTyVar (unLoc $1) placeHolderKind) }
+        | '(' tyvar '::' kind ')'       { LL (KindedTyVar (unLoc $2) $4 placeHolderKind) }
 
 fds :: { Located [Located (FunDep RdrName)] }
         : {- empty -}                   { noLoc [] }
@@ -1441,43 +1441,43 @@ aexp2   :: { LHsExpr RdrName }
         -- This allows you to write, e.g., '(+ 3, 4 -)', which isn't
         -- correct Haskell (you'd have to write '((+ 3), (4 -))')
         -- but the less cluttered version fell out of having texps.
-	| '(' texp ')'			{ LL (HsPar $2) }
-	| '(' tup_exprs ')'             { LL (ExplicitTuple $2 Boxed) }
+        | '(' texp ')'                  { LL (HsPar $2) }
+        | '(' tup_exprs ')'             { LL (ExplicitTuple $2 Boxed) }
 
-	| '(#' texp '#)'		{ LL (ExplicitTuple [Present $2] Unboxed) }
-	| '(#' tup_exprs '#)'		{ LL (ExplicitTuple $2 Unboxed) }
+        | '(#' texp '#)'                { LL (ExplicitTuple [Present $2] Unboxed) }
+        | '(#' tup_exprs '#)'           { LL (ExplicitTuple $2 Unboxed) }
 
-	| '[' list ']'                  { LL (unLoc $2) }
-	| '[:' parr ':]'                { LL (unLoc $2) }
-	| '_'				{ L1 EWildPat }
-	
-	-- Template Haskell Extension
-	| TH_ID_SPLICE          { L1 $ HsSpliceE (mkHsSplice 
-					(L1 $ HsVar (mkUnqual varName 
-							(getTH_ID_SPLICE $1)))) } 
-	| '$(' exp ')'   	{ LL $ HsSpliceE (mkHsSplice $2) }               
+        | '[' list ']'                  { LL (unLoc $2) }
+        | '[:' parr ':]'                { LL (unLoc $2) }
+        | '_'                           { L1 EWildPat }
+        
+        -- Template Haskell Extension
+        | TH_ID_SPLICE          { L1 $ HsSpliceE (mkHsSplice 
+                                        (L1 $ HsVar (mkUnqual varName 
+                                                        (getTH_ID_SPLICE $1)))) } 
+        | '$(' exp ')'          { LL $ HsSpliceE (mkHsSplice $2) }               
 
 
-	| SIMPLEQUOTE  qvar 	{ LL $ HsBracket (VarBr True  (unLoc $2)) }
-	| SIMPLEQUOTE  qcon 	{ LL $ HsBracket (VarBr True  (unLoc $2)) }
-	| TH_TY_QUOTE tyvar 	{ LL $ HsBracket (VarBr False (unLoc $2)) }
- 	| TH_TY_QUOTE gtycon	{ LL $ HsBracket (VarBr False (unLoc $2)) }
-	| '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }                       
-	| '[t|' ctype '|]'      { LL $ HsBracket (TypBr $2) }                       
-	| '[p|' infixexp '|]'   {% checkPattern $2 >>= \p ->
-					return (LL $ HsBracket (PatBr p)) }
-	| '[d|' cvtopbody '|]'	{ LL $ HsBracket (DecBrL $2) }
-	| quasiquote       	{ L1 (HsQuasiQuoteE (unLoc $1)) }
+        | SIMPLEQUOTE  qvar     { LL $ HsBracket (VarBr True  (unLoc $2)) }
+        | SIMPLEQUOTE  qcon     { LL $ HsBracket (VarBr True  (unLoc $2)) }
+        | TH_TY_QUOTE tyvar     { LL $ HsBracket (VarBr False (unLoc $2)) }
+        | TH_TY_QUOTE gtycon    { LL $ HsBracket (VarBr False (unLoc $2)) }
+        | '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }                       
+        | '[t|' ctype '|]'      { LL $ HsBracket (TypBr $2) }                       
+        | '[p|' infixexp '|]'   {% checkPattern $2 >>= \p ->
+                                        return (LL $ HsBracket (PatBr p)) }
+        | '[d|' cvtopbody '|]'  { LL $ HsBracket (DecBrL $2) }
+        | quasiquote            { L1 (HsQuasiQuoteE (unLoc $1)) }
 
-	-- arrow notation extension
-	| '(|' aexp2 cmdargs '|)'	{ LL $ HsArrForm $2 Nothing (reverse $3) }
+        -- arrow notation extension
+        | '(|' aexp2 cmdargs '|)'       { LL $ HsArrForm $2 Nothing (reverse $3) }
 
-cmdargs	:: { [LHsCmdTop RdrName] }
-	: cmdargs acmd			{ $2 : $1 }
-  	| {- empty -}			{ [] }
+cmdargs :: { [LHsCmdTop RdrName] }
+        : cmdargs acmd                  { $2 : $1 }
+        | {- empty -}                   { [] }
 
-acmd	:: { LHsCmdTop RdrName }
-	: aexp2			{ L1 $ HsCmdTop $1 [] placeHolderType undefined }
+acmd    :: { LHsCmdTop RdrName }
+        : aexp2                 { L1 $ HsCmdTop $1 [] placeHolderType undefined }
 
 cvtopbody :: { [LHsDecl RdrName] }
         :  '{'            cvtopdecls0 '}'               { $2 }
