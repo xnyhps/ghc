@@ -1334,8 +1334,16 @@ updateCache ecache (ev,fl,pty)
   where classifier          = classifyPredType pty
         ecache'             = alterTM pty (\_ -> Just (ev,fl)) $
                               evc_cache ecache
-        flat_cache' ty1 ty2 = alterTM ty1 (\_ -> Just (ev,(ty2,fl))) $
+        flat_cache' ty1 ty2 = alterTM ty1 x_flat_cache $
                               evc_flat_cache ecache
+          where x_flat_cache r  -- Even if the original guy can update the ecache
+                                -- maybe we don't want him to update the flat cache!
+                  | Just (_ev',(_,fl')) <- r
+                  , fl' `canRewrite` fl
+                  = r           -- Don't do the update! 
+                  | otherwise 
+                 = Just (ev,(ty2,fl))
+
         is_function_free ty = go ty
           where go ty@(TyConApp tc tys) 
                  | Just ty' <- tcView ty = go ty'

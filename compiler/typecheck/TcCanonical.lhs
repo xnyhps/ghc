@@ -1044,6 +1044,10 @@ canEqLeafFunEqLeftRec d fl eqv (fn,tys1) ty2  -- eqv :: F tys1 ~ ty2
   = do { traceTcS "canEqLeafFunEqLeftRec" $ ppr (evVarPred eqv)
        ; (xis1,cos1) <- flattenMany d fl tys1 -- Flatten type function arguments
                                               -- cos1 :: xis1 ~ tys1 
+
+-- DV: This needs fixing, use the /inert/ flat equations instead of the flat cache
+-- to rewrite the head of the family! TODO TODO TODO
+
        ; let no_flattening = all isReflCo cos1
        ; if no_flattening then
              -- No flattening, just go directly to flatten RHS and continue
