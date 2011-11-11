@@ -281,6 +281,7 @@ emitPrimOp res IndexOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 re
 emitPrimOp res IndexOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
 emitPrimOp res IndexOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
 emitPrimOp res IndexOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
+emitPrimOp res IndexOffAddrOp_Int64X2   args _ = doIndexOffAddrOp Nothing vec2b64 res args
 
 -- ReadXXXoffAddr, which are identical, for our purposes, to IndexXXXoffAddr.
 
@@ -303,6 +304,7 @@ emitPrimOp res ReadOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res
 emitPrimOp res ReadOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
 emitPrimOp res ReadOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
 emitPrimOp res ReadOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
+emitPrimOp res ReadOffAddrOp_Int64X2   args _ = doIndexOffAddrOp Nothing vec2b64 res args
 
 -- IndexXXXArray
 
@@ -325,6 +327,7 @@ emitPrimOp res IndexByteArrayOp_Word64    args _ = doIndexByteArrayOp Nothing b6
 emitPrimOp res IndexByteArrayOp_FloatX4   args _ = doIndexByteArrayOp Nothing vec4f32 res args
 emitPrimOp res IndexByteArrayOp_DoubleX2  args _ = doIndexByteArrayOp Nothing vec2f64 res args
 emitPrimOp res IndexByteArrayOp_Int32X4   args _ = doIndexByteArrayOp Nothing vec4b32 res args
+emitPrimOp res IndexByteArrayOp_Int64X2   args _ = doIndexByteArrayOp Nothing vec2b64 res args
 
 -- ReadXXXArray, identical to IndexXXXArray.
 
@@ -347,6 +350,7 @@ emitPrimOp res ReadByteArrayOp_Word64     args _ = doIndexByteArrayOp Nothing b6
 emitPrimOp res ReadByteArrayOp_FloatX4    args _ = doIndexByteArrayOp Nothing vec4f32 res args
 emitPrimOp res ReadByteArrayOp_DoubleX2   args _ = doIndexByteArrayOp Nothing vec2f64 res args
 emitPrimOp res ReadByteArrayOp_Int32X4    args _ = doIndexByteArrayOp Nothing vec4b32 res args
+emitPrimOp res ReadByteArrayOp_Int64X2    args _ = doIndexByteArrayOp Nothing vec2b64 res args
 
 -- WriteXXXoffAddr
 
@@ -369,6 +373,7 @@ emitPrimOp res WriteOffAddrOp_Word64     args _ = doWriteOffAddrOp Nothing b64 r
 emitPrimOp res WriteOffAddrOp_FloatX4    args _ = doWriteOffAddrOp Nothing vec4f32 res args
 emitPrimOp res WriteOffAddrOp_DoubleX2   args _ = doWriteOffAddrOp Nothing vec2f64 res args
 emitPrimOp res WriteOffAddrOp_Int32X4    args _ = doWriteOffAddrOp Nothing vec4b32 res args
+emitPrimOp res WriteOffAddrOp_Int64X2    args _ = doWriteOffAddrOp Nothing vec2b64 res args
 
 -- WriteXXXArray
 
@@ -391,6 +396,7 @@ emitPrimOp res WriteByteArrayOp_Word64    args _ = doWriteByteArrayOp Nothing b6
 emitPrimOp res WriteByteArrayOp_FloatX4   args _ = doWriteByteArrayOp Nothing vec4f32 res args
 emitPrimOp res WriteByteArrayOp_DoubleX2  args _ = doWriteByteArrayOp Nothing vec2f64 res args
 emitPrimOp res WriteByteArrayOp_Int32X4   args _ = doWriteByteArrayOp Nothing vec4b32 res args
+emitPrimOp res WriteByteArrayOp_Int64X2   args _ = doWriteByteArrayOp Nothing vec2b64 res args
 
 -- Copying byte arrays
 
@@ -442,6 +448,18 @@ emitPrimOp [res] Int32X4PackOp es@[_,_,_,_] _ =
 
 emitPrimOp res@[_,_,_,_] Int32X4UnpackOp [arg] _ =
     doVecUnpack (Just mo_s_32ToWord) vec4b32 arg res
+
+emitPrimOp [res] Int64ToInt64X2Op [e] _ =
+    doVecPack Nothing vec2b64 [e,e] res
+
+emitPrimOp [res] Int64X2InsertOp [v,e,i] _ =
+    doVecInsert Nothing vec2b64 v e i res
+
+emitPrimOp [res] Int64X2PackOp es@[_,_] _ =
+    doVecPack Nothing vec2b64 es res
+
+emitPrimOp res@[_,_] Int64X2UnpackOp [arg] _ =
+    doVecUnpack Nothing vec2b64 arg res
 
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg] _
@@ -630,6 +648,13 @@ translateOp Int32X4MulOp   = Just (MO_VN_Mul   4 W32)
 translateOp Int32X4QuotOp  = Just (MO_VN_SQuot 4 W32)
 translateOp Int32X4RemOp   = Just (MO_VN_SRem  4 W32)
 translateOp Int32X4NegOp   = Just (MO_VN_Neg   4 W32)
+
+translateOp Int64X2AddOp  = Just (MO_VN_Add   2 W64)
+translateOp Int64X2SubOp  = Just (MO_VN_Sub   2 W64)
+translateOp Int64X2MulOp  = Just (MO_VN_Mul   2 W64)
+translateOp Int64X2QuotOp = Just (MO_VN_SQuot 2 W64)
+translateOp Int64X2RemOp  = Just (MO_VN_SRem  2 W64)
+translateOp Int64X2NegOp  = Just (MO_VN_Neg   2 W64)
 
 translateOp _ = Nothing
 
