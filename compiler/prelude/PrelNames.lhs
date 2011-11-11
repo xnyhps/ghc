@@ -1355,13 +1355,11 @@ repTyConKey  = mkPreludeTyConUnique 155
 rep1TyConKey = mkPreludeTyConUnique 156
 
 -- SIMD vector types (Unique keys)
-floatX4PrimTyConKey :: Unique
+floatX4PrimTyConKey, doubleX2PrimTyConKey, int32X4PrimTyConKey :: Unique
 
-floatX4PrimTyConKey = mkPreludeTyConUnique 157
-
-int32X4PrimTyConKey :: Unique
-
-int32X4PrimTyConKey = mkPreludeTyConUnique 158
+floatX4PrimTyConKey  = mkPreludeTyConUnique 157
+doubleX2PrimTyConKey = mkPreludeTyConUnique 158
+int32X4PrimTyConKey  = mkPreludeTyConUnique 159
 
 ---------------- Template Haskell -------------------
 --      USES TyConUniques 200-299

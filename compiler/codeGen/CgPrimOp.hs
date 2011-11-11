@@ -279,6 +279,7 @@ emitPrimOp res IndexOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16T
 emitPrimOp res IndexOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res IndexOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
 emitPrimOp res IndexOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
+emitPrimOp res IndexOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
 emitPrimOp res IndexOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
 
 -- ReadXXXoffAddr, which are identical, for our purposes, to IndexXXXoffAddr.
@@ -300,6 +301,7 @@ emitPrimOp res ReadOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16To
 emitPrimOp res ReadOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
 emitPrimOp res ReadOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
 emitPrimOp res ReadOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
+emitPrimOp res ReadOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
 emitPrimOp res ReadOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
 
 -- IndexXXXArray
@@ -321,6 +323,7 @@ emitPrimOp res IndexByteArrayOp_Word16    args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res IndexByteArrayOp_Word32    args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res IndexByteArrayOp_Word64    args _ = doIndexByteArrayOp Nothing b64  res args
 emitPrimOp res IndexByteArrayOp_FloatX4   args _ = doIndexByteArrayOp Nothing vec4f32 res args
+emitPrimOp res IndexByteArrayOp_DoubleX2  args _ = doIndexByteArrayOp Nothing vec2f64 res args
 emitPrimOp res IndexByteArrayOp_Int32X4   args _ = doIndexByteArrayOp Nothing vec4b32 res args
 
 -- ReadXXXArray, identical to IndexXXXArray.
@@ -342,6 +345,7 @@ emitPrimOp res ReadByteArrayOp_Word16     args _ = doIndexByteArrayOp (Just mo_u
 emitPrimOp res ReadByteArrayOp_Word32     args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
 emitPrimOp res ReadByteArrayOp_Word64     args _ = doIndexByteArrayOp Nothing b64  res args
 emitPrimOp res ReadByteArrayOp_FloatX4    args _ = doIndexByteArrayOp Nothing vec4f32 res args
+emitPrimOp res ReadByteArrayOp_DoubleX2   args _ = doIndexByteArrayOp Nothing vec2f64 res args
 emitPrimOp res ReadByteArrayOp_Int32X4    args _ = doIndexByteArrayOp Nothing vec4b32 res args
 
 -- WriteXXXoffAddr
@@ -363,6 +367,7 @@ emitPrimOp res WriteOffAddrOp_Word16     args _ = doWriteOffAddrOp (Just mo_Word
 emitPrimOp res WriteOffAddrOp_Word32     args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
 emitPrimOp res WriteOffAddrOp_Word64     args _ = doWriteOffAddrOp Nothing b64 res args
 emitPrimOp res WriteOffAddrOp_FloatX4    args _ = doWriteOffAddrOp Nothing vec4f32 res args
+emitPrimOp res WriteOffAddrOp_DoubleX2   args _ = doWriteOffAddrOp Nothing vec2f64 res args
 emitPrimOp res WriteOffAddrOp_Int32X4    args _ = doWriteOffAddrOp Nothing vec4b32 res args
 
 -- WriteXXXArray
@@ -384,6 +389,7 @@ emitPrimOp res WriteByteArrayOp_Word16    args _ = doWriteByteArrayOp (Just mo_W
 emitPrimOp res WriteByteArrayOp_Word32    args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
 emitPrimOp res WriteByteArrayOp_Word64    args _ = doWriteByteArrayOp Nothing b64  res args
 emitPrimOp res WriteByteArrayOp_FloatX4   args _ = doWriteByteArrayOp Nothing vec4f32 res args
+emitPrimOp res WriteByteArrayOp_DoubleX2  args _ = doWriteByteArrayOp Nothing vec2f64 res args
 emitPrimOp res WriteByteArrayOp_Int32X4   args _ = doWriteByteArrayOp Nothing vec4b32 res args
 
 -- Copying byte arrays
@@ -412,6 +418,18 @@ emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
 
 emitPrimOp res@[_,_,_,_] FloatX4UnpackOp [arg] _ =
     doVecUnpack Nothing vec4f32 arg res
+
+emitPrimOp [res] DoubleToDoubleX2Op [e] _ =
+    doVecPack Nothing vec2f64 [e,e] res
+
+emitPrimOp [res] DoubleX2InsertOp [v,e,i] _ =
+    doVecInsert Nothing vec2f64 v e i res
+
+emitPrimOp [res] DoubleX2PackOp es@[_,_] _ =
+    doVecPack Nothing vec2f64 es res
+
+emitPrimOp res@[_,_] DoubleX2UnpackOp [arg] _ =
+    doVecUnpack Nothing vec2f64 arg res
 
 emitPrimOp [res] Int32ToInt32X4Op [e] _ =
     doVecPack (Just mo_WordTo32) vec4b32 [e,e,e,e] res
@@ -599,6 +617,12 @@ translateOp FloatX4SubOp  = Just (MO_VF_Sub  4 W32)
 translateOp FloatX4MulOp  = Just (MO_VF_Mul  4 W32)
 translateOp FloatX4DivOp  = Just (MO_VF_Quot 4 W32)
 translateOp FloatX4NegOp  = Just (MO_VF_Neg  4 W32)
+
+translateOp DoubleX2AddOp  = Just (MO_VF_Add  2 W64)
+translateOp DoubleX2SubOp  = Just (MO_VF_Sub  2 W64)
+translateOp DoubleX2MulOp  = Just (MO_VF_Mul  2 W64)
+translateOp DoubleX2DivOp  = Just (MO_VF_Quot 2 W64)
+translateOp DoubleX2NegOp  = Just (MO_VF_Neg  2 W64)
 
 translateOp Int32X4AddOp   = Just (MO_VN_Add   4 W32)
 translateOp Int32X4SubOp   = Just (MO_VN_Sub   4 W32)
