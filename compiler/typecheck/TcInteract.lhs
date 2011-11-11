@@ -629,42 +629,6 @@ doInteractWithInert
                -- throw workitem back in the worklist because this can cause loops. See #5236.
                -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
                      ; irKeepGoing "Cls/Cls (new fundeps)" } -- Just keep going without droping the inert 
-
-{- DV: I am commenting this optimisation code out as I am not confident about how much it helps: 
-
-               | not (eqTypes tys1 rewritten_tys2) 
-               -- Standard thing: create derived fds and keep on going. Importantly we don't
-               -- throw workitem back in the worklist because this can cause loops. See #5236.
-               -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
-                     ; irKeepGoing "Cls/Cls (new fundeps)" } -- Just keep going without droping the inert 
-
-               -- This WHOLE otherwise branch is an optimization where the fd made the things match
-               | otherwise
-               -> case fl2 of
-                    Given {} 
-                        -> pprPanic "Unexpected given!" (ppr inertItem $$ ppr workItem)
-                           -- The only way to have created a fundep is if the inert was
-                           -- wanted or derived, in which case the workitem can't be given!
-                    Derived {}
-                        -- The types were made to exactly match so we don't need 
-                        -- the workitem any longer.
-                        -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
-                              ; irWorkItemConsumed "Cls/Cls fundep (solved)" } 
-		    Wanted  {}
-                        | isDerived fl1 -- Just do the safe thing if inert is derived, 
-                                        -- but creating wanted equalities to allow rewriting and 
-                                        -- emit fd work and keep going as if nothing happened.
-                        -> do { emitFDWorkAsWanted fd_work (cc_depth workItem)
-                              ; irKeepGoing "Cls/Cls (new fundeps)" }
- 
-		        | otherwise
-                        -> -- You may think that we should just consume the work item but 
-                           -- the problem is that the FD's may not be solvable (e.g if they mention skolems)
-                           -- so we simply do the safe thing: emit deriveds and keep going ... 
-                           do { emitFDWorkAsDerived fd_work (cc_depth workItem) 
-                              ; irKeepGoing "Cls/Cls (new fundeps)"
-                              }
--}
        }
   where get_workitem_wloc (Wanted wl)  = wl 
         get_workitem_wloc (Derived wl) = wl 
@@ -749,7 +713,8 @@ rewriteEqLHS :: WhichComesFromInert -> (EqVar,Xi) -> (EqVar,SubGoalDepth,CtFlavo
 -- We have an option of creating new work (xi1 ~ xi2) OR (xi2 ~ xi1), 
 --    See Note [Efficient Orientation] for that 
 rewriteEqLHS LeftComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2) 
-  = do { evc <- newEqVar gw xi2 xi1
+  = do { delCachedEvVar eqv2 -- Similarly to canonicalization!
+       ; evc <- newEqVar gw xi2 xi1
        ; let eqv2' = evc_the_evvar evc
        ; case gw of 
            Wanted {} 
@@ -766,7 +731,8 @@ rewriteEqLHS LeftComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2)
                                                               , cc_depth  = d } ) ) }
 
 rewriteEqLHS RightComesFromInert (eqv1,xi1) (eqv2,d,gw,xi2) 
-  = do { evc <- newEqVar gw xi1 xi2
+  = do { delCachedEvVar eqv2 -- Similarly to canonicalization!
+       ; evc <- newEqVar gw xi1 xi2
        ; let eqv2' = evc_the_evvar evc
        ; case gw of
            Wanted {} 
@@ -1249,24 +1215,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                do { emitFDWorkAsDerived fd_work (cc_depth workItem)
                   ; return SomeTopInt { tir_rule = "Dict/Top (fundeps)"
                                       , tir_new_item = ContinueWith workItem } } }
-{- DV: Old code used to have this optimisation but I am not sure how much it helps:
-                      -- ; case lkup_inst_res of
-                      -- NoInstance
-                      --     -> do { emitFDWorkAsDerived fd_work (cc_depth workItem)
-                      --           ; return $
-                      --             SomeTopInt { tir_rule = "Dict/Top (no match but fundeps)"
-                      --                        , tir_new_item = ContinueWith workItem } } 
-                      -- -- This WHOLE branch is an optimization: we can immediately discharge the dictionary
-                      -- GenInst wtvs ev_term
-                      --     -> do { let dict_co = mkTyConAppCo (classTyCon cls) cos
-                      --           ; emitFDWorkAsWanted fd_work (cc_depth workItem) 
 
-                      --           ; evc <- newEvVar (mkClassPred cls xis') (mkSolvedFlavor fl UnkSkol)
-                      --           ; let dv' = evc_the_evvar evc
-
-                      --           ; setEvBind dv' ev_term
-                      --           ; doSolveFromInstance wtvs (mkEvCast dv' dict_co) workItem }
--}
    where doSolveFromInstance :: [WantedEvVar] 
                              -> EvTerm 
                              -> Ct 

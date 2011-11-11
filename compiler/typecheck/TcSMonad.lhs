@@ -40,7 +40,7 @@ module TcSMonad (
     SimplContext(..), isInteractive, simplEqsOnly, performDefaulting,
 
        -- Creation of evidence variables
-    newEvVar, forceNewEvVar,
+    newEvVar, forceNewEvVar, delCachedEvVar,
     newGivenEqVar,
     newEqVar, newKindConstraint,
     EvVarCreated (..), isNewEvVar,
@@ -56,7 +56,7 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getUntouchables,
     getTcEvBindsMap, getTcSContext, getTcSTyBinds, getTcSTyBindsMap,
-    getTcSEvVarCacheMap, getTcSEvVarFlatCache, setTcSEvVarCacheMap, pprFlatCache,
+    getTcSEvVarCacheMap, getTcSEvVarFlatCache, setTcSEvVarCacheMap, pprEvVarCache,
 
     newFlattenSkolemTy,                         -- Flatten skolems 
 
@@ -750,7 +750,7 @@ data TcSEnv
 data EvVarCache
   = EvVarCache { evc_cache     :: TypeMap (EvVar,CtFlavor)    
                      -- Map from PredTys to Evidence variables
-               , evc_flat_cache :: TypeMap (EvVar,Xi,CtFlavor) }
+               , evc_flat_cache :: TypeMap (EvVar,(Xi,CtFlavor)) }
                      -- Map from family-free heads (F xi) to family-free types.
                      -- If (F xi) |-> ev,xi_rhs,fl in evc_flat_cache
                      -- then (F xi ~ xi_rhs) |-> (ev,fl) must also exist in the evc_cache
@@ -1033,7 +1033,7 @@ getTcSEvVarCacheMap = do { cache_var <- getTcSEvVarCache
                          ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
                          ; return (evc_cache the_cache) }
 
-getTcSEvVarFlatCache :: TcS (TypeMap (EvVar,Type,CtFlavor))
+getTcSEvVarFlatCache :: TcS (TypeMap (EvVar,(Type,CtFlavor)))
 getTcSEvVarFlatCache = do { cache_var <- getTcSEvVarCache 
                           ; the_cache <- wrapTcS $ TcM.readTcRef cache_var 
                           ; return (evc_flat_cache the_cache) }
@@ -1090,14 +1090,16 @@ setEvBind ev t
        ; wrapTcS $ TcM.addTcEvBind tc_evbinds ev t
 
    -- TODO: enable this only in debug mode!
- 
        ; binds <- getTcEvBindsMap
        ; let cycle = any (reaches binds) (evterm_evs t)
-       ; when cycle $ 
-           pprTrace "setEvBind" (text "Cycle in evidence binds:" <+> 
-                                           ppr (evBindMapBinds binds)) (return ())
-       }
-  where reaches :: EvBindMap -> Var -> Bool 
+       ; when cycle (fail_if_co_loop binds) }
+
+  where fail_if_co_loop binds
+          = pprTrace "setEvBind" (vcat [ text "Cycle in evidence binds, evvar =" <+> ppr ev
+                                       , ppr (evBindMapBinds binds) ]) $
+            when (isLCoVar ev) (pprPanic "setEvBind" (text "BUG: Coercion loop!"))
+
+        reaches :: EvBindMap -> Var -> Bool 
         -- Does this evvar reach ev? 
         reaches ebm ev0 = go ev0
           where go ev0
@@ -1279,10 +1281,20 @@ newEvVar fl pty
   = do { eref <- getTcSEvVarCache
        ; ecache <- wrapTcS (TcM.readTcRef eref)
        ; case lookupTM pty (evc_cache ecache) of
-           Just (cached_evvar, _cached_flavor)
+           Just (cached_evvar, cached_flavor)
+             | cached_flavor `canSolve` fl -- NB: 
+                                           -- We want to use the cache /only/ if he can solve
+                                           -- the workitem. If cached_flavor is Derived
+                                           -- but we have a real Wanted, we want to create
+                                           -- new evidence, otherwise we are in danger to
+                                           -- have unsolved goals in the end. 
+                                           -- (Remember: Derived's are just unification hints
+                                           --            but they don't come with guarantees
+                                           --            that they can be solved and we don't 
+                                           --            quantify over them.
              -> do { traceTcS "newEvVar"  $  text "already cached, doing nothing" 
                    ; return (EvVarCreated False cached_evvar) }
-           Nothing   -- Not cached or cached with worse flavor
+           _   -- Not cached or cached with worse flavor
              -> do { new <- force_new_ev_var eref ecache fl pty
                    ; return (EvVarCreated True new) } }
 
@@ -1322,24 +1334,40 @@ updateCache ecache (ev,fl,pty)
   where classifier          = classifyPredType pty
         ecache'             = alterTM pty (\_ -> Just (ev,fl)) $
                               evc_cache ecache
-        flat_cache' ty1 ty2 = alterTM ty1 (\_ -> Just (ev,ty2,fl)) $
+        flat_cache' ty1 ty2 = alterTM ty1 (\_ -> Just (ev,(ty2,fl))) $
                               evc_flat_cache ecache
+        is_function_free ty = go ty
+          where go ty@(TyConApp tc tys) 
+                 | Just ty' <- tcView ty = go ty'
+                 | isSynFamilyTyCon tc   = False
+                 | otherwise             = all go tys
+                go (TyVarTy {}) = True
+                go (FunTy arg res) = go arg && go res
+                go (AppTy fun arg) = go fun && go arg
+                go (ForAllTy _ ty) = go ty
 
-        is_function_free ty@(TyConApp tc tys) 
-            | Just ty' <- tcView ty = is_function_free ty'
-            | isSynFamilyTyCon tc   = False
-            | otherwise             = all is_function_free tys
-        is_function_free (TyVarTy {}) = True
-        is_function_free (FunTy arg res) = is_function_free arg && 
-                                             is_function_free res
-        is_function_free (AppTy fun arg) = is_function_free fun && 
-                                             is_function_free arg
-        is_function_free (ForAllTy _ ty) = is_function_free ty
+delCachedEvVar :: EvVar -> TcS ()
+delCachedEvVar ev
+  = do { eref   <- getTcSEvVarCache
+       ; ecache <- wrapTcS (TcM.readTcRef eref)
+       ; wrapTcS $ TcM.writeTcRef eref (delFromCache ecache ev) }
 
+delFromCache :: EvVarCache -> EvVar -> EvVarCache 
+delFromCache (EvVarCache { evc_cache      = ecache
+                         , evc_flat_cache = flat_cache }) ev
+  = EvVarCache { evc_cache = ecache'
+               , evc_flat_cache = flat_cache'}
+  where pty = evVarPred ev
+        ecache'    = alterTM pty upd_aux ecache
+        flat_cache' = alterTM pty upd_aux flat_cache
+        upd_aux Nothing = Nothing
+        upd_aux r@(Just (v,_)) 
+            | v == ev   = Nothing
+            | otherwise = r
 
-pprFlatCache :: TypeMap (EvVar,b,c) -> SDoc
-pprFlatCache tm = ppr pairs
- where pairs = foldTM (\(ev,_,_) evrs -> (ev,evVarPred ev):evrs) tm []
+pprEvVarCache :: TypeMap (EvVar,a) -> SDoc
+pprEvVarCache tm = ppr (foldTM mk_pair tm [])
+ where mk_pair (ev,_) evrs = (ev,evVarPred ev) : evrs
 
 
 newGivenEqVar :: CtFlavor -> TcType -> TcType -> Coercion -> TcS EvVar
@@ -1353,6 +1381,7 @@ newGivenEqVar fl ty1 ty2 co
 newEqVar :: CtFlavor -> TcType -> TcType -> TcS EvVarCreated
 newEqVar fl ty1 ty2 
   = newEvVar fl (mkEqPred (ty1,ty2))
+
 
 \end{code} 
 
