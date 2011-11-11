@@ -1933,8 +1933,9 @@ primop  TraceEventOp "traceEvent#" GenPrimOp
    out_of_line      = True
 
 ------------------------------------------------------------------------
-section "SIMD" 
-	{Operations on vectors.}
+section "Float SIMD Vectors" 
+	{Operations on SIMD vectors of 4 single-precision (32-bit)
+         floating-point numbers.}
 ------------------------------------------------------------------------
 
 primtype FloatX4#
@@ -1996,6 +1997,11 @@ primop ReadOffAddrOp_FloatX4 "readFloatX4OffAddr#" GenPrimOp
 primop  WriteOffAddrOp_FloatX4 "writeFloatX4OffAddr#" GenPrimOp
    Addr# -> Int# -> FloatX4# -> State# s -> State# s
    with has_side_effects = True
+
+------------------------------------------------------------------------
+section "Int32 SIMD Vectors" 
+	{Operations on SIMD vectors of 4 32-bit signed integers.}
+------------------------------------------------------------------------
 
 primtype Int32X4#
 
