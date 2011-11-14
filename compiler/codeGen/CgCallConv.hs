@@ -43,7 +43,8 @@ import CLabel
 
 import Constants
 import CgStackery
-import ClosureInfo( CgRep(..), nonVoidArg, idCgRep, cgRepSizeW, isFollowableArg )
+import ClosureInfo( CgRep(..), argMachRep, nonVoidArg, idCgRep,
+                    cgRepSizeB, cgRepSizeW, isFollowableArg )
 import OldCmmUtils
 import Maybes
 import Id
@@ -89,11 +90,13 @@ argBits (arg    : args) = take (cgRepSizeW arg) (repeat True) ++ argBits args
 stdPattern :: [CgRep] -> Maybe StgHalfWord
 stdPattern []          = Just ARG_NONE	-- just void args, probably
 
-stdPattern [PtrArg]    = Just ARG_P
-stdPattern [FloatArg]  = Just ARG_F
-stdPattern [DoubleArg] = Just ARG_D
-stdPattern [LongArg]   = Just ARG_L
-stdPattern [NonPtrArg] = Just ARG_N
+stdPattern [PtrArg]          = Just ARG_P
+stdPattern [FloatArg]        = Just ARG_F
+stdPattern [DoubleArg]       = Just ARG_D
+stdPattern [LongArg]         = Just ARG_L
+stdPattern [arg@(VecArg {})]
+    | cgRepSizeB arg == 16   = Just ARG_X16
+stdPattern [NonPtrArg]       = Just ARG_N
 	 
 stdPattern [NonPtrArg,NonPtrArg] = Just ARG_NN
 stdPattern [NonPtrArg,PtrArg]    = Just ARG_NP
@@ -200,7 +203,11 @@ slowCallPattern (NonPtrArg: _)				= (fsLit "stg_ap_n", 1)
 slowCallPattern (FloatArg: _)				= (fsLit "stg_ap_f", 1)
 slowCallPattern (DoubleArg: _)				= (fsLit "stg_ap_d", 1)
 slowCallPattern (LongArg: _)				= (fsLit "stg_ap_l", 1)
-slowCallPattern _ 					= panic "CgStackery.slowCallPattern"
+slowCallPattern (arg@VecArg {}: _)			= (fsLit slowCallName, 1)
+  where
+    slowCallName :: String
+    slowCallName = "stg_ap_x" ++ (show . cgRepSizeB) arg
+slowCallPattern _ 					= panic "CgCallConv.slowCallPattern"
 
 -------------------------------------------------------------------------
 --

@@ -202,7 +202,10 @@ slowCallPattern (N: _)		      = (fsLit "stg_ap_n", 1)
 slowCallPattern (F: _)		      = (fsLit "stg_ap_f", 1)
 slowCallPattern (D: _)		      = (fsLit "stg_ap_d", 1)
 slowCallPattern (L: _)		      = (fsLit "stg_ap_l", 1)
-slowCallPattern (X {} : _)	      = error "No slow call pattern for vector"
+slowCallPattern (X len : _)	      = (fsLit slowCallName, 1)
+  where
+    slowCallName :: String
+    slowCallName = "stg_ap_x" ++ show len
 slowCallPattern []		      = (fsLit "stg_ap_0", 0)
 
 
@@ -346,12 +349,13 @@ argBits (arg : args) = take (argRepSizeW arg) (repeat True) ++ argBits args
 stdPattern :: [ArgRep] -> Maybe StgHalfWord
 stdPattern reps 
   = case reps of
-	[]  -> Just ARG_NONE	-- just void args, probably
-	[N] -> Just ARG_N
-	[P] -> Just ARG_P
-	[F] -> Just ARG_F
-	[D] -> Just ARG_D
-	[L] -> Just ARG_L
+	[]     -> Just ARG_NONE	-- just void args, probably
+	[N]    -> Just ARG_N
+	[P]    -> Just ARG_P
+	[F]    -> Just ARG_F
+	[D]    -> Just ARG_D
+	[L]    -> Just ARG_L
+	[X 16] -> Just ARG_X16
 
 	[N,N] -> Just ARG_NN
 	[N,P] -> Just ARG_NP

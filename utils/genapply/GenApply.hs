@@ -32,23 +32,26 @@ data ArgRep
   | F		-- float
   | D		-- double
   | L		-- long (64-bit)
+  | X Int	-- vectors (n-bytes)
 
 -- size of a value in *words*
 argSize :: ArgRep -> Int
-argSize N = 1
-argSize P = 1
-argSize V = 0
-argSize F = 1
-argSize D = (SIZEOF_DOUBLE `quot` SIZEOF_VOID_P :: Int)
-argSize L = (8 `quot` SIZEOF_VOID_P :: Int)
+argSize N     = 1
+argSize P     = 1
+argSize V     = 0
+argSize F     = 1
+argSize D     = (SIZEOF_DOUBLE `quot` SIZEOF_VOID_P :: Int)
+argSize L     = (8 `quot` SIZEOF_VOID_P :: Int)
+argSize (X n) = (n `quot` SIZEOF_VOID_P :: Int)
 
-showArg :: ArgRep -> Char
-showArg N = 'n'
-showArg P = 'p'
-showArg V = 'v'
-showArg F = 'f'
-showArg D = 'd'
-showArg L = 'l'
+showArg :: ArgRep -> String
+showArg N     = "n"
+showArg P     = "p"
+showArg V     = "v"
+showArg F     = "f"
+showArg D     = "d"
+showArg L     = "l"
+showArg (X n) = "x" ++ show n
 
 -- is a value a pointer?
 isPtr :: ArgRep -> Bool
@@ -162,7 +165,7 @@ mkBitmap args = foldr f 0 args
 -- when we start passing args to stg_ap_* in regs).
 
 mkApplyName args
-  = text "stg_ap_" <> text (map showArg args)
+  = text "stg_ap_" <> text (concatMap showArg args)
 
 mkApplyRetName args
   = mkApplyName args <> text "_ret"
@@ -726,7 +729,7 @@ genApplyFast regstatus args =
 -- void arguments.
 
 mkStackApplyEntryLabel:: [ArgRep] -> Doc
-mkStackApplyEntryLabel args = text "stg_ap_stk_" <> text (map showArg args)
+mkStackApplyEntryLabel args = text "stg_ap_stk_" <> text (concatMap showArg args)
 
 genStackApply :: RegStatus -> [ArgRep] -> Doc
 genStackApply regstatus args = 
@@ -751,7 +754,7 @@ genStackApply regstatus args =
 -- in HeapStackCheck.hc for more details.
 
 mkStackSaveEntryLabel :: [ArgRep] -> Doc
-mkStackSaveEntryLabel args = text "stg_stk_save_" <> text (map showArg args)
+mkStackSaveEntryLabel args = text "stg_stk_save_" <> text (concatMap showArg args)
 
 genStackSave :: RegStatus -> [ArgRep] -> Doc
 genStackSave regstatus args =
@@ -817,6 +820,7 @@ applyTypes = [
 	[F],
 	[D],
 	[L],
+	[X 16],
 	[N],
 	[P],
 	[P,V],
@@ -833,6 +837,11 @@ applyTypes = [
 -- ToDo: the stack apply and stack save code doesn't make a distinction
 -- between N and P (they both live in the same register), only the bitmap
 -- changes, so we could share the apply/save code between lots of cases.
+--
+--  NOTE: other places to change if you change stackApplyTypes:
+--       - includes/rts/storage/FunTypes.h
+--       - compiler/codeGen/CgCallConv.lhs: stdPattern
+--       - compiler/codeGen/StgCmmLayout.hs: stdPattern
 stackApplyTypes = [
 	[],
 	[N],
@@ -840,6 +849,7 @@ stackApplyTypes = [
 	[F],
 	[D],
 	[L],
+	[X 16],
 	[N,N],
 	[N,P],
 	[P,N],
