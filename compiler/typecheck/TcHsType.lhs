@@ -74,7 +74,7 @@ import UniqSupply
 import Outputable
 import BuildTyCl ( buildPromotedDataTyCon )
 import FastString
-import Control.Monad ( unless )
+import Control.Monad ( unless, when )
 \end{code}
 
 
@@ -171,12 +171,23 @@ tcHsSigType ctxt hs_ty
     tcHsSigTypeNC ctxt hs_ty
 
 tcHsSigTypeNC ctxt hs_ty
-  = do	{ (kinded_ty, _kind) <- kc_lhs_type hs_ty
-    	  -- The kind is checked by checkValidType, and isn't necessarily
-	  -- of kind * in a Template Haskell quote eg [t| Maybe |]
-	; ty <- tcHsKindedType kinded_ty
-	; checkValidType ctxt ty
-	; return ty }
+  = do  { -- (kinded_ty, _kind) <- kc_lhs_type hs_ty
+          kinded_ty <- if interestingCtxt ctxt
+                       -- In these cases we don't know the expected kind
+                       then fmap fst (kc_lhs_type hs_ty)
+                       -- In the remaining cases (FunSigCtxt, DefaultDeclCtxt,
+                       -- ExprSigCtxt, and ForSigCtxt), we expect kind *
+                       -- Using kcCheckLHsType we give better error messages
+                       else kcCheckLHsType hs_ty ekOpen
+          -- The kind is checked by checkValidType, and isn't necessarily
+          -- of kind * in a Template Haskell quote eg [t| Maybe |]
+        ; ty <- tcHsKindedType kinded_ty
+        ; when (interestingCtxt ctxt) $ checkValidType ctxt ty
+        ; return ty }
+  where 
+    interestingCtxt GhciCtxt    = True
+    interestingCtxt ThBrackCtxt = True
+    interestingCtxt _           = False
 
 -- Like tcHsType, but takes an expected kind
 tcCheckHsType :: LHsType Name -> Kind -> TcM Type
