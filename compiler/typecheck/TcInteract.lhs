@@ -1277,6 +1277,11 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
 
                                        ; let _solved = workItem { cc_flavor = _solved_fl }
                                              _solved_fl = mkSolvedFlavor fl UnkSkol
+
+                                             -- Update the flat cache with an equation
+                                             -- WhenSolved flavor
+                                       ; updateFlatCache eqv fl tc args xi WhenSolved
+
                                        ; return $ 
                                          SomeTopInt { tir_rule = "Fun/Top (solved, more work)"
                                                     , tir_new_item = Stop } } -- Cache in inerts the Solved item
