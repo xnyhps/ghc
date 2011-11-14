@@ -324,7 +324,7 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
                                               (mkFakeGroup ldecls) ;
    setEnvs tc_envs $ do {
 
-   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls [ldecls] ;
+   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls emptyModDetails [ldecls] ; -- JPM
 
 	-- Dump trace of renaming part
    rnDump (ppr rn_decls) ;
@@ -464,7 +464,7 @@ tc_rn_src_decls boot_details ds
 		-- If ds is [] we get ([], Nothing)
         
 	-- Deal with decls up to, but not including, the first splice
-	(tcg_env, rn_decls) <- rnTopSrcDecls first_group ;
+	(tcg_env, rn_decls) <- rnTopSrcDecls boot_details first_group ;
 		-- rnTopSrcDecls fails if there are any errors
         
 	(tcg_env, tcl_env) <- setGblEnv tcg_env $ 
@@ -522,7 +522,7 @@ tcRnHsBootDecls decls
 		   hs_ruleds = rule_decls, 
 		   hs_vects  = vect_decls, 
 		   hs_annds  = _,
-		   hs_valds  = val_binds }) <- rnTopSrcDecls first_group
+		   hs_valds  = val_binds }) <- rnTopSrcDecls emptyModDetails first_group -- JPM
 	; (gbl_env, lie) <- captureConstraints $ setGblEnv tcg_env $ do {
 
 
@@ -850,12 +850,12 @@ monad; it augments it and returns the new TcGblEnv.
 
 \begin{code}
 ------------------------------------------------
-rnTopSrcDecls :: HsGroup RdrName -> TcM (TcGblEnv, HsGroup Name)
+rnTopSrcDecls :: ModDetails -> HsGroup RdrName -> TcM (TcGblEnv, HsGroup Name)
 -- Fails if there are any errors
-rnTopSrcDecls group
+rnTopSrcDecls boot_details group
  = do { -- Rename the source decls
         traceTc "rn12" empty ;
-	(tcg_env, rn_decls) <- checkNoErrs $ rnSrcDecls group ;
+	(tcg_env, rn_decls) <- checkNoErrs $ rnSrcDecls boot_details group ;
         traceTc "rn13" empty ;
 
         -- save the renamed syntax, if we want it

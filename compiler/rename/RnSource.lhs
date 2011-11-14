@@ -33,6 +33,7 @@ import RnNames
 import RnHsDoc          ( rnHsDoc, rnMbLHsDoc )
 import TcRnMonad
 import Kind             ( liftedTypeKind )
+import TyCon            ( tyConName )
 
 import ForeignCall	( CCallTarget(..) )
 import Module
@@ -48,9 +49,9 @@ import FastString
 import Util		( filterOut )
 import SrcLoc
 import DynFlags
-import HscTypes		( HscEnv, hsc_dflags )
+import HscTypes		( HscEnv, hsc_dflags, ModDetails, md_types, typeEnvTyCons )
 import ListSetOps       ( findDupsEq )
-import Digraph		( SCC, flattenSCCs, stronglyConnCompFromEdgedVertices )
+import Digraph		( SCC, flattenSCC, stronglyConnCompFromEdgedVertices )
 
 import Control.Monad
 import Maybes( orElse )
@@ -76,20 +77,20 @@ Checks the @(..)@ etc constraints in the export list.
 \begin{code}
 -- Brings the binders of the group into scope in the appropriate places;
 -- does NOT assume that anything is in scope already
-rnSrcDecls :: HsGroup RdrName -> RnM (TcGblEnv, HsGroup Name)
+rnSrcDecls :: ModDetails -> HsGroup RdrName -> RnM (TcGblEnv, HsGroup Name)
 -- Rename a HsGroup; used for normal source files *and* hs-boot files
-rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
-                            hs_tyclds  = tycl_decls,
-                            hs_instds  = inst_decls,
-                            hs_derivds = deriv_decls,
-                            hs_fixds   = fix_decls,
-                            hs_warnds  = warn_decls,
-                            hs_annds   = ann_decls,
-                            hs_fords   = foreign_decls,
-                            hs_defds   = default_decls,
-                            hs_ruleds  = rule_decls,
-                            hs_vects   = vect_decls,
-                            hs_docs    = docs })
+rnSrcDecls boot_details group@(HsGroup { hs_valds   = val_decls,
+                                         hs_tyclds  = tycl_decls,
+                                         hs_instds  = inst_decls,
+                                         hs_derivds = deriv_decls,
+                                         hs_fixds   = fix_decls,
+                                         hs_warnds  = warn_decls,
+                                         hs_annds   = ann_decls,
+                                         hs_fords   = foreign_decls,
+                                         hs_defds   = default_decls,
+                                         hs_ruleds  = rule_decls,
+                                         hs_vects   = vect_decls,
+                                         hs_docs    = docs })
  = do {
    -- (A) Process the fixity declarations, creating a mapping from
    --     FastStrings to FixItems.
@@ -137,7 +138,7 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
    -- means we'll only report a declaration as unused if it isn't
    -- mentioned at all.  Ah well.
    traceRn (text "Start rnTyClDecls") ;
-   (rn_tycl_decls, src_fvs1) <- rnTyClDecls tycl_decls ;
+   (rn_tycl_decls, src_fvs1) <- rnTyClDecls boot_details tycl_decls ;
 
    -- (F) Rename Value declarations right-hand sides
    traceRn (text "Start rnmono") ;
@@ -701,17 +702,24 @@ and then go over it again to rename the tyvars!
 However, we can also do some scoping checks at the same time.
 
 \begin{code}
-rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
+rnTyClDecls :: ModDetails -> [[LTyClDecl RdrName]]
+            -> RnM ([[LTyClDecl Name]], FreeVars)
 -- Renamed the declarations and do depedency analysis on them
-rnTyClDecls tycl_ds
+rnTyClDecls boot_details tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM (rnTyClDecl Nothing)) (concat tycl_ds)
 
-       ; let sccs :: [SCC (LTyClDecl Name)]
-             sccs = depAnalTyClDecls ds_w_fvs
+       ; let boot_tycons = typeEnvTyCons (md_types boot_details)
+             add_boot_deps :: FreeVars -> FreeVars
+             add_boot_deps fvs = fvs `plusFV` mkFVs (map tyConName boot_tycons)
 
-             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs
+             ds_w_fvs' = map (\(ds, fvs) -> (ds, add_boot_deps fvs)) ds_w_fvs
 
-       ; return ([flattenSCCs sccs], all_fvs) }
+             sccs :: [SCC (LTyClDecl Name)]
+             sccs = depAnalTyClDecls ds_w_fvs'
+
+             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs'
+
+       ; return (map flattenSCC sccs, all_fvs) }
 -- JPM: This is wrong. We are calculating the SCCs but then ignore them and
 -- merge into a single, big group. This is a quick fix to allow
 -- mutually-recursive types across modules to work, given the new way of kind

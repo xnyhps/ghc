@@ -32,6 +32,7 @@ import RnBinds   ( rnLocalBindsAndThen, rnLocalValBindsLHS, rnLocalValBindsRHS,
                    rnMatchGroup, makeMiniFixityEnv) 
 import HsSyn
 import TcRnMonad
+import HscTypes         ( emptyModDetails )
 import TcEnv		( thRnBrack )
 import RnEnv
 import RnTypes		( rnHsTypeFVs, rnSplice, rnIPName, checkTH,
@@ -625,7 +626,7 @@ rnBracket (DecBrL decls)
                           -- group alone in the call to rnSrcDecls below
        ; (tcg_env, group') <- setGblEnv new_gbl_env $ 
        	 	   	      setStage thRnBrack $
-			      rnSrcDecls group      
+			      rnSrcDecls emptyModDetails group -- JPM
 
 	      -- Discard the tcg_env; it contains only extra info about fixity
         ; traceRn (text "rnBracket dec" <+> (ppr (tcg_dus tcg_env) $$ 
