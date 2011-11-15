@@ -23,6 +23,7 @@ import FunDeps
 import qualified TcMType as TcM
 import TcType
 import Type
+import Kind
 import Coercion
 import Class
 import TyCon
@@ -748,19 +749,22 @@ canEq d fl eqv (TyConApp tc1 tys1) (TyConApp tc2 tys2)
   , tc1 == tc2
   , length tys1 == length tys2
   = -- Generate equalities for each of the corresponding arguments
-    do { argeqvs <- zipWithM (newEqVar fl) tys1 tys2
+    do { let (kis1,  tys1') = span isKind tys1
+             (_kis2, tys2') = span isKind tys2
+       ; let kicos = map mkReflCo kis1
+
+       ; argeqvs <- zipWithM (newEqVar fl) tys1 tys2
        ; case fl of 
            Wanted {} -> 
              setEqBind eqv $ 
-             mkTyConAppCo tc1 (map (mkEqVarLCo . evc_the_evvar) argeqvs)
+             mkTyConAppCo tc1 (kicos ++ map (mkEqVarLCo . evc_the_evvar) argeqvs)
            Given {} ->
              let do_one argeqv n = setEqBind (evc_the_evvar argeqv) 
                                              (mkNthCo n (mkEqVarLCo eqv))
-             in do { _unused <- zipWithM do_one argeqvs [0..]; return ()}
+             in zipWithM_ do_one argeqvs [(length kicos)..]
            Derived {} -> return ()
 
        ; canEqEvVarsCreated d fl argeqvs tys1 tys2 }
-
 
 -- See Note [Equality between type applications]
 --     Note [Care with type applications] in TcUnify
@@ -769,7 +773,8 @@ canEq d fl eqv ty1 ty2
   , Nothing <- tcView ty2  -- See Note [Naked given applications]
   , Just (s1,t1) <- tcSplitAppTy_maybe ty1
   , Just (s2,t2) <- tcSplitAppTy_maybe ty2
-  = if isGivenOrSolved fl then 
+  = ASSERT( not (isKind t1) && not (isKind t2) )
+    if isGivenOrSolved fl then 
         do { traceTcS "canEq/(app case)" $
                 text "Ommitting decomposition of given equality between: " 
                     <+> ppr ty1 <+> text "and" <+> ppr ty2
@@ -1039,18 +1044,26 @@ canEqLeafOriented :: SubGoalDepth -- Depth
 canEqLeafOriented d fl eqv s1 s2
   | let k1 = typeKind s1
   , let k2 = typeKind s2
-  , not (k1 `compatKind` k2) -- Establish kind invariants for CFunEqCan and CTyEqCan
-  = do { traceTcS "canEqLeafOriented" $ text "kind mismatch!"
-       ; canEqFailure d fl eqv }
-  | Just (fn,tys1) <- splitTyConApp_maybe s1
-  = canEqLeafFunEqLeftRec d fl eqv (fn,tys1) s2
-  | Just tv <- getTyVar_maybe s1
-  = canEqLeafTyVarLeftRec d fl eqv tv s2
-  | otherwise 
-  = pprPanic "canEqLeafOriented" $
-    text "Non-variable or non-family equality LHS" <+> ppr eqv <+> 
-                                                       dcolon <+> ppr (evVarPred eqv)
+  -- Establish kind invariants for CFunEqCan and CTyEqCan
+  = do { are_compat <- compatKindTcS k1 k2
+       ; can_unify <- if not are_compat
+                      then unifyKindTcS s1 s2 k1 k2
+                      else return False
+         -- If the kinds cannot be unified or are not compatible, don't fail
+         -- right away; instead, emit a frozen error
+       ; if (not are_compat && not can_unify) then 
+             canEqFailure fl eqv 
+         else can_eq_kinds_ok d fl eqv s1 s2 }
 
+  where can_eq_kinds_ok d fl eqv s1 s2
+          | Just (fn,tys1) <- splitTyConApp_maybe s1
+          = canEqLeafFunEqLeftRec d fl eqv (fn,tys1) s2
+          | Just tv <- getTyVar_maybe s1
+          = canEqLeafTyVarLeftRec d fl eqv tv s2
+          | otherwise
+          = pprPanic "canEqLeafOriented" $
+            text "Non-variable or non-family equality LHS" <+> ppr eqv <+> 
+                                                       dcolon <+> ppr (evVarPred eqv)
 canEqLeafFunEqLeftRec :: SubGoalDepth
                       -> CtFlavor 
                       -> EqVar 
@@ -1422,7 +1435,7 @@ instFunDepEqn :: WantedLoc -> Equation -> TcS [(Int,(EvVar,WantedLoc))]
 instFunDepEqn wl (FDEqn { fd_qtvs = qtvs, fd_eqs = eqs
                         , fd_pred1 = d1, fd_pred2 = d2 })
   = do { let tvs = varSetElems qtvs
-       ; tvs' <- mapM instFlexiTcS tvs
+       ; tvs' <- mapM instFlexiTcS tvs  -- IA0_TODO: we might need to do kind substitution
        ; let subst = zipTopTvSubst tvs (mkTyVarTys tvs')
        ; foldM (do_one subst) [] eqs }
   where 

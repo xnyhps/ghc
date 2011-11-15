@@ -68,6 +68,7 @@ import Util
 import Pair
 import Data.Word
 import Data.Bits
+import Data.List ( mapAccumL )
 \end{code}
 
 
@@ -194,9 +195,15 @@ mkCast :: CoreExpr -> Coercion -> CoreExpr
 mkCast e co | isReflCo co = e
 
 mkCast (Coercion e_co) co 
-  = Coercion (mkSymCo g0 `mkTransCo` e_co `mkTransCo` g1)
+  = Coercion new_co
   where
-    [g0, g1] = decomposeCo 2 co
+       -- g :: (s1 ~# s2) ~# (t1 ~#  t2)
+       -- g1 :: s1 ~# t1
+       -- g2 :: s2 ~# t2
+       new_co = mkSymCo g1 `mkTransCo` co `mkTransCo` g2
+       [_reflk, g1, g2] = decomposeCo 3 g
+            -- Remember, (~#) :: forall k. k -> k -> *
+            -- so it takes *three* arguments, not two
 
 mkCast (Cast expr co2) co
   = ASSERT(let { Pair  from_ty  _to_ty  = coercionKind co;
@@ -230,7 +237,8 @@ mkTick t (Var x)
 mkTick t (Cast e co)
   = Cast (mkTick t e) co -- Move tick inside cast
 
-mkTick _ (Lit l) = Lit l
+mkTick t (Lit l)
+  | not (tickishCounts t) = Lit l
 
 mkTick t expr@(App f arg)
   | not (isRuntimeArg arg) = App (mkTick t f) arg
@@ -1071,9 +1079,10 @@ dataConInstPat :: [FastString]          -- A long enough list of FSs to use for 
 --
 --  where the double-primed variables are created with the FastStrings and
 --  Uniques given as fss and us
-dataConInstPat fss uniqs con inst_tys
-  = (ex_bndrs, arg_ids)
-  where
+dataConInstPat fss uniqs con inst_tys 
+  = ASSERT( univ_tvs `equalLength` inst_tys )
+    (ex_bndrs, arg_ids)
+  where 
     univ_tvs = dataConUnivTyVars con
     ex_tvs   = dataConExTyVars con
     arg_tys  = dataConRepArgTys con
@@ -1084,19 +1093,25 @@ dataConInstPat fss uniqs con inst_tys
     (ex_uniqs, id_uniqs) = splitAt n_ex uniqs
     (ex_fss,   id_fss)   = splitAt n_ex fss
 
-      -- Make existential type variables
-    ex_bndrs = zipWith3 mk_ex_var ex_uniqs ex_fss ex_tvs
-    mk_ex_var uniq fs var = mkTyVar new_name kind
-      where
-        new_name = mkSysTvName uniq fs
-        kind     = tyVarKind var
+      -- Make the instantiating substitution for universals
+    univ_subst = zipOpenTvSubst univ_tvs inst_tys
 
-      -- Make the instantiating substitution
-    subst = zipOpenTvSubst (univ_tvs ++ ex_tvs) (inst_tys ++ map mkTyVarTy ex_bndrs)
+      -- Make existential type variables, applyingn and extending the substitution
+    (full_subst, ex_bndrs) = mapAccumL mk_ex_var univ_subst 
+                                       (zip3 ex_tvs ex_fss ex_uniqs)
+
+    mk_ex_var :: TvSubst -> (TyVar, FastString, Unique) -> (TvSubst, TyVar)
+    mk_ex_var subst (tv, fs, uniq) = (Type.extendTvSubst subst tv (mkTyVarTy new_tv)
+                                     , new_tv)
+      where
+        new_tv   = mkTyVar new_name kind
+        new_name = mkSysTvName uniq fs
+        kind     = Type.substTy subst (tyVarKind tv)
 
       -- Make value vars, instantiating types
-    mk_id_var uniq fs ty = mkUserLocal (mkVarOccFS fs) uniq (Type.substTy subst ty) noSrcSpan
     arg_ids = zipWith3 mk_id_var id_uniqs id_fss arg_tys
+    mk_id_var uniq fs ty = mkUserLocal (mkVarOccFS fs) uniq 
+                                       (Type.substTy full_subst ty) noSrcSpan
 \end{code}
 
 %************************************************************************

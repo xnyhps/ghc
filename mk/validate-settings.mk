@@ -21,7 +21,7 @@ SRC_HC_OPTS     += -Wall $(WERROR) -H64m -O0
 
 GhcStage1HcOpts += -O -fwarn-tabs
 
-GhcStage2HcOpts += -O -fwarn-tabs
+GhcStage2HcOpts += -O -fwarn-tabs -dcore-lint
 # Using -O (rather than -O0) here bringes my validate down from 22mins to 16 mins.
 # Compiling stage2 takes longer, but we gain a faster haddock, faster
 # running of the tests, and faster building of the utils to be installed
@@ -99,8 +99,7 @@ libraries/dph/dph-base_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-prim-interface_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-prim-seq_dist-install_EXTRA_HC_OPTS += -Wwarn
 libraries/dph/dph-prim-par_dist-install_EXTRA_HC_OPTS += -Wwarn
-libraries/dph/dph-seq_dist-install_EXTRA_HC_OPTS += -Wwarn
-libraries/dph/dph-par_dist-install_EXTRA_HC_OPTS += -Wwarn
+libraries/dph/dph-lifted-common-install_EXTRA_HC_OPTS += -Wwarn
 
 # We need to turn of deprecated warnings for SafeHaskell transition
 libraries/array_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
