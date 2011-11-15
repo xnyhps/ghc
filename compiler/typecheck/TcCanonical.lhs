@@ -8,7 +8,7 @@
 
 module TcCanonical(
     canonicalize,
-    canOccursCheck, canEq, 
+    canOccursCheck, canEq, canEvVar,
     rewriteWithFunDeps,
     emitFDWorkAsWanted, emitFDWorkAsDerived,
     StopOrContinue (..)
@@ -651,18 +651,24 @@ getCachedFlatEq :: TyCon -> [Xi] -> CtFlavor
 -- Returns a coercion between (TyConApp tc xi_args ~ xi) if such an inert item exists
 -- But also applies the substitution to the item via calling flatten recursively
 getCachedFlatEq tc xi_args fl feq_origin
-  = do { traceTcS "getCachedFlatEq" $ ppr (mkTyConApp tc xi_args)
+  = do { let pty = mkTyConApp tc xi_args
+       ; traceTcS "getCachedFlatEq" $ ppr (mkTyConApp tc xi_args)
        ; flat_cache <- getTcSEvVarFlatCache
-       ; case lookupTM (mkTyConApp tc xi_args) flat_cache of
-           Just (co',(xi',fl',when_generated)) -- ev' :: (TyConApp tc xi_args) ~ xi'
+       ; inerts <- getTcSInerts
+       ; case lookupFunEq pty fl (inert_funeqs inerts) of
+           Nothing -> lookup_in_flat_cache pty flat_cache
+           res     -> return res }
+  where lookup_in_flat_cache pty flat_cache 
+          = case lookupTM pty flat_cache of
+              Just (co',(xi',fl',when_generated)) -- ev' :: (TyConApp tc xi_args) ~ xi'
                | fl' `canRewrite` fl
                , feq_origin `origin_matches` when_generated
                -> do { traceTcS "getCachedFlatEq" $ text "success!"
                      ; (xi'',co) <- flatten 0 fl' xi' -- co :: xi'' ~ xi'
                      ; return $ Just (xi'', co' `mkTransCo` (mkSymCo co)) }
-           _ -> do { traceTcS "getCachedFlatEq" $ text "failure!" <+> pprEvVarCache flat_cache
-                   ; return Nothing }
-       }
+              _ -> do { traceTcS "getCachedFlatEq" $ text "failure!" <+> pprEvVarCache flat_cache
+                      ; return Nothing }
+
 
 \end{code}
 
@@ -1055,120 +1061,69 @@ canEqLeafFunEqLeftRec d fl eqv (fn,tys1) ty2  -- eqv :: F tys1 ~ ty2
                                               -- cos1 :: xis1 ~ tys1
 
        ; let no_flattening = all isReflCo cos1
-             -- See if we have already solved a goal with the same head
-       ; is_cached <- getCachedFlatEq fn xis1 fl WhenSolved
 
-       ; if isNothing is_cached && no_flattening then 
+       ; inerts <- getTcSInerts
+       ; let fam_eqs   = inert_funeqs inerts
+
+       ; let is_cached = lookupFunEq (mkTyConApp fn xis1) fl fam_eqs
+
+       ; if no_flattening && isNothing is_cached then 
              canEqLeafFunEqLeft d fl eqv (fn,xis1) ty2
-         else do 
+         else do
        { let (final_co, final_ty)
-               | no_flattening                      -- Only head caching
-               , Just (rhs_ty, ret_eq) <- is_cached
-               = (mkSymCo ret_eq, rhs_ty)
-               | Just (rhs_ty, ret_eq) <- is_cached -- Both flattening and head caching
-               = (mkSymCo ret_eq `mkTransCo` mkTyConAppCo fn cos1, rhs_ty)
-               | Nothing <- is_cached               -- Only flattening
-               = (mkTyConAppCo fn cos1, mkTyConApp fn xis1)
+                 | no_flattening        -- Just in inerts
+                 , Just (rhs_ty, ret_eq) <- is_cached
+                 = (mkSymCo ret_eq, rhs_ty)
+                 | Nothing <- is_cached -- Just flattening
+                 = (mkTyConAppCo fn cos1, mkTyConApp fn xis1)
+                 | Just (rhs_ty, ret_eq) <- is_cached  -- Both
+                 = (mkSymCo ret_eq `mkTransCo` mkTyConAppCo fn cos1, rhs_ty)
+                 | otherwise = panic "No flattening and not cached!"
        ; delCachedEvVar eqv
        ; evc <- newEqVar fl final_ty ty2
        ; let new_eqv = evc_the_evvar evc
        ; case fl of
-           Wanted {} -> setEqBind eqv $ mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
-           Given {} -> setEqBind new_eqv $ final_co `mkTransCo` (mkEqVarLCo eqv)
+           Wanted {}  -> setEqBind eqv $ 
+                         mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
+           Given {}   -> setEqBind new_eqv $ final_co `mkTransCo` (mkEqVarLCo eqv)
            Derived {} -> return ()
        ; if isNewEvVar evc then
-             if isNothing is_cached then 
+             if isNothing is_cached then
                  canEqLeafFunEqLeft d fl new_eqv (fn,xis1) ty2
              else
                  canEq (d+1) fl new_eqv final_ty ty2
-         else
-             return Stop
+         else return Stop
        }
        }
 
+lookupFunEq :: PredType -> CtFlavor -> TypeMap Ct -> Maybe (TcType,Coercion)
+lookupFunEq pty fl fam_eqs = lookup_funeq pty fam_eqs
+  where lookup_funeq pty fam_eqs
+          | Just ct <- lookupTM pty fam_eqs
+          , cc_flavor ct `canRewrite` fl 
+          = Just (cc_rhs ct, mkEqVarLCo (cc_id ct))
+          | otherwise 
+          = Nothing
 
---        ; if isNewEvVar evc && isNothing is_cached then
---                canEqLeafFunEqLeft d fl new_eqv (fn, xis1) ty2 }
---                            else
+{- Original, not using inert family equations: 
+       ; if no_flattening then
+             canEqLeafFunEqLeft d fl eqv (fn,xis1) ty2
+         else do  -- There was flattening
+       { let (final_co, final_ty) = (mkTyConAppCo fn cos1, mkTyConApp fn xis1)
+       ; delCachedEvVar eqv
+       ; evc <- newEqVar fl final_ty ty2
+       ; let new_eqv = evc_the_evvar evc
+       ; case fl of
+           Wanted {}  -> setEqBind eqv $ mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
+           Given {}   -> setEqBind new_eqv $ final_co `mkTransCo` (mkEqVarLCo eqv)
+           Derived {} -> return ()
+       ; if isNewEvVar evc then
+             canEqLeafFunEqLeft d fl new_eqv (fn,xis1) ty2
+         else return Stop 
+       }
+       }
+-}
 
---              do { let (Just (
-
-
-
---            Nothing -> if no_flattening then 
-
---        ; if isNothing is_cached && no_flattening then
-
---              canEqLeafFunEqLeft d fl eqv (fn,xis1) ty2
-
---          else 
-
-
---        ; if no_flattening then
---              do { is_cached <- getCachedFlatEq fn xis1 fl WhenSolved
---                 ; case is_cached of 
---                     Nothing -> canEqLeafFunEqLeft d fl eqv (fn,xis1) ty2
---                     Just (rhs_ty, ret_eq) -> 
---                         do { let final_co = mkSymCo ret_eq
---                            ; delCachedEvVar eqv
---                            ; evc <- newEqVar fl rhs_ty ty2
---                            ; let new_eqv = evc_the_evvar evc
---                            ; case fl of 
---                                Wanted {} -> setEqBind eqv $ 
---                                             mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
---                                Given {}  -> setEqBind new_eqv $ 
---                                             final_co `mkTransCo` (mkEqVarLCo eqv)
---                                Derived {} -> return ()
---                            ; if isNewEvVar evc then
---                                do { canEq (d+1) fl new_eqv rhs_ty ty2 } -- DV: Increase depth because this is like an interaction?
---                              else return Stop 
---                            }
---                 }                        
---              -- No flattening, just go directly to flatten RHS and continue
---              -- NB: Don't use flattening cache as it will solve the constraint from itself!
---              -- We don't want to delete if from the cache either. 
---              --   DV: Maybe we want to reconsider this choice at some point. 
---              --       We can alternatively observe if we try to solve it from itself
---              --       and only if not we continue as in the `else` branch. 
---              --       For now, I am leaving this case fall through to the interaction solver
--- --             canEqLeafFunEqLeft d fl eqv (fn,tys1) ty2
---          else -- Now it should be safe to use the flattening cache
---              do { is_cached <- getCachedFlatEq fn xis1 fl WhenSolved
---                 ; case is_cached of -- ret_eq :: F xis1 ~ rhs_ty
---                     Just (rhs_ty, ret_eq) -> 
---                       do { let final_co = mkSymCo ret_eq `mkTransCo` mkTyConAppCo fn cos1
---                                        -- rhs_ty ~ F xis1 ~ F tys1 
---                          ; delCachedEvVar eqv
---                          ; evc <- newEqVar fl rhs_ty ty2
---                          ; let new_eqv = evc_the_evvar evc -- rhs_ty ~ ty2
---                          ; case fl of 
---                              Wanted {} -> setEqBind eqv $ 
---                                           mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
---                              Given {}  -> setEqBind new_eqv $ 
---                                           final_co `mkTransCo` (mkEqVarLCo eqv)
---                              Derived {} -> return ()
---                          ; if isNewEvVar evc then
---                                do { canEq (d+1) fl new_eqv rhs_ty ty2 } -- DV: Increase depth because this is like an interaction?
---                            else
---                                return Stop
---                          }
---                     Nothing -> 
---                       do { let final_co = mkTyConAppCo fn cos1  -- F xis1 ~ F tys1 
---                          ; delCachedEvVar eqv
---                          ; evc <- newEqVar fl (mkTyConApp fn xis1) ty2
---                          ; let new_eqv = evc_the_evvar evc -- F xis ~ ty2
---                          ; case fl of 
---                              Wanted {}  -> setEqBind eqv $ 
---                                            mkSymCo final_co `mkTransCo` (mkEqVarLCo new_eqv)
---                              Given {}   -> setEqBind new_eqv $ 
---                                            final_co `mkTransCo` (mkEqVarLCo eqv)
---                              Derived {} -> return ()
---                          ; if isNewEvVar evc then
---                                do { canEqLeafFunEqLeft d fl new_eqv (fn, xis1) ty2 }
---                            else
---                                return Stop }
---                 }
---        }
 
 canEqLeafFunEqLeft :: SubGoalDepth -- Depth
                    -> CtFlavor -> EqVar -> (TyCon,[Xi]) 

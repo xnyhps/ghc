@@ -23,7 +23,7 @@ import Unify
 
 import Id 
 import Var
-import VarEnv ( )
+import VarEnv ( ) -- unitVarEnv, mkInScopeSet
 
 import TcType
 import HsBinds
@@ -310,6 +310,92 @@ spontaneousSolveStage workItem
                ; updInertSetTcS workItem'
                -- .. and Stop 
                ; return Stop }
+
+kickOutRewritableInerts :: Ct -> TcS () 
+-- Pre:  ct is a CTyEqCan 
+-- Post: the TcS monad is left with the thinner non-rewritable inerts; the 
+--       rewritable end up in the worklist
+kickOutRewritableInerts ct 
+  = do { wl <- modifyInertTcS (kick_out_rewritable ct)
+
+         -- Rewrite the rewritable solved on the spot and stick them back in the inerts
+
+{- DV: I am commenting out the solved story altogether because I did not see any performance
+       improvement compared to just kicking out the solved ones any way. In fact there were
+       situations where performance got worse.
+
+       ; let subst = unitVarEnv (cc_tyvar ct) (ct, mkEqVarLCo (cc_id ct))
+             inscope = mkInScopeSet $ tyVarsOfCt ct
+       ; solved_rewritten <- mapBagM (rewrite_solved (subst,inscope)) solved_out
+       ; _unused <- modifyInertTcS (add_new_solveds solved_rewritten)
+      
+-}
+       ; traceTcS "Kick out" (ppr ct $$ ppr wl)
+       ; updWorkListTcS (unionWorkList wl) }
+{- 
+  where rewrite_solved inert_eqs solved_ct 
+          = do { (new_ev,_) <- rewriteFromInertEqs inert_eqs fl ev
+               ; mk_canonical new_ev }
+          where fl = cc_flavor solved_ct
+                ev = cc_id solved_ct
+                d  = cc_depth solved_ct
+                mk_canonical new_ev
+                  -- A bit of an overkill to call the canonicalizer, but ok ...
+                  = do { let new_pty = evVarPred new_ev
+                       ; r <- canEvVar new_ev (classifyPredType new_pty) d fl
+                       ; case r of
+                           Stop -> pprPanic "kickOutRewritableInerts" $ 
+                                   vcat [ text "Should never Stop, solved constraint IS canonical!"
+                                        , text "Orig (solved)     =" <+> ppr solved_ct
+                                        , text "Rewritten (solved)=" <+> ppr new_pty ]
+                           ContinueWith ct -> return ct }
+        add_new_solveds cts is = ((), is { inert_solved = new_solved })
+           where orig_solveds     = inert_solved is
+                 do_one slvmap ct = let ct_key = mkPredKeyForTypeMap ct
+                                    in alterTM ct_key (\_ -> Just ct) slvmap
+                 new_solved       = foldlBag do_one orig_solveds cts
+-}
+
+kick_out_rewritable :: Ct -> InertSet -> (WorkList,InertSet)
+kick_out_rewritable ct (IS { inert_eqs    = eqmap
+                           , inert_eq_tvs = inscope
+                           , inert_dicts  = dictmap
+                           , inert_ips    = ipmap
+                           , inert_funeqs = funeqmap
+                           , inert_irreds = irreds
+                           , inert_frozen = frozen
+                           } )
+  = (kicked_out, remaining)
+  where
+
+    kicked_out = WorkList { wl_eqs  = eqs_out ++ bagToList feqs_out
+                          , wl_rest = bagToList (fro_out `andCts` dicts_out 
+                                        `andCts` ips_out `andCts` irs_out) }
+  
+    remaining = IS { inert_eqs = eqs_in
+                   , inert_eq_tvs = inscope -- keep the same, safe and cheap
+                   , inert_dicts = dicts_in
+                   , inert_ips = ips_in
+                   , inert_funeqs = feqs_in
+                   , inert_irreds = irs_in
+                   , inert_frozen = fro_in 
+                   }
+
+    fl = cc_flavor ct
+    tv = cc_tyvar ct
+
+    (eqs_out,   eqs_in)   = partitionEqMap rewritable eqmap
+    (ips_out,   ips_in)   = partitionCCanMap rewritable ipmap 
+
+    (feqs_out,  feqs_in)  = partitionCtTypeMap rewritable funeqmap
+    (dicts_out, dicts_in) = partitionCCanMap rewritable dictmap
+
+    (irs_out,   irs_in)   = partitionBag rewritable irreds
+    (fro_out,   fro_in)   = partitionBag rewritable frozen
+    rewritable ct = (fl `canRewrite` cc_flavor ct) && 
+                    (tv `elemVarSet` tyVarsOfCt ct)
+
+
                              
 data SPSolveResult = SPCantSolve
                    | SPSolved WorkItem 
@@ -1234,8 +1320,8 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                  ; setEvBind (cc_id workItem) ev_term 
                         -- Solved and new wanted work produced, you may cache the 
                         -- (tentatively solved) dictionary as Solved given.
-                 ; let _solved = workItem { cc_flavor = _solved_fl }
-                       _solved_fl = mkSolvedFlavor fl UnkSkol
+                 ; let solved = workItem { cc_flavor = solved_fl }
+                       solved_fl = mkSolvedFlavor fl UnkSkol
                  ; let ct_from_wev (EvVarX v fl)
                            = CNonCanonical { cc_id = v, cc_flavor = Wanted fl
                                            , cc_depth  = cc_depth workItem + 1 }
@@ -1243,7 +1329,7 @@ doTopReact inerts workItem@(CDictCan { cc_flavor = fl@(Wanted loc)
                  ; updWorkListTcS (appendWorkListCt wtvs_cts)
                  ; return $ 
                    SomeTopInt { tir_rule     = "Dict/Top (solved, more work)"
-                              , tir_new_item = Stop } } -- Cache in inerts the Solved item
+                              , tir_new_item = ContinueWith solved } } -- Cache in inerts the Solved item
 
 -- Type functions
 doTopReact _inerts (CFunEqCan { cc_flavor = fl })
@@ -1275,16 +1361,13 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
                                                                     , cc_depth = cc_depth workItem + 1} 
                                              in updWorkListTcS (extendWorkListEq ct))
 
-                                       ; let _solved = workItem { cc_flavor = _solved_fl }
-                                             _solved_fl = mkSolvedFlavor fl UnkSkol
-
-                                             -- Update the flat cache with an equation
-                                             -- WhenSolved flavor
-                                       ; updateFlatCache eqv fl tc args xi WhenSolved
+                                       ; let solved = workItem { cc_flavor = solved_fl }
+                                             solved_fl = mkSolvedFlavor fl UnkSkol
 
                                        ; return $ 
                                          SomeTopInt { tir_rule = "Fun/Top (solved, more work)"
-                                                    , tir_new_item = Stop } } -- Cache in inerts the Solved item
+                                                    , tir_new_item = ContinueWith solved } } 
+                       -- Cache in inerts the Solved item
 
                        Given {} -> do { eqv' <- newGivenEqVar fl xi rhs_ty $ 
                                                 mkSymCo (mkEqVarLCo eqv) `mkTransCo` coe
