@@ -324,7 +324,9 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
                                               (mkFakeGroup ldecls) ;
    setEnvs tc_envs $ do {
 
-   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls emptyModDetails [ldecls] ; -- JPM
+   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls [] [ldecls] ;
+   -- The empty list is for extra dependencies coming from .hs-boot files
+   -- See Note [Extra dependencies from .hs-boot files] in RnSource
 
 	-- Dump trace of renaming part
    rnDump (ppr rn_decls) ;
@@ -463,8 +465,11 @@ tc_rn_src_decls boot_details ds
  = do { (first_group, group_tail) <- findSplice ds  ;
 		-- If ds is [] we get ([], Nothing)
         
+        -- The extra_deps are needed while renaming type and class declarations 
+        -- See Note [Extra dependencies from .hs-boot files] in RnSource
+	let { extra_deps = map tyConName (typeEnvTyCons (md_types boot_details)) } ;
 	-- Deal with decls up to, but not including, the first splice
-	(tcg_env, rn_decls) <- rnTopSrcDecls boot_details first_group ;
+	(tcg_env, rn_decls) <- rnTopSrcDecls extra_deps first_group ;
 		-- rnTopSrcDecls fails if there are any errors
         
 	(tcg_env, tcl_env) <- setGblEnv tcg_env $ 
@@ -522,7 +527,9 @@ tcRnHsBootDecls decls
 		   hs_ruleds = rule_decls, 
 		   hs_vects  = vect_decls, 
 		   hs_annds  = _,
-		   hs_valds  = val_binds }) <- rnTopSrcDecls emptyModDetails first_group -- JPM
+		   hs_valds  = val_binds }) <- rnTopSrcDecls [] first_group
+        -- The empty list is for extra dependencies coming from .hs-boot files
+        -- See Note [Extra dependencies from .hs-boot files] in RnSource
 	; (gbl_env, lie) <- captureConstraints $ setGblEnv tcg_env $ do {
 
 
@@ -850,12 +857,12 @@ monad; it augments it and returns the new TcGblEnv.
 
 \begin{code}
 ------------------------------------------------
-rnTopSrcDecls :: ModDetails -> HsGroup RdrName -> TcM (TcGblEnv, HsGroup Name)
+rnTopSrcDecls :: [Name] -> HsGroup RdrName -> TcM (TcGblEnv, HsGroup Name)
 -- Fails if there are any errors
-rnTopSrcDecls boot_details group
+rnTopSrcDecls extra_deps group
  = do { -- Rename the source decls
         traceTc "rn12" empty ;
-	(tcg_env, rn_decls) <- checkNoErrs $ rnSrcDecls boot_details group ;
+	(tcg_env, rn_decls) <- checkNoErrs $ rnSrcDecls extra_deps group ;
         traceTc "rn13" empty ;
 
         -- save the renamed syntax, if we want it

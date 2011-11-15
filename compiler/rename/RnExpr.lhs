@@ -32,7 +32,6 @@ import RnBinds   ( rnLocalBindsAndThen, rnLocalValBindsLHS, rnLocalValBindsRHS,
                    rnMatchGroup, makeMiniFixityEnv) 
 import HsSyn
 import TcRnMonad
-import HscTypes         ( emptyModDetails )
 import TcEnv		( thRnBrack )
 import RnEnv
 import RnTypes		( rnHsTypeFVs, rnSplice, rnIPName, checkTH,
@@ -626,7 +625,9 @@ rnBracket (DecBrL decls)
                           -- group alone in the call to rnSrcDecls below
        ; (tcg_env, group') <- setGblEnv new_gbl_env $ 
        	 	   	      setStage thRnBrack $
-			      rnSrcDecls emptyModDetails group -- JPM
+			      rnSrcDecls [] group
+   -- The empty list is for extra dependencies coming from .hs-boot files
+   -- See Note [Extra dependencies from .hs-boot files] in RnSource
 
 	      -- Discard the tcg_env; it contains only extra info about fixity
         ; traceRn (text "rnBracket dec" <+> (ppr (tcg_dus tcg_env) $$ 
