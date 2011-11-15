@@ -772,12 +772,16 @@ doVecInsert :: Maybe MachOp  -- Cast from element to vector component
             -> Code
 doVecInsert maybe_pre_write_cast ty src e idx res =
     stmtC $ CmmAssign (CmmLocal res)
-                      (CmmMachOp (MO_V_Insert len wid) [src, cast e, idx])
+                      (CmmMachOp (MO_V_Insert len wid) [src, cast e, idx'])
   where
     cast :: CmmExpr -> CmmExpr
     cast val = case maybe_pre_write_cast of
                  Nothing   -> val
                  Just cast -> CmmMachOp cast [val]
+
+    -- vector indices are always 32-bits
+    idx' :: CmmExpr
+    idx' = CmmMachOp (MO_SS_Conv wordWidth W32) [idx]
 
     len :: Length
     len = vecLength ty 
@@ -805,7 +809,8 @@ doVecPack maybe_pre_write_cast ty es res = do
                                      [CmmReg (CmmLocal src), cast e, iLit])
         vecPack dst es (i + 1)
       where
-        iLit = CmmLit (mkIntCLit i)
+        -- vector indices are always 32-bits
+        iLit = CmmLit (CmmInt (toInteger i) W32)
 
     cast :: CmmExpr -> CmmExpr
     cast val = case maybe_pre_write_cast of
@@ -836,7 +841,8 @@ doVecUnpack maybe_post_read_cast ty e res =
                                            [e, iLit]))
         vecUnpack rs (i + 1)
       where
-        iLit = CmmLit (mkIntCLit i)
+        -- vector indices are always 32-bits
+        iLit = CmmLit (CmmInt (toInteger i) W32)
 
     cast :: CmmExpr -> CmmExpr
     cast val = case maybe_post_read_cast of
