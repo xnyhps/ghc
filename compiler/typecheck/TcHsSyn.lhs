@@ -207,7 +207,7 @@ data ZonkEnv
 	-- Is only consulted lazily; hence knot-tying
 
 instance Outputable ZonkEnv where 
-  ppr (ZonkEnv _ty_env var_env) = vcat (map ppr (varEnvElts var_env))
+  ppr (ZonkEnv _ _ty_env var_env) = vcat (map ppr (varEnvElts var_env))
 
 
 emptyZonkEnv :: ZonkEnv
