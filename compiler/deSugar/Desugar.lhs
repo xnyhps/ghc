@@ -159,8 +159,10 @@ deSugar hsc_env
                (vcat [ pprCoreBindings final_pgm
                      , pprRules rules_for_imps ])
 -}
-        ; endPass dflags CoreDesugar final_pgm rules_for_imps 
 
+#ifdef DEBUG
+        ; endPass dflags CoreDesugar final_pgm rules_for_imps 
+#endif
         ; (ds_binds, ds_rules_for_imps, ds_vects) 
             <- simpleOptPgm dflags mod final_pgm rules_for_imps vects0
                          -- The simpleOptPgm gets rid of type 
