@@ -1,5 +1,5 @@
 {-# LANGUAGE KindSignatures             #-}
--- {-# LANGUAGE PolyKinds                  #-}
+{-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE TypeFamilies               #-}
@@ -23,7 +23,7 @@ import Control.Arrow
 --------------------------------------------------------------------------------
 -- Type-level peano naturals
 --------------------------------------------------------------------------------
-{-
+
 -- Crashes (also in HEAD)
 class CX a where
   type AD1 a
@@ -31,21 +31,29 @@ class CX a where
 instance CX a where
   type AD1 a = Int
   type AD1 a = Int
--}
+
 
 data Nat = Ze | Su Nat
 data List a = Nil | Cons a (List a)
 
---data AB :: Nat
-
 {-
+data AB f
+data AC = AC (AB Maybe)
+-}
+{-
+data B1 = B1 | B11 (B2 'B1)
+data B2 a where
+  B2 :: B2 'B1
+-}
+
 data Vec :: * -> Nat -> * where
   VNil  :: Vec a Ze
   VCons :: a -> Vec a n -> Vec a (Su n)
 
 vec1 :: Vec Nat (Su Ze)
 vec1 = VCons Ze VNil
--}
+
+
 -- Correctly fails to kind-check
 {-
 vec2 :: Vec Nat Nat
@@ -106,7 +114,7 @@ put (HasNat n _) = fmapP castBin (putNat n)
 --------------------------------------------------------------------------------
 -- DPH Vector
 --------------------------------------------------------------------------------
-
+{-
 class DT a where -- forall k:BOX a:k. Constraint
   data Dist a -- forall k:BOX. k -> *
 
@@ -122,7 +130,7 @@ instance {- (Star a) => -} DT (Proxy a) where -- forall k:BOX a:k. DT * (Proxy k
 --    ax7 k1 a  :: DispProxy k1 a ~ Dist * (Proxy k1 a)
 -- $WDVector :: forall (k1:BOX). forall (a:k1). Dist * (Proxy k1 a)
 -- $WDVector k1 a = (DProxy k1 a) |> ax7 k1 a
-
+-}
 --------------------------------------------------------------------------------
 -- Classes
 --------------------------------------------------------------------------------
@@ -134,18 +142,6 @@ class MyTypeable t where
 
 instance MyTypeable Nat  where myTypeOf _ = TypeRep
 --instance MyTypeable List where myTypeOf _ = TypeRep
-
---------------------------------------------------------------------------------
--- T5481
---------------------------------------------------------------------------------
-{-
-class Foo a b where
-  type X a
-
-instance Foo a b where
-  type X a = b -- Doesn't work if put on the class declaration as default
--}
--- Also, even the code above alone already generates invalid interface files
 
 --------------------------------------------------------------------------------
 -- Existentials
@@ -166,18 +162,18 @@ writeEx = Ex Ze (const (Su Ze))
 
 data A s = A { unA :: Nat }
 
-runA1 :: (forall s. A s) -> Nat -- Uncomment for error
+runA1 :: (forall s. A s) -> Nat
 runA1 a = unA a
 
 --------------------------------------------------------------------------------
 -- ContT (fails with -O)
 --------------------------------------------------------------------------------
-
+{-
 newtype ContT r m a = ContT { runContT :: (a -> m r) -> m r }
 
 mapContT :: (m r -> m r) -> ContT r m a -> ContT r m a
 mapContT f m = ContT $ f . runContT m
-
+-}
 --------------------------------------------------------------------------------
 -- doaitse
 --------------------------------------------------------------------------------
@@ -220,7 +216,7 @@ data B a where
 --------------------------------------------------------------------------------
 -- scoped
 --------------------------------------------------------------------------------
-
+{-
 data C x y where -- * -> * -> *
      C :: a -> C a a
 
@@ -229,11 +225,11 @@ data D x y where -- k -> * -> *
 
 g3 :: forall x y . D x y -> ()
 g3 (D (C (p :: y))) = ()
-
+-}
 --------------------------------------------------------------------------------
 -- GEq1
 --------------------------------------------------------------------------------
-
+{-
 class GEq' f where
   geq' :: f a -> f a -> Nat
 
@@ -244,7 +240,7 @@ class Generic a where
 class GEq a where 
   geq :: (Generic a, GEq' (Rep a)) => a -> a -> Nat
   geq x y = geq' (from x) (from y)
-
+-}
 --------------------------------------------------------------------------------
 -- GADT1
 --------------------------------------------------------------------------------
@@ -273,13 +269,13 @@ type instance A1 a   = Int
 --------------------------------------------------------------------------------
 -- read056
 --------------------------------------------------------------------------------
-
+{-
 class C1 a
 instance C1 Nat
 
 newtype Foo = Foo Nat
     deriving C1
-
+-}
 --------------------------------------------------------------------------------
 -- T303
 --------------------------------------------------------------------------------
@@ -323,19 +319,9 @@ testUnbox n a = a
 --------------------------------------------------------------------------------
 -- T5283
 --------------------------------------------------------------------------------
-{-
--- See TcArrows, l. 283, corner_ty `eqType` mkTyVarTy w_tv
 
 mapAC :: Arrow arr => arr (env, b) c -> arr (env, [b]) [c]  
 mapAC = undefined
 
 t :: Arrow arr => arr [a] [a]
 t = proc ys -> (| mapAC (\y -> returnA -< y) |) ys
--}
---------------------------------------------------------------------------------
--- tc167
---------------------------------------------------------------------------------
-{-
-f :: (->) Int# Int#
-f x = x
--}
