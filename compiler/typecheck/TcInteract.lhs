@@ -442,7 +442,7 @@ trySpontaneousEqOneWay d eqv gw tv xi
                                -- so we have its more specific kind in our hands
        ; is_sub_kind <- kxi `isSubKindTcS` tyVarKind tv
        ; if is_sub_kind then
-             solveWithIdentity eqv gw tv xi
+             solveWithIdentity d eqv gw tv xi
          else return SPCantSolve
        }
   | otherwise -- Still can't solve, sig tyvar and non-variable rhs
@@ -453,14 +453,14 @@ trySpontaneousEqTwoWay :: SubGoalDepth
                        -> EqVar -> CtFlavor -> TcTyVar -> TcTyVar -> TcS SPSolveResult
 -- Both tyvars are *touchable* MetaTyvars so there is only a chance for kind error here
 
-trySpontaneousEqTwoWay eqv gw tv1 tv2
+trySpontaneousEqTwoWay d eqv gw tv1 tv2
   = do { k1_sub_k2 <- k1 `isSubKindTcS` k2
        ; if k1_sub_k2 && nicer_to_update_tv2
-         then solveWithIdentity eqv gw tv2 (mkTyVarTy tv1)
+         then solveWithIdentity d eqv gw tv2 (mkTyVarTy tv1)
          else do
        { k2_sub_k1 <- k2 `isSubKindTcS` k1
        ; MASSERT( k2_sub_k1 )  -- they were unified in TcCanonical
-       ; solveWithIdentity eqv gw tv1 (mkTyVarTy tv2) } }
+       ; solveWithIdentity d eqv gw tv1 (mkTyVarTy tv2) } }
   where
     k1 = tyVarKind tv1
     k2 = tyVarKind tv2
@@ -789,12 +789,15 @@ doInteractWithInert (CFunEqCan { cc_id = eqv1, cc_flavor = fl1, cc_fun = tc1
                     (CFunEqCan { cc_id = eqv2, cc_flavor = fl2, cc_fun = tc2
                                , cc_tyargs = args2, cc_rhs = xi2, cc_depth = d2 })
   | lhss_match  
-  , Just GivenSolved <- isGiven_maybe fl1 
-  = irInertConsumed "FunEq/FunEq"    -- Don't throw anything in the worklist 
+  , Just GivenSolved <- isGiven_maybe fl1 -- Inert is solved and we can simply ignore it
+                                          -- when workitem is given/solved
+  , isGivenOrSolved fl2
+  = irInertConsumed "FunEq/FunEq"
   | lhss_match 
-  , Just GivenSolved <- isGiven_maybe fl2 
-  = irWorkItemConsumed "FunEq/FunEq" -- Don't throw anything in the worklist
-  
+  , Just GivenSolved <- isGiven_maybe fl2 -- Workitem is solved and we can ignore it when
+                                          -- the inert is given/solved
+  , isGivenOrSolved fl1                 
+  = irWorkItemConsumed "FunEq/FunEq" 
   | fl1 `canSolve` fl2 && lhss_match
   = do { rewriteEqLHS LeftComesFromInert  (eqv1,xi1) (eqv2,d2,fl2,xi2) 
        ; irWorkItemConsumed "FunEq/FunEq" }
@@ -1396,7 +1399,7 @@ doTopReact _inerts workItem@(CFunEqCan { cc_id = eqv, cc_flavor = fl
 
                                       ; return $ 
                                         SomeTopInt { tir_rule = "Fun/Top (given)"
-                                                   , tir_new_item = Stop } }
+                                                   , tir_new_item = ContinueWith workItem } }
                        Derived {} -> do { evc <- newEvVar fl (mkEqPred (xi, rhs_ty))
                                         ; let eqv' = evc_the_evvar evc
                                         ; when (isNewEvVar evc) $ 

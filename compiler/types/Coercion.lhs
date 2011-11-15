@@ -20,7 +20,7 @@ module Coercion (
         LCoercion,
 
         -- ** Functions over coercions
-        coVarKind, coVarKind_maybe,
+        coVarKind,
         coercionType, coercionKind, coercionKinds, isReflCo, liftedCoercionKind,
         mkCoercionType,
 
@@ -501,15 +501,19 @@ splitForAllCo_maybe _                = Nothing
 -- and some coercion kind stuff
 
 coVarKind :: CoVar -> (Type,Type) 
--- c :: t1 ~ t2
-coVarKind cv = case coVarKind_maybe cv of
-                 Just ts -> ts
-                 Nothing -> pprPanic "coVarKind" (ppr cv $$ ppr (tyVarKind cv))
+coVarKind cv
+ | Just (tc, [_kind,ty1,ty2]) <- splitTyConApp_maybe (varType cv)
+ = ASSERT (tc `hasKey` eqPrimTyConKey)
+   (ty1,ty2)
+ | otherwise = panic "coVarKind, non coercion variable"
 
-coVarKind_maybe :: CoVar -> Maybe (Type,Type) 
-coVarKind_maybe cv = case splitTyConApp_maybe (varType cv) of
-  Just (tc, [_, ty1, ty2]) | tc `hasKey` eqPrimTyConKey -> Just (ty1, ty2)
-  _ -> Nothing
+liftedCoVarKind :: EqVar -> (Type,Type)
+liftedCoVarKind cv
+ | Just (tc, [_kind,ty1,ty2]) <- splitTyConApp_maybe (varType cv)
+ = ASSERT (tc `hasKey` eqTyConKey)
+   (ty1,ty2)
+ | otherwise = panic "liftedCoVarKind, non coercion variable"
+
 
 -- | Makes a coercion type from two types: the types whose equality 
 -- is proven by the relevant 'Coercion'
@@ -1088,12 +1092,7 @@ coercionType co = case coercionKind co of
 -- i.e. the kind of @c@ relates @t1@ and @t2@, then @coercionKind c = Pair t1 t2@.
 
 liftedCoercionKind :: LCoercion -> Pair Type
-liftedCoercionKind = coercion_kind lifted_coVarKind 
-  where lifted_coVarKind cv 
-            | Just (tc, [ty1,ty2]) <- splitTyConApp_maybe (varType cv)
-            , (tc `hasKey` eqPrimTyConKey || tc `hasKey` eqTyConKey)  
-            = (ty1,ty2)
-            | otherwise = panic "liftedCoercionKind, non coercion variable"
+liftedCoercionKind = coercion_kind liftedCoVarKind 
 
 coercionKind :: Coercion -> Pair Type 
 coercionKind = coercion_kind coVarKind

@@ -200,8 +200,8 @@ mkCast (Coercion e_co) co
        -- g :: (s1 ~# s2) ~# (t1 ~#  t2)
        -- g1 :: s1 ~# t1
        -- g2 :: s2 ~# t2
-       new_co = mkSymCo g1 `mkTransCo` co `mkTransCo` g2
-       [_reflk, g1, g2] = decomposeCo 3 g
+       new_co = mkSymCo g1 `mkTransCo` e_co `mkTransCo` g2
+       [_reflk, g1, g2] = decomposeCo 3 co
             -- Remember, (~#) :: forall k. k -> k -> *
             -- so it takes *three* arguments, not two
 

@@ -1757,12 +1757,12 @@ sizeTypes xs = sum (map sizeType tys)
 -- can't get back to a class constraint, so it's safe
 -- to say "size 0".  See Trac #4200.
 sizePred :: PredType -> Int
-sizePred ty = go (predTypePredTree ty)
+sizePred ty = go (classifyPredType ty)
   where
     go (ClassPred _ tys') = sizeTypes tys'
     go (IPPred {})        = 0
     go (EqPred {})        = 0
-    go (TuplePred ts)     = sum (map go ts)
+    go (TuplePred ts)     = sum (map (go . classifyPredType) ts)
     go (IrredPred ty)     = sizeType ty
 \end{code}
 

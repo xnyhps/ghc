@@ -32,7 +32,7 @@ import Name ( Name )
 import Var
 import VarEnv
 import Outputable
-import Control.Monad    ( when, unless, zipWithM, foldM )
+import Control.Monad    ( when, unless, zipWithM, zipWithM_, foldM )
 import MonadUtils
 import Control.Applicative ( (<|>) )
 
@@ -753,7 +753,7 @@ canEq d fl eqv (TyConApp tc1 tys1) (TyConApp tc2 tys2)
              (_kis2, tys2') = span isKind tys2
        ; let kicos = map mkReflCo kis1
 
-       ; argeqvs <- zipWithM (newEqVar fl) tys1 tys2
+       ; argeqvs <- zipWithM (newEqVar fl) tys1' tys2'
        ; case fl of 
            Wanted {} -> 
              setEqBind eqv $ 
@@ -764,7 +764,7 @@ canEq d fl eqv (TyConApp tc1 tys1) (TyConApp tc2 tys2)
              in zipWithM_ do_one argeqvs [(length kicos)..]
            Derived {} -> return ()
 
-       ; canEqEvVarsCreated d fl argeqvs tys1 tys2 }
+       ; canEqEvVarsCreated d fl argeqvs tys1' tys2' }
 
 -- See Note [Equality between type applications]
 --     Note [Care with type applications] in TcUnify
@@ -1051,8 +1051,8 @@ canEqLeafOriented d fl eqv s1 s2
                       else return False
          -- If the kinds cannot be unified or are not compatible, don't fail
          -- right away; instead, emit a frozen error
-       ; if (not are_compat && not can_unify) then 
-             canEqFailure fl eqv 
+       ; if (not are_compat && not can_unify) then
+             canEqFailure d fl eqv
          else can_eq_kinds_ok d fl eqv s1 s2 }
 
   where can_eq_kinds_ok d fl eqv s1 s2
