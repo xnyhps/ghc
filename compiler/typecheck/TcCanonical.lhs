@@ -1203,46 +1203,64 @@ canEqLeafTyVarLeft :: SubGoalDepth -- Depth
 canEqLeafTyVarLeft d fl eqv tv s2       -- eqv : tv ~ s2
   = do { traceTcS "canEqLeafTyVarLeft" (ppr (evVarPred eqv))
        ; (xi2, co) <- flatten d fl s2   -- Flatten RHS   co : xi2 ~ s2
+       ; traceTcS "canEqLeafTyVarLeft" (nest 2 (vcat [ text "tv  =" <+> ppr tv
+                                                     , text "s2  =" <+> ppr s2
+                                                     , text "xi2 =" <+> ppr xi2]))
 
                       -- Flattening the RHS may reveal an identity coercion, which should
                       -- not be reported as occurs check error! 
-       ; if mkTyVarTy tv `eqType` xi2 then
-             do { when (isWanted fl) $ setEqBind eqv co 
+       ; let is_same_tv
+               | Just tv' <- getTyVar_maybe xi2, tv' == tv
+               = True
+               | otherwise = False
+       ; if is_same_tv then
+             do { delCachedEvVar eqv
+                ; when (isWanted fl) $ setEqBind eqv co 
                 ; return Stop }
          else
-    do { mxi2' <- canOccursCheck fl tv xi2 -- Do an occurs check, and return a possibly
-                                           -- unfolded version of the RHS, if we had to 
-                                           -- unfold any type synonyms to get rid of tv.
-       ; case mxi2' of {
-           Nothing   -> traceTcS "canEqLeafTyVarLeft" (text "occurs error") >> 
-                              canEqFailure d fl eqv ;
-           Just xi2' ->
-    do { let no_flattening_happened = isReflCo co
+    do { -- Do an occurs check, and return a possibly
+         -- unfolded version of the RHS, if we had to 
+         -- unfold any type synonyms to get rid of tv.
+         occ_check_result <- canOccursCheck fl tv xi2
+
+       ; let xi2'
+              | Just xi2_unfolded <- occ_check_result
+              = xi2_unfolded
+              | otherwise = xi2
+
+       ; let no_flattening_happened = isReflCo co
+
        ; if no_flattening_happened then
-             continueWith $ CTyEqCan { cc_id     = eqv
-                                     , cc_flavor = fl
-                                     , cc_tyvar  = tv
-                                     , cc_rhs    = xi2' 
-                                     , cc_depth  = d }
-         else do { delCachedEvVar eqv
-                 ; evc <- newEqVar fl (mkTyVarTy tv) xi2' 
-                 ; let eqv' = evc_the_evvar evc -- eqv' : tv ~ xi2'
-                       cv   = mkEqVarLCo eqv    -- cv : tv ~ s2
-                       cv'  = mkEqVarLCo eqv'   -- cv': tv ~ xi2'
+             if isNothing occ_check_result then 
+                 canEqFailure d fl eqv 
+             else 
+                 continueWith $ CTyEqCan { cc_id     = eqv
+                                         , cc_flavor = fl
+                                         , cc_tyvar  = tv
+                                         , cc_rhs    = xi2'
+                                         , cc_depth  = d }
+         else -- Flattening happened, in any case we have to create new variable 
+              -- even if we report an occurs check error
+             do { delCachedEvVar eqv
+                ; evc <- newEqVar fl (mkTyVarTy tv) xi2' 
+                ; let eqv' = evc_the_evvar evc -- eqv' : tv ~ xi2'
+                      cv   = mkEqVarLCo eqv    -- cv : tv ~ s2
+                      cv'  = mkEqVarLCo eqv'   -- cv': tv ~ xi2'
                  ; case fl of 
                      Wanted {}  -> setEqBind eqv (cv' `mkTransCo` co)         -- tv ~ xi2' ~ s2
                      Given {}   -> setEqBind eqv' (cv `mkTransCo` mkSymCo co) -- tv ~ s2 ~ xi2'
                      Derived {} -> return ()
 
                  ; if isNewEvVar evc then 
-                       do { continueWith $
-                            CTyEqCan { cc_id     = eqv'
-                                     , cc_flavor = fl
-                                     , cc_tyvar  = tv
-                                     , cc_rhs    = xi2' 
-                                     , cc_depth  = d } }
+                       if isNothing occ_check_result then 
+                           canEqFailure d fl eqv'
+                       else continueWith CTyEqCan { cc_id     = eqv'
+                                                  , cc_flavor = fl
+                                                  , cc_tyvar  = tv
+                                                  , cc_rhs    = xi2' 
+                                                  , cc_depth  = d }
                    else 
-                       return Stop } } } } }
+                       return Stop } } }
 
 
 -- See Note [Type synonyms and canonicalization].
@@ -1278,7 +1296,7 @@ even though we could also expand F to get rid of b.
 
 \begin{code}
 expandAway :: TcTyVar -> Xi -> Maybe Xi
-expandAway tv t@(TyVarTy tv') 
+expandAway tv t@(TyVarTy tv')
   | tv == tv' = Nothing
   | otherwise = Just t
 expandAway tv xi
