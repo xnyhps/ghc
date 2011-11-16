@@ -21,6 +21,7 @@ import Type hiding      ( substTy, extendTvSubst, substTyVar )
 import SimplEnv
 import SimplUtils
 import FamInstEnv	( FamInstEnv )
+import Literal		( litIsLifted )
 import Id
 import MkId		( seqId, realWorldPrimId )
 import MkCore		( mkImpossibleExpr )
@@ -1629,7 +1630,7 @@ to just
 This particular example shows up in default methods for
 comparision operations (e.g. in (>=) for Int.Int32)
 
-Note [CaseElimination: lifted case]
+Note [Case elimination: lifted case]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We also make sure that we deal with this very common case,
 where x has a lifted type:
@@ -1716,6 +1717,7 @@ rebuildCase, reallyRebuildCase
 rebuildCase env scrut case_bndr alts cont
   | Lit lit <- scrut    -- No need for same treatment as constructors
                         -- because literals are inlined more vigorously
+  , not (litIsLifted lit)
   = do  { tick (KnownBranch case_bndr)
         ; case findAlt (LitAlt lit) alts of
 	    Nothing           -> missingAlt env case_bndr alts cont
@@ -1751,7 +1753,11 @@ rebuildCase env scrut case_bndr [(_, bndrs, rhs)] cont
  , if isUnLiftedType (idType case_bndr)
    then ok_for_spec         -- Satisfy the let-binding invariant
    else elim_lifted
-  = do  { tick (CaseElim case_bndr)
+  = do  { -- pprTrace "case elim" (vcat [ppr case_bndr, ppr (exprIsHNF scrut),
+          --                            ppr strict_case_bndr, ppr (scrut_is_var scrut),
+          --                            ppr ok_for_spec,
+          --                            ppr scrut]) $
+          tick (CaseElim case_bndr)
         ; env' <- simplNonRecX env case_bndr scrut
           -- If case_bndr is deads, simplNonRecX will discard
         ; simplExprF env' rhs cont }
