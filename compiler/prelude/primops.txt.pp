@@ -1998,6 +1998,28 @@ primop  WriteOffAddrOp_FloatX4 "writeFloatX4OffAddr#" GenPrimOp
    Addr# -> Int# -> FloatX4# -> State# s -> State# s
    with has_side_effects = True
 
+primop IndexByteArrayOp_FloatAsFloatX4 "indexFloatArrayAsFloatX4#" GenPrimOp
+   ByteArray# -> Int# -> FloatX4#
+
+primop ReadByteArrayOp_FloatAsFloatX4 "readFloatArrayAsFloatX4#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, FloatX4# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_FloatAsFloatX4 "writeFloatArrayAsFloatX4#" GenPrimOp
+   MutableByteArray# s -> Int# -> FloatX4# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_FloatAsFloatX4 "indexFloatOffAddrAsFloatX4#" GenPrimOp
+   Addr# -> Int# -> FloatX4#
+
+primop ReadOffAddrOp_FloatAsFloatX4 "readFloatOffAddrAsFloatX4#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, FloatX4# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_FloatAsFloatX4 "writeFloatOffAddrAsFloatX4#" GenPrimOp
+   Addr# -> Int# -> FloatX4# -> State# s -> State# s
+   with has_side_effects = True
+
 ------------------------------------------------------------------------
 section "Double SIMD Vectors" 
 	{Operations on SIMD vectors of 2 double-precision (64-bit)
@@ -2061,6 +2083,28 @@ primop ReadOffAddrOp_DoubleX2 "readDoubleX2OffAddr#" GenPrimOp
    with has_side_effects = True
 
 primop  WriteOffAddrOp_DoubleX2 "writeDoubleX2OffAddr#" GenPrimOp
+   Addr# -> Int# -> DoubleX2# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexByteArrayOp_DoubleAsDoubleX2 "indexDoubleArrayAsDoubleX2#" GenPrimOp
+   ByteArray# -> Int# -> DoubleX2#
+
+primop ReadByteArrayOp_DoubleAsDoubleX2 "readDoubleArrayAsDoubleX2#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, DoubleX2# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_DoubleAsDoubleX2 "writeDoubleArrayAsDoubleX2#" GenPrimOp
+   MutableByteArray# s -> Int# -> DoubleX2# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_DoubleAsDoubleX2 "indexDoubleOffAddrAsDoubleX2#" GenPrimOp
+   Addr# -> Int# -> DoubleX2#
+
+primop ReadOffAddrOp_DoubleAsDoubleX2 "readDoubleOffAddrAsDoubleX2#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, DoubleX2# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_DoubleAsDoubleX2 "writeDoubleOffAddrAsDoubleX2#" GenPrimOp
    Addr# -> Int# -> DoubleX2# -> State# s -> State# s
    with has_side_effects = True
 
@@ -2133,6 +2177,28 @@ primop  WriteOffAddrOp_Int32X4 "writeInt32X4OffAddr#" GenPrimOp
    Addr# -> Int# -> Int32X4# -> State# s -> State# s
    with has_side_effects = True
 
+primop IndexByteArrayOp_Int32AsInt32X4 "indexInt32ArrayAsInt32X4#" GenPrimOp
+   ByteArray# -> Int# -> Int32X4#
+
+primop ReadByteArrayOp_Int32AsInt32X4 "readInt32ArrayAsInt32X4#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, Int32X4# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_Int32AsInt32X4 "writeInt32ArrayAsInt32X4#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int32X4# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_Int32AsInt32X4 "indexInt32OffAddrAsInt32X4#" GenPrimOp
+   Addr# -> Int# -> Int32X4#
+
+primop ReadOffAddrOp_Int32AsInt32X4 "readInt32OffAddrAsInt32X4#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, Int32X4# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_Int32AsInt32X4 "writeInt32OffAddrAsInt32X4#" GenPrimOp
+   Addr# -> Int# -> Int32X4# -> State# s -> State# s
+   with has_side_effects = True
+
 ------------------------------------------------------------------------
 section "Int64 SIMD Vectors" 
 	{Operations on SIMD vectors of 2 64-bit signed integers.}
@@ -2199,6 +2265,28 @@ primop ReadOffAddrOp_Int64X2 "readInt64X2OffAddr#" GenPrimOp
    with has_side_effects = True
 
 primop  WriteOffAddrOp_Int64X2 "writeInt64X2OffAddr#" GenPrimOp
+   Addr# -> Int# -> Int64X2# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexByteArrayOp_Int64AsInt64X2 "indexInt64ArrayAsInt64X2#" GenPrimOp
+   ByteArray# -> Int# -> Int64X2#
+
+primop ReadByteArrayOp_Int64AsInt64X2 "readInt64ArrayAsInt64X2#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, Int64X2# #)
+   with has_side_effects = True
+
+primop WriteByteArrayOp_Int64AsInt64X2 "writeInt64ArrayAsInt64X2#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int64X2# -> State# s -> State# s
+   with has_side_effects = True
+
+primop IndexOffAddrOp_Int64AsInt64X2 "indexInt64OffAddrAsInt64X2#" GenPrimOp
+   Addr# -> Int# -> Int64X2#
+
+primop ReadOffAddrOp_Int64AsInt64X2 "readInt64OffAddrAsInt64X2#" GenPrimOp
+   Addr# -> Int# -> State# s -> (# State# s, Int64X2# #)
+   with has_side_effects = True
+
+primop  WriteOffAddrOp_Int64AsInt64X2 "writeInt64OffAddrAsInt64X2#" GenPrimOp
    Addr# -> Int# -> Int64X2# -> State# s -> State# s
    with has_side_effects = True
    

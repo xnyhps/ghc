@@ -262,141 +262,165 @@ emitPrimOp [res] SizeofMutableArrayOp [arg] live
 
 -- IndexXXXoffAddr
 
-emitPrimOp res IndexOffAddrOp_Char      args _ = doIndexOffAddrOp (Just mo_u_8ToWord) b8 res args
-emitPrimOp res IndexOffAddrOp_WideChar  args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res IndexOffAddrOp_Int       args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res IndexOffAddrOp_Word      args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res IndexOffAddrOp_Addr      args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res IndexOffAddrOp_Float     args _ = doIndexOffAddrOp Nothing f32 res args
-emitPrimOp res IndexOffAddrOp_Double    args _ = doIndexOffAddrOp Nothing f64 res args
-emitPrimOp res IndexOffAddrOp_StablePtr args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res IndexOffAddrOp_Int8      args _ = doIndexOffAddrOp (Just mo_s_8ToWord)  b8  res args
-emitPrimOp res IndexOffAddrOp_Int16     args _ = doIndexOffAddrOp (Just mo_s_16ToWord) b16 res args
-emitPrimOp res IndexOffAddrOp_Int32     args _ = doIndexOffAddrOp (Just mo_s_32ToWord) b32 res args
-emitPrimOp res IndexOffAddrOp_Int64     args _ = doIndexOffAddrOp Nothing b64 res args
-emitPrimOp res IndexOffAddrOp_Word8     args _ = doIndexOffAddrOp (Just mo_u_8ToWord) b8   res args
-emitPrimOp res IndexOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16ToWord) b16 res args
-emitPrimOp res IndexOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res IndexOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
-emitPrimOp res IndexOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
-emitPrimOp res IndexOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
-emitPrimOp res IndexOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
-emitPrimOp res IndexOffAddrOp_Int64X2   args _ = doIndexOffAddrOp Nothing vec2b64 res args
+emitPrimOp res IndexOffAddrOp_Char             args _ = doIndexOffAddrOp   (Just mo_u_8ToWord) b8 res args
+emitPrimOp res IndexOffAddrOp_WideChar         args _ = doIndexOffAddrOp   (Just mo_u_32ToWord) b32 res args
+emitPrimOp res IndexOffAddrOp_Int              args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res IndexOffAddrOp_Word             args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res IndexOffAddrOp_Addr             args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res IndexOffAddrOp_Float            args _ = doIndexOffAddrOp   Nothing f32 res args
+emitPrimOp res IndexOffAddrOp_Double           args _ = doIndexOffAddrOp   Nothing f64 res args
+emitPrimOp res IndexOffAddrOp_StablePtr        args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res IndexOffAddrOp_Int8             args _ = doIndexOffAddrOp   (Just mo_s_8ToWord)  b8  res args
+emitPrimOp res IndexOffAddrOp_Int16            args _ = doIndexOffAddrOp   (Just mo_s_16ToWord) b16 res args
+emitPrimOp res IndexOffAddrOp_Int32            args _ = doIndexOffAddrOp   (Just mo_s_32ToWord) b32 res args
+emitPrimOp res IndexOffAddrOp_Int64            args _ = doIndexOffAddrOp   Nothing b64 res args
+emitPrimOp res IndexOffAddrOp_Word8            args _ = doIndexOffAddrOp   (Just mo_u_8ToWord) b8   res args
+emitPrimOp res IndexOffAddrOp_Word16           args _ = doIndexOffAddrOp   (Just mo_u_16ToWord) b16 res args
+emitPrimOp res IndexOffAddrOp_Word32           args _ = doIndexOffAddrOp   (Just mo_u_32ToWord) b32 res args
+emitPrimOp res IndexOffAddrOp_Word64           args _ = doIndexOffAddrOp   Nothing b64 res args
+emitPrimOp res IndexOffAddrOp_FloatX4          args _ = doIndexOffAddrOp   Nothing vec4f32 res args
+emitPrimOp res IndexOffAddrOp_FloatAsFloatX4   args _ = doIndexOffAddrOpAs Nothing vec4f32 f32 res args
+emitPrimOp res IndexOffAddrOp_DoubleX2         args _ = doIndexOffAddrOp   Nothing vec2f64 res args
+emitPrimOp res IndexOffAddrOp_DoubleAsDoubleX2 args _ = doIndexOffAddrOpAs Nothing vec2f64 f64 res args
+emitPrimOp res IndexOffAddrOp_Int32X4          args _ = doIndexOffAddrOp   Nothing vec4b32 res args
+emitPrimOp res IndexOffAddrOp_Int32AsInt32X4   args _ = doIndexOffAddrOpAs Nothing vec4b32 b32 res args
+emitPrimOp res IndexOffAddrOp_Int64X2          args _ = doIndexOffAddrOp   Nothing vec2b64 res args
+emitPrimOp res IndexOffAddrOp_Int64AsInt64X2   args _ = doIndexOffAddrOpAs Nothing vec2b64 b64 res args
 
 -- ReadXXXoffAddr, which are identical, for our purposes, to IndexXXXoffAddr.
 
-emitPrimOp res ReadOffAddrOp_Char      args _ = doIndexOffAddrOp (Just mo_u_8ToWord) b8 res args
-emitPrimOp res ReadOffAddrOp_WideChar  args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res ReadOffAddrOp_Int       args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res ReadOffAddrOp_Word      args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res ReadOffAddrOp_Addr      args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res ReadOffAddrOp_Float     args _ = doIndexOffAddrOp Nothing f32 res args
-emitPrimOp res ReadOffAddrOp_Double    args _ = doIndexOffAddrOp Nothing f64 res args
-emitPrimOp res ReadOffAddrOp_StablePtr args _ = doIndexOffAddrOp Nothing bWord res args
-emitPrimOp res ReadOffAddrOp_Int8      args _ = doIndexOffAddrOp (Just mo_s_8ToWord) b8  res args
-emitPrimOp res ReadOffAddrOp_Int16     args _ = doIndexOffAddrOp (Just mo_s_16ToWord) b16 res args
-emitPrimOp res ReadOffAddrOp_Int32     args _ = doIndexOffAddrOp (Just mo_s_32ToWord) b32 res args
-emitPrimOp res ReadOffAddrOp_Int64     args _ = doIndexOffAddrOp Nothing b64 res args
-emitPrimOp res ReadOffAddrOp_Word8     args _ = doIndexOffAddrOp (Just mo_u_8ToWord) b8  res args
-emitPrimOp res ReadOffAddrOp_Word16    args _ = doIndexOffAddrOp (Just mo_u_16ToWord) b16 res args
-emitPrimOp res ReadOffAddrOp_Word32    args _ = doIndexOffAddrOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res ReadOffAddrOp_Word64    args _ = doIndexOffAddrOp Nothing b64 res args
-emitPrimOp res ReadOffAddrOp_FloatX4   args _ = doIndexOffAddrOp Nothing vec4f32 res args
-emitPrimOp res ReadOffAddrOp_DoubleX2  args _ = doIndexOffAddrOp Nothing vec2f64 res args
-emitPrimOp res ReadOffAddrOp_Int32X4   args _ = doIndexOffAddrOp Nothing vec4b32 res args
-emitPrimOp res ReadOffAddrOp_Int64X2   args _ = doIndexOffAddrOp Nothing vec2b64 res args
+emitPrimOp res ReadOffAddrOp_Char             args _ = doIndexOffAddrOp   (Just mo_u_8ToWord) b8 res args
+emitPrimOp res ReadOffAddrOp_WideChar         args _ = doIndexOffAddrOp   (Just mo_u_32ToWord) b32 res args
+emitPrimOp res ReadOffAddrOp_Int              args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res ReadOffAddrOp_Word             args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res ReadOffAddrOp_Addr             args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res ReadOffAddrOp_Float            args _ = doIndexOffAddrOp   Nothing f32 res args
+emitPrimOp res ReadOffAddrOp_Double           args _ = doIndexOffAddrOp   Nothing f64 res args
+emitPrimOp res ReadOffAddrOp_StablePtr        args _ = doIndexOffAddrOp   Nothing bWord res args
+emitPrimOp res ReadOffAddrOp_Int8             args _ = doIndexOffAddrOp   (Just mo_s_8ToWord) b8  res args
+emitPrimOp res ReadOffAddrOp_Int16            args _ = doIndexOffAddrOp   (Just mo_s_16ToWord) b16 res args
+emitPrimOp res ReadOffAddrOp_Int32            args _ = doIndexOffAddrOp   (Just mo_s_32ToWord) b32 res args
+emitPrimOp res ReadOffAddrOp_Int64            args _ = doIndexOffAddrOp   Nothing b64 res args
+emitPrimOp res ReadOffAddrOp_Word8            args _ = doIndexOffAddrOp   (Just mo_u_8ToWord) b8  res args
+emitPrimOp res ReadOffAddrOp_Word16           args _ = doIndexOffAddrOp   (Just mo_u_16ToWord) b16 res args
+emitPrimOp res ReadOffAddrOp_Word32           args _ = doIndexOffAddrOp   (Just mo_u_32ToWord) b32 res args
+emitPrimOp res ReadOffAddrOp_Word64           args _ = doIndexOffAddrOp   Nothing b64 res args
+emitPrimOp res ReadOffAddrOp_FloatX4          args _ = doIndexOffAddrOp   Nothing vec4f32 res args
+emitPrimOp res ReadOffAddrOp_FloatAsFloatX4   args _ = doIndexOffAddrOpAs Nothing vec4f32 f32 res args
+emitPrimOp res ReadOffAddrOp_DoubleX2         args _ = doIndexOffAddrOp   Nothing vec2f64 res args
+emitPrimOp res ReadOffAddrOp_DoubleAsDoubleX2 args _ = doIndexOffAddrOpAs Nothing vec2f64 f64  res args
+emitPrimOp res ReadOffAddrOp_Int32X4          args _ = doIndexOffAddrOp   Nothing vec4b32 res args
+emitPrimOp res ReadOffAddrOp_Int32AsInt32X4   args _ = doIndexOffAddrOpAs Nothing vec4b32 b32 res args
+emitPrimOp res ReadOffAddrOp_Int64X2          args _ = doIndexOffAddrOp   Nothing vec2b64 res args
+emitPrimOp res ReadOffAddrOp_Int64AsInt64X2   args _ = doIndexOffAddrOpAs Nothing vec2b64 b64 res args
 
 -- IndexXXXArray
 
-emitPrimOp res IndexByteArrayOp_Char      args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8 res args
-emitPrimOp res IndexByteArrayOp_WideChar  args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res IndexByteArrayOp_Int       args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res IndexByteArrayOp_Word      args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res IndexByteArrayOp_Addr      args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res IndexByteArrayOp_Float     args _ = doIndexByteArrayOp Nothing f32 res args
-emitPrimOp res IndexByteArrayOp_Double    args _ = doIndexByteArrayOp Nothing f64 res args
-emitPrimOp res IndexByteArrayOp_StablePtr args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res IndexByteArrayOp_Int8      args _ = doIndexByteArrayOp (Just mo_s_8ToWord) b8  res args
-emitPrimOp res IndexByteArrayOp_Int16     args _ = doIndexByteArrayOp (Just mo_s_16ToWord) b16  res args
-emitPrimOp res IndexByteArrayOp_Int32     args _ = doIndexByteArrayOp (Just mo_s_32ToWord) b32  res args
-emitPrimOp res IndexByteArrayOp_Int64     args _ = doIndexByteArrayOp Nothing b64  res args
-emitPrimOp res IndexByteArrayOp_Word8     args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8  res args
-emitPrimOp res IndexByteArrayOp_Word16    args _ = doIndexByteArrayOp (Just mo_u_16ToWord) b16  res args
-emitPrimOp res IndexByteArrayOp_Word32    args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
-emitPrimOp res IndexByteArrayOp_Word64    args _ = doIndexByteArrayOp Nothing b64  res args
-emitPrimOp res IndexByteArrayOp_FloatX4   args _ = doIndexByteArrayOp Nothing vec4f32 res args
-emitPrimOp res IndexByteArrayOp_DoubleX2  args _ = doIndexByteArrayOp Nothing vec2f64 res args
-emitPrimOp res IndexByteArrayOp_Int32X4   args _ = doIndexByteArrayOp Nothing vec4b32 res args
-emitPrimOp res IndexByteArrayOp_Int64X2   args _ = doIndexByteArrayOp Nothing vec2b64 res args
+emitPrimOp res IndexByteArrayOp_Char             args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8 res args
+emitPrimOp res IndexByteArrayOp_WideChar         args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32 res args
+emitPrimOp res IndexByteArrayOp_Int              args _ = doIndexByteArrayOp Nothing bWord res args
+emitPrimOp res IndexByteArrayOp_Word             args _ = doIndexByteArrayOp Nothing bWord res args
+emitPrimOp res IndexByteArrayOp_Addr             args _ = doIndexByteArrayOp Nothing bWord res args
+emitPrimOp res IndexByteArrayOp_Float            args _ = doIndexByteArrayOp Nothing f32 res args
+emitPrimOp res IndexByteArrayOp_Double           args _ = doIndexByteArrayOp Nothing f64 res args
+emitPrimOp res IndexByteArrayOp_StablePtr        args _ = doIndexByteArrayOp Nothing bWord res args
+emitPrimOp res IndexByteArrayOp_Int8             args _ = doIndexByteArrayOp (Just mo_s_8ToWord) b8  res args
+emitPrimOp res IndexByteArrayOp_Int16            args _ = doIndexByteArrayOp (Just mo_s_16ToWord) b16  res args
+emitPrimOp res IndexByteArrayOp_Int32            args _ = doIndexByteArrayOp (Just mo_s_32ToWord) b32  res args
+emitPrimOp res IndexByteArrayOp_Int64            args _ = doIndexByteArrayOp Nothing b64  res args
+emitPrimOp res IndexByteArrayOp_Word8            args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8  res args
+emitPrimOp res IndexByteArrayOp_Word16           args _ = doIndexByteArrayOp (Just mo_u_16ToWord) b16  res args
+emitPrimOp res IndexByteArrayOp_Word32           args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
+emitPrimOp res IndexByteArrayOp_Word64           args _ = doIndexByteArrayOp Nothing b64  res args
+emitPrimOp res IndexByteArrayOp_FloatX4          args _ = doIndexByteArrayOp Nothing vec4f32 res args
+emitPrimOp res IndexByteArrayOp_FloatAsFloatX4   args _ = doIndexByteArrayOpAs Nothing vec4f32 f32 res args
+emitPrimOp res IndexByteArrayOp_DoubleX2         args _ = doIndexByteArrayOp Nothing vec2f64 res args
+emitPrimOp res IndexByteArrayOp_DoubleAsDoubleX2 args _ = doIndexByteArrayOpAs Nothing vec2f64 f64 res args
+emitPrimOp res IndexByteArrayOp_Int32X4          args _ = doIndexByteArrayOp Nothing vec4b32 res args
+emitPrimOp res IndexByteArrayOp_Int32AsInt32X4   args _ = doIndexByteArrayOpAs Nothing vec4b32 b32 res args
+emitPrimOp res IndexByteArrayOp_Int64X2          args _ = doIndexByteArrayOp Nothing vec2b64 res args
+emitPrimOp res IndexByteArrayOp_Int64AsInt64X2   args _ = doIndexByteArrayOpAs Nothing vec2b64 b64 res args
 
 -- ReadXXXArray, identical to IndexXXXArray.
 
-emitPrimOp res ReadByteArrayOp_Char       args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8 res args
-emitPrimOp res ReadByteArrayOp_WideChar   args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32 res args
-emitPrimOp res ReadByteArrayOp_Int        args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res ReadByteArrayOp_Word       args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res ReadByteArrayOp_Addr       args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res ReadByteArrayOp_Float      args _ = doIndexByteArrayOp Nothing f32 res args
-emitPrimOp res ReadByteArrayOp_Double     args _ = doIndexByteArrayOp Nothing f64 res args
-emitPrimOp res ReadByteArrayOp_StablePtr  args _ = doIndexByteArrayOp Nothing bWord res args
-emitPrimOp res ReadByteArrayOp_Int8       args _ = doIndexByteArrayOp (Just mo_s_8ToWord) b8  res args
-emitPrimOp res ReadByteArrayOp_Int16      args _ = doIndexByteArrayOp (Just mo_s_16ToWord) b16  res args
-emitPrimOp res ReadByteArrayOp_Int32      args _ = doIndexByteArrayOp (Just mo_s_32ToWord) b32  res args
-emitPrimOp res ReadByteArrayOp_Int64      args _ = doIndexByteArrayOp Nothing b64  res args
-emitPrimOp res ReadByteArrayOp_Word8      args _ = doIndexByteArrayOp (Just mo_u_8ToWord) b8  res args
-emitPrimOp res ReadByteArrayOp_Word16     args _ = doIndexByteArrayOp (Just mo_u_16ToWord) b16  res args
-emitPrimOp res ReadByteArrayOp_Word32     args _ = doIndexByteArrayOp (Just mo_u_32ToWord) b32  res args
-emitPrimOp res ReadByteArrayOp_Word64     args _ = doIndexByteArrayOp Nothing b64  res args
-emitPrimOp res ReadByteArrayOp_FloatX4    args _ = doIndexByteArrayOp Nothing vec4f32 res args
-emitPrimOp res ReadByteArrayOp_DoubleX2   args _ = doIndexByteArrayOp Nothing vec2f64 res args
-emitPrimOp res ReadByteArrayOp_Int32X4    args _ = doIndexByteArrayOp Nothing vec4b32 res args
-emitPrimOp res ReadByteArrayOp_Int64X2    args _ = doIndexByteArrayOp Nothing vec2b64 res args
+emitPrimOp res ReadByteArrayOp_Char             args _ = doIndexByteArrayOp   (Just mo_u_8ToWord) b8 res args
+emitPrimOp res ReadByteArrayOp_WideChar         args _ = doIndexByteArrayOp   (Just mo_u_32ToWord) b32 res args
+emitPrimOp res ReadByteArrayOp_Int              args _ = doIndexByteArrayOp   Nothing bWord res args
+emitPrimOp res ReadByteArrayOp_Word             args _ = doIndexByteArrayOp   Nothing bWord res args
+emitPrimOp res ReadByteArrayOp_Addr             args _ = doIndexByteArrayOp   Nothing bWord res args
+emitPrimOp res ReadByteArrayOp_Float            args _ = doIndexByteArrayOp   Nothing f32 res args
+emitPrimOp res ReadByteArrayOp_Double           args _ = doIndexByteArrayOp   Nothing f64 res args
+emitPrimOp res ReadByteArrayOp_StablePtr        args _ = doIndexByteArrayOp   Nothing bWord res args
+emitPrimOp res ReadByteArrayOp_Int8             args _ = doIndexByteArrayOp   (Just mo_s_8ToWord) b8  res args
+emitPrimOp res ReadByteArrayOp_Int16            args _ = doIndexByteArrayOp   (Just mo_s_16ToWord) b16  res args
+emitPrimOp res ReadByteArrayOp_Int32            args _ = doIndexByteArrayOp   (Just mo_s_32ToWord) b32  res args
+emitPrimOp res ReadByteArrayOp_Int64            args _ = doIndexByteArrayOp   Nothing b64  res args
+emitPrimOp res ReadByteArrayOp_Word8            args _ = doIndexByteArrayOp   (Just mo_u_8ToWord) b8  res args
+emitPrimOp res ReadByteArrayOp_Word16           args _ = doIndexByteArrayOp   (Just mo_u_16ToWord) b16  res args
+emitPrimOp res ReadByteArrayOp_Word32           args _ = doIndexByteArrayOp   (Just mo_u_32ToWord) b32  res args
+emitPrimOp res ReadByteArrayOp_Word64           args _ = doIndexByteArrayOp   Nothing b64  res args
+emitPrimOp res ReadByteArrayOp_FloatX4          args _ = doIndexByteArrayOp   Nothing vec4f32 res args
+emitPrimOp res ReadByteArrayOp_FloatAsFloatX4   args _ = doIndexByteArrayOpAs Nothing vec4f32 f32 res args
+emitPrimOp res ReadByteArrayOp_DoubleX2         args _ = doIndexByteArrayOp   Nothing vec2f64 res args
+emitPrimOp res ReadByteArrayOp_DoubleAsDoubleX2 args _ = doIndexByteArrayOpAs Nothing vec2f64 f64 res args
+emitPrimOp res ReadByteArrayOp_Int32X4          args _ = doIndexByteArrayOp   Nothing vec4b32 res args
+emitPrimOp res ReadByteArrayOp_Int32AsInt32X4   args _ = doIndexByteArrayOpAs Nothing vec4b32 b32 res args
+emitPrimOp res ReadByteArrayOp_Int64X2          args _ = doIndexByteArrayOp   Nothing vec2b64 res args
+emitPrimOp res ReadByteArrayOp_Int64AsInt64X2   args _ = doIndexByteArrayOpAs Nothing vec2b64 b64 res args
 
 -- WriteXXXoffAddr
 
-emitPrimOp res WriteOffAddrOp_Char       args _ = doWriteOffAddrOp (Just mo_WordTo8) b8 res args
-emitPrimOp res WriteOffAddrOp_WideChar   args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
-emitPrimOp res WriteOffAddrOp_Int        args _ = doWriteOffAddrOp Nothing bWord res args
-emitPrimOp res WriteOffAddrOp_Word       args _ = doWriteOffAddrOp Nothing bWord res args
-emitPrimOp res WriteOffAddrOp_Addr       args _ = doWriteOffAddrOp Nothing bWord res args
-emitPrimOp res WriteOffAddrOp_Float      args _ = doWriteOffAddrOp Nothing f32 res args
-emitPrimOp res WriteOffAddrOp_Double     args _ = doWriteOffAddrOp Nothing f64 res args
-emitPrimOp res WriteOffAddrOp_StablePtr  args _ = doWriteOffAddrOp Nothing bWord res args
-emitPrimOp res WriteOffAddrOp_Int8       args _ = doWriteOffAddrOp (Just mo_WordTo8) b8  res args
-emitPrimOp res WriteOffAddrOp_Int16      args _ = doWriteOffAddrOp (Just mo_WordTo16) b16 res args
-emitPrimOp res WriteOffAddrOp_Int32      args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
-emitPrimOp res WriteOffAddrOp_Int64      args _ = doWriteOffAddrOp Nothing b64 res args
-emitPrimOp res WriteOffAddrOp_Word8      args _ = doWriteOffAddrOp (Just mo_WordTo8) b8  res args
-emitPrimOp res WriteOffAddrOp_Word16     args _ = doWriteOffAddrOp (Just mo_WordTo16) b16 res args
-emitPrimOp res WriteOffAddrOp_Word32     args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
-emitPrimOp res WriteOffAddrOp_Word64     args _ = doWriteOffAddrOp Nothing b64 res args
-emitPrimOp res WriteOffAddrOp_FloatX4    args _ = doWriteOffAddrOp Nothing vec4f32 res args
-emitPrimOp res WriteOffAddrOp_DoubleX2   args _ = doWriteOffAddrOp Nothing vec2f64 res args
-emitPrimOp res WriteOffAddrOp_Int32X4    args _ = doWriteOffAddrOp Nothing vec4b32 res args
-emitPrimOp res WriteOffAddrOp_Int64X2    args _ = doWriteOffAddrOp Nothing vec2b64 res args
+emitPrimOp res WriteOffAddrOp_Char             args _ = doWriteOffAddrOp (Just mo_WordTo8) b8 res args
+emitPrimOp res WriteOffAddrOp_WideChar         args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
+emitPrimOp res WriteOffAddrOp_Int              args _ = doWriteOffAddrOp Nothing bWord res args
+emitPrimOp res WriteOffAddrOp_Word             args _ = doWriteOffAddrOp Nothing bWord res args
+emitPrimOp res WriteOffAddrOp_Addr             args _ = doWriteOffAddrOp Nothing bWord res args
+emitPrimOp res WriteOffAddrOp_Float            args _ = doWriteOffAddrOp Nothing f32 res args
+emitPrimOp res WriteOffAddrOp_Double           args _ = doWriteOffAddrOp Nothing f64 res args
+emitPrimOp res WriteOffAddrOp_StablePtr        args _ = doWriteOffAddrOp Nothing bWord res args
+emitPrimOp res WriteOffAddrOp_Int8             args _ = doWriteOffAddrOp (Just mo_WordTo8) b8  res args
+emitPrimOp res WriteOffAddrOp_Int16            args _ = doWriteOffAddrOp (Just mo_WordTo16) b16 res args
+emitPrimOp res WriteOffAddrOp_Int32            args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
+emitPrimOp res WriteOffAddrOp_Int64            args _ = doWriteOffAddrOp Nothing b64 res args
+emitPrimOp res WriteOffAddrOp_Word8            args _ = doWriteOffAddrOp (Just mo_WordTo8) b8  res args
+emitPrimOp res WriteOffAddrOp_Word16           args _ = doWriteOffAddrOp (Just mo_WordTo16) b16 res args
+emitPrimOp res WriteOffAddrOp_Word32           args _ = doWriteOffAddrOp (Just mo_WordTo32) b32 res args
+emitPrimOp res WriteOffAddrOp_Word64           args _ = doWriteOffAddrOp Nothing b64 res args
+emitPrimOp res WriteOffAddrOp_FloatX4          args _ = doWriteOffAddrOp Nothing vec4f32 res args
+emitPrimOp res WriteOffAddrOp_FloatAsFloatX4   args _ = doWriteOffAddrOp Nothing f32 res args
+emitPrimOp res WriteOffAddrOp_DoubleX2         args _ = doWriteOffAddrOp Nothing vec2f64 res args
+emitPrimOp res WriteOffAddrOp_DoubleAsDoubleX2 args _ = doWriteOffAddrOp Nothing f64 res args
+emitPrimOp res WriteOffAddrOp_Int32X4          args _ = doWriteOffAddrOp Nothing vec4b32 res args
+emitPrimOp res WriteOffAddrOp_Int32AsInt32X4   args _ = doWriteOffAddrOp Nothing b32 res args
+emitPrimOp res WriteOffAddrOp_Int64X2          args _ = doWriteOffAddrOp Nothing vec2b64 res args
+emitPrimOp res WriteOffAddrOp_Int64AsInt64X2   args _ = doWriteOffAddrOp Nothing b64 res args
 
 -- WriteXXXArray
 
-emitPrimOp res WriteByteArrayOp_Char      args _ = doWriteByteArrayOp (Just mo_WordTo8) b8 res args
-emitPrimOp res WriteByteArrayOp_WideChar  args _ = doWriteByteArrayOp (Just mo_WordTo32) b32 res args
-emitPrimOp res WriteByteArrayOp_Int       args _ = doWriteByteArrayOp Nothing bWord res args
-emitPrimOp res WriteByteArrayOp_Word      args _ = doWriteByteArrayOp Nothing bWord res args
-emitPrimOp res WriteByteArrayOp_Addr      args _ = doWriteByteArrayOp Nothing bWord res args
-emitPrimOp res WriteByteArrayOp_Float     args _ = doWriteByteArrayOp Nothing f32 res args
-emitPrimOp res WriteByteArrayOp_Double    args _ = doWriteByteArrayOp Nothing f64 res args
-emitPrimOp res WriteByteArrayOp_StablePtr args _ = doWriteByteArrayOp Nothing bWord res args
-emitPrimOp res WriteByteArrayOp_Int8      args _ = doWriteByteArrayOp (Just mo_WordTo8) b8  res args
-emitPrimOp res WriteByteArrayOp_Int16     args _ = doWriteByteArrayOp (Just mo_WordTo16) b16  res args
-emitPrimOp res WriteByteArrayOp_Int32     args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
-emitPrimOp res WriteByteArrayOp_Int64     args _ = doWriteByteArrayOp Nothing b64  res args
-emitPrimOp res WriteByteArrayOp_Word8     args _ = doWriteByteArrayOp (Just mo_WordTo8) b8  res args
-emitPrimOp res WriteByteArrayOp_Word16    args _ = doWriteByteArrayOp (Just mo_WordTo16) b16  res args
-emitPrimOp res WriteByteArrayOp_Word32    args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
-emitPrimOp res WriteByteArrayOp_Word64    args _ = doWriteByteArrayOp Nothing b64  res args
-emitPrimOp res WriteByteArrayOp_FloatX4   args _ = doWriteByteArrayOp Nothing vec4f32 res args
-emitPrimOp res WriteByteArrayOp_DoubleX2  args _ = doWriteByteArrayOp Nothing vec2f64 res args
-emitPrimOp res WriteByteArrayOp_Int32X4   args _ = doWriteByteArrayOp Nothing vec4b32 res args
-emitPrimOp res WriteByteArrayOp_Int64X2   args _ = doWriteByteArrayOp Nothing vec2b64 res args
+emitPrimOp res WriteByteArrayOp_Char             args _ = doWriteByteArrayOp (Just mo_WordTo8) b8 res args
+emitPrimOp res WriteByteArrayOp_WideChar         args _ = doWriteByteArrayOp (Just mo_WordTo32) b32 res args
+emitPrimOp res WriteByteArrayOp_Int              args _ = doWriteByteArrayOp Nothing bWord res args
+emitPrimOp res WriteByteArrayOp_Word             args _ = doWriteByteArrayOp Nothing bWord res args
+emitPrimOp res WriteByteArrayOp_Addr             args _ = doWriteByteArrayOp Nothing bWord res args
+emitPrimOp res WriteByteArrayOp_Float            args _ = doWriteByteArrayOp Nothing f32 res args
+emitPrimOp res WriteByteArrayOp_Double           args _ = doWriteByteArrayOp Nothing f64 res args
+emitPrimOp res WriteByteArrayOp_StablePtr        args _ = doWriteByteArrayOp Nothing bWord res args
+emitPrimOp res WriteByteArrayOp_Int8             args _ = doWriteByteArrayOp (Just mo_WordTo8) b8  res args
+emitPrimOp res WriteByteArrayOp_Int16            args _ = doWriteByteArrayOp (Just mo_WordTo16) b16  res args
+emitPrimOp res WriteByteArrayOp_Int32            args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
+emitPrimOp res WriteByteArrayOp_Int64            args _ = doWriteByteArrayOp Nothing b64  res args
+emitPrimOp res WriteByteArrayOp_Word8            args _ = doWriteByteArrayOp (Just mo_WordTo8) b8  res args
+emitPrimOp res WriteByteArrayOp_Word16           args _ = doWriteByteArrayOp (Just mo_WordTo16) b16  res args
+emitPrimOp res WriteByteArrayOp_Word32           args _ = doWriteByteArrayOp (Just mo_WordTo32) b32  res args
+emitPrimOp res WriteByteArrayOp_Word64           args _ = doWriteByteArrayOp Nothing b64  res args
+emitPrimOp res WriteByteArrayOp_FloatX4          args _ = doWriteByteArrayOp Nothing vec4f32 res args
+emitPrimOp res WriteByteArrayOp_FloatAsFloatX4   args _ = doWriteByteArrayOp Nothing f32 res args
+emitPrimOp res WriteByteArrayOp_DoubleX2         args _ = doWriteByteArrayOp Nothing vec2f64 res args
+emitPrimOp res WriteByteArrayOp_DoubleAsDoubleX2 args _ = doWriteByteArrayOp Nothing f64 res args
+emitPrimOp res WriteByteArrayOp_Int32X4          args _ = doWriteByteArrayOp Nothing vec4b32 res args
+emitPrimOp res WriteByteArrayOp_Int32AsInt32X4   args _ = doWriteByteArrayOp Nothing b32 res args
+emitPrimOp res WriteByteArrayOp_Int64X2          args _ = doWriteByteArrayOp Nothing vec2b64 res args
+emitPrimOp res WriteByteArrayOp_Int64AsInt64X2   args _ = doWriteByteArrayOp Nothing b64 res args
 
 -- Copying byte arrays
 
@@ -696,22 +720,35 @@ callishOp _ = Nothing
 -- Helpers for translating various minor variants of array indexing.
 
 -- Bytearrays outside the heap; hence non-pointers
+doIndexOffAddrOpAs, doIndexByteArrayOpAs
+	:: Maybe MachOp -> CmmType -> CmmType 
+	-> [LocalReg] -> [CmmExpr] -> Code
+doIndexOffAddrOpAs maybe_post_read_cast rep idx_rep [res] [addr,idx]
+   = mkBasicIndexedRead 0 maybe_post_read_cast rep res addr idx_rep idx
+doIndexOffAddrOpAs _ _ _ _ _
+   = panic "CgPrimOp: doIndexOffAddrOpAs"
+
+doIndexByteArrayOpAs maybe_post_read_cast rep idx_rep [res] [addr,idx]
+   = mkBasicIndexedRead arrWordsHdrSize maybe_post_read_cast rep res addr idx_rep idx
+doIndexByteArrayOpAs _ _ _ _ _ 
+   = panic "CgPrimOp: doIndexByteArrayOpAs"
+
 doIndexOffAddrOp, doIndexByteArrayOp 
 	:: Maybe MachOp -> CmmType 
 	-> [LocalReg] -> [CmmExpr] -> Code
 doIndexOffAddrOp maybe_post_read_cast rep [res] [addr,idx]
-   = mkBasicIndexedRead 0 maybe_post_read_cast rep res addr idx
+   = mkBasicIndexedRead 0 maybe_post_read_cast rep res addr rep idx
 doIndexOffAddrOp _ _ _ _
    = panic "CgPrimOp: doIndexOffAddrOp"
 
 doIndexByteArrayOp maybe_post_read_cast rep [res] [addr,idx]
-   = mkBasicIndexedRead arrWordsHdrSize maybe_post_read_cast rep res addr idx
+   = mkBasicIndexedRead arrWordsHdrSize maybe_post_read_cast rep res addr rep idx
 doIndexByteArrayOp _ _ _ _ 
    = panic "CgPrimOp: doIndexByteArrayOp"
 
 doReadPtrArrayOp :: LocalReg -> CmmExpr -> CmmExpr -> Code
 doReadPtrArrayOp res addr idx
-   = mkBasicIndexedRead arrPtrsHdrSize Nothing gcWord res addr idx
+   = mkBasicIndexedRead arrPtrsHdrSize Nothing gcWord res addr gcWord idx
 
 
 doWriteOffAddrOp, doWriteByteArrayOp 
@@ -745,16 +782,27 @@ loadArrPtrsSize :: CmmExpr -> CmmExpr
 loadArrPtrsSize addr = CmmLoad (cmmOffsetB addr off) bWord
  where off = fixedHdrSize*wORD_SIZE + oFFSET_StgMutArrPtrs_ptrs
 
-mkBasicIndexedRead :: ByteOff -> Maybe MachOp -> CmmType 
-		   -> LocalReg -> CmmExpr -> CmmExpr -> Code
-mkBasicIndexedRead off Nothing read_rep res base idx
-   = stmtC (CmmAssign (CmmLocal res) (cmmLoadIndexOffExpr off read_rep base idx))
-mkBasicIndexedRead off (Just cast) read_rep res base idx
+mkBasicIndexedRead :: ByteOff       -- Initial offset in bytes
+                   -> Maybe MachOp  -- Cast
+                   -> CmmType       -- Type of element we are accessing
+		   -> LocalReg      -- Destination
+                   -> CmmExpr       -- Base address
+                   -> CmmType       -- Type of elements by which we are indexing
+                   -> CmmExpr       -- Index
+                   -> Code
+mkBasicIndexedRead off Nothing read_rep res base idx_rep idx
+   = stmtC (CmmAssign (CmmLocal res) (cmmLoadIndexOffExpr off read_rep base idx_rep idx))
+mkBasicIndexedRead off (Just cast) read_rep res base idx_rep idx
    = stmtC (CmmAssign (CmmLocal res) (CmmMachOp cast [
-				cmmLoadIndexOffExpr off read_rep base idx]))
+				cmmLoadIndexOffExpr off read_rep base idx_rep idx]))
 
-mkBasicIndexedWrite :: ByteOff -> Maybe MachOp -> CmmType 
-		    -> CmmExpr -> CmmExpr -> CmmExpr -> Code
+mkBasicIndexedWrite :: ByteOff       -- Initial offset in bytes
+                    -> Maybe MachOp  -- Cast
+                    -> CmmType       -- Type of element we are accessing
+		    -> CmmExpr       -- Destination
+                    -> CmmExpr       -- Index
+                    -> CmmExpr       -- Value to write
+                    -> Code
 mkBasicIndexedWrite off Nothing write_rep base idx val
    = stmtC (CmmStore (cmmIndexOffExpr off write_rep base idx) val)
 mkBasicIndexedWrite off (Just cast) write_rep base idx val
@@ -862,9 +910,14 @@ cmmIndexOffExpr :: ByteOff -> CmmType -> CmmExpr -> CmmExpr -> CmmExpr
 cmmIndexOffExpr off rep base idx
    = cmmIndexExpr (typeWidth rep) (cmmOffsetB base off) idx
 
-cmmLoadIndexOffExpr :: ByteOff -> CmmType -> CmmExpr -> CmmExpr -> CmmExpr
-cmmLoadIndexOffExpr off rep base idx
-   = CmmLoad (cmmIndexOffExpr off rep base idx) rep
+cmmLoadIndexOffExpr :: ByteOff  -- Initial offset in bytes
+                    -> CmmType  -- Type of element we are accessing
+                    -> CmmExpr  -- Base address
+                    -> CmmType  -- Type of elements by which we are indexing
+                    -> CmmExpr  -- Index
+                    -> CmmExpr
+cmmLoadIndexOffExpr off rep base idx_rep idx
+   = CmmLoad (cmmIndexOffExpr off idx_rep base idx) rep
 
 setInfo :: CmmExpr -> CmmExpr -> CmmStmt
 setInfo closure_ptr info_ptr = CmmStore closure_ptr info_ptr
