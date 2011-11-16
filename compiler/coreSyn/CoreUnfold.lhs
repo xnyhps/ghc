@@ -174,8 +174,7 @@ mkUnfolding src top_lvl is_bottoming expr
 		    uf_guidance   = guidance }
   where
     is_cheap = exprIsCheap expr
-    (arity, guidance) = calcUnfoldingGuidance is_cheap
-                                              opt_UF_CreationThreshold expr
+    (arity, guidance) = calcUnfoldingGuidance expr
 	-- Sometimes during simplification, there's a large let-bound thing	
 	-- which has been substituted, and so is now dead; so 'expr' contains
 	-- two copies of the thing while the occurrence-analysed expression doesn't
@@ -217,14 +216,13 @@ inlineBoringOk e
     go _      _                		   = boringCxtNotOk
 
 calcUnfoldingGuidance
-	:: Bool		-- True <=> the rhs is cheap, or we want to treat it
-	   		--          as cheap (INLINE things)	 
-        -> Int		-- Bomb out if size gets bigger than this
-	-> CoreExpr    	-- Expression to look at
+	:: CoreExpr    	-- Expression to look at
 	-> (Arity, UnfoldingGuidance)
-calcUnfoldingGuidance expr_is_cheap bOMB_OUT_SIZE expr
+calcUnfoldingGuidance expr
   = case collectBinders expr of { (bndrs, body) ->
     let
+        bOMB_OUT_SIZE = opt_UF_CreationThreshold 
+               -- Bomb out if size gets bigger than this
         val_bndrs   = filter isId bndrs
 	n_val_bndrs = length val_bndrs
 
@@ -232,8 +230,7 @@ calcUnfoldingGuidance expr_is_cheap bOMB_OUT_SIZE expr
           = case (sizeExpr (iUnbox bOMB_OUT_SIZE) val_bndrs body) of
       	      TooBig -> UnfNever
       	      SizeIs size cased_bndrs scrut_discount
-      	        | uncondInline n_val_bndrs (iBox size)
-                , expr_is_cheap
+      	        | uncondInline expr n_val_bndrs (iBox size)
       	        -> UnfWhen unSaturatedOk boringCxtOk   -- Note [INLINE for small functions]
 	        | otherwise
       	        -> UnfIfGoodArgs { ug_args  = map (discount cased_bndrs) val_bndrs
@@ -278,9 +275,10 @@ Notice that 'x' counts 0, while (f x) counts 2.  That's deliberate: there's
 a function call to account for.  Notice also that constructor applications 
 are very cheap, because exposing them to a caller is so valuable.
 
-[25/5/11] All sizes are now multiplied by 10, except for primops.
-This makes primops look cheap, and seems to be almost unversally
-beneficial.  Done partly as a result of #4978.
+[25/5/11] All sizes are now multiplied by 10, except for primops
+(which have sizes like 1 or 4.  This makes primops look fantastically
+cheap, and seems to be almost unversally beneficial.  Done partly as a
+result of #4978.
 
 Note [Do not inline top-level bottoming functions]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -288,7 +286,6 @@ The FloatOut pass has gone to some trouble to float out calls to 'error'
 and similar friends.  See Note [Bottoming floats] in SetLevels.
 Do not re-inline them!  But we *do* still inline if they are very small
 (the uncondInline stuff).
-
 
 Note [INLINE for small functions]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -302,43 +299,54 @@ inline unconditionally, regardless of how boring the context is.
 
 Things to note:
 
- * We inline *unconditionally* if inlined thing is smaller (using sizeExpr)
-   than the thing it's replacing.  Notice that
+(1) We inline *unconditionally* if inlined thing is smaller (using sizeExpr)
+    than the thing it's replacing.  Notice that
       (f x) --> (g 3) 		  -- YES, unconditionally
       (f x) --> x : []		  -- YES, *even though* there are two
       	    	    		  --      arguments to the cons
       x     --> g 3		  -- NO
       x	    --> Just v		  -- NO
 
-  It's very important not to unconditionally replace a variable by
-  a non-atomic term.
+    It's very important not to unconditionally replace a variable by
+    a non-atomic term.
 
-* We do this even if the thing isn't saturated, else we end up with the
-  silly situation that
-     f x y = x
-     ...map (f 3)...
-  doesn't inline.  Even in a boring context, inlining without being
-  saturated will give a lambda instead of a PAP, and will be more
-  efficient at runtime.
+(2) We do this even if the thing isn't saturated, else we end up with the
+    silly situation that
+       f x y = x
+       ...map (f 3)...
+    doesn't inline.  Even in a boring context, inlining without being
+    saturated will give a lambda instead of a PAP, and will be more
+    efficient at runtime.
 
-* However, when the function's arity > 0, we do insist that it 
-  has at least one value argument at the call site.  Otherwise we find this:
-       f = /\a \x:a. x
-       d = /\b. MkD (f b)
-  If we inline f here we get
-       d = /\b. MkD (\x:b. x)
-  and then prepareRhs floats out the argument, abstracting the type
-  variables, so we end up with the original again!
+(3) However, when the function's arity > 0, we do insist that it 
+    has at least one value argument at the call site.  (This check is
+    made in the UnfWhen case of callSiteInline.) Otherwise we find this:
+         f = /\a \x:a. x
+         d = /\b. MkD (f b)
+    If we inline f here we get
+         d = /\b. MkD (\x:b. x)
+    and then prepareRhs floats out the argument, abstracting the type
+    variables, so we end up with the original again!
 
+(4) We must be much more cautious about arity-zero things. Consider
+       let x = y +# z in ...
+    In *size* terms primops look very small, because the generate a
+    single instruction, but we do not want to unconditionally replace
+    every occurrence of x with (y +# z).  So we only do the
+    unconditional-inline thing for *trivial* expressions.
+  
+    NB: you might think that PostInlineUnconditionally would do this
+    but it doesn't fire for top-level things; see SimplUtils
+    Note [Top level and postInlineUnconditionally]
 
 \begin{code}
-uncondInline :: Arity -> Int -> Bool
+uncondInline :: CoreExpr -> Arity -> Int -> Bool
 -- Inline unconditionally if there no size increase
 -- Size of call is arity (+1 for the function)
 -- See Note [INLINE for small functions]
-uncondInline arity size 
-  | arity == 0 = size == 0
-  | otherwise  = size <= 10 * (arity + 1)
+uncondInline rhs arity size 
+  | arity > 0 = size <= 10 * (arity + 1) -- See Note [INLINE for small functions] (1)
+  | otherwise = exprIsTrivial rhs        -- See Note [INLINE for small functions] (4)
 \end{code}
 
 
@@ -747,16 +755,27 @@ smallEnoughToInline _
 ----------------
 certainlyWillInline :: Unfolding -> Bool
   -- Sees if the unfolding is pretty certain to inline	
-certainlyWillInline (CoreUnfolding { uf_is_cheap = is_cheap, uf_arity = n_vals, uf_guidance = guidance })
+certainlyWillInline (CoreUnfolding { uf_arity = n_vals, uf_guidance = guidance })
   = case guidance of
       UnfNever      -> False
       UnfWhen {}    -> True
       UnfIfGoodArgs { ug_size = size} 
-                    -> is_cheap && size - (10 * (n_vals +1)) <= opt_UF_UseThreshold
+                    -> n_vals > 0     -- See Note [certainlyWillInline: be caseful of thunks]
+                    && size - (10 * (n_vals +1)) <= opt_UF_UseThreshold
 
 certainlyWillInline _
   = False
 \end{code}
+
+Note [certainlyWillInline: be caseful of thunks]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Don't claim that thunks will certainly inline, because that risks work
+duplication.  Even if the work duplication is not great (eg is_cheap
+holds), it can make a big difference in an inner loop In Trac #5623 we
+found that the WorkWrap phase thought that
+       y = case x of F# v -> F# (v +# v)
+was certainlyWillInline, so the addition got duplicated.  
+
 
 %************************************************************************
 %*									*
@@ -894,7 +913,7 @@ tryUnfolding dflags id lone_variable
 
           UnfWhen unsat_ok boring_ok 
              -> (enough_args && (boring_ok || some_benefit), empty )
-             where      -- See Note [INLINE for small functions]
+             where      -- See Note [INLINE for small functions (3)]
                enough_args = saturated || (unsat_ok && n_val_args > 0)
 
           UnfIfGoodArgs { ug_args = arg_discounts, ug_res = res_discount, ug_size = size }
@@ -1084,7 +1103,8 @@ to be cheap, and that's good because exprIsConApp_maybe doesn't
 think that expression is a constructor application.
 
 I used to test is_value rather than is_cheap, which was utterly
-wrong, because the above expression responds True to exprIsHNF.
+wrong, because the above expression responds True to exprIsHNF, 
+which is what sets is_value.
 
 This kind of thing can occur if you have
 

@@ -37,7 +37,6 @@ module DynFlags (
         Option(..), showOpt,
         DynLibLoader(..),
         fFlags, fWarningFlags, fLangFlags, xFlags,
-        DPHBackend(..), dphPackageMaybe,
         wayNames, dynFlagDependencies,
 
         -- ** Safe Haskell
@@ -245,6 +244,7 @@ data DynFlag
    | Opt_Vectorise
    | Opt_RegsGraph                      -- do graph coloring register allocation
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
+   | Opt_PedanticBottoms                -- Be picky about how we treat bottom
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -341,6 +341,7 @@ data WarningFlag =
    deriving (Eq, Show)
 
 data Language = Haskell98 | Haskell2010
+   deriving Enum
 
 -- | The various Safe Haskell modes
 data SafeHaskellMode
@@ -393,7 +394,8 @@ data ExtensionFlag
    | Opt_DoAndIfThenElse
    | Opt_RebindableSyntax
    | Opt_ConstraintKinds
-
+   | Opt_PolyKinds                -- Kind polymorphism
+   
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
    | Opt_DeriveFunctor
@@ -436,7 +438,7 @@ data ExtensionFlag
    | Opt_NondecreasingIndentation
    | Opt_RelaxedLayout
    | Opt_TraditionalRecordSyntax
-   deriving (Eq, Show)
+   deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'DynFlag's but also a plethora of
 -- information relating to the compilation of a single file or GHC session
@@ -466,8 +468,6 @@ data DynFlags = DynFlags {
   mainModIs             :: Module,
   mainFunIs             :: Maybe String,
   ctxtStkDepth          :: Int,         -- ^ Typechecker context stack depth
-
-  dphBackend            :: DPHBackend,
 
   thisPackage           :: PackageId,   -- ^ name of package currently being compiled
 
@@ -840,8 +840,6 @@ defaultDynFlags mySettings =
         mainModIs               = mAIN,
         mainFunIs               = Nothing,
         ctxtStkDepth            = mAX_CONTEXT_REDUCTION_DEPTH,
-
-        dphBackend              = DPHNone,
 
         thisPackage             = mainPackageId,
 
@@ -1622,13 +1620,6 @@ dynamic_flags = [
   , Flag "fprof-auto-exported"    (noArg (\d -> d { profAuto = ProfAutoExports } ))
   , Flag "fno-prof-auto"          (noArg (\d -> d { profAuto = NoProfAuto } ))
 
-        ------ DPH flags ----------------------------------------------------
-
-  , Flag "fdph-seq"         (NoArg (setDPHBackend DPHSeq))
-  , Flag "fdph-par"         (NoArg (setDPHBackend DPHPar))
-  , Flag "fdph-this"        (NoArg (setDPHBackend DPHThis))
-  , Flag "fdph-none"        (NoArg (setDPHBackend DPHNone))
-
         ------ Compiler flags -----------------------------------------------
 
   , Flag "fasm"             (NoArg (setObjTarget HscAsm))
@@ -1763,6 +1754,7 @@ fFlags = [
   ( "liberate-case",                    Opt_LiberateCase, nop ),
   ( "spec-constr",                      Opt_SpecConstr, nop ),
   ( "cse",                              Opt_CSE, nop ),
+  ( "pedantic-bottoms",                 Opt_PedanticBottoms, nop ),
   ( "ignore-interface-pragmas",         Opt_IgnoreInterfacePragmas, nop ),
   ( "omit-interface-pragmas",           Opt_OmitInterfacePragmas, nop ),
   ( "expose-all-unfoldings",            Opt_ExposeAllUnfoldings, nop ),
@@ -1915,7 +1907,8 @@ xFlags = [
   ( "DoAndIfThenElse",                  Opt_DoAndIfThenElse, nop ),
   ( "RebindableSyntax",                 Opt_RebindableSyntax, nop ),
   ( "ConstraintKinds",                  Opt_ConstraintKinds, nop ),
-  ( "MonoPatBinds",                     Opt_MonoPatBinds,
+  ( "PolyKinds",                        Opt_PolyKinds, nop ),
+  ( "MonoPatBinds",                     Opt_MonoPatBinds, 
     \ turn_on -> when turn_on $ deprecate "Experimental feature now removed; has no effect" ),
   ( "ExplicitForAll",                   Opt_ExplicitForAll, nop ),
   ( "AlternativeLayoutRule",            Opt_AlternativeLayoutRule, nop ),
@@ -1999,7 +1992,9 @@ impliedFlags
     , (Opt_TypeFamilies,     turnOn, Opt_MonoLocalBinds)
 
     , (Opt_TypeFamilies,     turnOn, Opt_KindSignatures)  -- Type families use kind signatures
-                                                     -- all over the place
+                                                          -- all over the place
+
+    , (Opt_PolyKinds,        turnOn, Opt_KindSignatures)
 
     , (Opt_ImpredicativeTypes,  turnOn, Opt_RankNTypes)
 
@@ -2357,29 +2352,6 @@ setDPHOpt :: DynFlags -> DynP DynFlags
 setDPHOpt dflags = setOptLevel 2 (dflags { maxSimplIterations  = 20
                                          , simplPhases         = 3
                                          })
-
--- Determines the package used by the vectoriser for the symbols of the vectorised code.
--- 'DPHNone' indicates that no data-parallel backend library is available; hence, the
--- vectoriser cannot be used.
---
-data DPHBackend = DPHPar    -- "dph-par"
-                | DPHSeq    -- "dph-seq"
-                | DPHThis   -- the currently compiled package
-                | DPHNone   -- no DPH library available
-        deriving(Eq, Ord, Enum, Show)
-
-setDPHBackend :: DPHBackend -> DynP ()
-setDPHBackend backend = upd $ \dflags -> dflags { dphBackend = backend }
-
--- Query the DPH backend package to be used by the vectoriser and desugaring of DPH syntax.
---
-dphPackageMaybe :: DynFlags -> Maybe PackageId
-dphPackageMaybe dflags
-  = case dphBackend dflags of
-      DPHPar  -> Just dphParPackageId
-      DPHSeq  -> Just dphSeqPackageId
-      DPHThis -> Just (thisPackage dflags)
-      DPHNone -> Nothing
 
 setMainIs :: String -> DynP ()
 setMainIs arg

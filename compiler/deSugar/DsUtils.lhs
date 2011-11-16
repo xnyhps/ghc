@@ -291,7 +291,7 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
 mkCoPrimCaseMatchResult :: Id				-- Scrutinee
                     -> Type                             -- Type of the case
 		    -> [(Literal, MatchResult)]		-- Alternatives
-		    -> MatchResult
+		    -> MatchResult			-- Literals are all unlifted
 mkCoPrimCaseMatchResult var ty match_alts
   = MatchResult CanFail mk_case
   where
@@ -300,8 +300,10 @@ mkCoPrimCaseMatchResult var ty match_alts
         return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
 
     sorted_alts = sortWith fst match_alts	-- Right order for a Case
-    mk_alt fail (lit, MatchResult _ body_fn) = do body <- body_fn fail
-                                                  return (LitAlt lit, [], body)
+    mk_alt fail (lit, MatchResult _ body_fn)
+       = ASSERT( not (litIsLifted lit) )
+         do body <- body_fn fail
+            return (LitAlt lit, [], body)
 
 
 mkCoAlgCaseMatchResult 
@@ -389,7 +391,7 @@ mkCoAlgCaseMatchResult var ty match_alts
     isPArrFakeAlts [] = panic "DsUtils: unexpectedly found an empty list of PArr fake alternatives"
     --
     mk_parrCase fail = do
-      lengthP <- dsLookupDPHId lengthPName
+      lengthP <- dsDPHBuiltin lengthPVar
       alt <- unboxAlt
       return (mkWildCase (len lengthP) intTy ty [alt])
       where
@@ -401,7 +403,7 @@ mkCoAlgCaseMatchResult var ty match_alts
 	--
 	unboxAlt = do
 	  l      <- newSysLocalDs intPrimTy
-	  indexP <- dsLookupDPHId indexPName
+	  indexP <- dsDPHBuiltin indexPVar
 	  alts   <- mapM (mkAlt indexP) sorted_alts
 	  return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
           where
