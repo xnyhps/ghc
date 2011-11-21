@@ -1194,7 +1194,7 @@ initLinker( void )
         barf("Compiling re_invalid failed");
     }
     compileResult = regcomp(&re_realso,
-           "(GROUP|INPUT) *\\( *(([^ )])+)",
+           "(GROUP|INPUT) *\\( *([^ )]+)",
            REG_EXTENDED);
     if (compileResult != 0) {
         barf("Compiling re_realso failed");
@@ -1361,7 +1361,7 @@ addDLL( char *dll_name )
       if ((fp = fopen(line, "r")) == NULL) {
          return errmsg; // return original error if open fails
       }
-      // try to find a GROUP ( ... ) command
+      // try to find a GROUP or INPUT ( ... ) command
       while (fgets(line, MAXLINE, fp) != NULL) {
          IF_DEBUG(linker, debugBelch("input line = %s", line));
          if (regexec(&re_realso, line, (size_t) NMATCH, match, 0) == 0) {
@@ -1371,8 +1371,9 @@ addDLL( char *dll_name )
             errmsg = internal_dlopen(line+match[2].rm_so);
             break;
          }
-         // if control reaches here, no GROUP ( ... ) directive was found
-         // and the original error message is returned to the caller
+         // if control reaches here, no GROUP or INPUT ( ... ) directive
+         // was found and the original error message is returned to the
+         // caller
       }
       fclose(fp);
    }
@@ -4206,18 +4207,24 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
 {
    int j;
    char *symbol = NULL;
-   Elf_Addr targ;
    Elf_Rela* rtab = (Elf_Rela*) (ehdrC + shdr[shnum].sh_offset);
    Elf_Sym*  stab;
    char*     strtab;
    int         nent = shdr[shnum].sh_size / sizeof(Elf_Rela);
-   int target_shndx = shdr[shnum].sh_info;
    int symtab_shndx = shdr[shnum].sh_link;
    int strtab_shndx = shdr[symtab_shndx].sh_link;
+#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(ia64_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
+   /* This #ifdef only serves to avoid unused-var warnings. */
+   Elf_Addr targ;
+   int target_shndx = shdr[shnum].sh_info;
+#endif
 
    stab  = (Elf_Sym*) (ehdrC + shdr[ symtab_shndx ].sh_offset);
    strtab= (char*)    (ehdrC + shdr[ strtab_shndx ].sh_offset);
+#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(ia64_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
+   /* This #ifdef only serves to avoid set-but-not-used warnings */
    targ  = (Elf_Addr) (ehdrC + shdr[ target_shndx ].sh_offset);
+#endif
    IF_DEBUG(linker,debugBelch( "relocations for section %d using symtab %d\n",
                           target_shndx, symtab_shndx ));
 
@@ -4226,12 +4233,14 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
       /* This #ifdef only serves to avoid unused-var warnings. */
       Elf_Addr  offset = rtab[j].r_offset;
       Elf_Addr  P      = targ + offset;
+      Elf_Addr  A      = rtab[j].r_addend;
+#endif
+#if defined(sparc_HOST_ARCH) || defined(ia64_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
+      Elf_Addr  value;
 #endif
       Elf_Addr  info   = rtab[j].r_info;
-      Elf_Addr  A      = rtab[j].r_addend;
       Elf_Addr  S;
       void*     S_tmp;
-      Elf_Addr  value;
 #     if defined(sparc_HOST_ARCH)
       Elf_Word* pP = (Elf_Word*)P;
       Elf_Word  w1, w2;
@@ -4286,7 +4295,9 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
                                         (void*)P, (void*)S, (void*)A ));
       /* checkProddableBlock ( oc, (void*)P ); */
 
+#if defined(sparc_HOST_ARCH) || defined(ia64_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
       value = S + A;
+#endif
 
       switch (ELF_R_TYPE(info)) {
 #        if defined(sparc_HOST_ARCH)

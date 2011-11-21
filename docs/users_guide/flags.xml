@@ -266,7 +266,13 @@
 	    </row>
 	    <row>
 	      <entry><option>-stubdir</option> <replaceable>dir</replaceable></entry>
-	      <entry>redirect FFi stub files</entry>
+	      <entry>redirect FFI stub files</entry>
+	      <entry>dynamic</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-dumpdir</option> <replaceable>dir</replaceable></entry>
+	      <entry>redirect dump files</entry>
 	      <entry>dynamic</entry>
 	      <entry>-</entry>
 	    </row>
@@ -1535,6 +1541,15 @@
 	      as argument is considered to be single-entry.  Hence OK to inline things inside it.</entry>
 	      <entry>static</entry>
 	      <entry>-</entry>
+	    </row>
+
+	    <row>
+	      <entry><option>-fpedantic-bottoms</option></entry>
+	      <entry>Make GHC be more precise about its treatment of bottom (but see also
+                     <option>-fno-state-hack</option>). In particular, GHC will not
+                     eta-expand through a case expression.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-fno-pedantic-bottoms</option></entry>
 	    </row>
 
 	    <row>

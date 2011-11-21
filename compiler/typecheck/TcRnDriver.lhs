@@ -89,7 +89,6 @@ import Data.IORef ( readIORef )
 
 #ifdef GHCI
 import TcType   ( isUnitTy, isTauTy )
-import CoreUtils( mkPiTypes )
 import TcHsType
 import TcMatches
 import RnTypes
@@ -122,13 +121,18 @@ import Control.Monad
 tcRnModule :: HscEnv 
 	   -> HscSource
 	   -> Bool 		-- True <=> save renamed syntax
-	   -> Located (HsModule RdrName)
+           -> HsParsedModule
 	   -> IO (Messages, Maybe TcGblEnv)
 
 tcRnModule hsc_env hsc_src save_rn_syntax
-	 (L loc (HsModule maybe_mod export_ies 
+   HsParsedModule {
+      hpm_module =
+         (L loc (HsModule maybe_mod export_ies
 			  import_decls local_decls mod_deprec
-			  maybe_doc_hdr))
+                          maybe_doc_hdr)),
+      hpm_src_files =
+         src_files
+   }
  = do { showPass (hsc_dflags hsc_env) "Renamer/typechecker" ;
 
    let { this_pkg = thisPackage (hsc_dflags hsc_env) ;
@@ -150,7 +154,8 @@ tcRnModule hsc_env hsc_src save_rn_syntax
         ifWOptM Opt_WarnImplicitPrelude $
              when (notNull prel_imports) $ addWarn (implicitPreludeWarn) ;
 
-	tcg_env <- tcRnImports hsc_env this_mod (prel_imports ++ import_decls) ;
+	tcg_env <- {-# SCC "tcRnImports" #-}
+                   tcRnImports hsc_env this_mod (prel_imports ++ import_decls) ;
 	setGblEnv tcg_env		$ do {
 
 		-- Load the hi-boot interface for this module, if any
@@ -168,7 +173,8 @@ tcRnModule hsc_env hsc_src save_rn_syntax
 	tcg_env <- if isHsBoot hsc_src then
 			tcRnHsBootDecls local_decls
 		   else	
-			tcRnSrcDecls boot_iface local_decls ;
+			{-# SCC "tcRnSrcDecls" #-}
+                        tcRnSrcDecls boot_iface local_decls ;
 	setGblEnv tcg_env		$ do {
 
 		-- Report the use of any deprecated things
@@ -206,7 +212,10 @@ tcRnModule hsc_env hsc_src save_rn_syntax
 		-- Report unused names
  	reportUnusedNames export_ies tcg_env ;
 
-		-- Dump output and return
+                -- add extra source files to tcg_dependent_files
+        addDependentFiles src_files ;
+
+                -- Dump output and return
 	tcDump tcg_env ;
 	return tcg_env
     }}}}
@@ -422,7 +431,8 @@ tcRnSrcDecls boot_iface decls
 	     --	 * the global env exposes the instances to simplifyTop
 	     --  * the local env exposes the local Ids to simplifyTop, 
 	     --    so that we get better error messages (monomorphism restriction)
-	new_ev_binds <- simplifyTop lie ;
+	new_ev_binds <- {-# SCC "simplifyTop" #-}
+                        simplifyTop lie ;
         traceTc "Tc9" empty ;
 
 	failIfErrsM ;	-- Don't zonk if there have been errors
@@ -443,7 +453,8 @@ tcRnSrcDecls boot_iface decls
             ; all_ev_binds = cur_ev_binds `unionBags` new_ev_binds } ;
 
         (bind_ids, ev_binds', binds', fords', imp_specs', rules', vects') 
-            <- zonkTopDecls all_ev_binds binds sig_ns rules vects imp_specs fords ;
+            <- {-# SCC "zonkTopDecls" #-}
+               zonkTopDecls all_ev_binds binds sig_ns rules vects imp_specs fords ;
         
         let { final_type_env = extendTypeEnvWithIds type_env bind_ids
             ; tcg_env' = tcg_env { tcg_binds    = binds',
@@ -462,7 +473,8 @@ tc_rn_src_decls :: ModDetails
 -- Loops around dealing with each top level inter-splice group 
 -- in turn, until it's dealt with the entire module
 tc_rn_src_decls boot_details ds
- = do { (first_group, group_tail) <- findSplice ds  ;
+ = {-# SCC "tc_rn_src_decls" #-}
+   do { (first_group, group_tail) <- findSplice ds  ;
 		-- If ds is [] we get ([], Nothing)
         
         -- The extra_deps are needed while renaming type and class declarations 

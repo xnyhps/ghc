@@ -291,7 +291,7 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
 mkCoPrimCaseMatchResult :: Id				-- Scrutinee
                     -> Type                             -- Type of the case
 		    -> [(Literal, MatchResult)]		-- Alternatives
-		    -> MatchResult
+		    -> MatchResult			-- Literals are all unlifted
 mkCoPrimCaseMatchResult var ty match_alts
   = MatchResult CanFail mk_case
   where
@@ -300,8 +300,10 @@ mkCoPrimCaseMatchResult var ty match_alts
         return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
 
     sorted_alts = sortWith fst match_alts	-- Right order for a Case
-    mk_alt fail (lit, MatchResult _ body_fn) = do body <- body_fn fail
-                                                  return (LitAlt lit, [], body)
+    mk_alt fail (lit, MatchResult _ body_fn)
+       = ASSERT( not (litIsLifted lit) )
+         do body <- body_fn fail
+            return (LitAlt lit, [], body)
 
 
 mkCoAlgCaseMatchResult 
@@ -640,7 +642,7 @@ mkSelectorBinds ticks pat val_expr
                                 (Var bndr_var) error_expr
         return (bndr_var, mkOptTickBox tick rhs_expr)
       where
-        error_expr = mkCoerce co (Var err_var)
+        error_expr = mkCast (Var err_var) co
         co         = mkUnsafeCo (exprType (Var err_var)) (idType bndr_var)
 
     is_simple_lpat p = is_simple_pat (unLoc p)

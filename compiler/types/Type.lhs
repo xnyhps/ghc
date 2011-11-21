@@ -39,7 +39,7 @@ module Type (
 	splitTyConApp_maybe, splitTyConApp, 
 
         mkForAllTy, mkForAllTys, splitForAllTy_maybe, splitForAllTys, 
-        mkForAllArrowKinds,
+        mkPiKinds, mkPiType, mkPiTypes,
 	applyTy, applyTys, applyTysD, isForAllTy, dropForAlls,
 	
 	-- (Newtypes)
@@ -54,7 +54,7 @@ module Type (
         mkPrimEqType,
 
         -- Deconstructing predicate types
-        PredTree(..), predTreePredType, predTypePredTree,
+        PredTree(..), predTreePredType, classifyPredType,
         getClassPredTys, getClassPredTys_maybe,
         getEqPredTys, getEqPredTys_maybe,
         getIPPredTy_maybe,
@@ -675,12 +675,25 @@ mkForAllTy tyvar ty
 mkForAllTys :: [TyVar] -> Type -> Type
 mkForAllTys tyvars ty = foldr ForAllTy ty tyvars
 
-mkForAllArrowKinds :: [TyVar] -> Kind -> Kind
--- mkForAllArrowKinds [k1, k2, (a:k1 -> *)] k2
+mkPiKinds :: [TyVar] -> Kind -> Kind
+-- mkPiKinds [k1, k2, (a:k1 -> *)] k2
 -- returns forall k1 k2. (k1 -> *) -> k2
-mkForAllArrowKinds ktvs res =
-  mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) res
-  where (kvs, tvs) = splitKiTyVars ktvs
+mkPiKinds [] res = res
+mkPiKinds (tv:tvs) res 
+  | isKiVar tv = ForAllTy tv          (mkPiKinds tvs res)
+  | otherwise  = FunTy (tyVarKind tv) (mkPiKinds tvs res)
+
+mkPiType  :: Var -> Type -> Type
+-- ^ Makes a @(->)@ type or a forall type, depending
+-- on whether it is given a type variable or a term variable.
+mkPiTypes :: [Var] -> Type -> Type
+-- ^ 'mkPiType' for multiple type or value arguments
+
+mkPiType v ty
+   | isId v    = mkFunTy (varType v) ty
+   | otherwise = mkForAllTy v ty
+
+mkPiTypes vs ty = foldr mkPiType ty vs
 
 isForAllTy :: Type -> Bool
 isForAllTy (ForAllTy _ _) = True
@@ -881,18 +894,18 @@ Decomposing PredType
 data PredTree = ClassPred Class [Type]
               | EqPred Type Type
               | IPPred (IPName Name) Type
-              | TuplePred [PredTree]
+              | TuplePred [PredType]
               | IrredPred PredType
 
 predTreePredType :: PredTree -> PredType
 predTreePredType (ClassPred clas tys) = mkClassPred clas tys
 predTreePredType (EqPred ty1 ty2)     = mkEqPred (ty1, ty2)
 predTreePredType (IPPred ip ty)       = mkIPPred ip ty
-predTreePredType (TuplePred tys)      = mkBoxedTupleTy (map predTreePredType tys)
+predTreePredType (TuplePred tys)      = mkBoxedTupleTy tys
 predTreePredType (IrredPred ty)       = ty
 
-predTypePredTree :: PredType -> PredTree
-predTypePredTree ev_ty = case splitTyConApp_maybe ev_ty of
+classifyPredType :: PredType -> PredTree
+classifyPredType ev_ty = case splitTyConApp_maybe ev_ty of
     Just (tc, tys) | Just clas <- tyConClass_maybe tc
                    -> ClassPred clas tys
     Just (tc, tys) | tc `hasKey` eqTyConKey
@@ -902,7 +915,7 @@ predTypePredTree ev_ty = case splitTyConApp_maybe ev_ty of
                    , let [ty] = tys
                    -> IPPred ip ty
     Just (tc, tys) | isTupleTyCon tc
-                   -> TuplePred (map predTypePredTree tys)
+                   -> TuplePred tys
     _ -> IrredPred ev_ty
 \end{code}
 

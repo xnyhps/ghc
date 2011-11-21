@@ -9,9 +9,10 @@ Utility functions on @Core@ syntax
 -- | Commonly useful utilites for manipulating the Core language
 module CoreUtils (
         -- * Constructing expressions
-        mkTick, mkTickNoHNF, mkCoerce,
+        mkCast,
+        mkTick, mkTickNoHNF,
         bindNonRec, needsCaseBinding,
-        mkAltExpr, mkPiType, mkPiTypes,
+        mkAltExpr,
 
         -- * Taking expressions apart
         findDefault, findAlt, isDefaultAlt, mergeAlts, trimConArgs,
@@ -137,20 +138,6 @@ Various possibilities suggest themselves:
    we are doing here.  It's not too expensive, I think.
 
 \begin{code}
-mkPiType  :: Var -> Type -> Type
--- ^ Makes a @(->)@ type or a forall type, depending
--- on whether it is given a type variable or a term variable.
-mkPiTypes :: [Var] -> Type -> Type
--- ^ 'mkPiType' for multiple type or value arguments
-
-mkPiType v ty
-   | isId v    = mkFunTy (idType v) ty
-   | otherwise = mkForAllTy v ty
-
-mkPiTypes vs ty = foldr mkPiType ty vs
-\end{code}
-
-\begin{code}
 applyTypeToArg :: Type -> CoreExpr -> Type
 -- ^ Determines the type resulting from applying an expression to a function with the given type
 applyTypeToArg fun_ty (Type arg_ty) = applyTy fun_ty arg_ty
@@ -190,15 +177,27 @@ panic_msg e op_ty = pprCoreExpr e $$ ppr op_ty
 \begin{code}
 -- | Wrap the given expression in the coercion safely, dropping
 -- identity coercions and coalescing nested coercions
-mkCoerce :: Coercion -> CoreExpr -> CoreExpr
-mkCoerce co e | isReflCo co = e
-mkCoerce co (Cast expr co2)
+mkCast :: CoreExpr -> Coercion -> CoreExpr
+mkCast e co | isReflCo co = e
+
+mkCast (Coercion e_co) co 
+  = Coercion new_co
+  where
+       -- g :: (s1 ~# s2) ~# (t1 ~#  t2)
+       -- g1 :: s1 ~# t1
+       -- g2 :: s2 ~# t2
+       new_co = mkSymCo g1 `mkTransCo` e_co `mkTransCo` g2
+       [_reflk, g1, g2] = decomposeCo 3 co
+            -- Remember, (~#) :: forall k. k -> k -> *
+            -- so it takes *three* arguments, not two
+
+mkCast (Cast expr co2) co
   = ASSERT(let { Pair  from_ty  _to_ty  = coercionKind co;
                  Pair _from_ty2  to_ty2 = coercionKind co2} in
            from_ty `eqType` to_ty2 )
-    mkCoerce (mkTransCo co2 co) expr
+    mkCast expr (mkTransCo co2 co)
 
-mkCoerce co expr
+mkCast expr co
   = let Pair from_ty _to_ty = coercionKind co in
 --    if to_ty `eqType` from_ty
 --    then expr
@@ -224,7 +223,8 @@ mkTick t (Var x)
 mkTick t (Cast e co)
   = Cast (mkTick t e) co -- Move tick inside cast
 
-mkTick _ (Lit l) = Lit l
+mkTick t (Lit l)
+  | not (tickishCounts t) = Lit l
 
 mkTick t expr@(App f arg)
   | not (isRuntimeArg arg) = App (mkTick t f) arg
@@ -715,6 +715,7 @@ it's applied only to dictionaries.
 %************************************************************************
 
 \begin{code}
+-----------------------------
 -- | 'exprOkForSpeculation' returns True of an expression that is:
 --
 --  * Safe to evaluate even if normal order eval might not
@@ -755,12 +756,8 @@ exprOkForSpeculation :: Expr b -> Bool
 exprOkForSpeculation (Lit _)      = True
 exprOkForSpeculation (Type _)     = True
 exprOkForSpeculation (Coercion _) = True
-
-exprOkForSpeculation (Var v)
-      =  isUnLiftedType (idType v)          -- c.f. the Var case of exprIsHNF
-      || isDataConWorkId v                  -- Nullary constructors
-      || idArity v > 0                      -- Functions
-      || isEvaldUnfolding (idUnfolding v)   -- Let-bound values
+exprOkForSpeculation (Var v)      = appOkForSpeculation v []
+exprOkForSpeculation (Cast e _)   = exprOkForSpeculation e
 
 -- Tick annotations that *tick* cannot be speculated, because these
 -- are meant to identify whether or not (and how often) the particular
@@ -769,8 +766,6 @@ exprOkForSpeculation (Tick tickish e)
    | tickishCounts tickish = False
    | otherwise             = exprOkForSpeculation e
 
-exprOkForSpeculation (Cast e _)  = exprOkForSpeculation e
-
 exprOkForSpeculation (Case e _ _ alts)
   =  exprOkForSpeculation e  -- Note [exprOkForSpeculation: case expressions]
   && all (\(_,_,rhs) -> exprOkForSpeculation rhs) alts
@@ -778,37 +773,46 @@ exprOkForSpeculation (Case e _ _ alts)
 
 exprOkForSpeculation other_expr
   = case collectArgs other_expr of
-        (Var f, args) -> spec_ok (idDetails f) args
+        (Var f, args) -> appOkForSpeculation f args
         _             -> False
 
-  where
-    spec_ok (DataConWorkId _) _
-      = True    -- The strictness of the constructor has already
+-----------------------------
+appOkForSpeculation :: Id -> [Expr b] -> Bool
+appOkForSpeculation fun args
+  = case idDetails fun of
+      DFunId new_type ->  not new_type
+         -- DFuns terminate, unless the dict is implemented 
+         -- with a newtype in which case they may not
+
+      DataConWorkId {} -> True
+                -- The strictness of the constructor has already
                 -- been expressed by its "wrapper", so we don't need
                 -- to take the arguments into account
 
-    spec_ok (PrimOpId op) args
-      | isDivOp op,             -- Special case for dividing operations that fail
-        [arg1, Lit lit] <- args -- only if the divisor is zero
-      = not (isZeroLit lit) && exprOkForSpeculation arg1
-                -- Often there is a literal divisor, and this
-                -- can get rid of a thunk in an inner looop
+      PrimOpId op
+        | isDivOp op              -- Special case for dividing operations that fail
+        , [arg1, Lit lit] <- args -- only if the divisor is zero
+        -> not (isZeroLit lit) && exprOkForSpeculation arg1
+                  -- Often there is a literal divisor, and this
+                  -- can get rid of a thunk in an inner looop
 
-      | DataToTagOp <- op      -- See Note [dataToTag speculation]
-      = True
+        | DataToTagOp <- op      -- See Note [dataToTag speculation]
+        -> True
 
-      | otherwise
-      = primOpOkForSpeculation op &&
-        all exprOkForSpeculation args
-                                -- A bit conservative: we don't really need
-                                -- to care about lazy arguments, but this is easy
+        | otherwise
+        -> primOpOkForSpeculation op &&
+           all exprOkForSpeculation args
+                                  -- A bit conservative: we don't really need
+                                  -- to care about lazy arguments, but this is easy
 
-    spec_ok (DFunId new_type) _ = not new_type
-         -- DFuns terminate, unless the dict is implemented with a newtype
-         -- in which case they may not
+      _other -> isUnLiftedType (idType fun)          -- c.f. the Var case of exprIsHNF
+             || idArity fun > n_val_args             -- Partial apps
+             || (n_val_args ==0 && 
+                 isEvaldUnfolding (idUnfolding fun)) -- Let-bound values
+             where
+               n_val_args = valArgCount args
 
-    spec_ok _ _ = False
-
+-----------------------------
 altsAreExhaustive :: [Alt b] -> Bool
 -- True  <=> the case alterantives are definiely exhaustive
 -- False <=> they may or may not be
@@ -977,19 +981,19 @@ exprIsHNFlike is_con is_con_unf = is_hnf_like
         -- we could get an infinite loop
 
     is_hnf_like (Lit _)          = True
-    is_hnf_like (Type _)        = True       -- Types are honorary Values;
+    is_hnf_like (Type _)         = True       -- Types are honorary Values;
                                               -- we don't mind copying them
     is_hnf_like (Coercion _)     = True       -- Same for coercions
     is_hnf_like (Lam b e)        = isRuntimeVar b || is_hnf_like e
     is_hnf_like (Tick tickish e) = not (tickishCounts tickish)
                                       && is_hnf_like e
                                       -- See Note [exprIsHNF Tick]
-    is_hnf_like (Cast e _)       = is_hnf_like e
-    is_hnf_like (App e (Type _))    = is_hnf_like e
+    is_hnf_like (Cast e _)           = is_hnf_like e
+    is_hnf_like (App e (Type _))     = is_hnf_like e
     is_hnf_like (App e (Coercion _)) = is_hnf_like e
-    is_hnf_like (App e a)        = app_is_value e [a]
-    is_hnf_like (Let _ e)        = is_hnf_like e  -- Lazy let(rec)s don't affect us
-    is_hnf_like _                = False
+    is_hnf_like (App e a)            = app_is_value e [a]
+    is_hnf_like (Let _ e)            = is_hnf_like e  -- Lazy let(rec)s don't affect us
+    is_hnf_like _                    = False
 
     -- There is at least one value argument
     app_is_value :: CoreExpr -> [CoreArg] -> Bool
@@ -1499,7 +1503,7 @@ tryEtaReduce bndrs body
     -- See Note [Eta reduction with casted arguments]
     -- for why we have an accumulating coercion
     go [] fun co
-      | ok_fun fun = Just (mkCoerce co fun)
+      | ok_fun fun = Just (mkCast fun co)
 
     go (b : bs) (App fun arg) co
       | Just co' <- ok_arg b arg co

@@ -15,10 +15,10 @@ import Vectorise.Monad
 import Vectorise.Builtins
 import Vectorise.Type.TyConDecl
 import Vectorise.Type.Classify
-import Vectorise.Type.PADict
-import Vectorise.Type.PData
-import Vectorise.Type.PRepr
-import Vectorise.Type.Repr
+import Vectorise.Generic.PADict
+import Vectorise.Generic.PAMethods
+import Vectorise.Generic.PData
+import Vectorise.Generic.Description
 import Vectorise.Utils
 
 import CoreSyn
@@ -39,7 +39,6 @@ import FastString
 import MonadUtils
 import Control.Monad
 import Data.List
-
 
 -- Note [Pragmas to vectorise tycons]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -165,7 +164,6 @@ vectTypeEnv tycons vectTypeDecls vectClassDecls
            -- Furthermore, 'drop_tcs' are those type constructors that we cannot vectorise.
        ; let maybeVectoriseTyCons           = filter notLocalScalarTyCon tycons ++ impVectTyCons
              (conv_tcs, keep_tcs, drop_tcs) = classifyTyCons vectTyConFlavour maybeVectoriseTyCons
-             orig_tcs                       = keep_tcs ++ conv_tcs
              
        ; traceVt " VECT SCALAR    : " $ ppr localScalarTyCons
        ; traceVt " VECT [class]   : " $ ppr impVectTyCons
@@ -207,29 +205,50 @@ vectTypeEnv tycons vectTypeDecls vectClassDecls
            -- We don't need new representation types for dictionary constructors. The constructors
            -- are always fully applied, and we don't need to lift them to arrays as a dictionary
            -- of a particular type always has the same value.
-       ; let vect_tcs = filter (not . isClassTyCon) 
-                      $ keep_tcs ++ new_tcs
+       ; let orig_tcs = filter (not . isClassTyCon) $ keep_tcs ++ conv_tcs
+             vect_tcs = filter (not . isClassTyCon) $ keep_tcs ++ new_tcs
 
            -- Build 'PRepr' and 'PData' instance type constructors and family instances for all
            -- type constructors with vectorised representations.
-       ; reprs     <- mapM tyConRepr vect_tcs
-       ; repr_tcs  <- zipWith3M buildPReprTyCon orig_tcs vect_tcs reprs
-       ; pdata_tcs <- zipWith3M buildPDataTyCon orig_tcs vect_tcs reprs
-       ; let inst_tcs  = repr_tcs ++ pdata_tcs
+       ; reprs      <- mapM tyConRepr vect_tcs
+       ; repr_tcs   <- zipWith3M buildPReprTyCon  orig_tcs vect_tcs reprs
+       ; pdata_tcs  <- zipWith3M buildPDataTyCon  orig_tcs vect_tcs reprs
+       ; pdatas_tcs <- zipWith3M buildPDatasTyCon orig_tcs vect_tcs reprs
+
+       ; let inst_tcs  = repr_tcs ++ pdata_tcs ++ pdatas_tcs
              fam_insts = map mkLocalFamInst inst_tcs
        ; updGEnv $ extendFamEnv fam_insts
 
-           -- Generate dfuns for the 'PA' instances of the vectorised type constructors and
-           -- associate the type constructors with their dfuns in the global environment.  We get
-           -- back the dfun bindings (which we will subsequently inject into the modules toplevel).
+           -- Generate workers for the vectorised data constructors, dfuns for the 'PA' instances of
+           -- the vectorised type constructors, and associate the type constructors with their dfuns
+           -- in the global environment.  We get back the dfun bindings (which we will subsequently
+           -- inject into the modules toplevel).
        ; (_, binds) <- fixV $ \ ~(dfuns, _) ->
            do { defTyConPAs (zipLazy vect_tcs dfuns)
-              ; dfuns <- sequence 
-                      $  zipWith4 buildTyConBindings
-                                  orig_tcs
-                                  vect_tcs
-                                  repr_tcs
-                                  pdata_tcs
+
+                  -- query the 'PData' instance type constructors for type constructors that have a
+                  -- VECTORISE pragma with an explicit right-hand side (this is Item (3) of
+                  -- "Note [Pragmas to vectorise tycons]" above)
+              ; pdata_withRHS_tcs <- mapM pdataReprTyConExact
+                                          [ mkTyConApp tycon tys
+                                          | (tycon, _) <- vectTyConsWithRHS
+                                          , let tys = mkTyVarTys (tyConTyVars tycon)
+                                          ]
+
+                  -- build workers for all vectorised data constructors (except scalar ones)
+              ; sequence_ $
+                  zipWith3 vectDataConWorkers (orig_tcs  ++ map fst vectTyConsWithRHS)
+                                              (vect_tcs  ++ map snd vectTyConsWithRHS)
+                                              (pdata_tcs ++ pdata_withRHS_tcs)
+
+                  -- build a 'PA' dictionary for all type constructors (except scalar ones and those
+                  -- defined with an explicit right-hand side where the dictionary is user-supplied)
+              ; dfuns <- sequence $
+                           zipWith4 buildTyConPADict
+                                    vect_tcs
+                                    repr_tcs
+                                    pdata_tcs
+                                    pdatas_tcs
 
               ; binds <- takeHoisted
               ; return (dfuns, binds)
@@ -241,25 +260,33 @@ vectTypeEnv tycons vectTypeDecls vectClassDecls
        }
 
 
--- Helpers -------------------
+-- Helpers --------------------------------------------------------------------
 
-buildTyConBindings :: TyCon -> TyCon -> TyCon -> TyCon -> VM Var
-buildTyConBindings orig_tc vect_tc prepr_tc pdata_tc
- = do { vectDataConWorkers orig_tc vect_tc pdata_tc
-      ; repr <- tyConRepr vect_tc
-      ; buildPADict vect_tc prepr_tc pdata_tc repr
-      }
+buildTyConPADict :: TyCon -> TyCon -> TyCon -> TyCon -> VM Var
+buildTyConPADict vect_tc prepr_tc pdata_tc pdatas_tc
+ = tyConRepr vect_tc >>= buildPADict vect_tc prepr_tc pdata_tc pdatas_tc
 
+-- Produce a custom-made worker for the data constructors of a vectorised data type.  This includes
+-- all data constructors that may be used in vetcorised code — i.e., all data constructors of data
+-- types other than scalar ones.  Also adds a mapping from the original to vectorised worker into
+-- the vectorisation map.
+--
+-- FIXME: It's not nice that we need create a special worker after the data constructors has
+--   already been constructed.  Also, I don't think the worker is properly added to the data
+--   constructor.  Seems messy.
 vectDataConWorkers :: TyCon -> TyCon -> TyCon -> VM ()
 vectDataConWorkers orig_tc vect_tc arr_tc
- = do bs <- sequence
-          . zipWith3 def_worker  (tyConDataCons orig_tc) rep_tys
-          $ zipWith4 mk_data_con (tyConDataCons vect_tc)
-                                 rep_tys
-                                 (inits rep_tys)
-                                 (tail $ tails rep_tys)
-      mapM_ (uncurry hoistBinding) bs
- where
+  = do { traceVt "Building vectorised worker for datatype" (ppr orig_tc)
+  
+       ; bs <- sequence
+             . zipWith3 def_worker  (tyConDataCons orig_tc) rep_tys
+             $ zipWith4 mk_data_con (tyConDataCons vect_tc)
+                                    rep_tys
+                                    (inits rep_tys)
+                                    (tail $ tails rep_tys)
+        ; mapM_ (uncurry hoistBinding) bs
+        }
+  where
     tyvars   = tyConTyVars vect_tc
     var_tys  = mkTyVarTys tyvars
     ty_args  = map Type var_tys
@@ -270,7 +297,6 @@ vectDataConWorkers orig_tc vect_tc arr_tc
     [arr_dc] = tyConDataCons arr_tc
 
     rep_tys  = map dataConRepArgTys $ tyConDataCons vect_tc
-
 
     mk_data_con con tys pre post
       = liftM2 (,) (vect_data_con con)
@@ -307,7 +333,7 @@ vectDataConWorkers orig_tc vect_tc arr_tc
                 . inBind orig_worker
                 . polyAbstract tyvars $ \args ->
                   liftM (mkLams (tyvars ++ args) . vectorised)
-                $ buildClosures tyvars [] arg_tys res_ty mk_body
+                $ buildClosures tyvars [] [] arg_tys res_ty mk_body
 
           raw_worker <- mkVectId orig_worker (exprType body)
           let vect_worker = raw_worker `setIdUnfolding`
