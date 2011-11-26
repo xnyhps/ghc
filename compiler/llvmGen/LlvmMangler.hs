@@ -60,7 +60,11 @@ llvmFixupAsm f1 f2 = do
     w <- openBinaryFile f2 WriteMode
     ss <- readSections r w
     hClose r
+#if mingw32_TARGET_OS
+    let fixed = (map fixMovaps . fixTables) ss
+#else
     let fixed = fixTables ss
+#endif
     mapM_ (writeSection w) fixed
     hClose w
     return ()
@@ -106,6 +110,25 @@ writeSection w (hdr, cts) = do
   when (not $ B.null hdr) $
     B.hPutStrLn w hdr
   B.hPutStrLn w cts
+
+fixMovaps :: Section -> Section
+fixMovaps (hdr, cts) =
+    (hdr, loop idxs cts)
+  where
+    loop :: [Int] -> B.ByteString -> B.ByteString
+    loop [] cts = cts
+                  
+    loop (i : is) cts =
+        loop is (hd `B.append` movups `B.append` B.drop 6 tl)
+      where
+        (hd, tl) = B.splitAt i cts
+
+    idxs :: [Int]
+    idxs = B.findSubstrings movaps cts
+
+    movaps, movups :: B.ByteString
+    movaps = B.pack "movaps"
+    movups = B.pack "movups"
 
 -- | Reorder and convert sections so info tables end up next to the
 -- code. Also does stack fixups.
