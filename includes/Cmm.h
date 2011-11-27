@@ -125,9 +125,10 @@
 #error Unknown long size
 #endif
 
-#define F_ float32
-#define D_ float64
-#define L_ bits64
+#define F_   float32
+#define D_   float64
+#define L_   bits64
+#define X16_ bits128
 
 #define SIZEOF_StgDouble 8
 #define SIZEOF_StgWord64 8

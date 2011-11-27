@@ -467,11 +467,13 @@ formalParam arg n =
     text "arg" <> int n <> text ", "
 formalParamType arg = argRep arg
 
-argRep F = text "F_"
-argRep D = text "D_"
-argRep L = text "L_"
-argRep P = text "gcptr"
-argRep _ = text "W_"
+argRep F      = text "F_"
+argRep D      = text "D_"
+argRep L      = text "L_"
+argRep P      = text "gcptr"
+argRep (X 16) = text "X16_"
+argRep (X _)  = error "Bad vector length"
+argRep _      = text "W_"
 
 genApply regstatus args =
    let
