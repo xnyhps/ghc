@@ -1,7 +1,7 @@
 
 module CmmType
     ( CmmType   -- Abstract
-    , b8, b16, b32, b64, f32, f64, bWord, bHalfWord, gcWord
+    , b8, b16, b32, b64, b128, f32, f64, bWord, bHalfWord, gcWord
     , cInt, cLong
     , cmmBits, cmmFloat
     , typeWidth, cmmEqType, cmmEqType_ignoring_ptrhood
@@ -110,11 +110,12 @@ cmmFloat = CmmType FloatCat
 
 -------- Common CmmTypes ------------
 -- Floats and words of specific widths
-b8, b16, b32, b64, f32, f64 :: CmmType
+b8, b16, b32, b64, b128, f32, f64 :: CmmType
 b8     = cmmBits W8
 b16    = cmmBits W16
 b32    = cmmBits W32
 b64    = cmmBits W64
+b128   = cmmBits W128
 f32    = cmmFloat W32
 f64    = cmmFloat W64
 
