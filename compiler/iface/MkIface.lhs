@@ -102,6 +102,7 @@ import ListSetOps
 import Binary
 import Fingerprint
 import Bag
+import Exception
 
 import Control.Monad
 import Data.List
@@ -262,7 +263,7 @@ mkIface_ hsc_env maybe_old_fingerprint
                 ; iface_vect_info = flattenVectInfo vect_info
                 -- Check if we are in Safe Inference mode but we failed to pass
                 -- the muster
-                ; safeMode    = if safeInferOn dflags  && not safeInf
+                ; safeMode    = if safeInferOn dflags && not safeInf
                                     then Sf_None
                                     else safeHaskell dflags
                 ; trust_info  = setSafeMode safeMode
@@ -1324,10 +1325,19 @@ checkModUsage this_pkg UsageHomeModule{
       else up_to_date (ptext (sLit "  Great!  The bits I use are up to date"))
  
 
-checkModUsage _this_pkg UsageFile{ usg_file_path = file, usg_mtime = old_mtime } = do
-  new_mtime <- liftIO $ getModificationTime file
-  return $ old_mtime /= new_mtime
-
+checkModUsage _this_pkg UsageFile{ usg_file_path = file,
+                                   usg_mtime = old_mtime } =
+  liftIO $
+    handleIO handle $ do
+      new_mtime <- getModificationTime file
+      return $ old_mtime /= new_mtime
+ where
+   handle =
+#ifdef DEBUG
+       \e -> pprTrace "UsageFile" (text (show e)) $ return True
+#else
+       \_ -> return True -- if we can't find the file, just recompile, don't fail
+#endif
 
 ------------------------
 checkModuleFingerprint :: Fingerprint -> Fingerprint -> IfG RecompileRequired

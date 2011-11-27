@@ -853,6 +853,7 @@ genCCall target dest_regs argsAndHints
           OSMinGW32  -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSFreeBSD  -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSOpenBSD  -> panic "PPC.CodeGen.genCCall: not defined for this os"
+          OSNetBSD   -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSUnknown  -> panic "PPC.CodeGen.genCCall: not defined for this os"
 
 data GenCCallPlatform = GCPLinux | GCPDarwin
@@ -1146,9 +1147,10 @@ genCCall' gcp target dest_regs argsAndHints
 
                     MO_PopCnt w  -> (fsLit $ popCntLabel w, False)
 
-                    other -> pprPanic "genCCall(ppc): unknown callish op"
-                                    (pprCallishMachOp other)
-
+                    MO_WriteBarrier ->
+                        panic $ "outOfLineCmmOp: MO_WriteBarrier not supported"
+                    MO_Touch ->
+                        panic $ "outOfLineCmmOp: MO_Touch not supported"
 
 -- -----------------------------------------------------------------------------
 -- Generating a table-branch

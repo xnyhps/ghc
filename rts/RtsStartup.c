@@ -183,6 +183,7 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
      */
     getStablePtr((StgPtr)runIO_closure);
     getStablePtr((StgPtr)runNonIO_closure);
+    getStablePtr((StgPtr)flushStdHandles_closure);
 
     getStablePtr((StgPtr)runFinalizerBatch_closure);
 
@@ -430,7 +431,7 @@ static void flushStdHandles(void)
 {
     Capability *cap;
     cap = rts_lock();
-    rts_evalIO(cap, flushStdHandles_closure, NULL);
+    cap = rts_evalIO(cap, flushStdHandles_closure, NULL);
     rts_unlock(cap);
 }
 

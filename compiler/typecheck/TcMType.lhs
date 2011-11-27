@@ -50,6 +50,7 @@ module TcMType (
   --------------------------------
   -- Checking type validity
   Rank, UserTypeCtxt(..), checkValidType, checkValidMonoType,
+  expectedKindInCtxt, 
   checkValidTheta, 
   checkValidInstHead, checkValidInstance, validDerivPred,
   checkInstTermination, checkValidFamInst, checkTyFamFreeness, 
@@ -63,8 +64,10 @@ module TcMType (
   zonkTcTyVar, zonkTcTyVars, zonkTcTyVarsAndFV, zonkSigTyVar,
   zonkQuantifiedTyVar, zonkQuantifiedTyVars,
   zonkTcType, zonkTcTypes, zonkTcThetaType,
-  zonkTcKind, defaultKindVarToStar,
-  zonkImplication, zonkEvVar, zonkWantedEvVar, zonkFlavoredEvVar,
+
+  zonkTcKind, defaultKindVarToStar, zonkCt, zonkCts,
+  zonkImplication, zonkEvVar, zonkWantedEvVar,
+
   zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
   tcGetGlobalTyVars, 
@@ -164,7 +167,7 @@ newDict cls tys
        ; return (mkLocalId name (mkClassPred cls tys)) }
 
 predTypeOccName :: PredType -> OccName
-predTypeOccName ty = case predTypePredTree ty of
+predTypeOccName ty = case classifyPredType ty of
     ClassPred cls _ -> mkDictOcc (getOccName cls)
     IPPred ip _     -> mkVarOccFS (ipFastString ip)
     EqPred _ _      -> mkVarOccFS (fsLit "cobox")
@@ -573,11 +576,12 @@ zonkTcPredType = zonkTcType
 		     are used at the end of type checking
 
 \begin{code}
-defaultKindVarToStar :: TcTyVar -> TcM ()
+defaultKindVarToStar :: TcTyVar -> TcM Kind
 -- We have a meta-kind: unify it with '*'
 defaultKindVarToStar kv 
-  = ASSERT ( isKiVar kv && isMetaTyVar kv )
-    writeMetaTyVar kv liftedTypeKind
+  = do { ASSERT ( isKiVar kv && isMetaTyVar kv )
+         writeMetaTyVar kv liftedTypeKind
+       ; return liftedTypeKind }
 
 zonkQuantifiedTyVars :: TcTyVarSet -> TcM [TcTyVar]
 -- Precondition: a kind variable occurs before a type
@@ -670,18 +674,25 @@ zonkEvVar :: EvVar -> TcM EvVar
 zonkEvVar var = do { ty' <- zonkTcType (varType var)
                    ; return (setVarType var ty') }
 
-zonkFlavoredEvVar :: FlavoredEvVar -> TcM FlavoredEvVar
-zonkFlavoredEvVar (EvVarX ev fl)
-  = do { ev' <- zonkEvVar ev
-       ; fl' <- zonkFlavor fl
-       ; return (EvVarX ev' fl') }
 
 zonkWC :: WantedConstraints -> TcM WantedConstraints
 zonkWC (WC { wc_flat = flat, wc_impl = implic, wc_insol = insol })
-  = do { flat'   <- zonkWantedEvVars flat
+  = do { flat'   <- mapBagM zonkCt flat 
        ; implic' <- mapBagM zonkImplication implic
-       ; insol'  <- mapBagM zonkFlavoredEvVar insol
+       ; insol'  <- mapBagM zonkCt insol
        ; return (WC { wc_flat = flat', wc_impl = implic', wc_insol = insol' }) }
+
+zonkCt :: Ct -> TcM Ct 
+-- Zonking a Ct conservatively gives back a CNonCanonical
+zonkCt ct 
+  = do { v'  <- zonkEvVar (cc_id ct)
+       ; fl' <- zonkFlavor (cc_flavor ct)
+       ; return $ 
+         CNonCanonical { cc_id = v'
+                       , cc_flavor = fl'
+                       , cc_depth = cc_depth ct } }
+zonkCts :: Cts -> TcM Cts
+zonkCts = mapBagM zonkCt
 
 zonkWantedEvVars :: Bag WantedEvVar -> TcM (Bag WantedEvVar)
 zonkWantedEvVars = mapBagM zonkWantedEvVar
@@ -883,14 +894,26 @@ This might not necessarily show up in kind checking.
 
 	
 \begin{code}
+-- Depending on the context, we might accept any kind (for instance, in a TH
+-- splice), or only certain kinds (like in type signatures).
+expectedKindInCtxt :: UserTypeCtxt -> Maybe Kind
+expectedKindInCtxt (TySynCtxt _)  = Nothing -- Any kind will do
+expectedKindInCtxt ThBrackCtxt    = Nothing
+expectedKindInCtxt GhciCtxt       = Nothing
+expectedKindInCtxt ResSigCtxt     = Just openTypeKind
+expectedKindInCtxt ExprSigCtxt    = Just openTypeKind
+expectedKindInCtxt (ForSigCtxt _) = Just liftedTypeKind
+expectedKindInCtxt _              = Just argTypeKind
+
 checkValidType :: UserTypeCtxt -> Type -> TcM ()
 -- Checks that the type is valid for the given context
 checkValidType ctxt ty = do
-    traceTc "checkValidType" (ppr ty)
-    unboxed  <- xoptM Opt_UnboxedTuples
-    rank2    <- xoptM Opt_Rank2Types
-    rankn    <- xoptM Opt_RankNTypes
-    polycomp <- xoptM Opt_PolymorphicComponents
+    traceTc "checkValidType" (ppr ty <+> text "::" <+> ppr (typeKind ty))
+    unboxed         <- xoptM Opt_UnboxedTuples
+    rank2           <- xoptM Opt_Rank2Types
+    rankn           <- xoptM Opt_RankNTypes
+    polycomp        <- xoptM Opt_PolymorphicComponents
+    constraintKinds <- xoptM Opt_ConstraintKinds
     let 
 	gen_rank n | rankn     = ArbitraryRank
 	           | rank2     = Rank 2
@@ -920,14 +943,9 @@ checkValidType ctxt ty = do
 
 	actual_kind = typeKind ty
 
-	kind_ok = case ctxt of
-			TySynCtxt _  -> True -- Any kind will do
-			ThBrackCtxt  -> True -- ditto
-                        GhciCtxt     -> True -- ditto
-			ResSigCtxt   -> tcIsSubOpenTypeKind actual_kind
-			ExprSigCtxt  -> tcIsSubOpenTypeKind actual_kind
-			ForSigCtxt _ -> isLiftedTypeKind actual_kind
-			_            -> tcIsSubArgTypeKind actual_kind
+        kind_ok = case expectedKindInCtxt ctxt of
+                    Nothing -> True
+                    Just k  -> tcIsSubKind actual_kind k
 	
 	ubx_tup 
          | not unboxed = UT_NotOk
@@ -944,10 +962,12 @@ checkValidType ctxt ty = do
 	-- Check that the thing has kind Type, and is lifted if necessary
 	-- Do this second, because we can't usefully take the kind of an 
 	-- ill-formed type such as (a~Int)
-    traceTc "checkValidType kind_ok ctxt" (ppr kind_ok $$ pprUserTypeCtxt ctxt)
     checkTc kind_ok (kindErr actual_kind)
 
-    traceTc "checkValidType done" (ppr ty)
+        -- Check that the thing does not have kind Constraint,
+        -- if -XConstraintKinds isn't enabled
+    unless constraintKinds
+      $ checkTc (not (isConstraintKind actual_kind)) (predTupleErr ty)
 
 checkValidMonoType :: Type -> TcM ()
 checkValidMonoType ty = check_mono_type MustBeMonoType ty
@@ -1217,7 +1237,7 @@ check_pred_ty' _ _ctxt (IPPred _ ty) = checkValidMonoType ty
 check_pred_ty' dflags ctxt t@(TuplePred ts)
   = do { checkTc (xopt Opt_ConstraintKinds dflags)
                  (predTupleErr (predTreePredType t))
-       ; mapM_ (check_pred_ty' dflags ctxt) ts }
+       ; mapM_ (check_pred_ty dflags ctxt) ts }
     -- This case will not normally be executed because without -XConstraintKinds
     -- tuple types are only kind-checked as *
 
@@ -1386,7 +1406,7 @@ growPredTyVars :: TcPredType
                -> TyVarSet	-- The set to extend
 	       -> TyVarSet	-- TyVars of the predicate if it intersects
 	       	  		-- the set, or is implicit parameter
-growPredTyVars pred tvs = go (predTypePredTree pred)
+growPredTyVars pred tvs = go (classifyPredType pred)
   where
     grow pred_tvs | pred_tvs `intersectsVarSet` tvs = pred_tvs
                   | otherwise                       = emptyVarSet
@@ -1394,7 +1414,7 @@ growPredTyVars pred tvs = go (predTypePredTree pred)
     go (IPPred _ ty)     = tyVarsOfType ty -- See Note [Implicit parameters and ambiguity]
     go (ClassPred _ tys) = grow (tyVarsOfTypes tys)
     go (EqPred ty1 ty2)  = grow (tyVarsOfType ty1 `unionVarSet` tyVarsOfType ty2)
-    go (TuplePred ts)    = unionVarSets (map go ts)
+    go (TuplePred ts)    = unionVarSets (map (go . classifyPredType) ts)
     go (IrredPred ty)    = grow (tyVarsOfType ty)
 \end{code}
     
@@ -1727,7 +1747,6 @@ fvType (ForAllTy tyvar ty) = filter (/= tyvar) (fvType ty)
 fvTypes :: [Type] -> [TyVar]
 fvTypes tys                = concat (map fvType tys)
 
--------------------
 sizeType :: Type -> Int
 -- Size of a type: the number of variables and constructors
 sizeType ty | Just exp_ty <- tcView ty = sizeType exp_ty
@@ -1749,12 +1768,12 @@ sizeTypes xs = sum (map sizeType tys)
 -- can't get back to a class constraint, so it's safe
 -- to say "size 0".  See Trac #4200.
 sizePred :: PredType -> Int
-sizePred ty = go (predTypePredTree ty)
+sizePred ty = go (classifyPredType ty)
   where
     go (ClassPred _ tys') = sizeTypes tys'
     go (IPPred {})        = 0
     go (EqPred {})        = 0
-    go (TuplePred ts)     = sum (map go ts)
+    go (TuplePred ts)     = sum (map (go . classifyPredType) ts)
     go (IrredPred ty)     = sizeType ty
 \end{code}
 

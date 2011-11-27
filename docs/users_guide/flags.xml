@@ -266,7 +266,13 @@
 	    </row>
 	    <row>
 	      <entry><option>-stubdir</option> <replaceable>dir</replaceable></entry>
-	      <entry>redirect FFi stub files</entry>
+	      <entry>redirect FFI stub files</entry>
+	      <entry>dynamic</entry>
+	      <entry>-</entry>
+	    </row>
+	    <row>
+	      <entry><option>-dumpdir</option> <replaceable>dir</replaceable></entry>
+	      <entry>redirect dump files</entry>
 	      <entry>dynamic</entry>
 	      <entry>-</entry>
 	    </row>
@@ -803,6 +809,13 @@
 	      <entry><option>-XNoConstraintKinds</option></entry>
 	    </row>
 	    <row>
+	      <entry><option>-XPolyKinds</option></entry>
+	      <entry>Enable <link linkend="kind-polymorphism">kind polymorphism</link>.
+                     Implies <option>-XKindSignatures</option>.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-XNoPolyKinds</option></entry>
+	    </row>
+	    <row>
 	      <entry><option>-XScopedTypeVariables</option></entry>
 	      <entry>Enable <link linkend="scoped-type-variables">lexically-scoped type variables</link>.
 	      Implied by <option>-fglasgow-exts</option>.</entry>
@@ -975,10 +988,10 @@
 	      <entry><option>-XNoRecursiveDo</option></entry>
 	    </row>
 	    <row>
-	      <entry><option>-XPArr</option></entry>
+	      <entry><option>-XParallelArrays</option></entry>
 	      <entry>Enable parallel arrays.</entry>
 	      <entry>dynamic</entry>
-	      <entry><option>-XNoPArr</option></entry>
+	      <entry><option>-XNoParallelArrays</option></entry>
 	    </row>
 	    <row>
 	      <entry><option>-XRecordWildCards</option></entry>
@@ -1090,14 +1103,14 @@
 	      <entry><option>-</option></entry>
 	    </row>
 	    <row>
-	      <entry><option>-XSafeLanguage</option></entry>
-        <entry>Enable the <link linkend="safe-haskell">Safe Haskell</link> Safe Language.</entry>
+	      <entry><option>-XUnsafe</option></entry>
+         <entry>Enable <link linkend="safe-haskell">Safe Haskell</link> Unsafe mode.</entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-</option></entry>
 	    </row>
 	    <row>
-	      <entry><option>-XSafeImports</option></entry>
-        <entry>Enable <link linkend="safe-imports-ext">Safe Imports</link>.</entry>
+	      <entry><option>-fpackage-trust</option></entry>
+         <entry>Enable <link linkend="safe-haskell">Safe Haskell</link> trusted package requirement for trustworty modules.</entry>
 	      <entry>dynamic</entry>
 	      <entry><option>-</option></entry>
 	    </row>
@@ -1344,6 +1357,24 @@
 	    <entry>warn about do bindings that appear to throw away monadic values that you should have bound instead</entry>
 	    <entry>dynamic</entry>
 	    <entry><option>-fno-warn-wrong-do-bind</option></entry>
+	  </row>
+
+	  <row>
+	    <entry><option>-fwarn-unsafe</option></entry>
+       <entry>warn if the module being compiled is regarded to be unsafe.
+         Should be used to check the safety status of modules when using safe
+         inference.</entry>
+	    <entry>dynamic</entry>
+	    <entry><option>-fno-warn-unsafe</option></entry>
+	  </row>
+
+	  <row>
+	    <entry><option>-fwarn-safe</option></entry>
+       <entry>warn if the module being compiled is regarded to be safe.
+         Should be used to check the safety status of modules when using safe
+         inference.</entry>
+	    <entry>dynamic</entry>
+	    <entry><option>-fno-warn-safe</option></entry>
 	  </row>
 
 	  </tbody>
@@ -1853,13 +1884,15 @@ phase <replaceable>n</replaceable></entry>
 	  <tbody>
 	    <row>
 	      <entry><option>-fasm</option></entry>
-	      <entry>Use the native code generator</entry>
+        <entry>Use the <link linkend="native-code-gen">native code
+            generator</link></entry>
 	      <entry>dynamic</entry>
 	      <entry>-fllvm</entry>
 	    </row>
 	    <row>
 	      <entry><option>-fllvm</option></entry>
-	      <entry>Compile via LLVM</entry>
+        <entry>Compile using the <link linkend="llvm-code-gen">LLVM code
+            generator</link></entry>
 	      <entry>dynamic</entry>
 	      <entry>-fasm</entry>
 	    </row>
@@ -2765,7 +2798,7 @@ phase <replaceable>n</replaceable></entry>
 	    </row>
 	    <row>
 	      <entry><option>-funregisterised</option></entry>
-	      <entry>Unregisterised compilation (use <option>-unreg</option> instead)</entry>
+        <entry><link linkend="unreg">Unregisterised</link> compilation (use <option>-unreg</option> instead)</entry>
 	      <entry>static</entry>
 	      <entry>-</entry>
 	    </row>

@@ -206,6 +206,10 @@ data ZonkEnv
 	-- Only *type* abstraction is done by side effect
 	-- Is only consulted lazily; hence knot-tying
 
+instance Outputable ZonkEnv where 
+  ppr (ZonkEnv _ _ty_env var_env) = vcat (map ppr (varEnvElts var_env))
+
+
 emptyZonkEnv :: ZonkEnv
 emptyZonkEnv = ZonkEnv zonkTypeZapping emptyVarEnv emptyVarEnv
 
@@ -1059,9 +1063,9 @@ zonkVect _ (HsVectTypeIn _ _ _) = panic "TcHsSyn.zonkVect: HsVectTypeIn"
 zonkVect _env (HsVectClassOut c)
   = return $ HsVectClassOut c
 zonkVect _ (HsVectClassIn _) = panic "TcHsSyn.zonkVect: HsVectClassIn"
-zonkVect _env (HsVectInstOut s i)
-  = return $ HsVectInstOut s i
-zonkVect _ (HsVectInstIn _ _) = panic "TcHsSyn.zonkVect: HsVectInstIn"
+zonkVect _env (HsVectInstOut i)
+  = return $ HsVectInstOut i
+zonkVect _ (HsVectInstIn _) = panic "TcHsSyn.zonkVect: HsVectInstIn"
 \end{code}
 
 %************************************************************************
@@ -1078,7 +1082,7 @@ zonkEvTerm env (EvCoercionBox co) = do { co' <- zonkTcLCoToLCo env co
                                        ; return (EvCoercionBox co') }
 zonkEvTerm env (EvCast v co)      = ASSERT( isId v) 
                                     do { co' <- zonkTcLCoToLCo env co
-                                       ; return (EvCast (zonkIdOcc env v) co') }
+                                       ; return (mkEvCast (zonkIdOcc env v) co') }
 zonkEvTerm env (EvTupleSel v n)   = return (EvTupleSel (zonkIdOcc env v) n)
 zonkEvTerm env (EvTupleMk vs)     = return (EvTupleMk (map (zonkIdOcc env) vs))
 zonkEvTerm env (EvSuperClass d n) = return (EvSuperClass (zonkIdOcc env d) n)
@@ -1202,9 +1206,7 @@ zonkTvCollecting :: TcRef TyVarSet -> UnboundTyVarZonker
 -- Works on both types and kinds
 zonkTvCollecting unbound_tv_set tv
   = do { poly_kinds <- xoptM Opt_PolyKinds
-       ; if isKiVar tv && not poly_kinds then
-            do { defaultKindVarToStar tv
-               ; return liftedTypeKind }
+       ; if isKiVar tv && not poly_kinds then defaultKindVarToStar tv
          else do
        { tv' <- zonkQuantifiedTyVar tv
        ; tv_set <- readMutVar unbound_tv_set
@@ -1225,10 +1227,14 @@ zonkTypeZapping tv
 
 
 zonkTcLCoToLCo :: ZonkEnv -> LCoercion -> TcM LCoercion
+-- NB: zonking often reveals that the coercion is an identity
+--     in which case the Refl-ness can propagate up to the top
+--     which in turn gives more efficient desugaring.  So it's
+--     worth using the 'mk' smart constructors on the RHS
 zonkTcLCoToLCo env co
   = go co
   where
-    go (CoVarCo cv)         = return (CoVarCo (zonkEvVarOcc env cv))
+    go (CoVarCo cv)         = return (mkEqVarLCo (zonkEvVarOcc env cv))
     go (Refl ty)            = do { ty' <- zonkTcTypeToType env ty
                                  ; return (Refl ty') }
     go (TyConAppCo tc cos)  = do { cos' <- mapM go cos; return (mkTyConAppCo tc cos') }

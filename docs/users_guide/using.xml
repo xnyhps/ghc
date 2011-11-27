@@ -731,11 +731,9 @@ ghc -c Foo.hs</screen>
       <filename>Foo.hs</filename> to an object file
       <filename>Foo.o</filename>.</para>
 
-      <para>Note: What the Haskell compiler proper produces depends on
-      whether a native-code generator<indexterm><primary>native-code
-      generator</primary></indexterm> is used (producing assembly
-      language) or not (producing C).  See <xref
-      linkend="options-codegen"/> for more details.</para>
+      <para>Note: What the Haskell compiler proper produces depends on what
+      backend code generator is used. See <xref linkend="code-generators"/>
+      for more details.</para>
 
       <para>Note: C pre-processing is optional, the
       <option>-cpp</option><indexterm><primary><option>-cpp</option></primary></indexterm>
@@ -2003,6 +2001,8 @@ f "2"    = 2
 
   </sect1>
 
+  &code-gens;
+
   &phases;
 
   &shared_libs;
@@ -2232,16 +2232,35 @@ f "2"    = 2
 	<term><option>-msse2</option>:</term>
 	<listitem>
           <para>
-            (x86 only, added in GHC 7.0.1) Use the SSE2 registers and
-            instruction set to implement floating point operations
-            when using the native code generator.  This gives a
-            substantial performance improvement for floating point,
-            but the resulting compiled code will only run on
-            processors that support SSE2 (Intel Pentium 4 and later,
-            or AMD Athlon 64 and later).
+				(x86 only, added in GHC 7.0.1) Use the SSE2 registers and
+				instruction set to implement floating point operations when using
+				the <link linkend="native-code-gen">native code generator</link>.
+				This gives a substantial performance improvement for floating
+				point, but the resulting compiled code
+				will only run on processors that support SSE2 (Intel Pentium 4 and
+				later, or AMD Athlon 64 and later). The
+				<link linkend="llvm-code-gen">LLVM backend</link> will also use SSE2
+				if your processor supports it but detects this automatically so no
+				flag is required.
           </para>
           <para>
             SSE2 is unconditionally used on x86-64 platforms.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term><option>-msse4.2</option>:</term>
+	<listitem>
+          <para>
+				(x86 only, added in GHC 7.2.1) Use the SSE4.2 instruction set to
+				implement some floating point and bit operations when using the
+				<link linkend="native-code-gen">native code generator</link>. The
+				resulting compiled code will only run on processors that
+				support SSE4.2 (Intel Core i7 and later). The
+				<link linkend="llvm-code-gen">LLVM backend</link> will also use
+				SSE4.2 if your processor supports it but detects this automatically
+				so no flag is required.
           </para>
         </listitem>
       </varlistentry>

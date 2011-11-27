@@ -86,10 +86,11 @@ vectModule guts@(ModGuts { mg_tcs        = tycons
       ; (_, fam_inst_env) <- readGEnv global_fam_inst_env
 
           -- Vectorise all the top level bindings and VECTORISE declarations on imported identifiers
-      ; let impBinds = [imp_id | Vect          imp_id _ <- vect_decls, isGlobalId imp_id] ++
-                       [imp_id | VectInst True imp_id   <- vect_decls, isGlobalId imp_id]
-      ; binds_top <- mapM vectTopBind binds
+          -- NB: Need to vectorise the imported bindings first (local bindings may depend on them).
+      ; let impBinds = [imp_id | Vect     imp_id _ <- vect_decls, isGlobalId imp_id] ++
+                       [imp_id | VectInst imp_id   <- vect_decls, isGlobalId imp_id]
       ; binds_imp <- mapM vectImpBind impBinds
+      ; binds_top <- mapM vectTopBind binds
 
       ; return $ guts { mg_tcs          = tycons ++ new_tycons
                         -- we produce no new classes or instances, only new class type constructors
@@ -149,7 +150,7 @@ vectTopBind b@(NonRec var expr)
          ; (inline, isScalar, expr') <- vectTopRhs [] var expr
          ; var' <- vectTopBinder var inline expr'
          ; when isScalar $ 
-             addGlobalScalar var
+             addGlobalScalarVar var
  
              -- We replace the original top-level binding by a value projected from the vectorised
              -- closure and add any newly created hoisted top-level bindings.
@@ -181,7 +182,7 @@ vectTopBind b@(Rec bs)
                   ; if and areScalars
                     then      -- (1) Entire recursive group is scalar
                               --      => add all variables to the global set of scalars
-                         do { mapM_ addGlobalScalar vars
+                         do { mapM_ addGlobalScalarVar vars
                             ; return (vars', inlines, exprs', hs)
                             }
                     else      -- (2) At least one binding is not scalar
@@ -225,7 +226,7 @@ vectImpBind var
        ; (inline, isScalar, expr') <- vectTopRhs [] var (Var var)
        ; var' <- vectTopBinder var inline expr'
        ; when isScalar $ 
-           addGlobalScalar var
+           addGlobalScalarVar var
 
            -- We add any newly created hoisted top-level bindings.
        ; hs <- takeHoisted
@@ -301,7 +302,8 @@ vectTopBinder var inline expr
 --     => generate vectorised code according to the the "Note [Scalar dfuns]" below
 -- 
 -- (4) There is no vectorisation declaration for the variable
---     => perform automatic vectorisation of the RHS
+--     => perform automatic vectorisation of the RHS (the definition may or may not be a dfun;
+--        vectorisation proceeds differently depending on which it is)
 --
 -- Note [Scalar dfuns]
 -- ~~~~~~~~~~~~~~~~~~~
@@ -338,11 +340,12 @@ vectTopRhs :: [Var]           -- ^ Names of all functions in the rec block
                  , CoreExpr)  -- (3) the vectorised right-hand side
 vectTopRhs recFs var expr
   = closedV
-  $ do { globalScalar <- isGlobalScalar var
+  $ do { globalScalar <- isGlobalScalarVar var
        ; vectDecl     <- lookupVectDecl var
        ; let isDFun = isDFunId var
 
-       ; traceVt ("vectTopRhs of " ++ show var ++ info globalScalar isDFun vectDecl) $ ppr expr
+       ; traceVt ("vectTopRhs of " ++ show var ++ info globalScalar isDFun vectDecl ++ ":") $ 
+           ppr expr
 
        ; rhs globalScalar isDFun vectDecl
        }
@@ -357,14 +360,18 @@ vectTopRhs recFs var expr
       = do { expr' <- vectScalarDFun var recFs
            ; return (DontInline, True, expr')
            }
-    rhs False         _isDFun Nothing                         -- Case (4)
-      = do { let fvs = freeVars expr
+    rhs False         False   Nothing                         -- Case (4) — not a dfun
+      = do { let exprFvs = freeVars expr
            ; (inline, isScalar, vexpr) 
                <- inBind var $
-                    vectPolyExpr (isStrongLoopBreaker $ idOccInfo var) recFs fvs
+                    vectPolyExpr (isStrongLoopBreaker $ idOccInfo var) recFs exprFvs
            ; return (inline, isScalar, vectorised vexpr)
            }
-    
+    rhs False         True    Nothing                         -- Case (4) — is a dfun
+      = do { expr' <- vectDictExpr expr
+           ; return  (DontInline, True, expr')
+           }
+
     info True  False _                          = " [VECTORISE SCALAR]"
     info True  True  _                          = " [VECTORISE SCALAR instance]"
     info False _     vectDecl | isJust vectDecl = " [VECTORISE]"
@@ -378,7 +385,7 @@ tryConvert :: Var       -- ^ Name of the original binding (eg @foo@)
            -> CoreExpr  -- ^ The original body of the binding.
            -> VM CoreExpr
 tryConvert var vect_var rhs
-  = do { globalScalar <- isGlobalScalar var
+  = do { globalScalar <- isGlobalScalarVar var
        ; if globalScalar
          then
            return rhs

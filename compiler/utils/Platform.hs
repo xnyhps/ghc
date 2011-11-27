@@ -42,9 +42,6 @@ data Arch
         | ArchARM
           { armISA    :: ArmISA
           , armISAExt :: [ArmISAExt] }
-        | ArchAlpha
-        | ArchMipseb
-        | ArchMipsel
         deriving (Read, Show, Eq)
 
 
@@ -58,6 +55,7 @@ data OS
         | OSMinGW32
         | OSFreeBSD
         | OSOpenBSD
+        | OSNetBSD
         deriving (Read, Show, Eq)
 
 -- | ARM Instruction Set Architecture and Extensions
@@ -86,9 +84,6 @@ target32Bit p = case platformArch p of
                 ArchPPC_64  -> False
                 ArchSPARC   -> True
                 ArchARM _ _ -> True
-                ArchMipseb  -> True
-                ArchMipsel  -> True
-                ArchAlpha   -> False
 
 
 -- | This predicates tells us whether the OS supports ELF-like shared libraries.
@@ -96,6 +91,7 @@ osElfTarget :: OS -> Bool
 osElfTarget OSLinux    = True
 osElfTarget OSFreeBSD  = True
 osElfTarget OSOpenBSD  = True
+osElfTarget OSNetBSD   = True
 osElfTarget OSSolaris2 = True
 osElfTarget OSDarwin   = False
 osElfTarget OSMinGW32  = False

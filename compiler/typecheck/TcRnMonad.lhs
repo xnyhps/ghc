@@ -513,6 +513,12 @@ getRecFieldEnv = do { env <- getGblEnv; return (tcg_field_env env) }
 
 getDeclaredDefaultTys :: TcRn (Maybe [Type])
 getDeclaredDefaultTys = do { env <- getGblEnv; return (tcg_default env) }
+
+addDependentFiles :: [FilePath] -> TcRn ()
+addDependentFiles fs = do
+  ref <- fmap tcg_dependent_files getGblEnv
+  dep_files <- readTcRef ref
+  writeTcRef ref (fs ++ dep_files)
 \end{code}
 
 %************************************************************************
@@ -997,6 +1003,15 @@ emitFlats :: Bag WantedEvVar -> TcM ()
 emitFlats ct
   = do { lie_var <- getConstraintVar ;
          updTcRef lie_var (`addFlats` ct) }
+
+emitWantedCts :: Cts -> TcM () 
+-- Precondition: all wanted
+emitWantedCts = mapBagM_ emit_wanted_ct
+  where emit_wanted_ct ct 
+          | v <- cc_id ct 
+          , Wanted loc <- cc_flavor ct 
+          = emitFlat (EvVarX v loc)
+          | otherwise = panic "emitWantecCts: can't emit non-wanted!"
 
 emitImplication :: Implication -> TcM ()
 emitImplication ct

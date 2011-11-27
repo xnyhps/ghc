@@ -75,11 +75,12 @@ paDictOfType ty
     -- the representation type if the tycon is polymorphic
     paDictOfTyApp (TyConApp tc []) ty_args
      = do
-         dfun <- maybeCantVectoriseM "No PA dictionary for type constructor"
-                                      (ppr tc <+> text "in" <+> ppr ty)
+         dfun <- maybeCantVectoriseM noPADictErr (ppr tc <+> text "in" <+> ppr ty)
                 $ lookupTyConPA tc
          dicts <- mapM paDictOfType ty_args
          return $ Var dfun `mkTyApps` ty_args `mkApps` dicts
+     where
+       noPADictErr = "No PA dictionary for type constructor (did you import 'Data.Array.Parallel'?)"
 
     paDictOfTyApp _ _ = failure
 
@@ -122,7 +123,7 @@ prDictOfPReprInstTyCon ty prepr_tc prepr_args
       let co = mkAppCo pr_co
              $ mkSymCo
              $ mkAxInstCo arg_co prepr_args
-      return $ mkCoerce co dict
+      return $ mkCast dict co
 
   | otherwise = cantVectorise "Invalid PRepr type instance" (ppr ty)
 

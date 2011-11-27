@@ -35,14 +35,15 @@ module Kind (
 
         -- ** Predicates on Kinds
         isLiftedTypeKind, isUnliftedTypeKind, isOpenTypeKind,
-        isUbxTupleKind, isArgTypeKind, isConstraintKind, isKind,
+        isUbxTupleKind, isArgTypeKind, isConstraintKind,
+        isConstraintOrLiftedKind, isKind,
         isSuperKind, noHashInKind,
         isLiftedTypeKindCon, isConstraintKindCon,
         isAnyKind, isAnyKindCon,
 
         isSubArgTypeKind, tcIsSubArgTypeKind, 
         isSubOpenTypeKind, tcIsSubOpenTypeKind,
-        isSubKind, defaultKind,
+        isSubKind, tcIsSubKind, defaultKind,
         isSubKindCon, tcIsSubKindCon, isSubOpenTypeKindCon,
 
         -- ** Functions on variables
@@ -138,7 +139,7 @@ synTyConResKind tycon = kindAppResult (tyConKind tycon) (map mkTyVarTy (tyConTyV
 
 -- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
 isUbxTupleKind, isOpenTypeKind, isArgTypeKind, isUnliftedTypeKind,
-  isConstraintKind, isAnyKind :: Kind -> Bool
+  isConstraintKind, isAnyKind, isConstraintOrLiftedKind :: Kind -> Bool
 
 isOpenTypeKindCon, isUbxTupleKindCon, isArgTypeKindCon,
   isUnliftedTypeKindCon, isSubArgTypeKindCon, tcIsSubArgTypeKindCon,
@@ -175,6 +176,9 @@ isConstraintKindCon tc = tyConUnique tc == constraintKindTyConKey
 isConstraintKind (TyConApp tc _) = isConstraintKindCon tc
 isConstraintKind _               = False
 
+isConstraintOrLiftedKind (TyConApp tc _)
+  = isConstraintKindCon tc || isLiftedTypeKindCon tc
+isConstraintOrLiftedKind _ = False
 
 -- Subkinding
 -- The tc variants are used during type-checking, where we don't want the
@@ -229,13 +233,18 @@ isSuperKind _                   = False
 isKind :: Kind -> Bool
 isKind k = isSuperKind (typeKind k)
 
-isSubKind :: Kind -> Kind -> Bool
+isSubKind, tcIsSubKind :: Kind -> Kind -> Bool
+isSubKind   = isSubKind' False
+tcIsSubKind = isSubKind' True
+
+-- The first argument denotes whether we are in the type-checking phase or not
+isSubKind' :: Bool -> Kind -> Kind -> Bool
 -- ^ @k1 \`isSubKind\` k2@ checks that @k1@ <: @k2@
 
-isSubKind (FunTy a1 r1) (FunTy a2 r2)
-  = (a2 `isSubKind` a1) && (r1 `isSubKind` r2)
+isSubKind' duringTc (FunTy a1 r1) (FunTy a2 r2)
+  = (isSubKind' duringTc a2 a1) && (isSubKind' duringTc r1 r2)
 
-isSubKind k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
+isSubKind' duringTc k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
   | isPromotedTypeTyCon kc1 || isPromotedTypeTyCon kc2
     -- handles promoted kinds (List *, Nat, etc.)
     = eqKind k1 k2
@@ -247,10 +256,10 @@ isSubKind k1@(TyConApp kc1 k1s) k2@(TyConApp kc2 k2s)
 
   | otherwise = -- handles usual kinds (*, #, (#), etc.)
                 ASSERT2( null k1s && null k2s, ppr k1 <+> ppr k2 )
-                kc1 `isSubKindCon` kc2
+                if duringTc then kc1 `tcIsSubKindCon` kc2
+                else kc1 `isSubKindCon` kc2
 
-
-isSubKind k1 k2 = eqKind k1 k2
+isSubKind' _duringTc k1 k2 = eqKind k1 k2
 
 isSubKindCon :: TyCon -> TyCon -> Bool
 -- ^ @kc1 \`isSubKindCon\` kc2@ checks that @kc1@ <: @kc2@
@@ -267,7 +276,7 @@ tcIsSubKindCon kc1 kc2
   | otherwise                                          = isSubKindCon kc1 kc2
 
 defaultKind :: Kind -> Kind
--- ^ Used when generalising: default kind ? and ?? to *.
+-- ^ Used when generalising: default OpenKind and ArgKind to *.
 -- See "Type#kind_subtyping" for more information on what that means
 
 -- When we generalise, we make generic type variables whose kind is
@@ -278,13 +287,13 @@ defaultKind :: Kind -> Kind
 -- We want f to get type
 --	f :: forall (a::*). a -> Bool
 -- Not 
---	f :: forall (a::??). a -> Bool
+--	f :: forall (a::ArgKind). a -> Bool
 -- because that would allow a call like (f 3#) as well as (f True),
 -- and the calling conventions differ.
 -- This defaulting is done in TcMType.zonkTcTyVarBndr.
 defaultKind k
-  | isSubOpenTypeKind k = liftedTypeKind
-  | otherwise           = k
+  | tcIsSubOpenTypeKind k = liftedTypeKind
+  | otherwise             = k
 
 splitKiTyVars :: [TyVar] -> ([KindVar], [TyVar])
 -- Precondition: kind variables should precede type variables

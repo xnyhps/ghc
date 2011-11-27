@@ -13,11 +13,11 @@ module Vectorise.Builtins.Base (
   Builtins(..),
   
   -- * Projections
-  parray_PrimTyCon,
-  selTy,
+  selTy, selsTy,
   selReplicate,
   selTags,
   selElements,
+  selsLength,
   sumTyCon,
   prodTyCon,
   prodDataCon,
@@ -70,9 +70,8 @@ aLL_DPH_PRIM_TYCONS = map tyConName [intPrimTyCon, {- floatPrimTyCon, -} doubleP
 --
 data Builtins 
         = Builtins 
-        { parrayTyCon          :: TyCon                     -- ^ PArray
-        , parray_PrimTyCons    :: NameEnv TyCon             -- ^ PArray_Int# etc.
-        , pdataTyCon           :: TyCon                     -- ^ PData
+        { pdataTyCon           :: TyCon                     -- ^ PData
+        , pdatasTyCon          :: TyCon                     -- ^ PDatas
         , prClass              :: Class                     -- ^ PR
         , prTyCon              :: TyCon                     -- ^ PR
         , preprTyCon           :: TyCon                     -- ^ PRepr
@@ -96,6 +95,7 @@ data Builtins
         , sumTyCons            :: Array Int TyCon           -- ^ Sum2 .. Sum3
         , wrapTyCon            :: TyCon                     -- ^ Wrap
         , pvoidVar             :: Var                       -- ^ pvoid
+        , pvoidsVar            :: Var                       -- ^ pvoids
         , closureTyCon         :: TyCon                     -- ^ :->
         , closureVar           :: Var                       -- ^ closure
         , liftedClosureVar     :: Var                       -- ^ liftedClosure
@@ -103,6 +103,8 @@ data Builtins
         , liftedApplyVar       :: Var                       -- ^ liftedApply
         , closureCtrFuns       :: Array Int Var             -- ^ closure1 .. closure3
         , selTys               :: Array Int Type            -- ^ Sel2
+        , selsTys              :: Array Int Type            -- ^ Sels2
+        , selsLengths          :: Array Int CoreExpr        -- ^ lengthSels2
         , selReplicates        :: Array Int CoreExpr        -- ^ replicate2
         , selTagss             :: Array Int CoreExpr        -- ^ tagsSel2
         , selElementss         :: Array (Int, Int) CoreExpr -- ^ elementsSel2_0 .. elementsSel_2_1
@@ -114,23 +116,26 @@ data Builtins
 -- We use these wrappers instead of indexing the `Builtin` structure directly
 -- because they give nicer panic messages if the indexed thing cannot be found.
 
-parray_PrimTyCon :: TyCon -> Builtins -> TyCon
-parray_PrimTyCon tc bi = lookupEnvBuiltin "parray_PrimTyCon" (parray_PrimTyCons bi) (tyConName tc)
-
 selTy :: Int -> Builtins -> Type
-selTy = indexBuiltin "selTy" selTys
+selTy           = indexBuiltin "selTy" selTys
+
+selsTy :: Int -> Builtins -> Type
+selsTy          = indexBuiltin "selsTy" selsTys
+
+selsLength :: Int -> Builtins -> CoreExpr
+selsLength      = indexBuiltin "selLength" selsLengths
 
 selReplicate :: Int -> Builtins -> CoreExpr
-selReplicate = indexBuiltin "selReplicate" selReplicates 
+selReplicate    = indexBuiltin "selReplicate" selReplicates 
 
 selTags :: Int -> Builtins -> CoreExpr
-selTags   = indexBuiltin "selTags" selTagss
+selTags         = indexBuiltin "selTags" selTagss
 
 selElements :: Int -> Int -> Builtins -> CoreExpr
 selElements i j = indexBuiltin "selElements" selElementss (i, j)
 
 sumTyCon :: Int -> Builtins -> TyCon
-sumTyCon = indexBuiltin "sumTyCon" sumTyCons
+sumTyCon        = indexBuiltin "sumTyCon" sumTyCons
 
 prodTyCon :: Int -> Builtins -> TyCon
 prodTyCon n _
@@ -171,8 +176,8 @@ scalarZip = indexBuiltin "scalarZip" scalarZips
 closureCtrFun :: Int -> Builtins -> Var
 closureCtrFun = indexBuiltin "closureCtrFun" closureCtrFuns
 
--- Get an element from one of the arrays of `Builtins`. Panic if the indexed thing is not in the array.
---
+-- | Get an element from one of the arrays of `Builtins`.
+--   Panic if the indexed thing is not in the array.
 indexBuiltin :: (Ix i, Outputable i) 
              => String                   -- ^ Name of the selector we've used, for panic messages.
              -> (Builtins -> Array i a)  -- ^ Field selector for the `Builtins`.
@@ -192,8 +197,8 @@ indexBuiltin fn f i bi
     , text "and ask what you can do to help (it might involve some GHC hacking)."])
   where xs = f bi
 
--- Get an entry from one of a 'NameEnv' of `Builtins`. Panic if the named item is not in the array.
---
+
+-- | Get an entry from one of a 'NameEnv' of `Builtins`. Panic if the named item is not in the array.
 lookupEnvBuiltin :: String                    -- Function name for error messages
                  -> NameEnv a                 -- Name environment
                  -> Name                      -- Index into the name environment

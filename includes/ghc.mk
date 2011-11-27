@@ -74,7 +74,7 @@ $(includes_H_CONFIG) : mk/config.h mk/config.mk includes/ghc.mk
 endif
 
 $(includes_H_PLATFORM) : includes/Makefile
-	"$(RM)" $(RM_OPTS) $@
+	$(call removeFiles,$@)
 	@echo "Creating $@..."
 	@echo "#ifndef __GHCPLATFORM_H__"  >$@
 	@echo "#define __GHCPLATFORM_H__" >>$@
@@ -104,6 +104,10 @@ endif
 	@echo "#define $(TargetVendor_CPP)_HOST_VENDOR  1" >> $@
 	@echo "#define BUILD_VENDOR  \"$(HostVendor_CPP)\"" >> $@
 	@echo "#define HOST_VENDOR  \"$(TargetVendor_CPP)\"" >> $@
+ifeq "$(CC_LLVM_BACKEND)" "1"
+	@echo >> $@
+	@echo "#define llvm_CC_FLAVOR 1" >> $@
+endif
 	@echo >> $@
 	@echo "/* These TARGET macros are for backwards compatibily... DO NOT USE! */" >> $@
 	@echo "#define TargetPlatform_TYPE $(TargetPlatform_CPP)" >> $@

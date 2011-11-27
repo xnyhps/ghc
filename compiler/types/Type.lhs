@@ -39,7 +39,7 @@ module Type (
 	splitTyConApp_maybe, splitTyConApp, 
 
         mkForAllTy, mkForAllTys, splitForAllTy_maybe, splitForAllTys, 
-        mkForAllArrowKinds,
+        mkPiKinds, mkPiType, mkPiTypes,
 	applyTy, applyTys, applyTysD, isForAllTy, dropForAlls,
 	
 	-- (Newtypes)
@@ -54,7 +54,7 @@ module Type (
         mkPrimEqType,
 
         -- Deconstructing predicate types
-        PredTree(..), predTreePredType, predTypePredTree,
+        PredTree(..), predTreePredType, classifyPredType,
         getClassPredTys, getClassPredTys_maybe,
         getEqPredTys, getEqPredTys_maybe,
         getIPPredTy_maybe,
@@ -675,12 +675,25 @@ mkForAllTy tyvar ty
 mkForAllTys :: [TyVar] -> Type -> Type
 mkForAllTys tyvars ty = foldr ForAllTy ty tyvars
 
-mkForAllArrowKinds :: [TyVar] -> Kind -> Kind
--- mkForAllArrowKinds [k1, k2, (a:k1 -> *)] k2
+mkPiKinds :: [TyVar] -> Kind -> Kind
+-- mkPiKinds [k1, k2, (a:k1 -> *)] k2
 -- returns forall k1 k2. (k1 -> *) -> k2
-mkForAllArrowKinds ktvs res =
-  mkForAllTys kvs $ mkArrowKinds (map tyVarKind tvs) res
-  where (kvs, tvs) = splitKiTyVars ktvs
+mkPiKinds [] res = res
+mkPiKinds (tv:tvs) res 
+  | isKiVar tv = ForAllTy tv          (mkPiKinds tvs res)
+  | otherwise  = FunTy (tyVarKind tv) (mkPiKinds tvs res)
+
+mkPiType  :: Var -> Type -> Type
+-- ^ Makes a @(->)@ type or a forall type, depending
+-- on whether it is given a type variable or a term variable.
+mkPiTypes :: [Var] -> Type -> Type
+-- ^ 'mkPiType' for multiple type or value arguments
+
+mkPiType v ty
+   | isId v    = mkFunTy (varType v) ty
+   | otherwise = mkForAllTy v ty
+
+mkPiTypes vs ty = foldr mkPiType ty vs
 
 isForAllTy :: Type -> Bool
 isForAllTy (ForAllTy _ _) = True
@@ -811,14 +824,18 @@ Make PredTypes
 mkEqPred :: (Type, Type) -> PredType
 mkEqPred (ty1, ty2)
   -- IA0_TODO: The caller should give the kind.
-  = TyConApp eqTyCon [k, ty1, ty2]
+  = WARN ( not (k `eqKind` defaultKind k), ppr (k, ty1, ty2) )
+    TyConApp eqTyCon [k, ty1, ty2]
   where k = defaultKind (typeKind ty1)
+--  where k = typeKind ty1
 
 mkPrimEqType :: (Type, Type) -> Type
 mkPrimEqType (ty1, ty2)
   -- IA0_TODO: The caller should give the kind.
-  = TyConApp eqPrimTyCon [k, ty1, ty2]
+  = WARN ( not (k `eqKind` defaultKind k), ppr (k, ty1, ty2) )
+    TyConApp eqPrimTyCon [k, ty1, ty2]
   where k = defaultKind (typeKind ty1)
+--  where k = typeKind ty1
 \end{code}
 
 --------------------- Implicit parameters ---------------------------------
@@ -881,18 +898,18 @@ Decomposing PredType
 data PredTree = ClassPred Class [Type]
               | EqPred Type Type
               | IPPred (IPName Name) Type
-              | TuplePred [PredTree]
+              | TuplePred [PredType]
               | IrredPred PredType
 
 predTreePredType :: PredTree -> PredType
 predTreePredType (ClassPred clas tys) = mkClassPred clas tys
 predTreePredType (EqPred ty1 ty2)     = mkEqPred (ty1, ty2)
 predTreePredType (IPPred ip ty)       = mkIPPred ip ty
-predTreePredType (TuplePred tys)      = mkBoxedTupleTy (map predTreePredType tys)
+predTreePredType (TuplePred tys)      = mkBoxedTupleTy tys
 predTreePredType (IrredPred ty)       = ty
 
-predTypePredTree :: PredType -> PredTree
-predTypePredTree ev_ty = case splitTyConApp_maybe ev_ty of
+classifyPredType :: PredType -> PredTree
+classifyPredType ev_ty = case splitTyConApp_maybe ev_ty of
     Just (tc, tys) | Just clas <- tyConClass_maybe tc
                    -> ClassPred clas tys
     Just (tc, tys) | tc `hasKey` eqTyConKey
@@ -902,7 +919,7 @@ predTypePredTree ev_ty = case splitTyConApp_maybe ev_ty of
                    , let [ty] = tys
                    -> IPPred ip ty
     Just (tc, tys) | isTupleTyCon tc
-                   -> TuplePred (map predTypePredTree tys)
+                   -> TuplePred tys
     _ -> IrredPred ev_ty
 \end{code}
 
@@ -1497,34 +1514,10 @@ cloneTyVarBndr (TvSubst in_scope tv_env) tv uniq
 Kinds
 ~~~~~
 
-\begin{code}
--- $kind_subtyping
--- #kind_subtyping#
--- There's a little subtyping at the kind level:
---
--- @
---               ?
---              \/ &#92;
---             \/   &#92;
---            ??   (\#)
---           \/  &#92;
---          \*    \#
--- .
--- Where:        \*    [LiftedTypeKind]   means boxed type
---              \#    [UnliftedTypeKind] means unboxed type
---              (\#)  [UbxTupleKind]     means unboxed tuple
---              ??   [ArgTypeKind]      is the lub of {\*, \#}
---              ?    [OpenTypeKind]	means any type at all
--- @
---
--- In particular:
---
--- > error :: forall a:?. String -> a
--- > (->)  :: ?? -> ? -> \*
--- > (\\(x::t) -> ...)
---
--- Where in the last example @t :: ??@ (i.e. is not an unboxed tuple)
+For the description of subkinding in GHC, see
+  http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/TypeType#Kinds
 
+\begin{code}
 type MetaKindVar = TyVar  -- invariant: MetaKindVar will always be a
                           -- TcTyVar with details MetaTv TauTv ...
 -- meta kind var constructors and functions are in TcType

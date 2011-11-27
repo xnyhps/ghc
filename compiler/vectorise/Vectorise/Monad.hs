@@ -13,9 +13,9 @@ module Vectorise.Monad (
   
   -- * Variables
   lookupVar,
-  maybeCantVectoriseVarM,
-  dumpVar,
-  addGlobalScalar, 
+  lookupVar_maybe,
+  addGlobalScalarVar, 
+  addGlobalScalarTyCon, 
 ) where
 
 import Vectorise.Monad.Base
@@ -33,6 +33,8 @@ import DynFlags
 import MonadUtils (liftIO)
 import InstEnv
 import Class
+import TyCon
+import NameSet
 import VarSet
 import VarEnv
 import Var
@@ -41,7 +43,6 @@ import Name
 import ErrUtils
 import Outputable
 
-import Control.Monad
 import System.IO
 
 
@@ -79,7 +80,6 @@ initV hsc_env guts info thing_inside
       = do {   -- set up tables of builtin entities
            ; builtins        <- initBuiltins
            ; builtin_vars    <- initBuiltinVars builtins
-           ; builtin_tycons  <- initBuiltinTyCons builtins
 
                -- set up class and type family envrionments
            ; eps <- liftIO $ hscEPS hsc_env
@@ -90,7 +90,6 @@ initV hsc_env guts info thing_inside
 
                -- construct the initial global environment
            ; let genv = extendImportedVarsEnv builtin_vars
-                        . extendTyConsEnv     builtin_tycons
                         . setPAFunsEnv        builtin_pas
                         . setPRFunsEnv        builtin_prs
                         $ initGlobalEnv info (mg_vect_decls guts) instEnvs famInstEnvs
@@ -142,32 +141,31 @@ builtins f = VM $ \bi genv lenv -> return (Yes genv lenv (`f` bi))
 
 -- Var ------------------------------------------------------------------------
 
--- |Lookup the vectorised, and if local, also the lifted versions of a variable.
+-- |Lookup the vectorised, and if local, also the lifted version of a variable.
 --
 -- * If it's in the global environment we get the vectorised version.
 -- * If it's in the local environment we get both the vectorised and lifted version.
 --
 lookupVar :: Var -> VM (Scope Var (Var, Var))
 lookupVar v
- = do r <- readLEnv $ \env -> lookupVarEnv (local_vars env) v
-      case r of
-        Just e  -> return (Local e)
-        Nothing -> liftM Global
-                . maybeCantVectoriseVarM v
-                . readGEnv $ \env -> lookupVarEnv (global_vars env) v
+  = do { mb_res <- lookupVar_maybe v
+       ; case mb_res of
+           Just x  -> return x
+           Nothing -> dumpVar v
+       }
 
-maybeCantVectoriseVarM :: Monad m => Var -> m (Maybe Var) -> m Var
-maybeCantVectoriseVarM v p
- = do r <- p
-      case r of
-        Just x  -> return x
-        Nothing -> dumpVar v
+lookupVar_maybe :: Var -> VM (Maybe (Scope Var (Var, Var)))
+lookupVar_maybe v
+ = do { r <- readLEnv $ \env -> lookupVarEnv (local_vars env) v
+      ; case r of
+          Just e  -> return $ Just (Local e)
+          Nothing -> fmap Global <$> (readGEnv $ \env -> lookupVarEnv (global_vars env) v)
+      }
 
 dumpVar :: Var -> a
 dumpVar var
   | Just _    <- isClassOpId_maybe var
   = cantVectorise "ClassOpId not vectorised:" (ppr var)
-
   | otherwise
   = cantVectorise "Variable not vectorised:" (ppr var)
 
@@ -177,8 +175,17 @@ dumpVar var
 -- |Mark the given variable as scalar — i.e., executing the associated code does not involve any
 -- parallel array computations.
 --
-addGlobalScalar :: Var -> VM ()
-addGlobalScalar var
-  = do { traceVt "addGlobalScalar" (ppr var)
+addGlobalScalarVar :: Var -> VM ()
+addGlobalScalarVar var
+  = do { traceVt "addGlobalScalarVar" (ppr var)
        ; updGEnv $ \env -> env{global_scalar_vars = extendVarSet (global_scalar_vars env) var}
+       }
+
+-- |Mark the given type constructor as scalar — i.e., its values cannot embed parallel arrays.
+--
+addGlobalScalarTyCon :: TyCon -> VM ()
+addGlobalScalarTyCon tycon
+  = do { traceVt "addGlobalScalarTyCon" (ppr tycon)
+       ; updGEnv $ \env -> 
+           env{global_scalar_tycons = addOneToNameSet (global_scalar_tycons env) (tyConName tycon)}
        }
