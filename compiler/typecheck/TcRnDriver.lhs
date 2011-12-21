@@ -97,6 +97,8 @@ import Bag
 
 import Control.Monad
 
+import System.IO
+
 #include "HsVersions.h"
 \end{code}
 
@@ -1326,12 +1328,17 @@ tcRnExpr hsc_env ictxt rdr_expr
     uniq <- newUnique ;
     let { fresh_it  = itName uniq } ;
     ((_tc_expr, res_ty), lie)	<- captureConstraints (tcInferRho rn_expr) ;
+    liftIO $ putStrLn ("tcRnExpr: " ++ (showSDoc $ ppr res_ty) );
     ((qtvs, dicts, _), lie_top) <- captureConstraints $ 
                                    simplifyInfer TopLevel False {- No MR for now -}
                                                  [(fresh_it, res_ty)]
                                                  lie  ;
     _ <- simplifyInteractive lie_top ;       -- Ignore the dicionary bindings
 
+    (g, l) <- getEnvs ;
+    holes <- readTcRef $ tcl_holes l ;
+    zonked_holes <- mapM (\ty -> zonkTcType $ mkForAllTys qtvs (mkPiTypes dicts ty)) $ holes ;
+    liftIO $ putStrLn ("tcRnExpr2: " ++ (showSDoc $ ppr $ zonked_holes)) ;
     let { all_expr_ty = mkForAllTys qtvs (mkPiTypes dicts res_ty) } ;
     zonkTcType all_expr_ty
     }

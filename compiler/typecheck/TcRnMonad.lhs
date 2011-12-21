@@ -77,6 +77,7 @@ initTc hsc_env hsc_src keep_rn_syntax mod do_this
         th_var       <- newIORef False ;
         th_splice_var<- newIORef False ;
         lie_var      <- newIORef emptyWC ;
+        holes_var    <- newIORef [] ;
 	dfun_n_var   <- newIORef emptyOccSet ;
 	type_env_var <- case hsc_type_env_var hsc_env of {
                            Just (_mod, te_var) -> return te_var ;
@@ -137,7 +138,8 @@ initTc hsc_env hsc_src keep_rn_syntax mod do_this
 		tcl_tyvars     = tvs_var,
 		tcl_lie	       = lie_var,
                 tcl_meta       = meta_var,
-		tcl_untch      = initTyVarUnique
+		tcl_untch      = initTyVarUnique,
+		tcl_holes      = holes_var
 	     } ;
 	} ;
    
@@ -1133,7 +1135,7 @@ initIfaceTc :: ModIface
 -- Used when type-checking checking an up-to-date interface file
 -- No type envt from the current module, but we do know the module dependencies
 initIfaceTc iface do_this
- = do	{ tc_env_var <- newTcRef emptyTypeEnv
+ = do	{ liftIO $ putStrLn "initIfaceTc" ; tc_env_var <- newTcRef emptyTypeEnv
 	; let { gbl_env = IfGblEnv { if_rec_types = Just (mod, readTcRef tc_env_var) } ;
 	      ; if_lenv = mkIfLclEnv mod doc
 	   }
