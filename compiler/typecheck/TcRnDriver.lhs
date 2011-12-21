@@ -37,7 +37,7 @@ import InstEnv
 import FamInstEnv
 import TcAnnotations
 import TcBinds
-import TcType	( tidyTopType )
+import TcType	( tidyTopType, tidyType )
 import TcDefaults
 import TcEnv
 import TcRules
@@ -98,6 +98,7 @@ import Bag
 import Control.Monad
 
 import System.IO
+import TypeRep
 
 #include "HsVersions.h"
 \end{code}
@@ -1337,8 +1338,9 @@ tcRnExpr hsc_env ictxt rdr_expr
 
     (g, l) <- getEnvs ;
     holes <- readTcRef $ tcl_holes l ;
-    zonked_holes <- mapM (\ty -> zonkTcType $ mkForAllTys qtvs (mkPiTypes dicts ty)) $ holes ;
-    liftIO $ putStrLn ("tcRnExpr2: " ++ (showSDoc $ ppr $ zonked_holes)) ;
+    zonked_holes <- zonkTcTypes $ map (\ty -> mkForAllTys qtvs (mkPiTypes dicts (TyVarTy ty))) $ holes ;
+    liftIO $ putStrLn ("tcRnExpr2: " ++ (showSDoc $ ppr $ zip holes (map (tidyType emptyTidyEnv) zonked_holes))) ;
+    liftIO $ putStrLn ("tcRnExpr3: " ++ (showSDoc $ ppr $ dicts)) ;
     let { all_expr_ty = mkForAllTys qtvs (mkPiTypes dicts res_ty) } ;
     zonkTcType all_expr_ty
     }
