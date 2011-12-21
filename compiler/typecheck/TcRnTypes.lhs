@@ -92,7 +92,7 @@ import ListSetOps
 import FastString
 
 import Data.Set (Set)
-import UniqSet
+import qualified Data.Map as Map
 \end{code}
 
 
@@ -400,7 +400,7 @@ data TcLclEnv		-- Changes as we move inside an expression
 	tcl_untch :: Unique,	    -- Any TcMetaTyVar with 
 		     		    --     unique >= tcl_untch is touchable
 		     		    --     unique <  tcl_untch is untouchable
-	tcl_holes :: TcRef [Type]
+	tcl_holes :: TcRef (Map.Map SrcSpan Type)
     }
 
 type TcTypeEnv = NameEnv TcTyThing

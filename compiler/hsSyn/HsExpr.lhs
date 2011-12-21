@@ -282,7 +282,7 @@ data HsExpr id
 
   |  HsWrap     HsWrapper    -- TRANSLATION
                 (HsExpr id)
-  |  HsHole
+  |  HsHole     SrcSpan
   deriving (Data, Typeable)
 
 -- HsTupArg is used for tuple sections
@@ -523,7 +523,7 @@ ppr_expr (HsArrForm (L _ (HsVar v)) (Just _) [arg1, arg2])
 ppr_expr (HsArrForm op _ args)
   = hang (ptext (sLit "(|") <> ppr_lexpr op)
          4 (sep (map (pprCmdArg.unLoc) args) <> ptext (sLit "|)"))
-ppr_expr HsHole
+ppr_expr (HsHole _)
   = text "__"
 
 pprCmdArg :: OutputableBndr id => HsCmdTop id -> SDoc
