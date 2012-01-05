@@ -1157,6 +1157,7 @@ exprSize (Cast e co)     = (seqCo co `seq` 1) + exprSize e
 exprSize (Note n e)      = noteSize n + exprSize e
 exprSize (Type t)       = seqType t `seq` 1
 exprSize (Coercion co)   = seqCo co `seq` 1
+exprSize (Hole src)      = src `seq` 1
 
 noteSize :: Note -> Int
 noteSize (SCC cc)       = cc `seq` 1

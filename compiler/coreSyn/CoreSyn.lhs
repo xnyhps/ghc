@@ -95,6 +95,8 @@ import Util
 import Data.Data
 import Data.Word
 
+import SrcLoc
+
 infixl 4 `mkApps`, `mkTyApps`, `mkVarApps`, `App`, `mkCoApps`
 -- Left associative, so that we can say (f `mkTyApps` xs `mkVarApps` ys)
 \end{code}
@@ -241,6 +243,7 @@ data Expr b
                                         -- level of an Arg
     
   | Coercion Coercion                   -- ^ A coercion
+  | Hole SrcSpan
   deriving (Data, Typeable)
 
 -- | Type synonym for expressions that occur in function argument positions.
@@ -1180,6 +1183,7 @@ data AnnExpr' bndr annot
   | AnnNote	Note (AnnExpr bndr annot)
   | AnnType	Type
   | AnnCoercion Coercion
+  | AnnHole SrcSpan
 
 -- | A clone of the 'Alt' type but allowing annotation at every tree node
 type AnnAlt bndr annot = (AltCon, [bndr], AnnExpr bndr annot)
@@ -1214,6 +1218,7 @@ deAnnotate' (AnnLam  binder body) = Lam binder (deAnnotate body)
 deAnnotate' (AnnApp  fun arg)     = App (deAnnotate fun) (deAnnotate arg)
 deAnnotate' (AnnCast e (_,co))    = Cast (deAnnotate e) co
 deAnnotate' (AnnNote note body)   = Note note (deAnnotate body)
+deAnnotate' (AnnHole src)         = Hole src
 
 deAnnotate' (AnnLet bind body)
   = Let (deAnnBind bind) (deAnnotate body)

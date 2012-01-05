@@ -234,6 +234,8 @@ ppr_expr add_par (Note (CoreNote s) expr)
     sep [sep [ptext (sLit "__core_note"), pprHsString (mkFastString s)],
          pprParendExpr expr]
 
+ppr_expr _ (Hole _) = text "__"
+
 pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a) -> SDoc
 pprCoreAlt (con, args, rhs) 
   = hang (ppr_case_pat con args <+> arrow) 2 (pprCoreExpr rhs)

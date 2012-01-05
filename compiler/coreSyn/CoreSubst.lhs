@@ -382,6 +382,7 @@ subst_expr subst expr
     go (Case scrut bndr ty alts) = Case (go scrut) bndr' (substTy subst ty) (map (go_alt subst') alts)
 			         where
 			  	 (subst', bndr') = substBndr subst bndr
+    go (Hole src)      = Hole src
 
     go_alt subst (con, bndrs, rhs) = (con, bndrs', subst_expr subst' rhs)
 				 where
@@ -850,6 +851,7 @@ simple_opt_expr' subst expr
        			       (map (go_alt subst') as)
        		        where
        		  	  (subst', b') = subst_opt_bndr subst b
+    go (Hole src)       = Hole src
 
     ----------------------
     go_alt subst (con, bndrs, rhs) 

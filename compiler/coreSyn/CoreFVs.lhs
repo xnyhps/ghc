@@ -202,6 +202,7 @@ expr_fvs (Let (NonRec bndr rhs) body)
 expr_fvs (Let (Rec pairs) body)
   = addBndrs (map fst pairs) 
 	     (foldr (union . rhs_fvs) (expr_fvs body) pairs)
+expr_fvs (Hole src)      = noVars
 
 ---------
 rhs_fvs :: (Id,CoreExpr) -> FV
@@ -542,5 +543,6 @@ freeVars (Note other_note expr)
 freeVars (Type ty) = (tyVarsOfType ty, AnnType ty)
 
 freeVars (Coercion co) = (tyCoVarsOfCo co, AnnCoercion co)
+freeVars (Hole src) = (noFVs, AnnHole src)
 \end{code}
 

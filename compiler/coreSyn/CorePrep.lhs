@@ -493,6 +493,7 @@ cpeRhsE env (Case scrut bndr ty alts)
        = do { (env2, bs') <- cpCloneBndrs env bs
             ; rhs' <- cpeBodyNF env2 rhs
             ; return (con, bs', rhs') }
+cpeRhsE _env expr@(Hole src) = return (emptyFloats, expr)
 
 -- ---------------------------------------------------------------------------
 --		CpeBody: produces a result satisfying CpeBody
