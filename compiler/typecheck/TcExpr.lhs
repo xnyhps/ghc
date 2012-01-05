@@ -224,9 +224,10 @@ tcExpr (HsHole s) res_ty
          holes <- readTcRef $ tcl_holes l ;
          writeTcRef (tcl_holes l) (Map.insert s res_ty holes) ;
          return (HsHole s) }
-       where printTy (TyVarTy ty) = let (MetaTv _ io) = tcTyVarDetails ty in 
-                                        do meta <- readTcRef io
-                                           liftIO $ putStrLn ("tcExpr.HsHole @(" ++ (showSDoc $ ppr s) ++ "): " ++ (showSDoc $ ppr meta))
+       where printTy (TyVarTy ty) = case tcTyVarDetails ty of
+                                          (MetaTv _ io) -> do meta <- readTcRef io ;
+                                                              liftIO $ putStrLn ("tcExpr.HsHole @(" ++ (showSDoc $ ppr s) ++ "): " ++ (showSDoc $ ppr meta))
+                                          x -> liftIO $ putStrLn ("tcExpr.HsHole: No idea how to handle " ++ (showSDoc $ ppr x))
              printTy (ForAllTy _ _) = liftIO $ putStrLn ("tcExpr.HsHole: ForAllTy")
              printTy (PredTy _) = liftIO $ putStrLn ("tcExpr.HsHole: ForAllTy")
              printTy (AppTy _ _) = liftIO $ putStrLn ("tcExpr.HsHole: AppTy")
@@ -347,7 +348,8 @@ tcExpr (SectionL arg1 op) res_ty
 
 tcExpr (ExplicitTuple tup_args boxity) res_ty
   | all tupArgPresent tup_args
-  = do { let tup_tc = tupleTyCon boxity (length tup_args)
+  = do { liftIO $ putStrLn ("tcExpr.ExplicitTuple")
+       ; let tup_tc = tupleTyCon boxity (length tup_args)
        ; (coi, arg_tys) <- matchExpectedTyConApp tup_tc res_ty
        ; tup_args1 <- tcTupArgs tup_args arg_tys
        ; return $ mkHsWrapCo coi (ExplicitTuple tup_args1 boxity) }

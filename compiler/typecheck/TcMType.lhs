@@ -556,6 +556,7 @@ skolemiseUnboundMetaTyVar tv details
 	; let final_kind = defaultKind (tyVarKind tv)
               final_name = mkInternalName uniq (getOccName tv) span
               final_tv   = mkTcTyVar final_name final_kind details
+  ; liftIO $ putStrLn ("skolemiseUnboundMetaTyVar: " ++ (showSDoc $ ppr tv) ++ ", " ++ (showSDoc $ ppr final_name) ++ ", " ++ (showSDoc $ ppr final_tv))
 	; writeMetaTyVar tv (mkTyVarTy final_tv)
 	; return final_tv }
 \end{code}
