@@ -545,7 +545,7 @@ for "SingI (n :: Nat)" is of the form "EvLit (EvNum n)".
 
 We make the following assumptions about dictionaries in GHC:
   1. The "dictionary" for classes with a single method---like SingI---is
-     a newtype for the type of the method, so using a evidence amounts
+     a newtype for the type of the method, so using evidence amounts
      to a coercion, and
   2. Newtypes use the same representation as their definition types.
 
