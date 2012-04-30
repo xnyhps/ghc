@@ -3,19 +3,51 @@ module TcTypeNats where
 import Data.Maybe(isNothing)
 import Control.Monad(guard, msum, mzero, liftM2, liftM3)
 
-import TcRnTypes( Xi, Ct(..) )
+import Var(Var)
+import TcRnTypes( Xi, Ct(..), isGiven, isWanted )
 import PrelNames( typeNatLeqClassName
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
                 )
-import TyCon(tyConName)
-import Class(className)
-import Type(getTyVar_maybe, isNumLitTy, mkTyVarTy, mkNumLitTy)
+import TyCon( tyConName )
+import Class( className )
+import Type( getTyVar_maybe, isNumLitTy, mkTyVarTy, mkNumLitTy )
+import TcSMonad( TcS, emitFrozenError {-, setEvBind-} )
+import TcCanonical( StopOrContinue(..) )
 
-import TcTypeNatsEval (minus,divide,logExact,rootExact)
+import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcTypeNatsRules()
-import Var(Var)
+
+
+--------------------------------------------------------------------------------
+
+typeNatStage :: Ct -> TcS StopOrContinue
+typeNatStage ct
+
+  -- XXX: Probably need to add the 'ct' to somewhere
+  | impossible ct =
+      do emitFrozenError flav (cc_depth ct)
+         return Stop
+
+  | isGiven flav =
+    case solve ct of
+      Just _ -> return Stop     -- trivial fact
+      _      -> return $ ContinueWith ct   -- XXX: TODO (compute new work)
+
+  | isWanted flav =
+    case solve ct of
+      Just _  -> return $ ContinueWith ct   --- XXX: setEvBind
+      Nothing -> return $ ContinueWith ct   --- XXX: Try improvement here
+
+  -- XXX: TODO
+  | otherwise = return $ ContinueWith ct
+
+
+  where flav = cc_flavor ct
+
+
+
 
 --------------------------------------------------------------------------------
 data Term = V Var | N Integer

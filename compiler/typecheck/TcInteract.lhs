@@ -57,6 +57,8 @@ import Pair ()
 import UniqFM
 import FastString ( sLit ) 
 import DynFlags
+
+import TcTypeNats
 \end{code}
 **********************************************************************
 *                                                                    * 
@@ -219,7 +221,9 @@ thePipeline = [ ("lookup-in-inerts",        lookupInInertsStage)
               , ("canonicalization",        canonicalizationStage)
               , ("spontaneous solve",       spontaneousSolveStage)
               , ("interact with inerts",    interactWithInertsStage)
-              , ("top-level reactions",     topReactionsStage) ]
+              , ("top-level reactions",     topReactionsStage)
+              , ("type-nat solver",         typeNatStage)
+              ]
 \end{code}
 
 
