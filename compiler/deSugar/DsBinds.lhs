@@ -817,6 +817,8 @@ ds_tc_coercion subst tc_co
     go (TcInstCo co ty)       = mkInstCo (go co) ty
     go (TcLetCo bs co)        = ds_tc_coercion (ds_co_binds bs) co
     go (TcCoVarCo v)          = ds_ev_id subst v
+    go (TcTypeNatCo co ts cs) = TypeNatCo co (map (Coercion.substTy subst) ts)
+                                             (map go cs)
 
     ds_co_binds :: TcEvBinds -> CvSubst
     ds_co_binds (EvBinds bs)      = foldl ds_scc subst (sccEvBinds bs)

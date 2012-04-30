@@ -598,6 +598,11 @@ tidyCo env@(_, subst) co
     go (NthCo d co)          = NthCo d $! go co
     go (InstCo co ty)        = (InstCo $! go co) $! tidyType env ty
 
+    go (TypeNatCo co ts cs)  = let ts' = tidyTypes env ts
+                                   cs' = tidyCos env cs
+                               in ts' `seqList` cs' `seqList`
+                                  TypeNatCo co ts' cs'
+
 tidyCos :: TidyEnv -> [Coercion] -> [Coercion]
 tidyCos env = map (tidyCo env)
 \end{code}
@@ -1293,6 +1298,8 @@ orphNamesOfCo (SymCo co)            = orphNamesOfCo co
 orphNamesOfCo (TransCo co1 co2)     = orphNamesOfCo co1 `unionNameSets` orphNamesOfCo co2
 orphNamesOfCo (NthCo _ co)          = orphNamesOfCo co
 orphNamesOfCo (InstCo co ty)        = orphNamesOfCo co `unionNameSets` orphNamesOfType ty
+orphNamesOfCo (TypeNatCo _ ts cs)   = orphNamesOfTypes ts `unionNameSets`
+                                      orphNamesOfCos cs
 
 orphNamesOfCos :: [Coercion] -> NameSet
 orphNamesOfCos = foldr (unionNameSets . orphNamesOfCo) emptyNameSet

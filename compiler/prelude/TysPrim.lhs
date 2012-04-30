@@ -78,7 +78,11 @@ module TysPrim(
         eqPrimTyCon,            -- ty1 ~# ty2
 
 	-- * Any
-	anyTy, anyTyCon, anyTypeOfKind
+	anyTy, anyTyCon, anyTypeOfKind,
+
+        -- * Type families used to compute at the type level.
+        typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon
+
   ) where
 
 #include "HsVersions.h"
@@ -740,3 +744,22 @@ anyTyCon = mkLiftedPrimTyCon anyTyConName kind 1 PtrRep
 anyTypeOfKind :: Kind -> Type
 anyTypeOfKind kind = mkNakedTyConApp anyTyCon [kind]
 \end{code}
+
+
+Type functions related to type-nats.
+
+\begin{code}
+typeNatAddTyCon :: TyCon
+typeNatAddTyCon = mkFunTyCon typeNatAddTyFamName
+                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
+
+typeNatMulTyCon :: TyCon
+typeNatMulTyCon = mkFunTyCon typeNatMulTyFamName
+                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
+
+typeNatExpTyCon :: TyCon
+typeNatExpTyCon = mkFunTyCon typeNatExpTyFamName
+                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
+
+\end{code}
+

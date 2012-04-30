@@ -43,6 +43,7 @@ import PrelNames
 import VarEnv
 import VarSet
 import Name
+import Coercion (TypeNatCoAxiom, coercionKindTypeNat)
 
 import Util
 import Bag
@@ -103,6 +104,7 @@ data TcCoercion
   | TcTransCo TcCoercion TcCoercion
   | TcNthCo Int TcCoercion
   | TcLetCo TcEvBinds TcCoercion
+  | TcTypeNatCo TypeNatCoAxiom [TcType] [TcCoercion]
   deriving (Data.Data, Data.Typeable)
 
 isEqVar :: Var -> Bool 
@@ -210,6 +212,10 @@ tcCoercionKind co = go co
     go (TcTransCo co1 co2)    = Pair (pFst $ go co1) (pSnd $ go co2)
     go (TcNthCo d co)         = tyConAppArgN d <$> go co
 
+    -- XXX: We are just reusing the definition from Coercion.
+    -- Is there a reason to duplicate it?
+    go (TcTypeNatCo ax ts _)  = coercionKindTypeNat ax ts
+
     -- c.f. Coercion.coercionKind
     go_inst (TcInstCo co ty) tys = go_inst co (ty:tys)
     go_inst co               tys = (`applyTys` tys) <$> go co
@@ -239,6 +245,7 @@ coVarsOfTcCo tc_co
     go (TcLetCo (EvBinds bs) co) = foldrBag (unionVarSet . go_bind) (go co) bs
                                    `minusVarSet` get_bndrs bs
     go (TcLetCo {}) = pprPanic "coVarsOfTcCo called on non-zonked TcCoercion" (ppr tc_co)
+    go (TcTypeNatCo _ _ cos)     = foldr (unionVarSet . go) emptyVarSet cos
 
     -- We expect only coercion bindings
     go_bind :: EvBind -> VarSet
@@ -302,6 +309,23 @@ ppr_co p (TcTransCo co1 co2) = maybeParen p FunPrec $
                                <+> ppr_co FunPrec co2
 ppr_co p (TcSymCo co)         = pprPrefixApp p (ptext (sLit "Sym")) [pprParendTcCo co]
 ppr_co p (TcNthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pprParendTcCo co]
+
+ppr_co p (TcTypeNatCo co ts ps)= maybeParen p TopPrec $ ppr_type_nat_co co ts ps
+
+ppr_type_nat_co :: TypeNatCoAxiom -> [Type] -> [TcCoercion] -> SDoc
+ppr_type_nat_co co ts ps = ppr co <> ppTs ts $$ nest 2 (ppPs ps)
+  where
+  ppTs []   = Outputable.empty
+  ppTs [t]  = ptext (sLit "@") <> ppr_type TopPrec t
+  ppTs ts   = ptext (sLit "@") <>
+                parens (hsep $ punctuate comma $ map pprType ts)
+
+  ppPs []   = Outputable.empty
+  ppPs [p]  = pprParendTcCo p
+  ppPs (p : ps) = ptext (sLit "(") <+> pprTcCo p $$
+                  vcat [ ptext (sLit ",") <+> pprTcCo q | q <- ps ] $$
+                  ptext (sLit ")")
+
 
 ppr_fun_co :: Prec -> TcCoercion -> SDoc
 ppr_fun_co p co = pprArrowChain p (split co)
@@ -483,6 +507,7 @@ data EvLit
   = EvNum Integer
   | EvStr FastString
     deriving( Data.Data, Data.Typeable)
+
 
 \end{code}
 

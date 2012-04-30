@@ -890,6 +890,74 @@ lintCoercion co@(AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
            ; unless (k `isSubKind` ktv_kind) (bad_ax (ptext (sLit "check_ki2")))
            ; return (Type.extendTvSubst subst_l ktv t1, 
                      Type.extendTvSubst subst_r ktv t2) } 
+
+lintCoercion (TypeNatCo co ts cs)
+  = do ks  <- mapM lintType ts
+       eqs <- mapM lintCoercion cs
+
+       -- So far, all type parameters are of kind Nat, so we just
+       -- check them in one go here.
+
+       unless (all (eqKind typeNatKind) ks) $
+         failWithL $ ptext $ sLit "Kind mis-match in TypeNatCo (param not Nat)"
+
+       case (co,ks,eqs) of
+         (TnAddDef a b, [], []) -> return (kN, mkAdd (mkN a) (mkN b), mkN (a + b))
+         (TnMulDef a b, [], []) -> return (kN, mkMul (mkN a) (mkN b), mkN (a * b))
+         (TnExpDef a b, [], []) -> return (kN, mkExp (mkN a) (mkN b), mkN (a ^ b))
+         (TnLeqDef a b c, [], [])
+           | (a <= b) == c      -> return (kB, mkLeq (mkN a) (mkN b), mkB c)
+
+         -- XXX: Check proofs
+         (TnLeqASym, [a,b], [_,_]) -> return (kN, a, b)
+
+         (TnLeq0,  [a], [])     -> return (kB, mkLeq (mkN 0) a, mkB True)
+         (TnLeqRefl, [a], [])   -> return (kB, mkLeq a a, mkB True)
+         -- XXX: Check proofs
+         (TnLeqTrans, [a,_,c], [_,_]) -> return (kB, mkLeq a c, mkB True)
+
+         (TnAdd0L, [a], []) -> return (kN, mkAdd (mkN 0) a, a)
+         (TnMul0L, [a], []) -> return (kN, mkMul (mkN 0) a, mkN 0)
+         (TnMul1L, [a], []) -> return (kN, mkMul (mkN 1) a, a)
+         (TnExp0L, [a], []) -> return (kN, mkExp (mkN 0) a, mkN 0)
+         (TnExp1L, [a], []) -> return (kN, mkExp (mkN 1) a, mkN 1)
+
+         (TnAdd0R, [a], []) -> return (kN, mkAdd a (mkN 0), a)
+         (TnMul0R, [a], []) -> return (kN, mkMul a (mkN 0), mkN 0)
+         (TnMul1R, [a], []) -> return (kN, mkMul a (mkN 1), a)
+         (TnExp0R, [a], []) -> return (kN, mkExp a (mkN 0), mkN 1)
+         (TnExp1R, [a], []) -> return (kN, mkExp a (mkN 1), a)
+
+         (TnAddComm, [a,b,c], [(k,a',b')])
+            | k `eqKind` typeNatKind && a `eqType` a' && b `eqType` b'
+                            -> return (kN, mkAdd b a, c)
+
+         (TnMulComm, [a,b,c], [(k,a',b')])
+            | k `eqKind` typeNatKind && a `eqType` a' && b `eqType` b'
+                            -> return (kN, mkMul b a, c)
+
+         -- XXX: Check proofs
+         (TnAddCancelL, [_,b1,b2,_], [_,_])   -> return (kN, b1, b2)
+         (TnMulCancelL, [_,b1,b2,_], [_,_,_]) -> return (kN, b1, b2)
+         (TnExpCancelL, [_,b1,b2,_], [_,_,_]) -> return (kN, b1, b2)
+
+         (TnAddCancelR, [a1,a2,_,_], [_,_])   -> return (kN, a1, a2)
+         (TnMulCancelR, [a1,a2,_,_], [_,_,_]) -> return (kN, a1, a2)
+         (TnExpCancelR, [a1,a2,_,_], [_,_,_]) -> return (kN, a1, a2)
+
+         _ -> failWithL $ ptext $ sLit $ "Lint failed on type nat coercion"
+
+       where mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
+             mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
+             mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
+             mkLeq _ _ = panic "mkLeq: TODO"
+             mkN n     = mkNumLitTy n
+             mkB _     = panic "mkB: TOD"
+             kN        = typeNatKind
+             kB        = panic "kB: TODO"
+
+
+
 \end{code}
 
 %************************************************************************

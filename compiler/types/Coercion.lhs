@@ -16,11 +16,12 @@
 --
 module Coercion (
         -- * Main data type
-        Coercion(..), Var, CoVar,
+        Coercion(..), TypeNatCoAxiom(..), Var, CoVar,
 
         -- ** Functions over coercions
         coVarKind,
         coercionType, coercionKind, coercionKinds, isReflCo,
+        coercionKindTypeNat,
         isReflCo_maybe,
         mkCoercionType,
 
@@ -99,9 +100,11 @@ import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import Control.Arrow (second)
 import FastString
+import TysPrim(typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon)
 
 import qualified Data.Data as Data hiding ( TyCon )
 \end{code}
+
 
 %************************************************************************
 %*									*
@@ -147,10 +150,65 @@ data Coercion
   | SymCo Coercion
   | TransCo Coercion Coercion
 
+  | TypeNatCo TypeNatCoAxiom [Type] [Coercion]
+
   -- These are destructors
   | NthCo Int Coercion          -- Zero-indexed
   | InstCo Coercion Type
   deriving (Data.Data, Data.Typeable)
+
+
+
+data TypeNatCoAxiom
+
+  -- Definitional axioms (for the functions we store just the inputs)
+  = TnAddDef Integer Integer        -- 2 + 3 ~ 5
+  | TnMulDef Integer Integer        -- 2 * 3 ~ 6
+  | TnExpDef Integer Integer        -- 2 ^ 3 ~ 8
+  | TnLeqDef Integer Integer Bool   -- 2 <=? 3 ~ True
+
+  -- Order
+  | TnLeqASym   -- forall a b.   (a <=? b ~ True, b <=? a ~ True) => a ~ b
+  | TnLeq0      -- forall a.     0 <=? a ~ True
+  | TnLeqRefl   -- forall a.     a <=? a ~ True
+  | TnLeqTrans  -- forall a b c. (a <=? b ~ True, b <=? c ~ TRue) => a <=? c ~ True
+  -- Note: Anti-symmetry is in the coercion type, TypeNatCoAxiom
+
+
+  -- Units and anihilators
+  | TnAdd0L      -- forall a. 0 + a ~ a
+  | TnAdd0R      -- forall a. a + 0 ~ a
+  | TnMul0L      -- forall a. 0 * a ~ 0
+  | TnMul0R      -- forall a. a * 0 ~ 0
+  | TnMul1L      -- forall a. 1 * a ~ a
+  | TnMul1R      -- forall a. a * 1 ~ a
+  | TnExp0L      -- forall a. (1 <=? a ~ True) => 0 ^ a ~ 0
+  | TnExp0R      -- forall a. a ^ 0 ~ 1
+  | TnExp1L      -- forall a. 1 ^ a ~ 1
+  | TnExp1R      -- forall a. a ^ 1 ~ a
+
+  -- Commutativity
+  | TnAddComm    -- forall a b c. (a + b ~ c) => b + a ~ c
+  | TnMulComm    -- forall a b c. (a * b ~ c) => b * a ~ c
+
+  -- Cancellation
+  | TnAddCancelL -- forall a b1 b2 c. ( a + b1 ~ c, a + b2 ~ c ) => b1 ~ b1
+  | TnMulCancelL -- forall a b1 b2 c. ( 1 <=? a ~ True
+                 --                   , a * b1 ~ c, a * b2 ~ c ) => b1 ~ b1
+  | TnExpCancelL -- forall a b1 b2 c. ( 2 <=? a ~ True
+                 --                   , a ^ b1 ~ c, a ^ b2 ~ c ) => b1 ~ b1
+
+  | TnAddCancelR -- forall a1 a2 b c. ( a1 + b ~ c, a2 + b ~ c ) => a1 ~ a1
+  | TnMulCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
+                 --                   , a1 * b ~ c, a2 * b ~ c ) => a1 ~ a1
+  | TnExpCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
+                 --                   , a1 ^ b ~ c, a2 ^ b ~ c ) => a1 ~ a1
+
+  -- XXX: Associativity, distributivity, and + ^ and ^ ^  interactions
+    deriving (Eq, Ord, Show, Data.Data, Data.Typeable)
+
+
+
 \end{code}
 
 
@@ -336,6 +394,7 @@ tyCoVarsOfCo (AxiomInstCo _ cos) = tyCoVarsOfCos cos
 tyCoVarsOfCo (UnsafeCo ty1 ty2)  = tyVarsOfType ty1 `unionVarSet` tyVarsOfType ty2
 tyCoVarsOfCo (SymCo co)          = tyCoVarsOfCo co
 tyCoVarsOfCo (TransCo co1 co2)   = tyCoVarsOfCo co1 `unionVarSet` tyCoVarsOfCo co2
+tyCoVarsOfCo (TypeNatCo _ ts cs) = tyVarsOfTypes ts `unionVarSet` tyCoVarsOfCos cs
 tyCoVarsOfCo (NthCo _ co)        = tyCoVarsOfCo co
 tyCoVarsOfCo (InstCo co ty)      = tyCoVarsOfCo co `unionVarSet` tyVarsOfType ty
 
@@ -355,6 +414,7 @@ coVarsOfCo (SymCo co)          = coVarsOfCo co
 coVarsOfCo (TransCo co1 co2)   = coVarsOfCo co1 `unionVarSet` coVarsOfCo co2
 coVarsOfCo (NthCo _ co)        = coVarsOfCo co
 coVarsOfCo (InstCo co _)       = coVarsOfCo co
+coVarsOfCo (TypeNatCo _ _ cs)  = coVarsOfCos cs
 
 coVarsOfCos :: [Coercion] -> VarSet
 coVarsOfCos cos = foldr (unionVarSet . coVarsOfCo) emptyVarSet cos
@@ -371,6 +431,7 @@ coercionSize (SymCo co)          = 1 + coercionSize co
 coercionSize (TransCo co1 co2)   = 1 + coercionSize co1 + coercionSize co2
 coercionSize (NthCo _ co)        = 1 + coercionSize co
 coercionSize (InstCo co ty)      = 1 + coercionSize co + typeSize ty
+coercionSize (TypeNatCo _ _ cs)  = 1 + sum (map coercionSize cs)
 \end{code}
 
 %************************************************************************
@@ -388,6 +449,9 @@ very high.
 \begin{code}
 instance Outputable Coercion where
   ppr = pprCo
+
+instance Outputable TypeNatCoAxiom where
+  ppr = text . show
 
 pprCo, pprParendCo :: Coercion -> SDoc
 pprCo       co = ppr_co TopPrec   co
@@ -417,6 +481,24 @@ ppr_co p (UnsafeCo ty1 ty2) = pprPrefixApp p (ptext (sLit "UnsafeCo"))
                                            [pprParendType ty1, pprParendType ty2]
 ppr_co p (SymCo co)         = pprPrefixApp p (ptext (sLit "Sym")) [pprParendCo co]
 ppr_co p (NthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pprParendCo co]
+ppr_co p (TypeNatCo co ts cs) = maybeParen p TopPrec $
+                                ppr_type_nat_co co ts cs
+
+ppr_type_nat_co :: TypeNatCoAxiom -> [Type] -> [Coercion] -> SDoc
+ppr_type_nat_co co ts ps = ppr co <> ppTs ts $$ nest 2 (ppPs ps)
+  where
+  ppTs []   = Outputable.empty
+  ppTs [t]  = ptext (sLit "@") <> ppr_type TopPrec t
+  ppTs ts   = ptext (sLit "@") <>
+                parens (hsep $ punctuate comma $ map pprType ts)
+
+  ppPs []   = Outputable.empty
+  ppPs [p]  = pprParendCo p
+  ppPs (p : ps) = ptext (sLit "(") <+> pprCo p $$
+                  vcat [ ptext (sLit ",") <+> pprCo q | q <- ps ] $$
+                  ptext (sLit ")")
+
+
 
 
 ppr_fun_co :: Prec -> Coercion -> SDoc
@@ -890,6 +972,11 @@ subst_co subst co
     go (NthCo d co)          = mkNthCo d (go co)
     go (InstCo co ty)        = mkInstCo (go co) $! go_ty ty
 
+    go (TypeNatCo co ts cs)  = let ts' = map go_ty ts
+                                   cs' = map go cs
+                               in ts' `seqList` cs' `seqList`
+                                  TypeNatCo co ts' cs'
+
 substCoVar :: CvSubst -> CoVar -> Coercion
 substCoVar (CvSubst in_scope _ cenv) cv
   | Just co  <- lookupVarEnv cenv cv      = co
@@ -1062,6 +1149,7 @@ seqCo (SymCo co)            = seqCo co
 seqCo (TransCo co1 co2)     = seqCo co1 `seq` seqCo co2
 seqCo (NthCo _ co)          = seqCo co
 seqCo (InstCo co ty)        = seqCo co `seq` seqType ty
+seqCo (TypeNatCo _ ts cs)   = seqTypes ts `seq` seqCos cs
 
 seqCos :: [Coercion] -> ()
 seqCos []       = ()
@@ -1104,6 +1192,8 @@ coercionKind co = go co
     go (NthCo d co)         = tyConAppArgN d <$> go co
     go (InstCo aco ty)      = go_app aco [ty]
 
+    go (TypeNatCo co ts _)  = coercionKindTypeNat co ts
+
     go_app :: Coercion -> [Type] -> Pair Type
     -- Collect up all the arguments and apply all at once
     -- See Note [Nested InstCos]
@@ -1113,6 +1203,51 @@ coercionKind co = go co
 -- | Apply 'coercionKind' to multiple 'Coercion's
 coercionKinds :: [Coercion] -> Pair [Type]
 coercionKinds tys = sequenceA $ map coercionKind tys
+
+
+coercionKindTypeNat :: TypeNatCoAxiom -> [Type] -> Pair Type
+coercionKindTypeNat ax ts =
+  case (ax, ts) of
+
+    (TnAddDef a b, ~[])          -> Pair (mkAdd (mkN a) (mkN b)) (mkN (a + b))
+    (TnMulDef a b, ~[])          -> Pair (mkMul (mkN a) (mkN b)) (mkN (a * b))
+    (TnExpDef a b, ~[])          -> Pair (mkExp (mkN a) (mkN b)) (mkN (a ^ b))
+    (TnLeqDef _ _ _, ~[])  -> panic "tcCoercionKindTypeNat" "XXX: LeqDef"
+
+    (TnLeqASym, ~[a,b])          -> Pair a b
+    (TnLeq0,  ~[_])        -> panic "tcCoercionKindTypeNat" "XXX: Leq0"
+    (TnLeqRefl, ~[_])      -> panic "tcCoercionKindTypeNat" "XXX: LeqRefl"
+    (TnLeqTrans, ~[_,_,_]) -> panic "tcCoercionKindTypeNat" "XXX: LeqTrans"
+
+    (TnAdd0L, ~[a])              -> Pair (mkAdd (mkN 0) a      ) a
+    (TnMul0L, ~[a])              -> Pair (mkMul (mkN 0) a      ) (mkN 0)
+    (TnMul1L, ~[a])              -> Pair (mkMul (mkN 1) a      ) a
+    (TnExp0L, ~[a])              -> Pair (mkExp (mkN 0) a      ) (mkN 0)
+    (TnExp1L, ~[a])              -> Pair (mkExp (mkN 1) a      ) (mkN 1)
+
+    (TnAdd0R, ~[a])              -> Pair (mkAdd a (mkN 0)) a
+    (TnMul0R, ~[a])              -> Pair (mkMul a (mkN 0)) (mkN 0)
+    (TnMul1R, ~[a])              -> Pair (mkMul a (mkN 1)) a
+    (TnExp0R, ~[a])              -> Pair (mkExp a (mkN 0)) (mkN 1)
+    (TnExp1R, ~[a])              -> Pair (mkExp a (mkN 1)) a
+
+    (TnAddComm, ~[a,b,c])        -> Pair (mkAdd b a) c
+    (TnMulComm, ~[a,b,c])        -> Pair (mkMul b a) c
+
+    (TnAddCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
+    (TnMulCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
+    (TnExpCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
+
+    (TnAddCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
+    (TnMulCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
+    (TnExpCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
+
+  where mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
+        mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
+        mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
+        mkN n     = mkNumLitTy n
+
+
 \end{code}
 
 Note [Nested InstCos]

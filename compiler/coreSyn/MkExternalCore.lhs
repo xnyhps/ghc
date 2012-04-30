@@ -302,6 +302,7 @@ make_co (SymCo co)            = C.SymCoercion (make_co co)
 make_co (TransCo c1 c2)       = C.TransCoercion (make_co c1) (make_co c2)
 make_co (NthCo d co)          = C.NthCoercion d (make_co co)
 make_co (InstCo co ty)        = C.InstCoercion (make_co co) (make_ty ty)
+make_co (TypeNatCo _ _ _)     = panic "make_co TypeNatCo: not yet implemented"
 
 -- Used for both tycon app coercions and axiom instantiations.
 make_conAppCo :: C.Qual C.Tcon -> [Coercion] -> C.Ty

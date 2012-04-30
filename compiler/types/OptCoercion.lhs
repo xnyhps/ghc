@@ -169,6 +169,10 @@ opt_co' env sym (InstCo co ty)
     co' = opt_co env sym co
     ty' = substTy env ty
 
+-- XXX: Write some simplification rules to make the proofs nicer.
+opt_co' env sym (TypeNatCo co ts cs) =
+  wrapSym sym $ TypeNatCo co (map (substTy env) ts) (map (opt_co env False) cs)
+
 -------------
 opt_transList :: InScopeSet -> [NormalCo] -> [NormalCo] -> [NormalCo]
 opt_transList is = zipWith (opt_trans is)
