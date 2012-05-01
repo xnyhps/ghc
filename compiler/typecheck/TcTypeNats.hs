@@ -4,7 +4,6 @@ import Data.Maybe(isNothing)
 import Control.Monad(guard, msum, mzero, liftM2, liftM3)
 
 import Var(Var)
-import TcRnTypes( Xi, Ct(..), isGiven, isWanted )
 import PrelNames( typeNatLeqClassName
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
@@ -13,11 +12,16 @@ import PrelNames( typeNatLeqClassName
 import TyCon( tyConName )
 import Class( className )
 import Type( getTyVar_maybe, isNumLitTy, mkTyVarTy, mkNumLitTy )
-import TcSMonad( TcS, emitFrozenError {-, setEvBind-} )
+import Coercion ( TypeNatCoAxiom(..) )
+
+import TcSMonad( TcS, emitFrozenError, setEvBind )
 import TcCanonical( StopOrContinue(..) )
 
+import TcRnTypes( Xi, Ct(..), isGiven, isWanted, flav_evar )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcTypeNatsRules()
+
+import TcEvidence ( EvTerm(..), TcCoercion(..) )
 
 
 --------------------------------------------------------------------------------
@@ -32,12 +36,13 @@ typeNatStage ct
 
   | isGiven flav =
     case solve ct of
-      Just _ -> return Stop     -- trivial fact
-      _      -> return $ ContinueWith ct   -- XXX: TODO (compute new work)
+      Just _ -> return Stop                 -- trivial fact
+      _      -> return $ ContinueWith ct    -- XXX: TODO (compute new work)
 
   | isWanted flav =
     case solve ct of
-      Just _  -> return $ ContinueWith ct   --- XXX: setEvBind
+      Just c  -> do setEvBind (flav_evar flav) (EvCoercion c)
+                    return Stop
       Nothing -> return $ ContinueWith ct   --- XXX: Try improvement here
 
   -- XXX: TODO
@@ -85,29 +90,29 @@ ctProp (CFunEqCan { cc_fun = tc, cc_tyargs = [t1,t2], cc_rhs = t3 }) =
 ctProp _ = Nothing
 
 --------------------------------------------------------------------------------
-solve :: Ct -> Maybe Proof
+solve :: Ct -> Maybe TcCoercion
 solve ct =
   do prop <- ctProp ct
      case prop of
 
-        Leq (N a) (N b) | a <= b            -> return $ byLeqDef a b
-        Leq (N 0) (V b)                     -> return $ byLeq0 (V b)
-        Leq (V a) (V b) | a == b            -> return $ byLeqRefl (V a)
+        Leq (N a) (N b) | a <= b            -> return $ by0 $ TnLeqDef a b
+        Leq (N 0) (V b)                     -> return $ by1 TnLeq0 (V b)
+        Leq (V a) (V b) | a == b            -> return $ by1 TnLeqRefl (V a)
 
-        Add (N a) (N b) (N c) | a + b == c  -> return $ byDefAdd a b
-        Add (N 0) (V b) (V c) | b == c      -> return $ byAdd0_L (V b)
-        Add (V a) (N 0) (V c) | a == c      -> return $ byAdd0_R (V a)
+        Add (N a) (N b) (N c) | a + b == c  -> return $ by0 $ TnAddDef a b
+        Add (N 0) (V b) (V c) | b == c      -> return $ by1 TnAdd0L (V c)
+        Add (V a) (N 0) (V c) | a == c      -> return $ by1 TnAdd0R (V c)
 
-        Mul (N a) (N b) (N c) | a * b == c  -> return $ byDefMul a b
-        Mul (N 0) (V b) (N 0)               -> return $ byMul0_L (V b)
-        Mul (V a) (N 0) (N 0)               -> return $ byMul0_R (V a)
-        Mul (N 1) (V b) (V c) | b == c      -> return $ byMul1_L (V b)
-        Mul (V a) (N 1) (V c) | a == c      -> return $ byMul1_R (V a)
+        Mul (N a) (N b) (N c) | a * b == c  -> return $ by0 $ TnMulDef a b
+        Mul (N 0) (V b) (N 0)               -> return $ by1 TnMul0L (V b)
+        Mul (V a) (N 0) (N 0)               -> return $ by1 TnMul0R (V a)
+        Mul (N 1) (V b) (V c) | b == c      -> return $ by1 TnMul1L (V c)
+        Mul (V a) (N 1) (V c) | a == c      -> return $ by1 TnMul1R (V c)
 
-        Exp (N a) (N b) (N c) | a ^ b == c  -> return $ byDefExp a b
-        Exp (V a) (N 0) (N 1)               -> return $ byExp0_R (V a)
-        Exp (V a) (N 1) (V c) | a == c      -> return $ byExp1_R (V a)
-        Exp (N 1) (V b) (N 1)               -> return $ byExp1_L (V b)
+        Exp (N a) (N b) (N c) | a ^ b == c  -> return $ by0 $ TnExpDef a b
+        Exp (V a) (N 0) (N 1)               -> return $ by1 TnExp0R (V a)
+        Exp (V a) (N 1) (V c) | a == c      -> return $ by1 TnExp1R (V c)
+        Exp (N 1) (V b) (N 1)               -> return $ by1 TnExp1L (V b)
 
         _                                   -> mzero
 
@@ -143,68 +148,10 @@ impossible ct =
 
 
 --------------------------------------------------------------------------------
-type Proof = ()
 
+by0 :: TypeNatCoAxiom -> TcCoercion
+by0 c = TcTypeNatCo c [] []
 
-byDefAdd :: Integer -> Integer -> Proof
-byDefAdd _ _  = ()
-
-byDefMul :: Integer -> Integer -> Proof
-byDefMul _ _  = ()
-
-byDefExp :: Integer -> Integer -> Proof
-byDefExp _ _  = ()
-
-byLeqDef :: Integer -> Integer -> Proof
-byLeqDef _ _  = ()
-
-
--- a <= a
-byLeqRefl :: Term -> Proof
-byLeqRefl _ = ()
-
--- 0 <= a
-byLeq0  :: Term -> Proof
-byLeq0 _ = ()
-
--- a + 0 = a
-byAdd0_L :: Term -> Proof
-byAdd0_L _    = ()
-
--- 0 + a = a
-byAdd0_R :: Term -> Proof
-byAdd0_R _    = ()
-
--- 0 * a = 0
-byMul0_L :: Term -> Proof
-byMul0_L _    = ()
-
--- a * 0 = 0
-byMul0_R :: Term -> Proof
-byMul0_R _    = ()
-
--- a * 1 = a
-byMul1_R :: Term -> Proof
-byMul1_R _    = ()
-
--- 1 * a = a
-byMul1_L :: Term -> Proof
-byMul1_L _    = ()
-
--- a ^ 0 = 1
-byExp0_R :: Term -> Proof
-byExp0_R _ = ()
-
--- (1 <= a) => 0 ^ a = 0
-
--- 1 ^ a = 1
-byExp1_L :: Term -> Proof
-byExp1_L _ = ()
-
--- a ^ 1 = a
-byExp1_R :: Term -> Proof
-byExp1_R _ = ()
-
-
-
+by1 :: TypeNatCoAxiom -> Term -> TcCoercion
+by1 c t = TcTypeNatCo c [ termTy t ] []
 
