@@ -1082,8 +1082,8 @@ instance Binary TypeNatCoAxiom where
       TnAddDef a b    -> byte 0x00 >> putNatural bh a >> putNatural bh b
       TnMulDef a b    -> byte 0x01 >> putNatural bh a >> putNatural bh b
       TnExpDef a b    -> byte 0x02 >> putNatural bh a >> putNatural bh b
-      TnLeqDef a b c  -> byte 0x03 >> putNatural bh a >> putNatural bh b
-                                                      >> put_ bh c
+      TnLeqDef a b    -> byte 0x03 >> putNatural bh a >> putNatural bh b
+
       TnLeqASym       -> byte 0x04
       TnLeq0          -> byte 0x05
       TnLeqRefl       -> byte 0x06
@@ -1118,7 +1118,7 @@ instance Binary TypeNatCoAxiom where
                 0x00 -> liftM2 TnAddDef (getNatural bh) (getNatural bh)
                 0x01 -> liftM2 TnMulDef (getNatural bh) (getNatural bh)
                 0x02 -> liftM2 TnExpDef (getNatural bh) (getNatural bh)
-                0x03 -> liftM3 TnLeqDef (getNatural bh) (getNatural bh) (get bh)
+                0x03 -> liftM2 TnLeqDef (getNatural bh) (getNatural bh)
 
                 0x04 -> return TnLeqASym
                 0x05 -> return TnLeq0

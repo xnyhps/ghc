@@ -905,8 +905,7 @@ lintCoercion (TypeNatCo co ts cs)
          (TnAddDef a b, [], []) -> return (kN, mkAdd (mkN a) (mkN b), mkN (a + b))
          (TnMulDef a b, [], []) -> return (kN, mkMul (mkN a) (mkN b), mkN (a * b))
          (TnExpDef a b, [], []) -> return (kN, mkExp (mkN a) (mkN b), mkN (a ^ b))
-         (TnLeqDef a b c, [], [])
-           | (a <= b) == c      -> return (kB, mkLeq (mkN a) (mkN b), mkB c)
+         (TnLeqDef a b, [], []) -> return (kB, mkLeq (mkN a) (mkN b), mkB (a <= b))
 
          -- XXX: Check proofs
          (TnLeqASym, [a,b], [_,_]) -> return (kN, a, b)

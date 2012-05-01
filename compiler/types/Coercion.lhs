@@ -165,7 +165,7 @@ data TypeNatCoAxiom
   = TnAddDef Integer Integer        -- 2 + 3 ~ 5
   | TnMulDef Integer Integer        -- 2 * 3 ~ 6
   | TnExpDef Integer Integer        -- 2 ^ 3 ~ 8
-  | TnLeqDef Integer Integer Bool   -- 2 <=? 3 ~ True
+  | TnLeqDef Integer Integer        -- 2 <=? 3 ~ True
 
   -- Order
   | TnLeqASym   -- forall a b.   (a <=? b ~ True, b <=? a ~ True) => a ~ b
@@ -1212,7 +1212,7 @@ coercionKindTypeNat ax ts =
     (TnAddDef a b, ~[])          -> Pair (mkAdd (mkN a) (mkN b)) (mkN (a + b))
     (TnMulDef a b, ~[])          -> Pair (mkMul (mkN a) (mkN b)) (mkN (a * b))
     (TnExpDef a b, ~[])          -> Pair (mkExp (mkN a) (mkN b)) (mkN (a ^ b))
-    (TnLeqDef _ _ _, ~[])  -> panic "tcCoercionKindTypeNat" "XXX: LeqDef"
+    (TnLeqDef _ _, ~[])    -> panic "tcCoercionKindTypeNat" "XXX: LeqDef"
 
     (TnLeqASym, ~[a,b])          -> Pair a b
     (TnLeq0,  ~[_])        -> panic "tcCoercionKindTypeNat" "XXX: Leq0"
