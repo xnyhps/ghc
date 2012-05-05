@@ -192,17 +192,17 @@ data TypeNatCoAxiom
   | TnMulComm    -- forall a b c. (a * b ~ c) => b * a ~ c
 
   -- Cancellation
-  | TnAddCancelL -- forall a b1 b2 c. ( a + b1 ~ c, a + b2 ~ c ) => b1 ~ b1
+  | TnAddCancelL -- forall a b1 b2 c. ( a + b1 ~ c, a + b2 ~ c ) => b1 ~ b2
   | TnMulCancelL -- forall a b1 b2 c. ( 1 <=? a ~ True
-                 --                   , a * b1 ~ c, a * b2 ~ c ) => b1 ~ b1
+                 --                   , a * b1 ~ c, a * b2 ~ c ) => b1 ~ b2
   | TnExpCancelL -- forall a b1 b2 c. ( 2 <=? a ~ True
-                 --                   , a ^ b1 ~ c, a ^ b2 ~ c ) => b1 ~ b1
+                 --                   , a ^ b1 ~ c, a ^ b2 ~ c ) => b1 ~ b2
 
-  | TnAddCancelR -- forall a1 a2 b c. ( a1 + b ~ c, a2 + b ~ c ) => a1 ~ a1
+  | TnAddCancelR -- forall a1 a2 b c. ( a1 + b ~ c, a2 + b ~ c ) => a1 ~ a2
   | TnMulCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
-                 --                   , a1 * b ~ c, a2 * b ~ c ) => a1 ~ a1
+                 --                   , a1 * b ~ c, a2 * b ~ c ) => a1 ~ a2
   | TnExpCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
-                 --                   , a1 ^ b ~ c, a2 ^ b ~ c ) => a1 ~ a1
+                 --                   , a1 ^ b ~ c, a2 ^ b ~ c ) => a1 ~ a2
 
   -- XXX: Associativity, distributivity, and + ^ and ^ ^  interactions
     deriving (Eq, Ord, Show, Data.Data, Data.Typeable)
