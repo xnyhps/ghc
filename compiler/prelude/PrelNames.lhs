@@ -277,7 +277,7 @@ basicKnownKeyNames
         typeNatKindConName,
         typeStringKindConName,
         singIClassName,
-        typeNatLeqClassName,
+        typeNatLeqTyFamName,
         typeNatAddTyFamName,
         typeNatMulTyFamName,
         typeNatExpTyFamName,
@@ -1060,13 +1060,13 @@ isStringClassName   = clsQual dATA_STRING (fsLit "IsString") isStringClassKey
 
 -- Type-level naturals
 typeNatKindConName, typeStringKindConName,
-  singIClassName, typeNatLeqClassName,
+  singIClassName, typeNatLeqTyFamName,
   typeNatAddTyFamName, typeNatMulTyFamName, typeNatExpTyFamName :: Name
 typeNatKindConName    = tcQual gHC_TYPELITS (fsLit "Nat")  typeNatKindConNameKey
 typeStringKindConName = tcQual gHC_TYPELITS (fsLit "Symbol")
                                                         typeStringKindConNameKey
 singIClassName      = clsQual gHC_TYPELITS (fsLit "SingI") singIClassNameKey
-typeNatLeqClassName = clsQual gHC_TYPELITS (fsLit "<=")  typeNatLeqClassNameKey
+typeNatLeqTyFamName = clsQual gHC_TYPELITS (fsLit "<=?") typeNatLeqTyFamNameKey
 typeNatAddTyFamName = tcQual  gHC_TYPELITS (fsLit "+")   typeNatAddTyFamNameKey
 typeNatMulTyFamName = tcQual  gHC_TYPELITS (fsLit "*")   typeNatMulTyFamNameKey
 typeNatExpTyFamName = tcQual  gHC_TYPELITS (fsLit "^")   typeNatExpTyFamNameKey
@@ -1185,9 +1185,8 @@ datatypeClassKey    = mkPreludeClassUnique 39
 constructorClassKey = mkPreludeClassUnique 40
 selectorClassKey    = mkPreludeClassUnique 41
 
-singIClassNameKey, typeNatLeqClassNameKey :: Unique
+singIClassNameKey :: Unique
 singIClassNameKey       = mkPreludeClassUnique 42
-typeNatLeqClassNameKey  = mkPreludeClassUnique 43
 
 ghciIoClassKey :: Unique
 ghciIoClassKey = mkPreludeClassUnique 44
@@ -1375,13 +1374,17 @@ rep1TyConKey = mkPreludeTyConUnique 156
 
 -- Type-level naturals
 typeNatKindConNameKey, typeStringKindConNameKey,
-  typeNatAddTyFamNameKey, typeNatMulTyFamNameKey, typeNatExpTyFamNameKey
+  typeNatLeqTyFamNameKey,
+  typeNatAddTyFamNameKey,
+  typeNatMulTyFamNameKey,
+  typeNatExpTyFamNameKey
   :: Unique
 typeNatKindConNameKey     = mkPreludeTyConUnique 160
 typeStringKindConNameKey  = mkPreludeTyConUnique 161
-typeNatAddTyFamNameKey    = mkPreludeTyConUnique 162
-typeNatMulTyFamNameKey    = mkPreludeTyConUnique 163
-typeNatExpTyFamNameKey    = mkPreludeTyConUnique 164
+typeNatLeqTyFamNameKey    = mkPreludeTyConUnique 162
+typeNatAddTyFamNameKey    = mkPreludeTyConUnique 163
+typeNatMulTyFamNameKey    = mkPreludeTyConUnique 164
+typeNatExpTyFamNameKey    = mkPreludeTyConUnique 165
 
 ---------------- Template Haskell -------------------
 --      USES TyConUniques 200-299

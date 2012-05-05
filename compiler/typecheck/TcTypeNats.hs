@@ -1,16 +1,15 @@
 module TcTypeNats where
 
 import Data.Maybe(isNothing)
-import Control.Monad(guard, msum, mzero, liftM2, liftM3)
+import Control.Monad(guard, msum, mzero, liftM3)
 
 import Var(Var)
-import PrelNames( typeNatLeqClassName
-                , typeNatAddTyFamName
+import PrelNames( {- typeNatLeqTyFamName
+                , -} typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
                 )
 import TyCon( tyConName )
-import Class( className )
 import Type( getTyVar_maybe, isNumLitTy, mkTyVarTy, mkNumLitTy )
 import Coercion ( TypeNatCoAxiom(..) )
 
@@ -55,13 +54,15 @@ typeNatStage ct
 
 
 --------------------------------------------------------------------------------
+
+-- XXX: Duplication with the Rules modules.
 data Term = V Var | N Integer
             deriving Eq
 
 data Prop = Add Term Term Term
           | Mul Term Term Term
           | Exp Term Term Term
-          | Leq Term Term
+          | Leq Term Term Term
             deriving Eq
 
 tyTerm :: Xi -> Maybe Term
@@ -72,9 +73,12 @@ termTy (V x) = mkTyVarTy x
 termTy (N x) = mkNumLitTy x
 
 ctProp :: Ct -> Maybe Prop
+
+{-
 ctProp (CDictCan { cc_class = cl, cc_tyargs = [t1,t2] }) =
   do guard (className cl == typeNatLeqClassName)
      liftM2 Leq (tyTerm t1) (tyTerm t2)
+-}
 
 ctProp (CFunEqCan { cc_fun = tc, cc_tyargs = [t1,t2], cc_rhs = t3 }) =
   msum [ do guard (tyConName tc == typeNatAddTyFamName)
@@ -95,9 +99,11 @@ solve ct =
   do prop <- ctProp ct
      case prop of
 
+{-
         Leq (N a) (N b) | a <= b            -> return $ by0 $ TnLeqDef a b
         Leq (N 0) (V b)                     -> return $ by1 TnLeq0 (V b)
         Leq (V a) (V b) | a == b            -> return $ by1 TnLeqRefl (V a)
+-}
 
         Add (N a) (N b) (N c) | a + b == c  -> return $ by0 $ TnAddDef a b
         Add (N 0) (V b) (V c) | b == c      -> return $ by1 TnAdd0L (V c)
@@ -127,7 +133,7 @@ impossible ct =
     Nothing   -> False
     Just prop ->
       case prop of
-        Leq (N a) (N b)       -> not (a <= b)
+        -- Leq (N a) (N b)       -> not (a <= b)
 
         Add (N a) _     (N c) -> isNothing (minus c a)
         Add _     (N b) (N c) -> isNothing (minus c b)
