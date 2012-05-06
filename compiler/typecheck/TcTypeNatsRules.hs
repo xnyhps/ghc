@@ -1,8 +1,9 @@
 module TcTypeNatsRules where
 
 import Name     ( Name )
-import Var      ( Var )
+import Var      ( Var, EvVar )
 import TyCon    ( TyCon, tyConName )
+import Coercion ( TypeNatCoAxiom (..) )
 import Type     ( isNumLitTy, getTyVar_maybe )
 import PrelNames( typeNatLeqTyFamName
                 , typeNatAddTyFamName
@@ -11,20 +12,54 @@ import PrelNames( typeNatLeqTyFamName
                 )
 import Panic    ( panic )
 
-import TcRnTypes      ( Xi, Ct(..) )
+import TcRnTypes      ( Xi, Ct(..), ctId )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 
-import Data.Maybe ( fromMaybe )
+import Data.Maybe ( fromMaybe, maybeToList )
+import Data.List  ( nub, sort )
 import qualified Data.IntMap as IMap
 import Control.Monad ( msum )
 
-type RVar   = Int
-type Subst  = IMap.IntMap Term
+--------------------------------------------------------------------------------
+type Subst  = IMap.IntMap Term  -- ^ Maps TVars to Terms
 
-data Term   = Var !RVar     -- ^ Matches anything
-            | Num !Integer  -- ^ Matches the given literal constant
+class ApSubst t where
+  apSubst :: Subst -> t -> t
+
+instance ApSubst t => ApSubst [t] where
+  apSubst su ts             = map (apSubst su) ts
+
+instance ApSubst Term where
+  apSubst su term           = case term of
+                                Var a -> fromMaybe term (IMap.lookup a su)
+                                _     -> term
+
+instance ApSubst Prop where
+  apSubst su (Prop op ts)   = Prop op (apSubst su ts)
+
+instance ApSubst Conc where
+  apSubst su (CProp p)      = CProp (apSubst su p)
+  apSubst su (CEq t1 t2)    = CEq (apSubst su t1) (apSubst su t2)
+
+instance ApSubst Rule where
+  apSubst su (Rule as c p)  = Rule [ (n, apSubst su a) | (n,a) <- as ]
+                                   (apSubst su c) (apSubst su p)
+
+instance ApSubst Proof where
+  apSubst su (By ax ts ps)  = By ax (apSubst su ts) (apSubst su ps)
+  apSubst _ (Proved v)      = Proved v
+  apSubst _ (Assumed n)     = Assumed n
+
+
+--------------------------------------------------------------------------------
+
+type TVar   = Int               -- ^ Names a term
+type PVar   = Int               -- ^ Names a proof
+
+data Term   = Var  !TVar    -- ^ Matches anything
+            | Num  !Integer -- ^ Matches the given number constant
             | Bool !Bool    -- ^ Matches the given boolean constant
-            | Con !Var      -- ^ Matches a GHC variable (uninterpreted constant)
+            | Con  !Var     -- ^ Matches a GHC variable (uninterpreted constant)
               deriving Eq
 
 fromXi :: Xi -> Maybe Term
@@ -39,23 +74,17 @@ matchTermTerm (Var a) t         = return (IMap.singleton a t)
 matchTermTerm t (Var a)         = return (IMap.singleton a t)
 matchTermTerm _ _               = panic "matchTermTerm: unreachable"
 
-specTerm :: Subst -> Term -> Term
-specTerm su term =
-  case term of
-    Var a -> fromMaybe term (IMap.lookup a su)
-    _     -> term
-
 matchTerms :: [Term] -> [Xi] -> Maybe Subst
 matchTerms [] [] = return IMap.empty
 matchTerms (t : ts) (xi : xis) =
   do su1 <- matchTermXi t xi
-     su2 <- matchTerms (map (specTerm su1) ts) xis
+     su2 <- matchTerms (apSubst su1 ts) xis
      return (IMap.union su1 su2)
 matchTerms _ _ = Nothing
 
 -- For functions, the result comes first:
--- For example `x ~ a + b` or `Prop addCon [x,a,b]`
-data Prop = Prop { pOp :: Op , pTerms :: [Term] }
+-- For example `x ~ a + b` or `Prop Add [x,a,b]`
+data Prop = Prop Op [Term]
 data Op   = Leq | Add | Mul | Exp
 
 opName :: Op -> Name
@@ -67,6 +96,7 @@ opName Exp = typeNatExpTyFamName
 matchProp :: Prop -> Ct -> Maybe Subst
 matchProp (Prop op ts) (CFunEqCan { cc_fun = tc, cc_tyargs = xis, cc_rhs = xi})
   | tyConName tc == opName op = matchTerms ts (xi : xis)
+
 matchProp _ _ = Nothing
 
 matchAxiom :: Prop -> Maybe Subst -- XXX: Also proof
@@ -113,29 +143,58 @@ matchAxiom (Prop Exp [r, a, Num 1]) = matchTermTerm r a
 matchAxiom _ = Nothing
 
 
+data Rule   = Rule [(PVar,Prop)] Conc Proof
 
-{-
-              deriving Eq
+data Conc   = CProp Prop | CEq Term Term
 
-              deriving (Eq,Ord,Show)
+data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
+            | Proved EvVar
+            | Assumed PVar
 
-data Proof  = By String [Term] [Proof]   -- Using an existing fact
-            | DefAx Op Term Term        -- Definitional axiom
-            | ByAsmp String
 
-data Rule   = Rule { rForall  :: [String]
-                   , rAsmps   :: [(String,Prop)]  -- named assumptions
-                   , rSides   :: [Prop]           -- no variables here
-                   , rConc    :: Prop
-                   , rProof   :: [(String,Term)]    -- inst. for terms
-                              -> [(String,Proof)]   -- inst. for asmps
-                              -> Proof
-                   }
--}
--- (a + b1 ~ c, a + b2 ~ c) => (b1 ~ b2)
 
--- (2 + b1 ~ 5, 2 + b2 ~ 5) =>
+-- | A smart constructor for easier rule constrction.
+rule :: TypeNatCoAxiom -> [Prop] -> Conc -> Rule
+rule ax asmps conc
+  | wellFormed = Rule as conc $ By ax (map Var vs) $ map (Assumed . fst) as
+  | otherwise  = panic "Malfored rule."
+  where
+  as                    = zip [ 0 .. ] asmps
+  vs                    = sort $ nub $ concatMap propVars asmps
 
+  wellFormed            = all (`elem` vs) (concVars conc)
+
+  concVars (CProp p)    = propVars p
+  concVars (CEq s t)    = termVars s ++ termVars t
+
+  propVars (Prop _ ts)  = concatMap termVars ts
+
+  termVars (Var x)      = [x]
+  termVars (Con _)      = panic "Unineterpreted constant in rule."
+  termVars (Num _)      = []
+  termVars (Bool _)     = []
+
+
+{- Try to use the given constraint to satisfy one of the assumptoins
+for a rule.  We return a list because the consraint may be used to
+satisfy multiple (or none) of the assumptions. -}
+
+specRuleCt :: Rule -> Ct -> [Rule]
+specRuleCt (Rule as c proof) ct =
+  do ((n,p), rest) <- choose as
+     su <- maybeToList (matchProp p ct)
+     return $ apSubst su $ Rule rest c $ define n (Proved (ctId ct)) proof
+
+define :: PVar -> Proof -> Proof -> Proof
+define n p (Assumed m) | n == m   = p
+define n p (By ax ts ps)          = By ax ts (map (define n p) ps)
+define _ _ p                      = p
+
+
+-- Consider each element of the list (and the rest)
+choose :: [a] -> [(a,[a])]
+choose []       = []
+choose (a : as) = (a, as) : [ (b, a : bs) | (b,bs) <- choose as ]
 
 
 -- (a + b = x, b + c = y, a + y = z) => (x + c = z)
