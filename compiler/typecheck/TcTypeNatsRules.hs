@@ -20,6 +20,33 @@ import Data.List  ( nub, sort )
 import qualified Data.IntMap as IMap
 import Control.Monad ( msum )
 
+
+type TVar   = Int           -- ^ Names a term
+type PVar   = Int           -- ^ Names a proof
+
+data Term   = Var  !TVar    -- ^ Matches anything
+            | Num  !Integer -- ^ Matches the given number constant
+            | Bool !Bool    -- ^ Matches the given boolean constant
+            | Con  !Var     -- ^ Matches a GHC variable (uninterpreted constant)
+              deriving Eq
+
+-- For functions, the result comes first:
+-- For example `x ~ a + b` or `Prop Add [x,a,b]`
+data Prop   = Prop Op [Term]
+data Op     = Leq | Add | Mul | Exp
+
+data Rule   = Rule [(PVar,Prop)]    -- ^ Named assumptions of the rule
+                   Conc             -- ^ Conclusion of the rule
+                   Proof            -- ^ Proof of conclusion (uses assumptions)
+
+data Conc   = CProp Prop
+            | CEq Term Term
+
+data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
+            | Proved EvVar
+            | Assumed PVar
+
+
 --------------------------------------------------------------------------------
 type Subst  = IMap.IntMap Term  -- ^ Maps TVars to Terms
 
@@ -52,16 +79,6 @@ instance ApSubst Proof where
 
 
 --------------------------------------------------------------------------------
-
-type TVar   = Int               -- ^ Names a term
-type PVar   = Int               -- ^ Names a proof
-
-data Term   = Var  !TVar    -- ^ Matches anything
-            | Num  !Integer -- ^ Matches the given number constant
-            | Bool !Bool    -- ^ Matches the given boolean constant
-            | Con  !Var     -- ^ Matches a GHC variable (uninterpreted constant)
-              deriving Eq
-
 fromXi :: Xi -> Maybe Term
 fromXi t = msum [ Con `fmap` getTyVar_maybe t, Num `fmap` isNumLitTy t ]
 
@@ -81,11 +98,6 @@ matchTerms (t : ts) (xi : xis) =
      su2 <- matchTerms (apSubst su1 ts) xis
      return (IMap.union su1 su2)
 matchTerms _ _ = Nothing
-
--- For functions, the result comes first:
--- For example `x ~ a + b` or `Prop Add [x,a,b]`
-data Prop = Prop Op [Term]
-data Op   = Leq | Add | Mul | Exp
 
 opName :: Op -> Name
 opName Leq = typeNatLeqTyFamName
@@ -143,21 +155,12 @@ matchAxiom (Prop Exp [r, a, Num 1]) = matchTermTerm r a
 matchAxiom _ = Nothing
 
 
-data Rule   = Rule [(PVar,Prop)] Conc Proof
-
-data Conc   = CProp Prop | CEq Term Term
-
-data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
-            | Proved EvVar
-            | Assumed PVar
-
-
 
 -- | A smart constructor for easier rule constrction.
 rule :: TypeNatCoAxiom -> [Prop] -> Conc -> Rule
 rule ax asmps conc
   | wellFormed = Rule as conc $ By ax (map Var vs) $ map (Assumed . fst) as
-  | otherwise  = panic "Malfored rule."
+  | otherwise  = panic "Malformed rule."
   where
   as                    = zip [ 0 .. ] asmps
   vs                    = sort $ nub $ concatMap propVars asmps
@@ -177,7 +180,10 @@ rule ax asmps conc
 
 {- Try to use the given constraint to satisfy one of the assumptoins
 for a rule.  We return a list because the consraint may be used to
-satisfy multiple (or none) of the assumptions. -}
+satisfy multiple (or none) of the assumptions.
+
+We assume that each rule will need to use a constraint at most once.
+-}
 
 specRuleCt :: Rule -> Ct -> [Rule]
 specRuleCt (Rule as c proof) ct =
