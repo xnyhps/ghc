@@ -1,5 +1,6 @@
 module TcTypeNatsRules where
 
+-- From other GHC locations
 import Name     ( Name )
 import Var      ( Var, EvVar )
 import TyCon    ( TyCon, tyConName )
@@ -12,9 +13,11 @@ import PrelNames( typeNatLeqTyFamName
                 )
 import Panic    ( panic )
 
+-- From type checker
 import TcRnTypes      ( Xi, Ct(..), ctId )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 
+-- From base libraries
 import Data.Maybe ( fromMaybe, maybeToList )
 import Data.List  ( nub, sort )
 import qualified Data.IntMap as IMap
@@ -48,6 +51,181 @@ data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
 
 
 --------------------------------------------------------------------------------
+fromXi :: Xi -> Maybe Term
+fromXi t = msum [ Con `fmap` getTyVar_maybe t, Num `fmap` isNumLitTy t ]
+
+opName :: Op -> Name
+opName Leq = typeNatLeqTyFamName
+opName Add = typeNatAddTyFamName
+opName Mul = typeNatMulTyFamName
+opName Exp = typeNatExpTyFamName
+
+opAxiom :: Op -> Integer -> Integer -> TypeNatCoAxiom
+opAxiom Leq = TnLeqDef
+opAxiom Add = TnAddDef
+opAxiom Mul = TnMulDef
+opAxiom Exp = TnExpDef
+--------------------------------------------------------------------------------
+
+
+
+--------------------------------------------------------------------------------
+
+-- XXX: We should be able to also cope with rules that have only Leq constraints
+simpleRules :: [Rule]
+simpleRules = map (uncurry simpleRule)
+  [ (TnLeq0    , Prop Leq [ t, o, a ])
+  , (TnLeqRefl , Prop Leq [ t, a, a ])
+
+  , (TnAdd0L   , Prop Add [ a, o, a ])
+  , (TnAdd0R   , Prop Add [ a, a, o ])
+
+  , (TnMul0L   , Prop Mul [ o, o, a ])
+  , (TnMul0R   , Prop Mul [ o, a, o ])
+  , (TnMul1L   , Prop Mul [ a, i, a ])
+  , (TnMul1R   , Prop Mul [ a, a, i ])
+
+  -- TnExp0L
+  , (TnExp0R   , Prop Exp [ i, a, o ])
+  , (TnExp1L   , Prop Exp [ i, i, a ])
+  , (TnExp1R   , Prop Exp [ a, a, i ])
+  ]
+  where a = Var 0
+        t = Bool True
+        o = Num 0
+        i = Num 1
+
+
+
+
+
+-- | A smart constructor for easier rule constrction.
+rule :: TypeNatCoAxiom -> [Prop] -> Conc -> Rule
+rule ax asmps conc
+  | wellFormed = Rule as conc $ By ax (map Var vs) $ map (Assumed . fst) as
+  | otherwise  = panic "Malformed rule."
+  where
+  as                    = zip [ 0 .. ] asmps
+  vs                    = sort $ nub $ concatMap propVars asmps
+
+  wellFormed            = all (`elem` vs) (concVars conc)
+
+  concVars (CProp p)    = propVars p
+  concVars (CEq s t)    = termVars s ++ termVars t
+
+  propVars (Prop _ ts)  = concatMap termVars ts
+
+  termVars (Var x)      = [x]
+  termVars (Con _)      = panic "Unineterpreted constant in rule."
+  termVars (Num _)      = []
+  termVars (Bool _)     = []
+
+simpleRule :: TypeNatCoAxiom -> Prop -> Rule
+simpleRule ax p = rule ax [] (CProp p)
+--------------------------------------------------------------------------------
+
+
+
+--------------------------------------------------------------------------------
+matchTermXi :: Term -> Xi -> Maybe Subst
+matchTermXi term xi = matchTermTerm term =<< fromXi xi
+
+matchTermTerm :: Term -> Term -> Maybe Subst
+matchTermTerm t1 t2 | t1 == t2  = return IMap.empty
+matchTermTerm (Var a) t         = return (IMap.singleton a t)
+matchTermTerm t (Var a)         = return (IMap.singleton a t)
+matchTermTerm _ _               = panic "matchTermTerm: unreachable"
+
+matchTerms :: [Term] -> [Xi] -> Maybe Subst
+matchTerms [] [] = return IMap.empty
+matchTerms (t : ts) (xi : xis) =
+  do su1 <- matchTermXi t xi
+     su2 <- matchTerms (apSubst su1 ts) xis
+     return (IMap.union su1 su2)
+matchTerms _ _ = Nothing
+
+
+--------------------------------------------------------------------------------
+
+
+-- | Try to satisfy a rule assumption with an existing constraint.
+byAsmp :: Prop -> Ct -> Maybe (Subst, Proof)
+byAsmp (Prop op ts) ct
+  | tyConName (cc_fun ct) == opName op =
+      do su <- matchTerms ts (cc_rhs ct : cc_tyargs ct)
+         return (su, Proved (ctId ct))
+byAsmp _ _ = Nothing
+
+
+-- | Try to stisfy a rule assumption with an axiom.
+byAxiom :: Prop -> Maybe (Subst, Proof)
+
+byAxiom (Prop op [r, Num a, Num b]) =
+  do su <- matchTermTerm r $
+           case op of
+             Add -> Num (a + b)
+             Mul -> Num (a * b)
+             Exp -> Num (a ^ b)
+             Leq -> Bool (a <= b)
+
+     return (su, By (opAxiom op a b) [] [])
+
+byAxiom (Prop op [Num r, a, Num b]) =
+  do na <- case op of
+             Add -> minus r b
+             Mul -> divide r b
+             Exp -> rootExact r b
+             Leq -> Nothing
+
+     su <- matchTermTerm a (Num na)
+     return (su, By (opAxiom op na b) [] [])
+
+byAxiom (Prop op [Num r, Num a, b]) =
+  do nb <- case op of
+             Add -> minus r a
+             Mul -> divide r a
+             Exp -> logExact r a
+             Leq -> Nothing
+
+     su <- matchTermTerm b (Num nb)
+     return (su, By (opAxiom op a nb) [] [])
+
+byAxiom _ = Nothing
+
+
+
+-- XXX: By simple rule
+
+{-
+matchAxiom (Prop Add [r, Num 0, b]) = matchTermTerm r b
+matchAxiom (Prop Add [r, a, Num 0]) = matchTermTerm r a
+
+matchAxiom (Prop Mul [r, Num 0, _]) = matchTermTerm r $ Num 0
+matchAxiom (Prop Mul [r, _, Num 0]) = matchTermTerm r $ Num 0
+matchAxiom (Prop Mul [r, Num 1, b]) = matchTermTerm r b
+matchAxiom (Prop Mul [r, a, Num 1]) = matchTermTerm r a
+
+
+
+-- (only if 1 <= b)
+-- matchAxiom (Prop Exp [r, Num 0, b]) = matchTermTerm r $ Num 0
+
+matchAxiom (Prop Exp [r, _, Num 0]) = matchTermTerm r $ Num 1
+matchAxiom (Prop Exp [r, Num 1, _]) = matchTermTerm r $ Num 1
+matchAxiom (Prop Exp [r, a, Num 1]) = matchTermTerm r a
+-}
+
+
+specRule :: Rule -> (Prop -> Maybe (Subst, Proof)) -> [Rule]
+specRule (Rule as c proof) tactic =
+  do ((n,p), rest) <- choose as
+     (su, aP) <- maybeToList (tactic p)
+     return $ apSubst su $ Rule rest c $ define n aP proof
+
+
+
+
+--------------------------------------------------------------------------------
 type Subst  = IMap.IntMap Term  -- ^ Maps TVars to Terms
 
 class ApSubst t where
@@ -78,119 +256,7 @@ instance ApSubst Proof where
   apSubst _ (Assumed n)     = Assumed n
 
 
---------------------------------------------------------------------------------
-fromXi :: Xi -> Maybe Term
-fromXi t = msum [ Con `fmap` getTyVar_maybe t, Num `fmap` isNumLitTy t ]
-
-matchTermXi :: Term -> Xi -> Maybe Subst
-matchTermXi term xi = matchTermTerm term =<< fromXi xi
-
-matchTermTerm :: Term -> Term -> Maybe Subst
-matchTermTerm t1 t2 | t1 == t2  = return IMap.empty
-matchTermTerm (Var a) t         = return (IMap.singleton a t)
-matchTermTerm t (Var a)         = return (IMap.singleton a t)
-matchTermTerm _ _               = panic "matchTermTerm: unreachable"
-
-matchTerms :: [Term] -> [Xi] -> Maybe Subst
-matchTerms [] [] = return IMap.empty
-matchTerms (t : ts) (xi : xis) =
-  do su1 <- matchTermXi t xi
-     su2 <- matchTerms (apSubst su1 ts) xis
-     return (IMap.union su1 su2)
-matchTerms _ _ = Nothing
-
-opName :: Op -> Name
-opName Leq = typeNatLeqTyFamName
-opName Add = typeNatAddTyFamName
-opName Mul = typeNatMulTyFamName
-opName Exp = typeNatExpTyFamName
-
-matchProp :: Prop -> Ct -> Maybe Subst
-matchProp (Prop op ts) (CFunEqCan { cc_fun = tc, cc_tyargs = xis, cc_rhs = xi})
-  | tyConName tc == opName op = matchTerms ts (xi : xis)
-
-matchProp _ _ = Nothing
-
-matchAxiom :: Prop -> Maybe Subst -- XXX: Also proof
-
-matchAxiom (Prop op [r, Num a, Num b]) = matchTermTerm r val
-  where
-  val = case op of
-          Add -> Num  $ a + b
-          Mul -> Num  $ a * b
-          Exp -> Num  $ a ^ b
-          Leq -> Bool $ a <= b
-
-matchAxiom (Prop op [Num r, a, Num b]) = matchTermTerm a =<< val
-  where
-  val = case op of
-          Add -> Num `fmap` minus r b
-          Mul -> Num `fmap` divide r b
-          Exp -> Num `fmap` rootExact r b
-          Leq -> Nothing
-
-matchAxiom (Prop op [Num r, Num a, b]) = matchTermTerm b =<< val
-  where
-  val = case op of
-          Add -> Num `fmap` minus r a
-          Mul -> Num `fmap` divide r a
-          Exp -> Num `fmap` logExact r a
-          Leq -> Nothing
-
-matchAxiom (Prop Add [r, Num 0, b]) = matchTermTerm r b
-matchAxiom (Prop Add [r, a, Num 0]) = matchTermTerm r a
-
-matchAxiom (Prop Mul [r, Num 0, _]) = matchTermTerm r $ Num 0
-matchAxiom (Prop Mul [r, _, Num 0]) = matchTermTerm r $ Num 0
-matchAxiom (Prop Mul [r, Num 1, b]) = matchTermTerm r b
-matchAxiom (Prop Mul [r, a, Num 1]) = matchTermTerm r a
-
--- (only if 1 <= b)
--- matchAxiom (Prop Exp [r, Num 0, b]) = matchTermTerm r $ Num 0
-
-matchAxiom (Prop Exp [r, _, Num 0]) = matchTermTerm r $ Num 1
-matchAxiom (Prop Exp [r, Num 1, _]) = matchTermTerm r $ Num 1
-matchAxiom (Prop Exp [r, a, Num 1]) = matchTermTerm r a
-
-matchAxiom _ = Nothing
-
-
-
--- | A smart constructor for easier rule constrction.
-rule :: TypeNatCoAxiom -> [Prop] -> Conc -> Rule
-rule ax asmps conc
-  | wellFormed = Rule as conc $ By ax (map Var vs) $ map (Assumed . fst) as
-  | otherwise  = panic "Malformed rule."
-  where
-  as                    = zip [ 0 .. ] asmps
-  vs                    = sort $ nub $ concatMap propVars asmps
-
-  wellFormed            = all (`elem` vs) (concVars conc)
-
-  concVars (CProp p)    = propVars p
-  concVars (CEq s t)    = termVars s ++ termVars t
-
-  propVars (Prop _ ts)  = concatMap termVars ts
-
-  termVars (Var x)      = [x]
-  termVars (Con _)      = panic "Unineterpreted constant in rule."
-  termVars (Num _)      = []
-  termVars (Bool _)     = []
-
-
-{- Try to use the given constraint to satisfy one of the assumptoins
-for a rule.  We return a list because the consraint may be used to
-satisfy multiple (or none) of the assumptions.
-
-We assume that each rule will need to use a constraint at most once.
--}
-
-specRuleCt :: Rule -> Ct -> [Rule]
-specRuleCt (Rule as c proof) ct =
-  do ((n,p), rest) <- choose as
-     su <- maybeToList (matchProp p ct)
-     return $ apSubst su $ Rule rest c $ define n (Proved (ctId ct)) proof
-
+-- | Define an assumption paramater in the proof of a rule.
 define :: PVar -> Proof -> Proof -> Proof
 define n p (Assumed m) | n == m   = p
 define n p (By ax ts ps)          = By ax ts (map (define n p) ps)
@@ -203,29 +269,4 @@ choose []       = []
 choose (a : as) = (a, as) : [ (b, a : bs) | (b,bs) <- choose as ]
 
 
--- (a + b = x, b + c = y, a + y = z) => (x + c = z)
-
-
--- (?a + ?b = ?x, ?b + ?c = ?y, ?a + ?y = ?z) => (?x + ?c = ?z)
-
--- givens ( 5 + c = y, 2 + y = z )
-
-
--- (?a + ?b = ?x) | (?b + ?c = ?y, ?a + ?y = ?z) => (?x + ?c = ?z)
-
--- (?a + 5 = ?x) | (5 + c = y, ?a + y = ?z) => (?x + c = ?z)
-
--- (2 + 5 = ?x) | (5 + c = y, 2 + y = z) => (?x + c = z)
--- (5 + c = y, 2 + y = z) => (7 + c = z)
-
-
-
-
--- (2 + 5 = 7, 5 + c = y, 2 + y = z) => (7 + c = z)
-
-
--- (?a + ?b1 ~ ?c, ?a + ?b2 ~ ?c) => (?b1 ~ ?b2)
--- (0 + x ~ y)
-
--- (0 + x ~ y, 0 + ?b2 ~ y) => (x ~ ?b2)
 
