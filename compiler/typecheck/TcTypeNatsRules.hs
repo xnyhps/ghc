@@ -2,10 +2,10 @@ module TcTypeNatsRules where
 
 -- From other GHC locations
 import Name     ( Name )
-import Var      ( Var, EvVar )
+import Var      ( Var, EqVar )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( TypeNatCoAxiom (..) )
-import Type     ( isNumLitTy, getTyVar_maybe )
+import Type     ( isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy )
 import PrelNames( typeNatLeqTyFamName
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
@@ -16,8 +16,11 @@ import Panic    ( panic )
 -- From type checker
 import TcRnTypes      ( Xi, Ct(..), ctId )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
+import TcEvidence     ( TcCoercion (TcTypeNatCo)
+                      , mkTcSymCo, mkTcTransCo, mkTcCoVarCo )
 
 -- From base libraries
+import Prelude hiding ( exp )
 import Data.Maybe ( fromMaybe, maybeToList )
 import Data.List  ( nub, sort )
 import qualified Data.IntMap as IMap
@@ -34,7 +37,9 @@ data Term   = Var  !TVar    -- ^ Matches anything
               deriving Eq
 
 -- For functions, the result comes first:
--- For example `x ~ a + b` or `Prop Add [x,a,b]`
+-- For example `a + b ~ x` is represented as `Prop Add [x,a,b]`
+-- XXX: This makes matching bellow a bit simpler, but maybe it is more confusing
+-- than helpful?
 data Prop   = Prop Op [Term]
 data Op     = Leq | Add | Mul | Exp
 
@@ -46,8 +51,22 @@ data Conc   = CProp Prop
             | CEq Term Term
 
 data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
-            | Proved EvVar
             | Assumed PVar
+            | Proved EqVar
+            | Sym Proof | Trans Proof Proof   -- used in `funRule`
+
+
+leq :: Term -> Term -> Prop
+leq x y = Prop Leq [ Bool True, x, y ]
+
+add :: Term -> Term -> Term -> Prop
+add x y z = Prop Add [ z, x, y ]
+
+mul :: Term -> Term -> Term -> Prop
+mul x y z = Prop Mul [ z, x, y ]
+
+exp :: Term -> Term -> Term -> Prop
+exp x y z = Prop Exp [ z, x, y ]
 
 
 --------------------------------------------------------------------------------
@@ -65,36 +84,79 @@ opAxiom Leq = TnLeqDef
 opAxiom Add = TnAddDef
 opAxiom Mul = TnMulDef
 opAxiom Exp = TnExpDef
+
+
+toCoercion :: Proof -> TcCoercion
+toCoercion proof  =
+  case proof of
+    By ax ts ps -> TcTypeNatCo ax (map toXi ts) (map toCoercion ps)
+    Sym p       -> mkTcSymCo (toCoercion p)
+    Trans p q   -> mkTcTransCo (toCoercion p) (toCoercion q)
+    Proved ev   -> mkTcCoVarCo ev
+    Assumed _   -> panic "Incomplete proof"
+
+toXi :: Term -> Xi
+toXi term =
+  case term of
+    Var _  -> panic "Incomplete term"
+    Bool _ -> panic "XXX: Make boolean literal"
+    Num n  -> mkNumLitTy n
+    Con c  -> mkTyVarTy c
+
+
 --------------------------------------------------------------------------------
 
 
 
 --------------------------------------------------------------------------------
 
--- XXX: We should be able to also cope with rules that have only Leq constraints
-simpleRules :: [Rule]
-simpleRules = map (uncurry simpleRule)
-  [ (TnLeq0    , Prop Leq [ t, o, a ])
-  , (TnLeqRefl , Prop Leq [ t, a, a ])
+-- XXX: We should be able to cope with some assumptions in backward
+-- reasoning too.
+bRules :: [Rule]
+bRules = map (uncurry simpleRule)
+  [ (TnLeq0    , leq n0 a)
+  , (TnLeqRefl , leq a a)
 
-  , (TnAdd0L   , Prop Add [ a, o, a ])
-  , (TnAdd0R   , Prop Add [ a, a, o ])
+  , (TnAdd0L   , add n0 a a)
+  , (TnAdd0R   , add a n0 a)
 
-  , (TnMul0L   , Prop Mul [ o, o, a ])
-  , (TnMul0R   , Prop Mul [ o, a, o ])
-  , (TnMul1L   , Prop Mul [ a, i, a ])
-  , (TnMul1R   , Prop Mul [ a, a, i ])
+  , (TnMul0L   , mul n0 a n0)
+  , (TnMul0R   , mul a n0 n0)
+  , (TnMul1L   , mul n1 a a)
+  , (TnMul1R   , mul a n1 a)
 
   -- TnExp0L
-  , (TnExp0R   , Prop Exp [ i, a, o ])
-  , (TnExp1L   , Prop Exp [ i, i, a ])
-  , (TnExp1R   , Prop Exp [ a, a, i ])
+  , (TnExp0R   , exp a n0 n1)
+  , (TnExp1L   , exp n1 a n1)
+  , (TnExp1R   , exp a n1 a)
   ]
-  where a = Var 0
-        t = Bool True
-        o = Num 0
-        i = Num 1
+  where a  = Var 0
+        n0 = Num 0
+        n1 = Num 1
 
+
+fRules :: [Rule]
+fRules =
+  map funRule [ Add, Mul, Exp, Leq ]
+  ++
+  [ rule TnLeqASym    [ leq a b, leq b a ] $ CEq a b
+  , rule TnLeqTrans   [ leq a b, leq b c ] $ CProp $ leq a c
+
+  , rule TnAddComm    [ add a b c ] $ CProp $ add b a c
+  , rule TnMulComm    [ mul a b c ] $ CProp $ mul b a c
+
+  , rule TnAddCancelL [           add a b1 c, add a b2 c ] $ CEq b1 b2
+  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ CEq b1 b2
+  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ CEq b1 b2
+
+  , rule TnAddCancelR [           add a1 b c, add a2 b c ] $ CEq a1 a2
+  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ CEq a1 a2
+  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ CEq a1 a2
+  ]
+  where
+  a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
+  n1 = Num 1
+  n2 = Num 2
 
 
 
@@ -122,6 +184,26 @@ rule ax asmps conc
 
 simpleRule :: TypeNatCoAxiom -> Prop -> Rule
 simpleRule ax p = rule ax [] (CProp p)
+
+{- This slightly duplicates the functionality of GHC's solver but
+we have it here so that it can react with axioms.
+For example, the following is justified using a fun-rule and an axiom:
+
+(5 + 3 ~ x) => (x ~ 8)
+like this:
+(5 + 3 ~ x, 5 + 3 ~ 8) => (x ~ 8)
+-}
+
+-- p: a + b ~ c1, q: a + b ~ c2
+-- sym p `trans` q
+funRule :: Op -> Rule
+funRule op = Rule [ (p, Prop op [ c1, a, b]), (q, Prop op [ c2, a, b ]) ]
+                  (CEq c1 c2)
+                  (Trans (Sym (Assumed p)) (Assumed q))
+  where a : b : c1 : c2 : _ = map Var [ 0 .. ]
+        p : q : _           = [ 0 .. ]
+
+
 --------------------------------------------------------------------------------
 
 
@@ -149,8 +231,8 @@ matchTerms _ _ = Nothing
 
 
 -- | Try to satisfy a rule assumption with an existing constraint.
-byAsmp :: Prop -> Ct -> Maybe (Subst, Proof)
-byAsmp (Prop op ts) ct
+byAsmp :: Ct -> Prop -> Maybe (Subst, Proof)
+byAsmp ct (Prop op ts)
   | tyConName (cc_fun ct) == opName op =
       do su <- matchTerms ts (cc_rhs ct : cc_tyargs ct)
          return (su, Proved (ctId ct))
@@ -254,12 +336,16 @@ instance ApSubst Proof where
   apSubst su (By ax ts ps)  = By ax (apSubst su ts) (apSubst su ps)
   apSubst _ (Proved v)      = Proved v
   apSubst _ (Assumed n)     = Assumed n
+  apSubst su (Sym p)        = Sym (apSubst su p)
+  apSubst su (Trans p q)    = Trans (apSubst su p) (apSubst su q)
 
 
 -- | Define an assumption paramater in the proof of a rule.
 define :: PVar -> Proof -> Proof -> Proof
 define n p (Assumed m) | n == m   = p
 define n p (By ax ts ps)          = By ax ts (map (define n p) ps)
+define n p (Sym q)                = Sym (define n p q)
+define n p (Trans q r)            = Trans (define n p q) (define n p r)
 define _ _ p                      = p
 
 
