@@ -1,7 +1,6 @@
 module TcTypeNatsRules where
 
 -- From other GHC locations
-import Name     ( Name )
 import Var      ( Var, EqVar )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( TypeNatCoAxiom (..) )
@@ -21,10 +20,10 @@ import TcEvidence     ( TcCoercion (TcTypeNatCo)
 
 -- From base libraries
 import Prelude hiding ( exp )
-import Data.Maybe ( fromMaybe, maybeToList )
-import Data.List  ( nub, sort )
+import Data.Maybe ( fromMaybe, maybeToList, isNothing )
 import qualified Data.IntMap as IMap
-import Control.Monad ( msum )
+import qualified Data.IntSet as ISet
+import Control.Monad ( msum, guard )
 
 
 type TVar   = Int           -- ^ Names a term
@@ -41,20 +40,20 @@ data Term   = Var  !TVar    -- ^ Matches anything
 -- XXX: This makes matching bellow a bit simpler, but maybe it is more confusing
 -- than helpful?
 data Prop   = Prop Op [Term]
-data Op     = Leq | Add | Mul | Exp
+data Op     = Eq | Leq | Add | Mul | Exp
+              deriving Eq
 
 data Rule   = Rule [(PVar,Prop)]    -- ^ Named assumptions of the rule
-                   Conc             -- ^ Conclusion of the rule
+                   Prop             -- ^ Conclusion of the rule
                    Proof            -- ^ Proof of conclusion (uses assumptions)
-
-data Conc   = CProp Prop
-            | CEq Term Term
 
 data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
             | Assumed PVar
             | Proved EqVar
             | Sym Proof | Trans Proof Proof   -- used in `funRule`
 
+eq :: Term -> Term -> Prop
+eq x y = Prop Eq [ x, y ]
 
 leq :: Term -> Term -> Prop
 leq x y = Prop Leq [ Bool True, x, y ]
@@ -73,17 +72,25 @@ exp x y z = Prop Exp [ z, x, y ]
 fromXi :: Xi -> Maybe Term
 fromXi t = msum [ Con `fmap` getTyVar_maybe t, Num `fmap` isNumLitTy t ]
 
-opName :: Op -> Name
-opName Leq = typeNatLeqTyFamName
-opName Add = typeNatAddTyFamName
-opName Mul = typeNatMulTyFamName
-opName Exp = typeNatExpTyFamName
+fromCt :: Ct -> Maybe Prop
+fromCt (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
+  do o  <- op
+     x  <- fromXi t
+     xs <- mapM fromXi ts
+     return (Prop o (x : xs))
+  where
+  op = case tyConName tc of
+         name | name == typeNatAddTyFamName -> Just Add
+              | name == typeNatMulTyFamName -> Just Mul
+              | name == typeNatExpTyFamName -> Just Exp
+              | name == typeNatLeqTyFamName -> Just Leq
+              | otherwise                   -> Nothing
 
-opAxiom :: Op -> Integer -> Integer -> TypeNatCoAxiom
-opAxiom Leq = TnLeqDef
-opAxiom Add = TnAddDef
-opAxiom Mul = TnMulDef
-opAxiom Exp = TnExpDef
+fromCt (CTyEqCan { cc_tyvar = x, cc_rhs = t }) =
+  do y <- fromXi t
+     return (Prop Eq [ Con x, y ])
+
+fromCt _ = Nothing
 
 
 toCoercion :: Proof -> TcCoercion
@@ -139,19 +146,19 @@ fRules :: [Rule]
 fRules =
   map funRule [ Add, Mul, Exp, Leq ]
   ++
-  [ rule TnLeqASym    [ leq a b, leq b a ] $ CEq a b
-  , rule TnLeqTrans   [ leq a b, leq b c ] $ CProp $ leq a c
+  [ rule TnLeqASym    [ leq a b, leq b a ] $ eq a b
+  , rule TnLeqTrans   [ leq a b, leq b c ] $ leq a c
 
-  , rule TnAddComm    [ add a b c ] $ CProp $ add b a c
-  , rule TnMulComm    [ mul a b c ] $ CProp $ mul b a c
+  , rule TnAddComm    [ add a b c ] $ add b a c
+  , rule TnMulComm    [ mul a b c ] $ mul b a c
 
-  , rule TnAddCancelL [           add a b1 c, add a b2 c ] $ CEq b1 b2
-  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ CEq b1 b2
-  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ CEq b1 b2
+  , rule TnAddCancelL [           add a b1 c, add a b2 c ] $ eq b1 b2
+  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ eq b1 b2
+  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ eq b1 b2
 
-  , rule TnAddCancelR [           add a1 b c, add a2 b c ] $ CEq a1 a2
-  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ CEq a1 a2
-  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ CEq a1 a2
+  , rule TnAddCancelR [           add a1 b c, add a2 b c ] $ eq a1 a2
+  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ eq a1 a2
+  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ eq a1 a2
   ]
   where
   a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
@@ -162,28 +169,19 @@ fRules =
 
 
 -- | A smart constructor for easier rule constrction.
-rule :: TypeNatCoAxiom -> [Prop] -> Conc -> Rule
+rule :: TypeNatCoAxiom -> [Prop] -> Prop -> Rule
 rule ax asmps conc
-  | wellFormed = Rule as conc $ By ax (map Var vs) $ map (Assumed . fst) as
+  | wellFormed = Rule as conc $ By ax (map Var $ ISet.toList vs)
+                              $ map (Assumed . fst) as
   | otherwise  = panic "Malformed rule."
   where
-  as                    = zip [ 0 .. ] asmps
-  vs                    = sort $ nub $ concatMap propVars asmps
+  as          = zip [ 0 .. ] asmps
+  vs          = fvs asmps
 
-  wellFormed            = all (`elem` vs) (concVars conc)
-
-  concVars (CProp p)    = propVars p
-  concVars (CEq s t)    = termVars s ++ termVars t
-
-  propVars (Prop _ ts)  = concatMap termVars ts
-
-  termVars (Var x)      = [x]
-  termVars (Con _)      = panic "Unineterpreted constant in rule."
-  termVars (Num _)      = []
-  termVars (Bool _)     = []
+  wellFormed  = ISet.null (ISet.difference (fvs conc) vs)
 
 simpleRule :: TypeNatCoAxiom -> Prop -> Rule
-simpleRule ax p = rule ax [] (CProp p)
+simpleRule ax p = rule ax [] p
 
 {- This slightly duplicates the functionality of GHC's solver but
 we have it here so that it can react with axioms.
@@ -198,7 +196,7 @@ like this:
 -- sym p `trans` q
 funRule :: Op -> Rule
 funRule op = Rule [ (p, Prop op [ c1, a, b]), (q, Prop op [ c2, a, b ]) ]
-                  (CEq c1 c2)
+                  (eq c1 c2)
                   (Trans (Sym (Assumed p)) (Assumed q))
   where a : b : c1 : c2 : _ = map Var [ 0 .. ]
         p : q : _           = [ 0 .. ]
@@ -209,93 +207,95 @@ funRule op = Rule [ (p, Prop op [ c1, a, b]), (q, Prop op [ c2, a, b ]) ]
 
 
 --------------------------------------------------------------------------------
-matchTermXi :: Term -> Xi -> Maybe Subst
-matchTermXi term xi = matchTermTerm term =<< fromXi xi
+class ApSubst t => Match t where
+  match :: t -> t -> Maybe Subst
 
-matchTermTerm :: Term -> Term -> Maybe Subst
-matchTermTerm t1 t2 | t1 == t2  = return IMap.empty
-matchTermTerm (Var a) t         = return (IMap.singleton a t)
-matchTermTerm t (Var a)         = return (IMap.singleton a t)
-matchTermTerm _ _               = panic "matchTermTerm: unreachable"
+instance Match Term where
+  match t1 t2 | t1 == t2  = return IMap.empty
+  match (Var a) t         = return (IMap.singleton a t)
+  match t (Var a)         = return (IMap.singleton a t)
+  match _ _               = panic "matchTermTerm: unreachable"
 
-matchTerms :: [Term] -> [Xi] -> Maybe Subst
-matchTerms [] [] = return IMap.empty
-matchTerms (t : ts) (xi : xis) =
-  do su1 <- matchTermXi t xi
-     su2 <- matchTerms (apSubst su1 ts) xis
-     return (IMap.union su1 su2)
-matchTerms _ _ = Nothing
+instance Match t => Match [t] where
+  match [] [] = return IMap.empty
+  match (x : xs) (y : ys) = do su1 <- match x y
+                               su2 <- match (apSubst su1 xs) (apSubst su1 ys)
+                               return (IMap.union su1 su2)
+  match _ _ = Nothing
+
+instance Match Prop where
+  match (Prop x xs) (Prop y ys) = guard (x == y) >> match xs ys
+
+
+
 
 
 --------------------------------------------------------------------------------
 
 
 -- | Try to satisfy a rule assumption with an existing constraint.
-byAsmp :: Ct -> Prop -> Maybe (Subst, Proof)
-byAsmp ct (Prop op ts)
-  | tyConName (cc_fun ct) == opName op =
-      do su <- matchTerms ts (cc_rhs ct : cc_tyargs ct)
-         return (su, Proved (ctId ct))
-byAsmp _ _ = Nothing
+usingAsmp :: Ct -> Prop -> Maybe (Subst, Proof)
+usingAsmp ct q =
+  do p  <- fromCt ct
+     su <- match q p
+     return (su, Proved (ctId ct))
 
 
 -- | Try to stisfy a rule assumption with an axiom.
-byAxiom :: Prop -> Maybe (Subst, Proof)
+usingAxiom :: Prop -> Maybe (Subst, Proof)
 
-byAxiom (Prop op [r, Num a, Num b]) =
-  do su <- matchTermTerm r $
-           case op of
-             Add -> Num (a + b)
-             Mul -> Num (a * b)
-             Exp -> Num (a ^ b)
-             Leq -> Bool (a <= b)
+usingAxiom (Prop op [r, Num a, Num b]) =
+  do (na,ax) <- case op of
+                  Add -> Just (Num  (a + b), TnAddDef a b)
+                  Mul -> Just (Num  (a * b), TnMulDef a b)
+                  Exp -> Just (Num  (a ^ b), TnExpDef a b)
+                  Leq -> Just (Bool (a <= b), TnLeqDef a b)
+                  Eq  -> Nothing
 
-     return (su, By (opAxiom op a b) [] [])
+     su <- match r na
+     return (su, By ax [] [])
 
-byAxiom (Prop op [Num r, a, Num b]) =
-  do na <- case op of
-             Add -> minus r b
-             Mul -> divide r b
-             Exp -> rootExact r b
-             Leq -> Nothing
+usingAxiom (Prop op [Num r, a, Num b]) =
+  do let mkAx ax mb = mb >>= \na -> Just (Num na, ax na b)
+     (na,ax) <- case op of
+                  Add -> mkAx TnAddDef (minus r b)
+                  Mul -> mkAx TnMulDef (divide r b)
+                  Exp -> mkAx TnExpDef (rootExact r b)
+                  Leq -> Nothing
+                  Eq  -> Nothing
 
-     su <- matchTermTerm a (Num na)
-     return (su, By (opAxiom op na b) [] [])
+     su <- match a na
+     return (su, By ax [] [])
 
-byAxiom (Prop op [Num r, Num a, b]) =
-  do nb <- case op of
-             Add -> minus r a
-             Mul -> divide r a
-             Exp -> logExact r a
-             Leq -> Nothing
+usingAxiom (Prop op [Num r, Num a, b]) =
+  do let mkAx ax mb = mb >>= \nb -> Just (Num nb, ax a nb)
+     (nb,ax) <- case op of
+                  Add -> mkAx TnAddDef (minus r a)
+                  Mul -> mkAx TnMulDef (divide r a)
+                  Exp -> mkAx TnExpDef (logExact r a)
+                  Leq -> Nothing
+                  Eq  -> Nothing
 
-     su <- matchTermTerm b (Num nb)
-     return (su, By (opAxiom op a nb) [] [])
+     su <- match b nb
+     return (su, By ax [] [])
 
-byAxiom _ = Nothing
-
-
-
--- XXX: By simple rule
-
-{-
-matchAxiom (Prop Add [r, Num 0, b]) = matchTermTerm r b
-matchAxiom (Prop Add [r, a, Num 0]) = matchTermTerm r a
-
-matchAxiom (Prop Mul [r, Num 0, _]) = matchTermTerm r $ Num 0
-matchAxiom (Prop Mul [r, _, Num 0]) = matchTermTerm r $ Num 0
-matchAxiom (Prop Mul [r, Num 1, b]) = matchTermTerm r b
-matchAxiom (Prop Mul [r, a, Num 1]) = matchTermTerm r a
+usingAxiom _ = Nothing
 
 
+-- Currently, only using rules with no premises.
+usingRule :: Rule -> Prop -> Maybe (Subst, Proof)
+usingRule (Rule [] conc proof) p =
+  do su <- match freshConc p
+     return (su, freshProof)
+  where
+  (freshConc, freshProof) =
+     case ISet.maxView (fvs p) of
+       Just (n,_) ->
+         let bump = 1 + n
+         in (fresh bump conc, fresh bump proof)
+       Nothing -> (conc, proof)
 
--- (only if 1 <= b)
--- matchAxiom (Prop Exp [r, Num 0, b]) = matchTermTerm r $ Num 0
-
-matchAxiom (Prop Exp [r, _, Num 0]) = matchTermTerm r $ Num 1
-matchAxiom (Prop Exp [r, Num 1, _]) = matchTermTerm r $ Num 1
-matchAxiom (Prop Exp [r, a, Num 1]) = matchTermTerm r a
--}
+usingRule _ _ = Nothing
 
 
 specRule :: Rule -> (Prop -> Maybe (Subst, Proof)) -> [Rule]
@@ -303,6 +303,41 @@ specRule (Rule as c proof) tactic =
   do ((n,p), rest) <- choose as
      (su, aP) <- maybeToList (tactic p)
      return $ apSubst su $ Rule rest c $ define n aP proof
+
+--------------------------------------------------------------------------------
+
+solve :: Ct -> Maybe TcCoercion
+solve ct =
+  do p <- fromCt ct
+     (_, p) <- msum $ usingAxiom p : map (`usingRule` p) bRules
+     return (toCoercion p)
+
+
+impossible :: Ct -> Bool
+
+impossible ct =
+  case fromCt ct of
+    Nothing   -> False
+    Just prop ->
+      case prop of
+        Prop Leq [ Bool c, Num a, Num b ] -> c /= (a <= b)
+
+        Prop Add [ Num c, Num a, _     ] -> isNothing (minus c a)
+        Prop Add [ Num c, _    , Num b ] -> isNothing (minus c b)
+
+        Prop Mul [ Num c, Num 0, _     ] -> not (c == 0)
+        Prop Mul [ Num c, Num a, _     ] -> isNothing (divide c a)
+        Prop Mul [ Num c, _    , Num 0 ] -> not (c == 0)
+        Prop Mul [ Num c, _    , Num b ] -> isNothing (divide c b)
+
+        Prop Exp [ Num c, Num 0, _     ] -> not (c == 0 || c == 1)
+        Prop Exp [ Num c, Num 1, _     ] -> not (c == 1)
+        Prop Exp [ Num c, Num a, _     ] -> isNothing (logExact c a)
+        Prop Exp [ Num c, _    , Num 0 ] -> not (c == 1)
+        Prop Exp [ Num c, _    , Num b ] -> isNothing (rootExact c b)
+
+        _                                -> False
+
 
 
 
@@ -323,10 +358,6 @@ instance ApSubst Term where
 
 instance ApSubst Prop where
   apSubst su (Prop op ts)   = Prop op (apSubst su ts)
-
-instance ApSubst Conc where
-  apSubst su (CProp p)      = CProp (apSubst su p)
-  apSubst su (CEq t1 t2)    = CEq (apSubst su t1) (apSubst su t2)
 
 instance ApSubst Rule where
   apSubst su (Rule as c p)  = Rule [ (n, apSubst su a) | (n,a) <- as ]
@@ -353,6 +384,45 @@ define _ _ p                      = p
 choose :: [a] -> [(a,[a])]
 choose []       = []
 choose (a : as) = (a, as) : [ (b, a : bs) | (b,bs) <- choose as ]
+
+
+class FVS t where
+  fvs :: t -> ISet.IntSet
+
+instance FVS Term where
+  fvs (Var x)     = ISet.singleton x
+  fvs _           = ISet.empty
+
+instance FVS t => FVS [t] where
+  fvs ts          = ISet.unions (map fvs ts)
+
+instance FVS Prop where
+  fvs (Prop _ ts) = fvs ts
+
+
+-- ^ Increments all variables, to get a fresh instance of something.
+class Fresh t where
+  fresh :: Int -> t -> t
+
+instance Fresh Term where
+  fresh n (Var x)       = Var (n + x)
+  fresh _ t             = t
+
+instance Fresh t => Fresh [t] where
+  fresh n ts            = map (fresh n) ts
+
+instance Fresh Prop where
+  fresh n (Prop op ts)  = Prop op (fresh n ts)
+
+instance Fresh Proof where
+  fresh n proof =
+    case proof of
+      Sym p       -> Sym (fresh n p)
+      Trans p q   -> Trans (fresh n p) (fresh n q)
+      Proved x    -> Proved x
+      Assumed x   -> Assumed x
+      By a ts ps  -> By a (fresh n ts) (fresh n ps)
+
 
 
 
