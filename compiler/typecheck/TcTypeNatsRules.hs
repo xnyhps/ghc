@@ -1,7 +1,7 @@
 module TcTypeNatsRules where
 
 -- From other GHC locations
-import Var      ( Var, EqVar )
+import Var      ( Var )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( TypeNatCoAxiom (..) )
 import Type     ( isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy )
@@ -13,10 +13,11 @@ import PrelNames( typeNatLeqTyFamName
 import Panic    ( panic )
 
 -- From type checker
-import TcRnTypes      ( Xi, Ct(..), ctId )
+import TcRnTypes      ( Xi, Ct(..), ctEvidence, ctEvTerm )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
-import TcEvidence     ( TcCoercion (TcTypeNatCo)
-                      , mkTcSymCo, mkTcTransCo, mkTcCoVarCo )
+import TcEvidence     ( TcCoercion (..)
+                      , mkTcSymCo, mkTcTransCo, mkTcCoVarCo
+                      , EvTerm(..) )
 
 -- From base libraries
 import Prelude hiding ( exp )
@@ -43,13 +44,13 @@ data Prop   = Prop Op [Term]
 data Op     = Eq | Leq | Add | Mul | Exp
               deriving Eq
 
-data Rule   = Rule [(PVar,Prop)]    -- ^ Named assumptions of the rule
-                   Prop             -- ^ Conclusion of the rule
-                   Proof            -- ^ Proof of conclusion (uses assumptions)
+data Rule   = Rule [(PVar,Prop)]    -- Named assumptions of the rule
+                   Prop             -- Conclusion of the rule
+                   Proof            -- Proof of conclusion (uses assumptions)
 
 data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
             | Assumed PVar
-            | Proved EqVar
+            | Proved TcCoercion
             | Sym Proof | Trans Proof Proof   -- used in `funRule`
 
 eq :: Term -> Term -> Prop
@@ -99,7 +100,7 @@ toCoercion proof  =
     By ax ts ps -> TcTypeNatCo ax (map toXi ts) (map toCoercion ps)
     Sym p       -> mkTcSymCo (toCoercion p)
     Trans p q   -> mkTcTransCo (toCoercion p) (toCoercion q)
-    Proved ev   -> mkTcCoVarCo ev
+    Proved co   -> co
     Assumed _   -> panic "Incomplete proof"
 
 toXi :: Term -> Xi
@@ -167,18 +168,13 @@ fRules =
 
 
 
-
 -- | A smart constructor for easier rule constrction.
 rule :: TypeNatCoAxiom -> [Prop] -> Prop -> Rule
-rule ax asmps conc
-  | wellFormed = Rule as conc $ By ax (map Var $ ISet.toList vs)
-                              $ map (Assumed . fst) as
-  | otherwise  = panic "Malformed rule."
+rule ax asmps conc = Rule as conc $ By ax (map Var $ ISet.toList vs)
+                                  $ map (Assumed . fst) as
   where
   as          = zip [ 0 .. ] asmps
   vs          = fvs asmps
-
-  wellFormed  = ISet.null (ISet.difference (fvs conc) vs)
 
 simpleRule :: TypeNatCoAxiom -> Prop -> Rule
 simpleRule ax p = rule ax [] p
@@ -214,7 +210,7 @@ instance Match Term where
   match t1 t2 | t1 == t2  = return IMap.empty
   match (Var a) t         = return (IMap.singleton a t)
   match t (Var a)         = return (IMap.singleton a t)
-  match _ _               = panic "matchTermTerm: unreachable"
+  match _ _               = Nothing
 
 instance Match t => Match [t] where
   match [] [] = return IMap.empty
@@ -238,7 +234,12 @@ usingAsmp :: Ct -> Prop -> Maybe (Subst, Proof)
 usingAsmp ct q =
   do p  <- fromCt ct
      su <- match q p
-     return (su, Proved (ctId ct))
+     let co = case ctEvTerm (ctEvidence ct) of
+                EvCoercion c -> c
+                EvId x       -> mkTcCoVarCo x -- XXX: wanteds are returned
+                                              -- in this form...
+                _            -> panic "usingAsmp: unexpected evidence"
+     return (su, Proved co)
 
 
 -- | Try to stisfy a rule assumption with an axiom.

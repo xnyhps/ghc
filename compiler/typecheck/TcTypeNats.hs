@@ -3,7 +3,7 @@ module TcTypeNats where
 import TcSMonad( TcS, emitFrozenError, setEvBind )
 import TcCanonical( StopOrContinue(..) )
 import TcEvidence ( EvTerm(..) )
-import TcRnTypes( Ct(..), isGiven, isWanted, flav_evar )
+import TcRnTypes( Ct(..), isGiven, isWanted, ctEvidence, ctEvId )
 
 import TcTypeNatsRules( solve, impossible )
 
@@ -16,17 +16,17 @@ typeNatStage ct
 
   -- XXX: Probably need to add the 'ct' to somewhere
   | impossible ct =
-      do emitFrozenError flav (cc_depth ct)
+      do emitFrozenError ev (cc_depth ct)
          return Stop
 
-  | isGiven flav =
+  | isGiven ev =
     case solve ct of
       Just _ -> return Stop                 -- trivial fact
       _      -> return $ ContinueWith ct    -- XXX: TODO (compute new work)
 
-  | isWanted flav =
+  | isWanted ev =
     case solve ct of
-      Just c  -> do setEvBind (flav_evar flav) (EvCoercion c)
+      Just c  -> do setEvBind (ctEvId ev) (EvCoercion c)
                     return Stop
       Nothing -> return $ ContinueWith ct   --- XXX: Try improvement here
 
@@ -34,7 +34,7 @@ typeNatStage ct
   | otherwise = return $ ContinueWith ct
 
 
-  where flav = cc_flavor ct
+  where ev = ctEvidence ct
 
 
 

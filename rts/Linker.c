@@ -304,8 +304,6 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(__hscore_get_saved_termios) \
       SymI_HasProto(__hscore_set_saved_termios) \
       SymI_HasProto(shutdownHaskellAndSignal)   \
-      SymI_HasProto(lockFile)                   \
-      SymI_HasProto(unlockFile)                 \
       SymI_HasProto(signal_handlers)            \
       SymI_HasProto(stg_sig_install)            \
       SymI_HasProto(rtsTimerSignal)             \
@@ -558,6 +556,196 @@ typedef struct _RtsSymbolVal {
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetConsoleMode))              \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_SetConsoleMode))              \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_FlushConsoleInputBuffer))     \
+      RTS_WIN64_ONLY(SymI_HasProto(free))                                \
+      RTS_WIN64_ONLY(SymI_NeedsProto(raise))                             \
+      RTS_WIN64_ONLY(SymI_NeedsProto(_getpid))                           \
+      RTS_WIN64_ONLY(SymI_HasProto(getc))                                \
+      RTS_WIN64_ONLY(SymI_HasProto(ungetc))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(puts))                                \
+      RTS_WIN64_ONLY(SymI_HasProto(putc))                                \
+      RTS_WIN64_ONLY(SymI_HasProto(putchar))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(fputc))                               \
+      RTS_WIN64_ONLY(SymI_HasProto(fread))                               \
+      RTS_WIN64_ONLY(SymI_HasProto(fwrite))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(ferror))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(printf))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(fprintf))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(sprintf))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(vsprintf))                            \
+      RTS_WIN64_ONLY(SymI_HasProto(sscanf))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(ldexp))                               \
+      RTS_WIN64_ONLY(SymI_HasProto(strlen))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(strnlen))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(strchr))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(strtol))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(strerror))                            \
+      RTS_WIN64_ONLY(SymI_HasProto(memchr))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(memcmp))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(wcscpy))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(wcslen))                              \
+      RTS_WIN64_ONLY(SymI_HasProto(_lseeki64))                           \
+      RTS_WIN64_ONLY(SymI_HasProto(_wchmod))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(closesocket))                         \
+      RTS_WIN64_ONLY(SymI_HasProto(send))                                \
+      RTS_WIN64_ONLY(SymI_HasProto(recv))                                \
+      RTS_WIN64_ONLY(SymI_HasProto(bsearch))                             \
+      RTS_WIN64_ONLY(SymI_HasProto(CommandLineToArgvW))                  \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateBitmap))                        \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateBitmapIndirect))                \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateCompatibleBitmap))              \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateDIBPatternBrushPt))             \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateDIBitmap))                      \
+      RTS_WIN64_ONLY(SymI_HasProto(SetBitmapDimensionEx))                \
+      RTS_WIN64_ONLY(SymI_HasProto(GetBitmapDimensionEx))                \
+      RTS_WIN64_ONLY(SymI_HasProto(GetStockObject))                      \
+      RTS_WIN64_ONLY(SymI_HasProto(GetObjectW))                          \
+      RTS_WIN64_ONLY(SymI_HasProto(DeleteObject))                        \
+      RTS_WIN64_ONLY(SymI_HasProto(SetDIBits))                           \
+      RTS_WIN64_ONLY(SymI_HasProto(GetDIBits))                           \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateSolidBrush))                    \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateHatchBrush))                    \
+      RTS_WIN64_ONLY(SymI_HasProto(CreatePatternBrush))                  \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateFontW))                         \
+      RTS_WIN64_ONLY(SymI_HasProto(AngleArc)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Arc)) \
+      RTS_WIN64_ONLY(SymI_HasProto(ArcTo)) \
+      RTS_WIN64_ONLY(SymI_HasProto(BeginPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(BitBlt)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CancelDC)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Chord)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CloseFigure)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CombineRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateCompatibleDC)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateEllipticRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateEllipticRgnIndirect)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreatePen)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreatePolygonRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateRectRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateRectRgnIndirect)) \
+      RTS_WIN64_ONLY(SymI_HasProto(CreateRoundRectRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(DeleteDC)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Ellipse)) \
+      RTS_WIN64_ONLY(SymI_HasProto(EndPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(EqualRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(ExtSelectClipRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(FillPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(FillRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(FlattenPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(FrameRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetArcDirection)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetBkColor)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetBkMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetBrushOrgEx)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetCurrentObject)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetDCOrgEx)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetGraphicsMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetMiterLimit)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetPolyFillMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetRgnBox)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetStretchBltMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetTextAlign)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetTextCharacterExtra)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetTextColor)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetTextExtentPoint32W)) \
+      RTS_WIN64_ONLY(SymI_HasProto(InvertRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(LineTo)) \
+      RTS_WIN64_ONLY(SymI_HasProto(MaskBlt)) \
+      RTS_WIN64_ONLY(SymI_HasProto(MoveToEx)) \
+      RTS_WIN64_ONLY(SymI_HasProto(OffsetRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PaintRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PathToRegion)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Pie)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PlgBlt)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PolyBezier)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PolyBezierTo)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Polygon)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Polyline)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PolylineTo)) \
+      RTS_WIN64_ONLY(SymI_HasProto(PtInRegion)) \
+      RTS_WIN64_ONLY(SymI_HasProto(Rectangle)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RectInRegion)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RestoreDC)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RoundRect)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SaveDC)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SelectClipPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SelectClipRgn)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SelectObject)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SelectPalette)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetArcDirection)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetBkColor)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetBkMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetBrushOrgEx)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetGraphicsMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetMiterLimit)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetPolyFillMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetStretchBltMode)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetTextAlign)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetTextCharacterExtra)) \
+      RTS_WIN64_ONLY(SymI_HasProto(SetTextColor)) \
+      RTS_WIN64_ONLY(SymI_HasProto(StretchBlt)) \
+      RTS_WIN64_ONLY(SymI_HasProto(StrokeAndFillPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(StrokePath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(TextOutW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(timeGetTime)) \
+      RTS_WIN64_ONLY(SymI_HasProto(WidenPath)) \
+      RTS_WIN64_ONLY(SymI_HasProto(GetFileSecurityW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegCloseKey)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegConnectRegistryW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegCreateKeyExW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegCreateKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegDeleteKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegDeleteValueW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegEnumKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegEnumValueW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegFlushKey)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegLoadKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegNotifyChangeKeyValue)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegOpenKeyExW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegOpenKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegQueryInfoKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegQueryValueExW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegQueryValueW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegReplaceKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegRestoreKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegSaveKeyW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegSetValueExW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegSetValueW)) \
+      RTS_WIN64_ONLY(SymI_HasProto(RegUnLoadKeyW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(SHGetFolderPathW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_SetWindowLongPtrW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetWindowLongPtrW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_MenuItemFromPoint)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_ChildWindowFromPoint)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_ChildWindowFromPointEx)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_DeleteObject)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_UnmapViewOfFile)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_CloseHandle)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_FreeLibrary)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetMessageW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_TranslateMessage)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_DispatchMessageW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_DefWindowProcW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetDIBits)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GlobalAlloc)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GlobalFree)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_CreateFileW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_WriteFile)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_CreateCompatibleBitmap)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_SelectObject)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_Polygon)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_FormatMessageW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp__localtime64)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp__tzname)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp__timezone)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_CreatePipe)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_SetHandleInformation)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetStdHandle)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetCurrentProcess)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_DuplicateHandle)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_CreateProcessW)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_TerminateProcess)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp__open_osfhandle)) \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetExitCodeProcess)) \
       RTS_MINGW_GETTIMEOFDAY_SYM                         \
       SymI_NeedsProto(closedir)
 
@@ -796,7 +984,7 @@ typedef struct _RtsSymbolVal {
 // We don't do this when compiling to Windows DLLs at the moment because
 //      it doesn't support cross package data references well.
 //
-#if defined(__PIC__) && defined(mingw32_HOST_OS) && defined(i386_HOST_ARCH)
+#if defined(COMPILING_WINDOWS_DLL)
 #define RTS_INTCHAR_SYMBOLS
 #else
 #define RTS_INTCHAR_SYMBOLS                             \
@@ -1093,6 +1281,9 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(n_capabilities)                     \
       SymI_HasProto(stg_traceCcszh)                     \
       SymI_HasProto(stg_traceEventzh)                   \
+      SymI_HasProto(getMonotonicNSec)                   \
+      SymI_HasProto(lockFile)                           \
+      SymI_HasProto(unlockFile)                         \
       RTS_USER_SIGNALS_SYMBOLS                          \
       RTS_INTCHAR_SYMBOLS
 
@@ -1124,9 +1315,13 @@ typedef struct _RtsSymbolVal {
 
 /* entirely bogus claims about types of these symbols */
 #define SymI_NeedsProto(vvv)  extern void vvv(void);
-#if defined(__PIC__) && defined(mingw32_HOST_OS) && defined(i386_HOST_ARCH)
+#if defined(COMPILING_WINDOWS_DLL)
 #define SymE_HasProto(vvv)    SymE_HasProto(vvv);
-#define SymE_NeedsProto(vvv)    extern void _imp__ ## vvv (void);
+#  if defined(x86_64_HOST_ARCH)
+#    define SymE_NeedsProto(vvv)    extern void __imp_ ## vvv (void);
+#  else
+#    define SymE_NeedsProto(vvv)    extern void _imp__ ## vvv (void);
+#  endif
 #else
 #define SymE_NeedsProto(vvv)  SymI_NeedsProto(vvv);
 #define SymE_HasProto(vvv)    SymI_HasProto(vvv)
@@ -2089,8 +2284,23 @@ loadArchive( pathchar *path )
 #elif defined(mingw32_HOST_OS)
         // TODO: We would like to use allocateExec here, but allocateExec
         //       cannot currently allocate blocks large enough.
-            image = VirtualAlloc(NULL, memberSize, MEM_RESERVE | MEM_COMMIT,
-                                 PAGE_EXECUTE_READWRITE);
+            {
+                int offset;
+#if defined(x86_64_HOST_ARCH)
+                /* We get back 8-byte aligned memory (is that guaranteed?), but
+                   the offsets to the sections within the file are all 4 mod 8
+                   (is that guaranteed?). We therefore need to offset the image
+                   by 4, so that all the pointers are 8-byte aligned, so that
+                   pointer tagging works. */
+                offset = 4;
+#else
+                offset = 0;
+#endif
+                image = VirtualAlloc(NULL, memberSize + offset,
+                                     MEM_RESERVE | MEM_COMMIT,
+                                     PAGE_EXECUTE_READWRITE);
+                image += offset;
+            }
 #elif defined(darwin_HOST_OS)
             /* See loadObj() */
             misalignment = machoGetMisalignment(f);
@@ -2493,23 +2703,15 @@ addProddableBlock ( ObjectCode* oc, void* start, int size )
 }
 
 static void
-checkProddableBlock (ObjectCode *oc, void *addr )
+checkProddableBlock (ObjectCode *oc, void *addr, size_t size )
 {
    ProddableBlock* pb;
 
    for (pb = oc->proddables; pb != NULL; pb = pb->next) {
       char* s = (char*)(pb->start);
-      char* e = s + pb->size - 1;
+      char* e = s + pb->size;
       char* a = (char*)addr;
-#if WORD_SIZE_IN_BITS == 32
-      /* Assumes that the biggest fixup involves a 4-byte write */
-      if (a >= s && (a+3) <= e) return;
-#elif WORD_SIZE_IN_BITS == 64
-      /* Assumes that the biggest fixup involves a 4-byte write */
-      if (a >= s && (a+7) <= e) return;
-#else
-#error
-#endif
+      if (a >= s && (a+size) <= e) return;
    }
    barf("checkProddableBlock: invalid fixup in runtime linker: %p", addr);
 }
@@ -3406,6 +3608,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 #     endif
 
       if (0==strcmp(".text",(char*)secname) ||
+          0==strcmp(".text.startup",(char*)secname) ||
           0==strcmp(".rdata",(char*)secname)||
           0==strcmp(".rodata",(char*)secname))
          kind = SECTIONKIND_CODE_OR_RODATA;
@@ -3442,6 +3645,10 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       }
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
+          if ((((size_t)(start)) % (size_t)sizeof(void *)) != 0) {
+              barf("Misaligned section: %p", start);
+          }
+
          addSection(oc, kind, start, end);
          addProddableBlock(oc, start, end - start + 1);
       }
@@ -3670,7 +3877,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
             return 0;
            foundit:;
          }
-         checkProddableBlock(oc, pP);
+         /* All supported relocations write at least 4 bytes */
+         checkProddableBlock(oc, pP, 4);
          switch (reltab_j->Type) {
 #if defined(i386_HOST_ARCH)
             case MYIMAGE_REL_I386_DIR32:
@@ -3707,14 +3915,33 @@ ocResolve_PEi386 ( ObjectCode* oc )
 #elif defined(x86_64_HOST_ARCH)
             case 2:  /* R_X86_64_32 */
             case 17: /* R_X86_64_32S */
-               *(UInt32 *)pP = ((UInt32)S) + A;
-               break;
+               {
+                   size_t v;
+                   v = S + ((size_t)A);
+                   if (v >> 32) {
+                       copyName ( sym->Name, strtab, symbol, 1000-1 );
+                       barf("R_X86_64_32[S]: High bits are set in %zx for %s",
+                            v, (char *)symbol);
+                   }
+                   *(UInt32 *)pP = (UInt32)v;
+                   break;
+               }
             case 4: /* R_X86_64_PC32 */
-               *(UInt32 *)pP = ((UInt32)S) + A - ((UInt32)(size_t)pP) - 4;
-               break;
+               {
+                   intptr_t v;
+                   v = ((intptr_t)S) + ((intptr_t)(Int32)A) - ((intptr_t)pP) - 4;
+                   if ((v >> 32) && ((-v) >> 32)) {
+                       copyName ( sym->Name, strtab, symbol, 1000-1 );
+                       barf("R_X86_64_PC32: High bits are set in %zx for %s",
+                            v, (char *)symbol);
+                   }
+                   *(UInt32 *)pP = (UInt32)v;
+                   break;
+               }
             case 1: /* R_X86_64_64 */
                {
                  UInt64 A;
+                 checkProddableBlock(oc, pP, 8);
                  A = *(UInt64*)pP;
                  *(UInt64 *)pP = ((UInt64)S) + ((UInt64)A);
                  break;
@@ -4466,7 +4693,7 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
 
       IF_DEBUG(linker,debugBelch( "Reloc: P = %p   S = %p   A = %p\n",
                              (void*)P, (void*)S, (void*)A ));
-      checkProddableBlock ( oc, pP );
+      checkProddableBlock ( oc, pP, sizeof(Elf_Word) );
 
 #ifdef i386_HOST_ARCH
       value = S + A;
@@ -5233,7 +5460,7 @@ resolveImports(
 
 #if i386_HOST_ARCH
         if (isJumpTable) {
-            checkProddableBlock(oc,image + sect->offset + i*itemSize);
+            checkProddableBlock(oc,image + sect->offset + i*itemSize, 5);
 
             *(image + sect->offset + i * itemSize) = 0xe9; // jmp opcode
             *(unsigned*)(image + sect->offset + i*itemSize + 1)
@@ -5242,7 +5469,9 @@ resolveImports(
         else
 #endif
         {
-            checkProddableBlock(oc,((void**)(image + sect->offset)) + i);
+            checkProddableBlock(oc,
+                                ((void**)(image + sect->offset)) + i,
+                                sizeof(void *));
             ((void**)(image + sect->offset))[i] = addr;
         }
     }
@@ -5323,22 +5552,25 @@ relocateSection(
 	IF_DEBUG(linker, debugBelch("               : extern    = %d\n", reloc->r_extern));
 	IF_DEBUG(linker, debugBelch("               : type      = %d\n", reloc->r_type));
 
-        checkProddableBlock(oc,thingPtr);
         switch(reloc->r_length)
         {
             case 0:
+                checkProddableBlock(oc,thingPtr,1);
                 thing = *(uint8_t*)thingPtr;
                 baseValue = (uint64_t)thingPtr + 1;
                 break;
             case 1:
+                checkProddableBlock(oc,thingPtr,2);
                 thing = *(uint16_t*)thingPtr;
                 baseValue = (uint64_t)thingPtr + 2;
                 break;
             case 2:
+                checkProddableBlock(oc,thingPtr,4);
                 thing = *(uint32_t*)thingPtr;
                 baseValue = (uint64_t)thingPtr + 4;
                 break;
             case 3:
+                checkProddableBlock(oc,thingPtr,8);
                 thing = *(uint64_t*)thingPtr;
                 baseValue = (uint64_t)thingPtr + 8;
                 break;
@@ -5506,7 +5738,10 @@ relocateSection(
                 {
                     unsigned long word = 0;
                     unsigned long* wordPtr = (unsigned long*) (image + sect->offset + scat->r_address);
-                    checkProddableBlock(oc,wordPtr);
+
+                    /* In this check we assume that sizeof(unsigned long) = 2 * sizeof(unsigned short)
+                       on powerpc_HOST_ARCH */
+                    checkProddableBlock(oc,wordPtr,sizeof(unsigned long));
 
                     // Note on relocation types:
                     // i386 uses the GENERIC_RELOC_* types,
@@ -5676,7 +5911,10 @@ relocateSection(
 #endif
 
                 unsigned long* wordPtr = (unsigned long*) (image + sect->offset + reloc->r_address);
-                checkProddableBlock(oc,wordPtr);
+
+                /* In this check we assume that sizeof(unsigned long) = 2 * sizeof(unsigned short)
+                   on powerpc_HOST_ARCH */
+                checkProddableBlock(oc,wordPtr, sizeof(unsigned long));
 
                 if (reloc->r_type == GENERIC_RELOC_VANILLA) {
                     word = *wordPtr;
