@@ -2,10 +2,9 @@ module TcTypeNats where
 
 import TcSMonad( TcS, emitFrozenError, setEvBind )
 import TcCanonical( StopOrContinue(..) )
-import TcEvidence ( EvTerm(..) )
 import TcRnTypes( Ct(..), isGiven, isWanted, ctEvidence, ctEvId )
 
-import TcTypeNatsRules( solve, impossible )
+import TcTypeNatsRules( solve, impossible, computeNewGivenWork )
 
 
 
@@ -22,11 +21,12 @@ typeNatStage ct
   | isGiven ev =
     case solve ct of
       Just _ -> return Stop                 -- trivial fact
-      _      -> return $ ContinueWith ct    -- XXX: TODO (compute new work)
+      _      -> do computeNewGivenWork ct   -- add some new facts (if any)
+                   return $ ContinueWith ct
 
   | isWanted ev =
     case solve ct of
-      Just c  -> do setEvBind (ctEvId ev) (EvCoercion c)
+      Just c  -> do setEvBind (ctEvId ev) c
                     return Stop
       Nothing -> return $ ContinueWith ct   --- XXX: Try improvement here
 

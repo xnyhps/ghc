@@ -1,28 +1,48 @@
 module TcTypeNatsRules where
 
 -- From other GHC locations
+import Outputable ( ppr, vcat )
+import SrcLoc   ( noSrcSpan )
 import Var      ( Var )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( TypeNatCoAxiom (..) )
-import Type     ( isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy )
+import Type     ( isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
+                , mkEqPred, mkTyConApp
+                )
 import PrelNames( typeNatLeqTyFamName
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
                 )
+import TysPrim  ( typeNatLeqTyCon
+                , typeNatAddTyCon
+                , typeNatMulTyCon
+                , typeNatExpTyCon
+                )
 import Panic    ( panic )
 
 -- From type checker
-import TcRnTypes      ( Xi, Ct(..), ctEvidence, ctEvTerm )
+import TcType         ( TcPredType )
+import TcRnTypes      ( Xi, Ct(..), ctEvidence, ctEvTerm, isGivenCt
+                      , CtEvidence(..), CtLoc(..), SkolemInfo(..)
+                      , mkNonCanonical
+                      )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
-import TcEvidence     ( TcCoercion (..)
-                      , mkTcSymCo, mkTcTransCo, mkTcCoVarCo
-                      , EvTerm(..) )
+import TcEvidence     ( EvTerm(..), TcCoercion (..)
+                      , mkTcSymCo, mkTcTransCo
+                      , evTermCoercion
+                      )
+import TcSMonad ( TcS, InertSet
+                , getTcSInerts, foldFamHeadMap, inert_cans, inert_funeqs
+                , updWorkListTcS, appendWorkListCt
+                , traceTcS
+                )
 
 -- From base libraries
 import Prelude hiding ( exp )
-import Data.Maybe ( fromMaybe, maybeToList, isNothing )
+import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing )
 import qualified Data.IntMap as IMap
+import qualified Data.Map    as Map
 import qualified Data.IntSet as ISet
 import Control.Monad ( msum, guard )
 
@@ -42,7 +62,7 @@ data Term   = Var  !TVar    -- ^ Matches anything
 -- than helpful?
 data Prop   = Prop Op [Term]
 data Op     = Eq | Leq | Add | Mul | Exp
-              deriving Eq
+              deriving (Eq,Ord)
 
 data Rule   = Rule [(PVar,Prop)]    -- Named assumptions of the rule
                    Prop             -- Conclusion of the rule
@@ -50,7 +70,7 @@ data Rule   = Rule [(PVar,Prop)]    -- Named assumptions of the rule
 
 data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
             | Assumed PVar
-            | Proved TcCoercion
+            | Proved EvTerm
             | Sym Proof | Trans Proof Proof   -- used in `funRule`
 
 eq :: Term -> Term -> Prop
@@ -67,6 +87,9 @@ mul x y z = Prop Mul [ z, x, y ]
 
 exp :: Term -> Term -> Term -> Prop
 exp x y z = Prop Exp [ z, x, y ]
+
+
+
 
 
 --------------------------------------------------------------------------------
@@ -93,15 +116,29 @@ fromCt (CTyEqCan { cc_tyvar = x, cc_rhs = t }) =
 
 fromCt _ = Nothing
 
+toTcPredTy :: Prop -> TcPredType
+toTcPredTy (Prop op ts) =
+  case (op, map toXi ts) of
+    (Eq,  [t1,t2])    -> mkEqPred t1 t2
+    (Leq, [t1,t2,t3]) -> mkEqPred (mk typeNatLeqTyCon t2 t3) t1
+    (Add, [t1,t2,t3]) -> mkEqPred (mk typeNatAddTyCon t2 t3) t1
+    (Mul, [t1,t2,t3]) -> mkEqPred (mk typeNatMulTyCon t2 t3) t1
+    (Exp, [t1,t2,t3]) -> mkEqPred (mk typeNatExpTyCon t2 t3) t1
+    _                 -> panic "toTcPredTy: Unexpected Prop"
+  where
+  mk f a b = mkTyConApp f [a,b]
+
+toEvTerm :: Proof -> EvTerm
+toEvTerm proof  =
+  case proof of
+    By ax ts ps -> EvCoercion $ TcTypeNatCo ax (map toXi ts) (map toCoercion ps)
+    Sym p       -> EvCoercion $ mkTcSymCo (toCoercion p)
+    Trans p q   -> EvCoercion $ mkTcTransCo (toCoercion p) (toCoercion q)
+    Proved t    -> t
+    Assumed _   -> panic "Incomplete proof"
 
 toCoercion :: Proof -> TcCoercion
-toCoercion proof  =
-  case proof of
-    By ax ts ps -> TcTypeNatCo ax (map toXi ts) (map toCoercion ps)
-    Sym p       -> mkTcSymCo (toCoercion p)
-    Trans p q   -> mkTcTransCo (toCoercion p) (toCoercion q)
-    Proved co   -> co
-    Assumed _   -> panic "Incomplete proof"
+toCoercion = evTermCoercion . toEvTerm
 
 toXi :: Term -> Xi
 toXi term =
@@ -110,6 +147,22 @@ toXi term =
     Bool _ -> panic "XXX: Make boolean literal"
     Num n  -> mkNumLitTy n
     Con c  -> mkTyVarTy c
+
+
+{- While the resulting constraints are mostly in canonical form,
+sometimes they are not:  for example, we might get new work like this:
+
+2 ~ 3
+
+This indicates that someone gave us an inconsistent context,
+and will be detected on the next iteration of the solver.
+-}
+toGivenCt :: (Proof,Prop) -> Ct
+toGivenCt (proof,prop) = mkNonCanonical $
+  Given { ctev_gloc = CtLoc UnkSkol noSrcSpan [] -- XXX: something better?
+        , ctev_pred = toTcPredTy prop
+        , ctev_evtm = toEvTerm proof
+        }
 
 
 --------------------------------------------------------------------------------
@@ -230,22 +283,27 @@ instance Match Prop where
 
 
 -- | Try to satisfy a rule assumption with an existing constraint.
-usingAsmp :: Ct -> Prop -> Maybe (Subst, Proof)
-usingAsmp ct q =
+usingCt :: Ct -> Prop -> [(Subst, Proof)]
+usingCt ct q =
+  maybeToList $
   do p  <- fromCt ct
      su <- match q p
-     let co = case ctEvTerm (ctEvidence ct) of
-                EvCoercion c -> c
-                EvId x       -> mkTcCoVarCo x -- XXX: wanteds are returned
-                                              -- in this form...
-                _            -> panic "usingAsmp: unexpected evidence"
-     return (su, Proved co)
+     return (su, Proved $ ctEvTerm $ ctEvidence ct)
+
+-- Assumes that the proof came from the inert set, and so it
+-- contains no rule variables.
+usingAsmps :: Asmps -> Prop -> [(Subst, Proof)]
+usingAsmps asmps (Prop op ts) =
+  do (proof,ts1) <- asmpsFor op asmps
+     su <- maybeToList $ match ts ts1
+     return (su, Proved proof)
 
 
 -- | Try to stisfy a rule assumption with an axiom.
-usingAxiom :: Prop -> Maybe (Subst, Proof)
+usingAxiom :: Prop -> [(Subst, Proof)]
 
 usingAxiom (Prop op [r, Num a, Num b]) =
+  maybeToList $
   do (na,ax) <- case op of
                   Add -> Just (Num  (a + b), TnAddDef a b)
                   Mul -> Just (Num  (a * b), TnMulDef a b)
@@ -257,6 +315,7 @@ usingAxiom (Prop op [r, Num a, Num b]) =
      return (su, By ax [] [])
 
 usingAxiom (Prop op [Num r, a, Num b]) =
+  maybeToList $
   do let mkAx ax mb = mb >>= \na -> Just (Num na, ax na b)
      (na,ax) <- case op of
                   Add -> mkAx TnAddDef (minus r b)
@@ -269,6 +328,7 @@ usingAxiom (Prop op [Num r, a, Num b]) =
      return (su, By ax [] [])
 
 usingAxiom (Prop op [Num r, Num a, b]) =
+  maybeToList $
   do let mkAx ax mb = mb >>= \nb -> Just (Num nb, ax a nb)
      (nb,ax) <- case op of
                   Add -> mkAx TnAddDef (minus r a)
@@ -280,12 +340,13 @@ usingAxiom (Prop op [Num r, Num a, b]) =
      su <- match b nb
      return (su, By ax [] [])
 
-usingAxiom _ = Nothing
+usingAxiom _ = []
 
 
 -- Currently, only using rules with no premises.
-usingRule :: Rule -> Prop -> Maybe (Subst, Proof)
+usingRule :: Rule -> Prop -> [(Subst, Proof)]
 usingRule (Rule [] conc proof) p =
+  maybeToList $
   do su <- match freshConc p
      return (su, freshProof)
   where
@@ -296,22 +357,60 @@ usingRule (Rule [] conc proof) p =
          in (fresh bump conc, fresh bump proof)
        Nothing -> (conc, proof)
 
-usingRule _ _ = Nothing
+usingRule _ _ = []
 
 
-specRule :: Rule -> (Prop -> Maybe (Subst, Proof)) -> [Rule]
+specRule :: Rule -> (Prop -> [(Subst, Proof)]) -> [Rule]
 specRule (Rule as c proof) tactic =
   do ((n,p), rest) <- choose as
-     (su, aP) <- maybeToList (tactic p)
+     (su, aP)      <- tactic p
      return $ apSubst su $ Rule rest c $ define n aP proof
+
+
+fireRules :: Asmps -> Ct -> [(Proof,Prop)]
+fireRules asmps newFact = loop []
+                        $ concatMap (`specRule` usingCt newFact) fRules
+  where
+  step r  = specRule r usingAxiom
+         ++ [ r1 | b <- bRules, r1 <- specRule r (usingRule b) ]
+         ++ [ r1 | r1 <- specRule r (usingAsmps asmps) ]
+
+  loop done (Rule [] p proof : more) = loop ((proof,p) : done) more
+  loop done (r : more)               = loop done (step r ++ more)
+  loop done []                       = done
+
+
+type Asmps = Map.Map Op [ (EvTerm, [Term]) ]
+
+asmpsFor :: Op -> Asmps -> [ (EvTerm, [Term]) ]
+asmpsFor op asmps = Map.findWithDefault [] op asmps
+
+toAsmps :: Bool -> InertSet -> Asmps
+toAsmps alsoWanted = foldFamHeadMap addAsmp Map.empty
+                   . inert_funeqs
+                   . inert_cans
+  where
+  addAsmp ct as = fromMaybe as $
+                  do guard (isGivenCt ct || alsoWanted)
+                     Prop op ts <- fromCt ct
+                     let fact = (ctEvTerm (ctEvidence ct), ts)
+                     return $ Map.insertWith (++) op [fact] as
+
+computeNewGivenWork :: Ct -> TcS ()
+computeNewGivenWork ct =
+  do is <- getTcSInerts
+     let newWork = map toGivenCt $ fireRules (toAsmps False is) ct
+     traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
+     updWorkListTcS (appendWorkListCt newWork)
+
 
 --------------------------------------------------------------------------------
 
-solve :: Ct -> Maybe TcCoercion
+solve :: Ct -> Maybe EvTerm
 solve ct =
   do p <- fromCt ct
-     (_, p) <- msum $ usingAxiom p : map (`usingRule` p) bRules
-     return (toCoercion p)
+     (_, p) <- listToMaybe $ msum $ usingAxiom p : map (`usingRule` p) bRules
+     return (toEvTerm p)
 
 
 impossible :: Ct -> Bool
@@ -338,8 +437,6 @@ impossible ct =
         Prop Exp [ Num c, _    , Num b ] -> isNothing (rootExact c b)
 
         _                                -> False
-
-
 
 
 
