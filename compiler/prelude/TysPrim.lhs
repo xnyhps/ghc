@@ -81,7 +81,7 @@ module TysPrim(
 	anyTy, anyTyCon, anyTypeOfKind,
 
         -- * Type families used to compute at the type level.
-        typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon
+        typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon
 
   ) where
 
@@ -96,6 +96,8 @@ import SrcLoc
 import Unique		( mkAlphaTyVarUnique )
 import PrelNames
 import FastString
+
+import BasicTypes (RecFlag(..))
 
 import Data.Char
 \end{code}
@@ -370,10 +372,14 @@ ubxTupleKind     = kindTyConType ubxTupleKindTyCon
 constraintKind   = kindTyConType constraintKindTyCon
 
 typeNatKind :: Kind
-typeNatKind = kindTyConType (mkKindTyCon typeNatKindConName superKind)
+typeNatKind = kindTyConType (mkPromotedTyCon alg superKind)
+  where alg = mkAlgTyCon typeNatKindConName openTypeKind [] Nothing []
+                          (AbstractTyCon True) NoParentTyCon NonRecursive False
 
 typeStringKind :: Kind
-typeStringKind = kindTyConType (mkKindTyCon typeStringKindConName superKind)
+typeStringKind = kindTyConType (mkPromotedTyCon alg superKind)
+  where alg = mkAlgTyCon typeStringKindConName openTypeKind [] Nothing []
+                         (AbstractTyCon True) NoParentTyCon NonRecursive False
 
 -- | Given two kinds @k1@ and @k2@, creates the 'Kind' @k1 -> k2@
 mkArrowKind :: Kind -> Kind -> Kind
@@ -749,17 +755,29 @@ anyTypeOfKind kind = mkNakedTyConApp anyTyCon [kind]
 Type functions related to type-nats.
 
 \begin{code}
+
+-- XXX: THIS IS WRONG.  IT SHOULD RETURN A PROMOTED BOOL.
+typeNatLeqTyCon :: TyCon
+typeNatLeqTyCon = mkSynTyCon typeNatLeqTyFamName
+                    (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
+                    (take 2 $ tyVarList typeNatKind)
+                    SynFamilyTyCon
+                    NoParentTyCon
+
+mkTypeNatFunTyCon :: Name -> TyCon
+mkTypeNatFunTyCon op = mkSynTyCon op
+                    (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
+                    (take 2 $ tyVarList typeNatKind)
+                    SynFamilyTyCon
+                    NoParentTyCon
+
 typeNatAddTyCon :: TyCon
-typeNatAddTyCon = mkFunTyCon typeNatAddTyFamName
-                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
+typeNatAddTyCon = mkTypeNatFunTyCon typeNatAddTyFamName
 
 typeNatMulTyCon :: TyCon
-typeNatMulTyCon = mkFunTyCon typeNatMulTyFamName
-                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
+typeNatMulTyCon = mkTypeNatFunTyCon typeNatMulTyFamName
 
 typeNatExpTyCon :: TyCon
-typeNatExpTyCon = mkFunTyCon typeNatExpTyFamName
-                $ mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind
-
+typeNatExpTyCon = mkTypeNatFunTyCon typeNatExpTyFamName
 \end{code}
 
