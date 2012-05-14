@@ -75,7 +75,7 @@ module TcSMonad (
     CCanMap(..), CtTypeMap, CtFamHeadMap, CtPredMap,
     PredMap, FamHeadMap,
     partCtFamHeadMap, lookupFamHead,
-
+    foldFamHeadMap,
 
     instDFunType,                              -- Instantiation
     newFlexiTcSTy, instFlexiTcS,
@@ -406,6 +406,9 @@ partCtFamHeadMap f ctmap
                       = ty1 
                       | otherwise 
                       = panic "partCtFamHeadMap, encountered non equality!"
+
+foldFamHeadMap :: (a -> b -> b) -> b -> FamHeadMap a -> b
+foldFamHeadMap f a (FamHeadMap m) = foldTypeMap f a m
 \end{code}
 
 %************************************************************************
