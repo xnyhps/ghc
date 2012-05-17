@@ -540,6 +540,7 @@ typedef struct _RtsSymbolVal {
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp__fstat64))    \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp__wsopen))     \
       RTS_WIN64_ONLY(SymI_HasProto(__imp__environ))      \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetFileInformationByHandle))  \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetFileType))                 \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetLastError))                \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_QueryPerformanceFrequency))   \
@@ -3645,7 +3646,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       }
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
-          if ((((size_t)(start)) % (size_t)sizeof(void *)) != 0) {
+          if ((((size_t)(start)) % sizeof(void *)) != 0) {
               barf("Misaligned section: %p", start);
           }
 
