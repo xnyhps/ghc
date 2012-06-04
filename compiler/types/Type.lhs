@@ -44,6 +44,7 @@ module Type (
 
         mkNumLitTy, isNumLitTy,
         mkStrLitTy, isStrLitTy,
+        isTyLit,
 	
 	-- (Newtypes)
 	newTyConInstRhs, carefullySplitNewType_maybe,
@@ -420,6 +421,10 @@ mkStrLitTy s = LitTy (StrTyLit s)
 isStrLitTy :: Type -> Maybe FastString
 isStrLitTy (LitTy (StrTyLit s)) = Just s
 isStrLitTy _                    = Nothing
+
+isTyLit :: Type -> Maybe TyLit
+isTyLit (LitTy x) = Just x
+isTyLit _         = Nothing
 
 \end{code}
 
