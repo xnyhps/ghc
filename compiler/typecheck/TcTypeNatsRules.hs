@@ -3,22 +3,30 @@ module TcTypeNatsRules where
 -- From other GHC locations
 import Outputable ( ppr, vcat )
 import SrcLoc   ( noSrcSpan )
-import Var      ( Var )
+import Var      ( Var, TyVar )
 import TyCon    ( TyCon, tyConName )
-import Coercion ( TypeNatCoAxiom (..) )
-import Type     ( isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
+import Coercion ( TypeNatCoAxiom (..), CoAxiomRule(..) )
+import Type     ( Type, isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
                 , mkEqPred, mkTyConApp
+                , splitTyConApp_maybe
+                , isTyLit, eqType
                 )
 import PrelNames( typeNatLeqTyFamName
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
+                , unboundKey
                 )
 import TysPrim  ( typeNatLeqTyCon
                 , typeNatAddTyCon
                 , typeNatMulTyCon
                 , typeNatExpTyCon
+                , tyVarList
+                , typeNatKind
                 )
+import Name     ( mkInternalName )
+import OccName  ( mkOccName, tcName )
+import Unique   ( mkPreludeMiscIdUnique )
 import Panic    ( panic )
 
 -- From type checker
@@ -41,6 +49,7 @@ import TcSMonad ( TcS, InertSet
 -- From base libraries
 import Prelude hiding ( exp )
 import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing )
+import Data.List (find)
 import qualified Data.IntMap as IMap
 import qualified Data.Map    as Map
 import qualified Data.IntSet as ISet
@@ -522,5 +531,94 @@ instance Fresh Proof where
       By a ts ps  -> By a (fresh n ts) (fresh n ps)
 
 
+
+--------------------------------------------------------------------------------
+
+mkAx :: Int -> String -> [TyVar] -> [(Type,Type)] -> Type -> Type -> CoAxiomRule
+mkAx u n vs asmps lhs rhs = CoAxiomRule
+  { co_axr_unique = mkAxUique u
+  , co_axr_name   = mkAxName n
+  , co_axr_tvs    = vs
+  , co_axr_asmps  = zip [ 0 .. ] asmps
+  , co_axr_lhs    = lhs
+  , co_axr_rhs    = rhs
+  }
+  where
+  mkAxUique  = mkPreludeMiscIdUnique
+  mkAxName x = mkInternalName unboundKey (mkOccName tcName x) noSrcSpan
+
+mkAdd :: Type -> Type -> Type
+mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
+
+mkMul :: Type -> Type -> Type
+mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
+
+mkExp :: Type -> Type -> Type
+mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
+
+natVars :: [TyVar]
+natVars = tyVarList typeNatKind
+
+--------------------------------------------------------------------------------
+
+axAddComm :: CoAxiomRule
+axAddComm = mkAx 0 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
+  where a : b : c : _ = map mkTyVarTy natVars
+
+--------------------------------------------------------------------------------
+
+type SimpleSubst = [ (TyVar, Type) ]
+type TypePat     = Type
+
+matchType :: TypePat -> Type -> Maybe SimpleSubst
+matchType t1 t2 | Just x <- getTyVar_maybe t1 = return [(x,t2)]
+
+matchType t1 t2 | Just (tc1,ts1) <- splitTyConApp_maybe t1
+                , Just (tc2,ts2) <- splitTyConApp_maybe t2
+                  = guard (tc1 == tc2) >> matchTypes ts1 ts2
+
+matchType t1 t2 | Just x1 <- isTyLit t1
+                , Just x2 <- isTyLit t2
+                  = guard (x1 == x2) >> return []
+
+matchType _ _   = Nothing
+
+matchTypes :: [TypePat] -> [Type] -> Maybe SimpleSubst
+matchTypes [] []              = Just []
+matchTypes (x : xs) (y : ys)  = do su1 <- matchType x y
+                                   su2 <- matchTypes xs ys
+                                   mergeSimpleSubst su1 su2
+matchTypes _ _                = Nothing
+
+
+mergeSimpleSubst :: SimpleSubst -> SimpleSubst -> Maybe SimpleSubst
+mergeSimpleSubst xs ys = check xs ys
+  where
+  check done [] = return done
+  check done ((y,t) : more) =
+    case find ((y == ) . fst) xs of
+      Nothing     -> check ((y,t):done) more
+      Just (_,t1) -> guard (eqType t t1) >> check done more
+
+
+substType :: SimpleSubst -> Type -> Type
+substType su t
+  | Just x <- getTyVar_maybe t  = case lookup x su of
+                                    Just t1 -> t1
+                                    Nothing -> t
+  | Just (tc,ts) <- splitTyConApp_maybe t = mkTyConApp tc
+                                                        (map (substType su) ts)
+
+  | Just _ <- isTyLit t = t
+  | otherwise           = panic "TcTypeNatRule.substType: unexpected type"
+
+
+-- Tries to instantuate the equation with the constraint.
+matchCt :: Type -> Type -> Ct -> Maybe SimpleSubst
+matchCt lhs rhs (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
+  matchTypes [lhs, rhs] [ mkTyConApp tc ts, t ]
+matchCt lhs rhs (CTyEqCan { cc_tyvar = x, cc_rhs = t }) =
+  matchTypes [lhs, rhs] [ mkTyVarTy x, t ]
+matchCt _ _ _ = Nothing
 
 

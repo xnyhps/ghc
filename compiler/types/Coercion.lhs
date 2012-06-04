@@ -17,6 +17,7 @@
 module Coercion (
         -- * Main data type
         Coercion(..), TypeNatCoAxiom(..), Var, CoVar,
+        CoAxiomRule(..),
 
         -- ** Functions over coercions
         coVarKind,
@@ -156,6 +157,30 @@ data Coercion
   | NthCo Int Coercion          -- Zero-indexed
   | InstCo Coercion Type
   deriving (Data.Data, Data.Typeable)
+
+
+-- Conditional axioms.  The genral idea is that a `CoAxiomRule` looks like this:
+--
+--   forall as. (r1 ~ r2, s1 ~ s2) => t1 ~ t2
+--
+-- My intension is to reuse these for both (~) and (~#).
+-- The short-term plan is to use this datatype to represent the type-nat axioms.
+-- In the longer run, it would probably be good to unify this and `CoAxiom`,
+-- as `CoAxiom` is the special case when `co_axr_asmps` is [].
+data CoAxiomRule = CoAxiomRule
+  { co_axr_unique   :: Unique
+  , co_axr_name     :: Name
+  , co_axr_tvs      :: [TyVar]        -- ^ Quantified variabes
+  , co_axr_asmps    :: [(Type,Type)]  -- ^ Assumptions
+  , co_axr_lhs      :: Type           -- ^ LHS of conclusion
+  , co_axr_rhs      :: Type           -- ^ RHS of conclusion
+  } deriving (Data.Typeable)
+
+instance Data.Data CoAxiomRule where
+  -- don't traverse?
+  toConstr _   = abstractConstr "CoAxiomRule"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "CoAxiomRule"
 
 
 
