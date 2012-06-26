@@ -107,9 +107,11 @@ import Bag
 import Exception
 
 import Control.Monad
+import Data.Function
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Ord
 import Data.IORef
 import System.Directory
 import System.FilePath
@@ -277,9 +279,9 @@ mkIface_ hsc_env maybe_old_fingerprint
         
                         -- Sort these lexicographically, so that
                         -- the result is stable across compilations
-                        mi_insts       = sortLe le_inst iface_insts,
-                        mi_fam_insts   = sortLe le_fam_inst iface_fam_insts,
-                        mi_rules       = sortLe le_rule iface_rules,
+                        mi_insts       = sortBy cmp_inst     iface_insts,
+                        mi_fam_insts   = sortBy cmp_fam_inst iface_fam_insts,
+                        mi_rules       = sortBy cmp_rule     iface_rules,
 
                         mi_vect_info   = iface_vect_info,
 
@@ -322,10 +324,10 @@ mkIface_ hsc_env maybe_old_fingerprint
                 | otherwise                     = emptyBag
               errs_and_warns = (orph_warnings, emptyBag)
               unqual = mkPrintUnqualified dflags rdr_env
-              inst_warns = listToBag [ instOrphWarn unqual d 
+              inst_warns = listToBag [ instOrphWarn dflags unqual d 
                                      | (d,i) <- insts `zip` iface_insts
                                      , isNothing (ifInstOrph i) ]
-              rule_warns = listToBag [ ruleOrphWarn unqual this_mod r 
+              rule_warns = listToBag [ ruleOrphWarn dflags unqual this_mod r 
                                      | r <- iface_rules
                                      , isNothing (ifRuleOrph r)
                                      , if ifRuleAuto r then warn_auto_orphs
@@ -347,14 +349,11 @@ mkIface_ hsc_env maybe_old_fingerprint
 
         ; return (errs_and_warns, Just (final_iface, no_change_at_all)) }}
   where
-     r1 `le_rule`     r2 = ifRuleName      r1    <=    ifRuleName      r2
-     i1 `le_inst`     i2 = ifDFun          i1 `le_occ` ifDFun          i2  
-     i1 `le_fam_inst` i2 = ifFamInstTcName i1 `le_occ` ifFamInstTcName i2
-
-     le_occ :: Name -> Name -> Bool
-        -- Compare lexicographically by OccName, *not* by unique, because 
-        -- the latter is not stable across compilations
-     le_occ n1 n2 = nameOccName n1 <= nameOccName n2
+     cmp_rule     = comparing ifRuleName
+     -- Compare these lexicographically by OccName, *not* by unique,
+     -- because the latter is not stable across compilations:
+     cmp_inst     = comparing (nameOccName . ifDFun)
+     cmp_fam_inst = comparing (nameOccName . ifFamInstTcName)
 
      dflags = hsc_dflags hsc_env
 
@@ -849,14 +848,14 @@ oldMD5 dflags bh = do
         return $! readHexFingerprint hash_str
 -}
 
-instOrphWarn :: PrintUnqualified -> ClsInst -> WarnMsg
-instOrphWarn unqual inst
-  = mkWarnMsg (getSrcSpan inst) unqual $
+instOrphWarn :: DynFlags -> PrintUnqualified -> ClsInst -> WarnMsg
+instOrphWarn dflags unqual inst
+  = mkWarnMsg dflags (getSrcSpan inst) unqual $
     hang (ptext (sLit "Orphan instance:")) 2 (pprInstanceHdr inst)
 
-ruleOrphWarn :: PrintUnqualified -> Module -> IfaceRule -> WarnMsg
-ruleOrphWarn unqual mod rule
-  = mkWarnMsg silly_loc unqual $
+ruleOrphWarn :: DynFlags -> PrintUnqualified -> Module -> IfaceRule -> WarnMsg
+ruleOrphWarn dflags unqual mod rule
+  = mkWarnMsg dflags silly_loc unqual $
     ptext (sLit "Orphan rule:") <+> ppr rule
   where
     silly_loc = srcLocSpan (mkSrcLoc (moduleNameFS (moduleName mod)) 1 1)
@@ -1095,8 +1094,6 @@ data RecompileRequired
   | RecompBecause String
        -- ^ The .o/.hi files are up to date, but something else has changed
        -- to force recompilation; the String says what (one-line summary)
-  | RecompForcedByTH
-       -- ^ recompile is forced due to use of TH by the module
    deriving Eq
 
 recompileRequired :: RecompileRequired -> Bool
@@ -1118,8 +1115,9 @@ checkOldIface :: HscEnv
               -> IO (RecompileRequired, Maybe ModIface)
 
 checkOldIface hsc_env mod_summary source_modified maybe_iface
-  = do  showPass (hsc_dflags hsc_env) $
-            "Checking old interface for " ++ (showSDoc $ ppr $ ms_mod mod_summary)
+  = do  let dflags = hsc_dflags hsc_env
+        showPass dflags $
+            "Checking old interface for " ++ (showPpr dflags $ ms_mod mod_summary)
         initIfaceCheck hsc_env $
             check_old_iface hsc_env mod_summary source_modified maybe_iface
 

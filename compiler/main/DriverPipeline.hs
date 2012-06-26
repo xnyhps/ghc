@@ -326,8 +326,7 @@ link' dflags batch_attempt_linking hpt
                    return Succeeded
            else do
 
-        compilationProgressMsg dflags $ showSDoc $
-            (ptext (sLit "Linking") <+> text exe_file <+> text "...")
+        compilationProgressMsg dflags ("Linking " ++ exe_file ++ " ...")
 
         -- Don't showPass in Batch mode; doLink will do that for us.
         let link = case ghcLink dflags of
@@ -774,7 +773,7 @@ runPhase (Cpp sf) input_fn dflags0
        (dflags1, unhandled_flags, warns)
            <- io $ parseDynamicFilePragma dflags0 src_opts
        setDynFlags dflags1
-       io $ checkProcessArgsResult unhandled_flags
+       io $ checkProcessArgsResult dflags1 unhandled_flags
 
        if not (xopt Opt_Cpp dflags1) then do
            -- we have to be careful to emit warnings only once.
@@ -791,7 +790,7 @@ runPhase (Cpp sf) input_fn dflags0
             src_opts <- io $ getOptionsFromFile dflags0 output_fn
             (dflags2, unhandled_flags, warns)
                 <- io $ parseDynamicFilePragma dflags0 src_opts
-            io $ checkProcessArgsResult unhandled_flags
+            io $ checkProcessArgsResult dflags2 unhandled_flags
             unless (dopt Opt_Pp dflags2) $ io $ handleFlagWarnings dflags2 warns
             -- the HsPp pass below will emit warnings
 
@@ -826,7 +825,7 @@ runPhase (HsPp sf) input_fn dflags
             (dflags1, unhandled_flags, warns)
                 <- io $ parseDynamicFilePragma dflags src_opts
             setDynFlags dflags1
-            io $ checkProcessArgsResult unhandled_flags
+            io $ checkProcessArgsResult dflags1 unhandled_flags
             io $ handleFlagWarnings dflags1 warns
 
             return (Hsc sf, output_fn)
@@ -1493,10 +1492,11 @@ mkExtraObjToLinkIntoBinary dflags = do
                                         _ -> True
 
    when (dopt Opt_NoHsMain dflags && have_rts_opts_flags) $ do
-      hPutStrLn stderr $ "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main.\n" ++
-                         "    Call hs_init_ghc() from your main() function to set these options."
+      log_action dflags dflags SevInfo noSrcSpan defaultUserStyle
+          (text "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main." $$
+           text "    Call hs_init_ghc() from your main() function to set these options.")
 
-   mkExtraObj dflags "c" (showSDoc main)
+   mkExtraObj dflags "c" (showSDoc dflags main)
 
   where
     main
@@ -1527,7 +1527,7 @@ mkNoteObjsToLinkIntoBinary dflags dep_packages = do
    link_info <- getLinkInfo dflags dep_packages
 
    if (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
-     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc (link_opts link_info))
+     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc dflags (link_opts link_info))
      else return []
 
   where

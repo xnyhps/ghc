@@ -489,19 +489,13 @@
           <row>
             <entry><option>-ignore-dot-ghci</option></entry>
             <entry>Disable reading of <filename>.ghci</filename> files</entry>
-            <entry>static</entry>
+            <entry>dynamic</entry>
             <entry>-</entry>
           </row>
           <row>
             <entry><option>-ghci-script</option></entry>
             <entry>Read additional <filename>.ghci</filename> files</entry>
             <entry>dynamic</entry>
-            <entry>-</entry>
-          </row>
-          <row>
-            <entry><option>-read-dot-ghci</option></entry>
-            <entry>Enable reading of <filename>.ghci</filename> files</entry>
-            <entry>static</entry>
             <entry>-</entry>
           </row>
           <row>
@@ -834,13 +828,14 @@
           </row>
           <row>
             <entry><option>-XDataKinds</option></entry>
-            <entry>Enable <link linkend="kind-polymorphism-and-promotion">datatype promotion</link>.</entry>
+            <entry>Enable <link linkend="promotion">datatype promotion</link>.</entry>
             <entry>dynamic</entry>
             <entry><option>-XNoDataKinds</option></entry>
           </row>
           <row>
             <entry><option>-XPolyKinds</option></entry>
-            <entry>Enable <link linkend="kind-polymorphism-and-promotion">kind polymorphism</link>.</entry>
+            <entry>Enable <link linkend="kind-polymorphism">kind polymorphism</link>.
+                   Implies <option>-XKindSignatures</option>.</entry>
             <entry>dynamic</entry>
             <entry><option>-XNoPolyKinds</option></entry>
           </row>
@@ -1011,14 +1006,8 @@
             <entry><option>-XNoExplicitNamespaces</option></entry>
           </row>
           <row>
-            <entry><option>-XDoRec</option></entry>
-            <entry>Enable <link linkend="recursive-do-notation">recursive do notation</link>.</entry>
-            <entry>dynamic</entry>
-            <entry><option>-XNoDoRec</option></entry>
-          </row>
-          <row>
             <entry><option>-XRecursiveDo</option></entry>
-            <entry>Enable <link linkend="mdo-notation">recursive do (mdo) notation</link>. This is deprecated; please use <link linkend="recursive-do-notation">recursive do notation</link> instead.</entry>
+            <entry>Enable <link linkend="recursive-do-notation">recursive do (mdo) notation</link>.</entry>
             <entry>dynamic</entry>
             <entry><option>-XNoRecursiveDo</option></entry>
           </row>
@@ -2717,19 +2706,19 @@
           <row>
             <entry><option>-dppr-user-length</option></entry>
             <entry>Set the depth for printing expressions in error msgs</entry>
-            <entry>static</entry>
+            <entry>dynamic</entry>
             <entry>-</entry>
           </row>
           <row>
             <entry><option>-dppr-colsNNN</option></entry>
             <entry>Set the width of debugging output. For example <option>-dppr-cols200</option></entry>
-            <entry>static</entry>
+            <entry>dynamic</entry>
             <entry>-</entry>
           </row>
           <row>
             <entry><option>-dppr-case-as-let</option></entry>
             <entry>Print single alternative case expressions as strict lets.</entry>
-            <entry>static</entry>
+            <entry>dynamic</entry>
             <entry>-</entry>
           </row>
           <row>

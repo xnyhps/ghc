@@ -19,9 +19,8 @@ module BinIface (
 #include "HsVersions.h"
 
 import TcRnMonad
-import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon, tyConIP_maybe)
+import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon)
 import DataCon    (dataConName, dataConWorkId, dataConTyCon)
-import IParam     (ipFastString, ipTyConName)
 import PrelInfo   (wiredInThings, basicKnownKeyNames)
 import Id         (idName, isDataConWorkId_maybe)
 import TysWiredIn
@@ -39,7 +38,6 @@ import DynFlags
 import UniqFM
 import UniqSupply
 import CostCentre
-import StaticFlags
 import Panic
 import Binary
 import SrcLoc
@@ -51,6 +49,7 @@ import Outputable
 import Platform
 import FastString
 import Constants
+import Util
 import Coercion(TypeNatCoAxiom(..))
 
 import Data.Bits
@@ -86,7 +85,7 @@ readBinIface_ :: DynFlags -> CheckHiWay -> TraceBinIFaceReading -> FilePath
 readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu = do
     let printer :: SDoc -> IO ()
         printer = case traceBinIFaceReading of
-                      TraceBinIFaceReading -> \sd -> printSDoc sd defaultDumpStyle
+                      TraceBinIFaceReading -> \sd -> log_action dflags dflags SevOutput noSrcSpan defaultDumpStyle sd
                       QuietBinIFaceReading -> \_ -> return ()
         wantedGot :: Outputable a => String -> a -> a -> IO ()
         wantedGot what wanted got =
@@ -124,7 +123,7 @@ readBinIface_ dflags checkHiWay traceBinIFaceReading hi_path ncu = do
 
     -- Check the interface file version and ways.
     check_ver  <- get bh
-    let our_ver = show opt_HiVersion
+    let our_ver = show hiVersion
     wantedGot "Version" our_ver check_ver
     errorOnMismatch "mismatched interface file versions" our_ver check_ver
 
@@ -174,7 +173,7 @@ writeBinIface dflags hi_path mod_iface = do
         else Binary.put_ bh (0 :: Word64)
 
     -- The version and way descriptor go next
-    put_ bh (show opt_HiVersion)
+    put_ bh (show hiVersion)
     let way_descr = getWayDescr dflags
     put_  bh way_descr
 
@@ -316,7 +315,7 @@ knownKeyNamesMap = listToUFM_Directly [(nameUnique n, n) | n <- knownKeyNames]
 
 -- See Note [Symbol table representation of names]
 putName :: BinDictionary -> BinSymbolTable -> BinHandle -> Name -> IO ()
-putName dict BinSymbolTable{ 
+putName _dict BinSymbolTable{ 
                bin_symtab_map = symtab_map_ref,
                bin_symtab_next = symtab_next }    bh name
   | name `elemUFM` knownKeyNamesMap
@@ -327,10 +326,6 @@ putName dict BinSymbolTable{
   = case wiredInNameTyThing_maybe name of
      Just (ATyCon tc)
        | isTupleTyCon tc             -> putTupleName_ bh tc 0
-       | Just ip <- tyConIP_maybe tc -> do
-         off <- allocateFastString dict (ipFastString ip)
-         -- MASSERT(off < 2^(30 :: Int))
-         put_ bh (0xC0000000 .|. off)
      Just (ADataCon dc)
        | let tc = dataConTyCon dc, isTupleTyCon tc -> putTupleName_ bh tc 1
      Just (AnId x)
@@ -362,7 +357,7 @@ putTupleName_ bh tc thing_tag
 getSymtabName :: NameCacheUpdater
               -> Dictionary -> SymbolTable
               -> BinHandle -> IO Name
-getSymtabName ncu dict symtab bh = do
+getSymtabName _ncu _dict symtab bh = do
     i <- get bh
     case i .&. 0xC0000000 of
         0x00000000 -> return $! symtab ! fromIntegral (i ::  Word32)
@@ -385,7 +380,6 @@ getSymtabName ncu dict symtab bh = do
                      _ -> pprPanic "getSymtabName:unknown tuple sort" (ppr i)
             thing_tag = (i .&. 0x0CFFFFFF) `shiftR` 26
             arity = fromIntegral (i .&. 0x03FFFFFF)
-        0xC0000000 -> liftM ipTyConName $ updateNameCache ncu $ flip allocateIPName (dict ! fromIntegral (i .&. 0x3FFFFFFF))
         _          -> pprPanic "getSymtabName:unknown name tag" (ppr i)
 
 data BinSymbolTable = BinSymbolTable {
@@ -426,7 +420,6 @@ data BinDictionary = BinDictionary {
 -- All the binary instances
 
 -- BasicTypes
-{-! for IPName derive: Binary !-}
 {-! for Fixity derive: Binary !-}
 {-! for FixityDirection derive: Binary !-}
 {-! for Boxity derive: Binary !-}
@@ -825,11 +818,6 @@ instance Binary Fixity where
           ab <- get bh
           return (Fixity aa ab)
 
-instance (Binary name) => Binary (IPName name) where
-    put_ bh (IPName aa) = put_ bh aa
-    get bh = do aa <- get bh
-                return (IPName aa)
-
 -------------------------------------------------------------------------
 --              Types from: Demand
 -------------------------------------------------------------------------
@@ -1057,9 +1045,8 @@ instance Binary IfaceCoCon where
    put_ bh IfaceTransCo        = putByte bh 4
    put_ bh IfaceInstCo         = putByte bh 5
    put_ bh (IfaceNthCo d)      = do { putByte bh 6; put_ bh d }
-   put_ bh (IfaceIPCoAx ip)    = do { putByte bh 7; put_ bh ip }
    put_ bh (IfaceTypeNatCo c)  = do { putByte bh 8; put_ bh c }
-
+ 
    get bh = do
         h <- getByte bh
         case h of
@@ -1070,7 +1057,6 @@ instance Binary IfaceCoCon where
           4 -> return IfaceTransCo
           5 -> return IfaceInstCo
           6 -> do { d <- get bh; return (IfaceNthCo d) }
-          7 -> do { ip <- get bh; return (IfaceIPCoAx ip) }
           8 -> do { c <- get bh; return (IfaceTypeNatCo c) }
           _ -> panic ("get IfaceCoCon " ++ show h)
 

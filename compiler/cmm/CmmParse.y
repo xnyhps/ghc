@@ -1070,7 +1070,7 @@ parseCmmFile dflags filename = do
 		-- in there we don't want.
   case unP cmmParse init_state of
     PFailed span err -> do
-        let msg = mkPlainErrMsg span err
+        let msg = mkPlainErrMsg dflags span err
         return ((emptyBag, unitBag msg), Nothing)
     POk pst code -> do
         cmm <- initC dflags no_module (getCmm (unEC code initEnv [] >> return ()))
@@ -1078,7 +1078,7 @@ parseCmmFile dflags filename = do
         if (errorsFound dflags ms)
          then return (ms, Nothing)
          else do
-           dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" (pprPlatform (targetPlatform dflags) cmm)
+           dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" (ppr cmm)
            return (ms, Just cmm)
   where
 	no_module = panic "parseCmmFile: no module"

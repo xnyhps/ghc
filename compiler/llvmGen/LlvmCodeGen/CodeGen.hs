@@ -635,7 +635,7 @@ genStore_slow env addr val meta = do
 
         other ->
             pprPanic "genStore: ptr not right type!"
-                    (PprCmm.pprExpr (getLlvmPlatform env) addr <+> text (
+                    (PprCmm.pprExpr addr <+> text (
                         "Size of Ptr: " ++ show llvmPtrBits ++
                         ", Size of var: " ++ show (llvmWidthInBits other) ++
                         ", Var: " ++ show vaddr))
@@ -950,7 +950,10 @@ genMachOp_slow env opt op [x, y] = case op of
 
                 else do
                     -- Error. Continue anyway so we can debug the generated ll file.
-                    let cmmToStr = (lines . show . llvmSDoc . PprCmm.pprExpr (getLlvmPlatform env))
+                    let dflags = getDflags env
+                        style = mkCodeStyle CStyle
+                        toString doc = renderWithStyle dflags doc style
+                        cmmToStr = (lines . toString . PprCmm.pprExpr)
                     let dx = Comment $ map fsLit $ cmmToStr x
                     let dy = Comment $ map fsLit $ cmmToStr y
                     (v1, s1) <- doExpr (ty vx) $ binOp vx vy
@@ -1109,7 +1112,7 @@ genLoad_slow env e ty meta = do
                     return (env', dvar, stmts `snocOL` cast `snocOL` load, tops)
 
          other -> pprPanic "exprToVar: CmmLoad expression is not right type!"
-                        (PprCmm.pprExpr (getLlvmPlatform env) e <+> text (
+                        (PprCmm.pprExpr e <+> text (
                             "Size of Ptr: " ++ show llvmPtrBits ++
                             ", Size of var: " ++ show (llvmWidthInBits other) ++
                             ", Var: " ++ show iptr))

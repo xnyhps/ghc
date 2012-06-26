@@ -32,7 +32,7 @@ import Constants
 import Digraph
 import qualified Prelude as P
 import Prelude hiding (succ)
-import Util (sortLe)
+import Util
 
 import BlockId
 import Bitmap
@@ -51,7 +51,6 @@ import Control.Monad
 import Name
 import OptimizationFuel
 import Outputable
-import Platform
 import SMRep
 import UniqSupply
 
@@ -201,8 +200,8 @@ cafLattice = DataflowLattice "live cafs" Map.empty add
   where add _ (OldFact old) (NewFact new) = case old `Map.union` new of
                                               new' -> (changeIf $ Map.size new' > Map.size old, new')
 
-cafTransfers :: Platform -> BwdTransfer CmmNode CAFSet
-cafTransfers platform = mkBTransfer3 first middle last
+cafTransfers :: BwdTransfer CmmNode CAFSet
+cafTransfers = mkBTransfer3 first middle last
   where first  _ live = live
         middle m live = foldExpDeep addCaf m live
         last   l live = foldExpDeep addCaf l (joinOutFacts cafLattice l live)
@@ -211,12 +210,11 @@ cafTransfers platform = mkBTransfer3 first middle last
                CmmLit (CmmLabelOff c _)         -> add c set
                CmmLit (CmmLabelDiffOff c1 c2 _) -> add c1 $ add c2 set
                _ -> set
-        add l s = if hasCAF l then Map.insert (toClosureLbl platform l) () s
+        add l s = if hasCAF l then Map.insert (toClosureLbl l) () s
                               else s
 
-cafAnal :: Platform -> CmmGraph -> FuelUniqSM CAFEnv
-cafAnal platform g
-    = liftM snd $ dataflowPassBwd g [] $ analBwd cafLattice (cafTransfers platform)
+cafAnal :: CmmGraph -> FuelUniqSM CAFEnv
+cafAnal g = liftM snd $ dataflowPassBwd g [] $ analBwd cafLattice cafTransfers
 
 -----------------------------------------------------------------------
 -- Building the SRTs
@@ -228,12 +226,12 @@ data TopSRT = TopSRT { lbl      :: CLabel
                      , rev_elts :: [CLabel]
                      , elt_map  :: Map CLabel Int }
                         -- map: CLabel -> its last entry in the table
-instance PlatformOutputable TopSRT where
-  pprPlatform platform (TopSRT lbl next elts eltmap) =
-    text "TopSRT:" <+> pprPlatform platform lbl
+instance Outputable TopSRT where
+  ppr (TopSRT lbl next elts eltmap) =
+    text "TopSRT:" <+> ppr lbl
                    <+> ppr next
-                   <+> pprPlatform platform elts
-                   <+> pprPlatform platform eltmap
+                   <+> ppr elts
+                   <+> ppr eltmap
 
 emptySRT :: MonadUnique m => m TopSRT
 emptySRT =
@@ -317,7 +315,7 @@ procpointSRT top_srt top_table entries =
     return (top, srt)
   where
     ints = map (expectJust "constructSRT" . flip Map.lookup top_table) entries
-    sorted_ints = sortLe (<=) ints
+    sorted_ints = sort ints
     offset = head sorted_ints
     bitmap_entries = map (subtract offset) sorted_ints
     len = P.last bitmap_entries + 1
@@ -348,13 +346,13 @@ to_SRT top_srt off len bmp
 --  keep its CAFs live.)
 -- Any procedure referring to a non-static CAF c must keep live
 -- any CAF that is reachable from c.
-localCAFInfo :: Platform -> CAFEnv -> CmmDecl -> Maybe (CLabel, CAFSet)
-localCAFInfo _        _      (CmmData _ _) = Nothing
-localCAFInfo platform cafEnv (CmmProc top_info top_l (CmmGraph {g_entry=entry})) =
+localCAFInfo :: CAFEnv -> CmmDecl -> Maybe (CLabel, CAFSet)
+localCAFInfo _      (CmmData _ _) = Nothing
+localCAFInfo cafEnv (CmmProc top_info top_l (CmmGraph {g_entry=entry})) =
   case info_tbl top_info of
     CmmInfoTable { cit_rep = rep } 
       | not (isStaticRep rep) 
-      -> Just (toClosureLbl platform top_l,
+      -> Just (toClosureLbl top_l,
                expectJust "maybeBindCAFs" $ mapLookup entry cafEnv)
     _ -> Nothing
 

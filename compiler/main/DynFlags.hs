@@ -17,7 +17,7 @@ module DynFlags (
         WarningFlag(..),
         ExtensionFlag(..),
         Language(..),
-        LogAction, FlushOut(..), FlushErr(..),
+        FatalMessager, LogAction, FlushOut(..), FlushErr(..),
         ProfAuto(..),
         glasgowExtsFlags,
         dopt,
@@ -44,6 +44,8 @@ module DynFlags (
         fFlags, fWarningFlags, fLangFlags, xFlags,
         wayNames, dynFlagDependencies,
 
+        printOutputForUser, printInfoForUser,
+
         -- ** Safe Haskell
         SafeHaskellMode(..),
         safeHaskellOn, safeImportsOn, safeLanguageOn, safeInferOn,
@@ -65,7 +67,9 @@ module DynFlags (
         -- ** Manipulating DynFlags
         defaultDynFlags,                -- Settings -> DynFlags
         initDynFlags,                   -- DynFlags -> IO DynFlags
+        defaultFatalMessager,
         defaultLogAction,
+        defaultLogActionHPrintDoc,
         defaultFlushOut,
         defaultFlushErr,
 
@@ -91,12 +95,15 @@ module DynFlags (
         getStgToDo,
 
         -- * Compiler configuration suitable for display to the user
-        compilerInfo
+        compilerInfo,
+
 #ifdef GHCI
 -- Only in stage 2 can we be sure that the RTS
 -- exposes the appropriate runtime boolean
-      , rtsIsProfiled
+        rtsIsProfiled,
 #endif
+        -- ** Only for use in the tracing functions in Outputable
+        tracingDynFlags,
   ) where
 
 #include "HsVersions.h"
@@ -114,6 +121,7 @@ import Constants        ( mAX_CONTEXT_REDUCTION_DEPTH )
 import Panic
 import Util
 import Maybes           ( orElse )
+import qualified Pretty
 import SrcLoc
 import FastString
 import Outputable
@@ -261,6 +269,7 @@ data DynFlag
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
    | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA (hidden flag)
    | Opt_RegLiveness                    -- Use the STG Reg liveness information (hidden flag)
+   | Opt_IrrefutableTuples
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -295,10 +304,16 @@ data DynFlag
    | Opt_BuildingCabalPackage
    | Opt_SSE2
    | Opt_SSE4_2
+   | Opt_IgnoreDotGhci
    | Opt_GhciSandbox
    | Opt_GhciHistory
    | Opt_HelpfulErrors
    | Opt_DeferTypeErrors
+   | Opt_Parallel
+   | Opt_GranMacros
+
+   -- output style opts
+   | Opt_PprCaseAsLet
 
    -- temporary flags
    | Opt_RunCPS
@@ -369,15 +384,18 @@ data SafeHaskellMode
    | Sf_Unsafe
    | Sf_Trustworthy
    | Sf_Safe
-   | Sf_SafeInfered
+   | Sf_SafeInferred
    deriving (Eq)
 
+instance Show SafeHaskellMode where
+    show Sf_None         = "None"
+    show Sf_Unsafe       = "Unsafe"
+    show Sf_Trustworthy  = "Trustworthy"
+    show Sf_Safe         = "Safe"
+    show Sf_SafeInferred = "Safe-Inferred"
+
 instance Outputable SafeHaskellMode where
-    ppr Sf_None        = ptext $ sLit "None"
-    ppr Sf_Unsafe      = ptext $ sLit "Unsafe"
-    ppr Sf_Trustworthy = ptext $ sLit "Trustworthy"
-    ppr Sf_Safe        = ptext $ sLit "Safe"
-    ppr Sf_SafeInfered = ptext $ sLit "Safe-Infered"
+    ppr = text . show
 
 data ExtensionFlag
    = Opt_Cpp
@@ -444,7 +462,6 @@ data ExtensionFlag
    | Opt_MonadComprehensions
    | Opt_GeneralizedNewtypeDeriving
    | Opt_RecursiveDo
-   | Opt_DoRec
    | Opt_PostfixOperators
    | Opt_TupleSections
    | Opt_PatternGuards
@@ -600,6 +617,11 @@ data DynFlags = DynFlags {
 
   haddockOptions        :: Maybe String,
   ghciScripts           :: [String],
+
+  -- Output style options
+  pprUserLength         :: Int,
+  pprCols               :: Int,
+  traceLevel            :: Int, -- Standard level is 1. Less verbose is 0.
 
   -- | what kind of {-# SCC #-} to add automatically
   profAuto              :: ProfAuto,
@@ -946,7 +968,7 @@ defaultDynFlags mySettings =
         warningFlags = IntSet.fromList (map fromEnum standardWarnings),
         ghciScripts = [],
         language = Nothing,
-        safeHaskell = Sf_SafeInfered,
+        safeHaskell = Sf_SafeInferred,
         thOnLoc = noSrcSpan,
         newDerivOnLoc = noSrcSpan,
         pkgTrustOnLoc = noSrcSpan,
@@ -957,23 +979,49 @@ defaultDynFlags mySettings =
         log_action = defaultLogAction,
         flushOut = defaultFlushOut,
         flushErr = defaultFlushErr,
+        pprUserLength = 5,
+        pprCols = 100,
+        traceLevel = 1,
         profAuto = NoProfAuto,
         llvmVersion = panic "defaultDynFlags: No llvmVersion"
       }
 
-type LogAction = Severity -> SrcSpan -> PprStyle -> MsgDoc -> IO ()
+-- Do not use tracingDynFlags!
+-- tracingDynFlags is a hack, necessary because we need to be able to
+-- show SDocs when tracing, but we don't always have DynFlags available.
+-- Do not use it if you can help it. It will not reflect options set
+-- by the commandline flags, and all fields may be either wrong or
+-- undefined.
+tracingDynFlags :: DynFlags
+tracingDynFlags = defaultDynFlags tracingSettings
+    where tracingSettings = panic "Settings not defined in tracingDynFlags"
+
+type FatalMessager = String -> IO ()
+type LogAction = DynFlags -> Severity -> SrcSpan -> PprStyle -> MsgDoc -> IO ()
+
+defaultFatalMessager :: FatalMessager
+defaultFatalMessager = hPutStrLn stderr
 
 defaultLogAction :: LogAction
-defaultLogAction severity srcSpan style msg
- = case severity of
-   SevOutput -> printSDoc msg style
-   SevInfo   -> printErrs msg style
-   SevFatal  -> printErrs msg style
-   _         -> do hPutChar stderr '\n'
-                   printErrs (mkLocMessage severity srcSpan msg) style
-                   -- careful (#2302): printErrs prints in UTF-8, whereas
-                   -- converting to string first and using hPutStr would
-                   -- just emit the low 8 bits of each unicode char.
+defaultLogAction dflags severity srcSpan style msg
+    = case severity of
+      SevOutput -> printSDoc msg style
+      SevDump   -> hPrintDump dflags stdout msg
+      SevInfo   -> printErrs msg style
+      SevFatal  -> printErrs msg style
+      _         -> do hPutChar stderr '\n'
+                      printErrs (mkLocMessage severity srcSpan msg) style
+                      -- careful (#2302): printErrs prints in UTF-8, whereas
+                      -- converting to string first and using hPutStr would
+                      -- just emit the low 8 bits of each unicode char.
+    where printSDoc = defaultLogActionHPrintDoc dflags stdout
+          printErrs = defaultLogActionHPrintDoc dflags stderr
+
+defaultLogActionHPrintDoc :: DynFlags -> Handle -> SDoc -> PprStyle -> IO ()
+defaultLogActionHPrintDoc dflags h d sty
+    = do let doc = runSDoc d (initSDocContext dflags sty)
+         Pretty.printDoc Pretty.PageMode (pprCols dflags) h doc
+         hFlush h
 
 newtype FlushOut = FlushOut (IO ())
 
@@ -984,6 +1032,16 @@ newtype FlushErr = FlushErr (IO ())
 
 defaultFlushErr :: FlushErr
 defaultFlushErr = FlushErr $ hFlush stderr
+
+printOutputForUser :: DynFlags -> PrintUnqualified -> SDoc -> IO ()
+printOutputForUser = printSevForUser SevOutput
+
+printInfoForUser :: DynFlags -> PrintUnqualified -> SDoc -> IO ()
+printInfoForUser = printSevForUser SevInfo
+
+printSevForUser :: Severity -> DynFlags -> PrintUnqualified -> SDoc -> IO ()
+printSevForUser sev dflags unqual doc
+    = log_action dflags dflags sev noSrcSpan (mkUserStyle unqual AllTheWay) doc
 
 {-
 Note [Verbosity levels]
@@ -1116,7 +1174,7 @@ safeLanguageOn dflags = safeHaskell dflags == Sf_Safe
 
 -- | Is the Safe Haskell safe inference mode active
 safeInferOn :: DynFlags -> Bool
-safeInferOn dflags = safeHaskell dflags == Sf_SafeInfered
+safeInferOn dflags = safeHaskell dflags == Sf_SafeInferred
 
 -- | Test if Safe Imports are on in some form
 safeImportsOn :: DynFlags -> Bool
@@ -1147,14 +1205,14 @@ safeImplicitImpsReq d = safeLanguageOn d
 -- want to export this functionality from the module but do want to export the
 -- type constructors.
 combineSafeFlags :: SafeHaskellMode -> SafeHaskellMode -> DynP SafeHaskellMode
-combineSafeFlags a b | a == Sf_SafeInfered = return b
-                     | b == Sf_SafeInfered = return a
-                     | a == Sf_None        = return b
-                     | b == Sf_None        = return a
-                     | a == b              = return a
-                     | otherwise           = addErr errm >> return (panic errm)
+combineSafeFlags a b | a == Sf_SafeInferred = return b
+                     | b == Sf_SafeInferred = return a
+                     | a == Sf_None         = return b
+                     | b == Sf_None         = return a
+                     | a == b               = return a
+                     | otherwise            = addErr errm >> return (panic errm)
     where errm = "Incompatible Safe Haskell flags! ("
-                    ++ showPpr a ++ ", " ++ showPpr b ++ ")"
+                    ++ show a ++ ", " ++ show b ++ ")"
 
 -- | A list of unsafe flags under Safe Haskell. Tuple elements are:
 --     * name of the flag
@@ -1402,7 +1460,7 @@ safeFlagCheck cmdl dflags =
 
               | otherwise
               -> (dflags' { safeHaskell = Sf_None }, [])
-                -- Have we infered Unsafe?
+                -- Have we inferred Unsafe?
                 -- See Note [HscMain . Safe Haskell Inference]
     where
         -- TODO: Can we do better than this for inference?
@@ -1566,6 +1624,11 @@ dynamic_flags = [
         ------- Include/Import Paths ----------------------------------------
   , Flag "I"              (Prefix    addIncludePath)
   , Flag "i"              (OptPrefix addImportPath)
+
+        ------ Output style options -----------------------------------------
+  , Flag "dppr-user-length" (intSuffix (\n d -> d{ pprUserLength = n }))
+  , Flag "dppr-cols"        (intSuffix (\n d -> d{ pprCols = n }))
+  , Flag "dtrace-level"     (intSuffix (\n d -> d{ traceLevel = n }))
 
         ------ Debugging ----------------------------------------------------
   , Flag "dstg-stats"     (NoArg (setDynFlag Opt_StgStats))
@@ -1739,6 +1802,10 @@ dynamic_flags = [
   , Flag "fpackage-trust"   (NoArg setPackageTrust)
   , Flag "fno-safe-infer"   (NoArg (setSafeHaskell Sf_None))
  ]
+ ++ map (mkFlag turnOn  ""     setDynFlag  ) negatableFlags
+ ++ map (mkFlag turnOff "no-"  unSetDynFlag) negatableFlags
+ ++ map (mkFlag turnOn  "d"    setDynFlag  ) dFlags
+ ++ map (mkFlag turnOff "dno-" unSetDynFlag) dFlags
  ++ map (mkFlag turnOn  "f"    setDynFlag  ) fFlags
  ++ map (mkFlag turnOff "fno-" unSetDynFlag) fFlags
  ++ map (mkFlag turnOn  "f"    setWarningFlag  ) fWarningFlags
@@ -1761,6 +1828,14 @@ package_flags = [
   , Flag "no-user-package-db"    (NoArg removeUserPkgConf)
   , Flag "global-package-db"     (NoArg (addPkgConfRef GlobalPkgConf))
   , Flag "user-package-db"       (NoArg (addPkgConfRef UserPkgConf))
+
+    -- backwards compat with GHC<=7.4 :
+  , Flag "package-conf"          (HasArg $ \path -> do
+                                    addPkgConfRef (PkgConfFile path)
+                                    deprecate "Use -package-db instead")
+  , Flag "no-user-package-conf"  (NoArg $ do
+                                    removeUserPkgConf
+                                    deprecate "Use -no-user-package-db instead")
 
   , Flag "package-name"          (hasArg setPackageName)
   , Flag "package-id"            (HasArg exposePackageId)
@@ -1851,6 +1926,16 @@ fWarningFlags = [
   ( "warn-pointless-pragmas",           Opt_WarnPointlessPragmas, nop ),
   ( "warn-unsupported-calling-conventions", Opt_WarnUnsupportedCallingConventions, nop ) ]
 
+-- | These @-\<blah\>@ flags can all be reversed with @-no-\<blah\>@
+negatableFlags :: [FlagSpec DynFlag]
+negatableFlags = [
+  ( "ignore-dot-ghci",                  Opt_IgnoreDotGhci, nop ) ]
+
+-- | These @-d\<blah\>@ flags can all be reversed with @-dno-\<blah\>@
+dFlags :: [FlagSpec DynFlag]
+dFlags = [
+  ( "ppr-case-as-let",                  Opt_PprCaseAsLet, nop ) ]
+
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
 fFlags :: [FlagSpec DynFlag]
 fFlags = [
@@ -1893,6 +1978,7 @@ fFlags = [
   ( "regs-iterative",                   Opt_RegsIterative, nop ),
   ( "llvm-tbaa",                        Opt_LlvmTBAA, nop), -- hidden flag
   ( "regs-liveness",                    Opt_RegLiveness, nop), -- hidden flag
+  ( "irrefutable-tuples",               Opt_IrrefutableTuples, nop ),
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -1901,6 +1987,8 @@ fFlags = [
   ( "ghci-history",                     Opt_GhciHistory, nop ),
   ( "helpful-errors",                   Opt_HelpfulErrors, nop ),
   ( "defer-type-errors",                Opt_DeferTypeErrors, nop ),
+  ( "parallel",                         Opt_Parallel, nop ),
+  ( "gransim",                          Opt_GranMacros, nop ),
   ( "building-cabal-package",           Opt_BuildingCabalPackage, nop ),
   ( "implicit-import-qualified",        Opt_ImplicitImportQualified, nop ),
   ( "prof-count-entries",               Opt_ProfCountEntries, nop ),
@@ -1969,7 +2057,7 @@ languageFlags = [
 -- features can be used.
 safeHaskellFlags :: [FlagSpec SafeHaskellMode]
 safeHaskellFlags = [mkF Sf_Unsafe, mkF Sf_Trustworthy, mkF Sf_Safe]
-    where mkF flag = (showPpr flag, flag, nop)
+    where mkF flag = (show flag, flag, nop)
 
 -- | These -X<blah> flags can all be reversed with -XNo<blah>
 xFlags :: [FlagSpec ExtensionFlag]
@@ -1998,9 +2086,9 @@ xFlags = [
   ( "ImpredicativeTypes",               Opt_ImpredicativeTypes, nop),
   ( "TypeOperators",                    Opt_TypeOperators, nop ),
   ( "ExplicitNamespaces",               Opt_ExplicitNamespaces, nop ),
-  ( "RecursiveDo",                      Opt_RecursiveDo,     -- Enables 'mdo'
-    deprecatedForExtension "DoRec"),
-  ( "DoRec",                            Opt_DoRec, nop ),    -- Enables 'rec' keyword
+  ( "RecursiveDo",                      Opt_RecursiveDo, nop ),  -- Enables 'mdo' and 'rec'
+  ( "DoRec",                            Opt_RecursiveDo, 
+     deprecatedForExtension "RecursiveDo" ),
   ( "Arrows",                           Opt_Arrows, nop ),
   ( "ParallelArrays",                   Opt_ParallelArrays, nop ),
   ( "TemplateHaskell",                  Opt_TemplateHaskell, checkTemplateHaskellOk ),
@@ -2108,6 +2196,7 @@ impliedFlags
     , (Opt_TypeFamilies,     turnOn, Opt_MonoLocalBinds)
 
     , (Opt_TypeFamilies,     turnOn, Opt_KindSignatures)  -- Type families use kind signatures
+    , (Opt_PolyKinds,        turnOn, Opt_KindSignatures)  -- Ditto polymorphic kinds
 
     -- We turn this on so that we can export associated type
     -- type synonyms in subordinates (e.g. MyClass(type AssocType))
@@ -2123,6 +2212,11 @@ impliedFlags
     , (Opt_RecordWildCards,     turnOn, Opt_DisambiguateRecordFields)
 
     , (Opt_ParallelArrays, turnOn, Opt_ParallelListComp)
+
+    -- An implicit parameter constraint, `?x::Int`, is desugared into
+    -- `IP "x" Int`, which requires a flexible context/instance.
+    , (Opt_ImplicitParams, turnOn, Opt_FlexibleContexts)
+    , (Opt_ImplicitParams, turnOn, Opt_FlexibleInstances)
   ]
 
 optLevelFlags :: [([Int], DynFlag)]
@@ -2245,7 +2339,7 @@ glasgowExtsFlags = [
            , Opt_RankNTypes
            , Opt_TypeOperators
            , Opt_ExplicitNamespaces
-           , Opt_DoRec
+           , Opt_RecursiveDo
            , Opt_ParallelListComp
            , Opt_EmptyDataDecls
            , Opt_KindSignatures

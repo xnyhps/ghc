@@ -44,12 +44,12 @@ import UniqSupply
 import Unique
 import UniqFM
 import DynFlags
+import Maybes
 import StaticFlags
 import FastString
 import Panic
 import Util
 
-import System.IO
 import Data.IORef
 import qualified Data.Set as Set
 import Control.Monad
@@ -186,6 +186,9 @@ initTcPrintErrors       -- Used from the interactive loop only
        -> IO (Messages, Maybe r)
 
 initTcPrintErrors env mod todo = initTc env HsSrcFile False mod todo
+
+initTcForLookup :: HscEnv -> TcM a -> IO a
+initTcForLookup hsc_env = liftM (expectJust "initTcInteractive" . snd) . initTc hsc_env HsSrcFile False iNTERACTIVE
 \end{code}
 
 %************************************************************************
@@ -429,9 +432,9 @@ traceTc = traceTcN 1
 
 traceTcN :: Int -> String -> SDoc -> TcRn ()
 traceTcN level herald doc
-  | level <= opt_TraceLevel = traceOptTcRn Opt_D_dump_tc_trace $
-                              hang (text herald) 2 doc
-  | otherwise               = return ()
+    = do dflags <- getDynFlags
+         when (level <= traceLevel dflags) $
+             traceOptTcRn Opt_D_dump_tc_trace $ hang (text herald) 2 doc
 
 traceRn, traceSplice :: SDoc -> TcRn ()
 traceRn      = traceOptTcRn Opt_D_dump_rn_trace
@@ -444,7 +447,8 @@ traceHiDiffs = traceOptIf Opt_D_dump_hi_diffs
 
 traceOptIf :: DynFlag -> SDoc -> TcRnIf m n ()  -- No RdrEnv available, so qualify everything
 traceOptIf flag doc = ifDOptM flag $
-                      liftIO (printForUser stderr alwaysQualify doc)
+                          do dflags <- getDynFlags
+                             liftIO (printInfoForUser dflags alwaysQualify doc)
 
 traceOptTcRn :: DynFlag -> SDoc -> TcRn ()
 -- Output the message, with current location if opt_PprStyle_Debug
@@ -459,7 +463,7 @@ traceOptTcRn flag doc = ifDOptM flag $ do
 dumpTcRn :: SDoc -> TcRn ()
 dumpTcRn doc = do { rdr_env <- getGlobalRdrEnv
                   ; dflags <- getDynFlags
-                  ; liftIO (printForUser stderr (mkPrintUnqualified dflags rdr_env) doc) }
+                  ; liftIO (printInfoForUser dflags (mkPrintUnqualified dflags rdr_env) doc) }
 
 debugDumpTcRn :: SDoc -> TcRn ()
 debugDumpTcRn doc | opt_NoDebugOutput = return ()
@@ -631,7 +635,7 @@ mkLongErrAt loc msg extra
   = do { traceTc "Adding error:" (mkLocMessage SevError loc (msg $$ extra)) ;
          rdr_env <- getGlobalRdrEnv ;
          dflags <- getDynFlags ;
-         return $ mkLongErrMsg loc (mkPrintUnqualified dflags rdr_env) msg extra }
+         return $ mkLongErrMsg dflags loc (mkPrintUnqualified dflags rdr_env) msg extra }
 
 addLongErrAt :: SrcSpan -> MsgDoc -> MsgDoc -> TcRn ()
 addLongErrAt loc msg extra = mkLongErrAt loc msg extra >>= reportError
@@ -913,7 +917,7 @@ add_warn_at :: SrcSpan -> MsgDoc -> MsgDoc -> TcRn ()
 add_warn_at loc msg extra_info
   = do { rdr_env <- getGlobalRdrEnv ;
          dflags <- getDynFlags ;
-         let { warn = mkLongWarnMsg loc (mkPrintUnqualified dflags rdr_env)
+         let { warn = mkLongWarnMsg dflags loc (mkPrintUnqualified dflags rdr_env)
                                     msg extra_info } ;
          reportWarning warn }
 
@@ -1018,11 +1022,16 @@ emitFlats :: Cts -> TcM ()
 emitFlats cts
   = do { lie_var <- getConstraintVar ;
          updTcRef lie_var (`addFlats` cts) }
-
+    
 emitImplication :: Implication -> TcM ()
 emitImplication ct
   = do { lie_var <- getConstraintVar ;
          updTcRef lie_var (`addImplics` unitBag ct) }
+
+emitWC :: WantedConstraints -> TcM ()
+emitWC wc
+  = do { emitFlats (keepWanted (wc_flat wc))
+       ; emitImplications (wc_impl wc) }
 
 emitImplications :: Bag Implication -> TcM ()
 emitImplications ct
@@ -1216,7 +1225,8 @@ failIfM :: MsgDoc -> IfL a
 failIfM msg
   = do  { env <- getLclEnv
         ; let full_msg = (if_loc env <> colon) $$ nest 2 msg
-        ; liftIO (printErrs full_msg defaultErrStyle)
+        ; dflags <- getDynFlags
+        ; liftIO (log_action dflags dflags SevFatal noSrcSpan (defaultErrStyle dflags) full_msg)
         ; failM }
 
 --------------------
@@ -1243,15 +1253,15 @@ forkM_maybe doc thing_inside
                     -- Bleat about errors in the forked thread, if -ddump-if-trace is on
                     -- Otherwise we silently discard errors. Errors can legitimately
                     -- happen when compiling interface signatures (see tcInterfaceSigs)
-                      ifDOptM Opt_D_dump_if_trace
-                             (print_errs (hang (text "forkM failed:" <+> doc)
-                                             2 (text (show exn))))
+                      ifDOptM Opt_D_dump_if_trace $ do
+                          dflags <- getDynFlags
+                          let msg = hang (text "forkM failed:" <+> doc)
+                                       2 (text (show exn))
+                          liftIO $ log_action dflags dflags SevFatal noSrcSpan (defaultErrStyle dflags) msg
 
                     ; traceIf (text "} ending fork (badly)" <+> doc)
                     ; return Nothing }
         }}
-  where
-    print_errs sdoc = liftIO (printErrs sdoc defaultErrStyle)
 
 forkM :: SDoc -> IfL a -> IfL a
 forkM doc thing_inside

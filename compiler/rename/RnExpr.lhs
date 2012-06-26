@@ -46,7 +46,7 @@ import RdrName
 import LoadIface	( loadInterfaceForName )
 import UniqSet
 import Data.List
-import Util		( isSingleton, snocView )
+import Util
 import ListSetOps	( removeDups )
 import Outputable
 import SrcLoc
@@ -111,8 +111,7 @@ rnExpr (HsVar v)
        finishHsVar name
 
 rnExpr (HsIPVar v)
-  = do v' <- rnIPName v
-       return (HsIPVar v', emptyFVs)
+  = return (HsIPVar v, emptyFVs)
 
 rnExpr (HsLit lit@(HsString s))
   = do {
@@ -753,7 +752,7 @@ rnStmt ctxt (L _ (RecStmt { recS_stmts = rec_stmts })) thing_inside
 		-- Step 3: Group together the segments to make bigger segments
 		--	   Invariant: in the result, no segment uses a variable
 		--	   	      bound in a later segment
-	    grouped_segs = glomSegments segs_w_fwd_refs
+	    grouped_segs = glomSegments ctxt segs_w_fwd_refs
 
 		-- Step 4: Turn the segments into Stmts
 		--	   Use RecStmt when and only when there are fwd refs
@@ -1101,15 +1100,20 @@ addFwdRefs pairs
 --	{ rec { x <- ...y...; p <- z ; y <- ...x... ; 
 --		q <- x ; z <- y } ; 
 -- 	  r <- x }
+--
+-- NB. June 7 2012: We only glom segments that appear in
+-- an explicit mdo; and leave those found in "do rec"'s intact.
+-- See http://hackage.haskell.org/trac/ghc/ticket/4148 for
+-- the discussion leading to this design choice.
 
-glomSegments :: [Segment (LStmt Name)] -> [Segment [LStmt Name]]
+glomSegments :: HsStmtContext Name -> [Segment (LStmt Name)] -> [Segment [LStmt Name]]
 
-glomSegments [] = []
-glomSegments ((defs,uses,fwds,stmt) : segs)
+glomSegments _ [] = []
+glomSegments ctxt ((defs,uses,fwds,stmt) : segs)
 	-- Actually stmts will always be a singleton
   = (seg_defs, seg_uses, seg_fwds, seg_stmts)  : others
   where
-    segs'	     = glomSegments segs
+    segs'	     = glomSegments ctxt segs
     (extras, others) = grab uses segs'
     (ds, us, fs, ss) = unzip4 extras
     
@@ -1127,7 +1131,9 @@ glomSegments ((defs,uses,fwds,stmt) : segs)
 	= (reverse yeses, reverse noes)
 	where
 	  (noes, yeses) 	  = span not_needed (reverse dus)
-	  not_needed (defs,_,_,_) = not (intersectsNameSet defs uses)
+	  not_needed (defs,_,_,_) = case ctxt of
+	  		              MDoExpr -> not (intersectsNameSet defs uses)
+				      _	      -> False  -- unless we're in mdo, we *need* everything
 
 
 ----------------------------------------------------
@@ -1159,15 +1165,17 @@ segsToStmts empty_rec_stmt ((defs, uses, fwds, ss) : segs) fvs_later
 %************************************************************************
 
 \begin{code}
-srcSpanPrimLit :: SrcSpan -> HsExpr Name
-srcSpanPrimLit span = HsLit (HsStringPrim (mkFastString (showSDocOneLine (ppr span))))
+srcSpanPrimLit :: DynFlags -> SrcSpan -> HsExpr Name
+srcSpanPrimLit dflags span
+    = HsLit (HsStringPrim (mkFastString (showSDocOneLine dflags (ppr span))))
 
 mkAssertErrorExpr :: RnM (HsExpr Name)
 -- Return an expression for (assertError "Foo.hs:27")
 mkAssertErrorExpr
-  = getSrcSpanM    			`thenM` \ sloc ->
-    return (HsApp (L sloc (HsVar assertErrorName)) 
-		  (L sloc (srcSpanPrimLit sloc)))
+  = do sloc <- getSrcSpanM
+       dflags <- getDynFlags
+       return (HsApp (L sloc (HsVar assertErrorName))
+                     (L sloc (srcSpanPrimLit dflags sloc)))
 \end{code}
 
 Note [Adding the implicit parameter to 'assert']
@@ -1297,9 +1305,9 @@ okParStmt dflags ctxt stmt
 okDoStmt dflags ctxt stmt
   = case stmt of
        RecStmt {}
-         | Opt_DoRec `xopt` dflags -> isOK
-         | ArrowExpr <- ctxt       -> isOK	-- Arrows allows 'rec'
-         | otherwise               -> Just (ptext (sLit "Use -XDoRec"))
+         | Opt_RecursiveDo `xopt` dflags -> isOK
+         | ArrowExpr <- ctxt -> isOK	-- Arrows allows 'rec'
+         | otherwise         -> Just (ptext (sLit "Use -XRecursiveDo"))
        BindStmt {} -> isOK
        LetStmt {}  -> isOK
        ExprStmt {} -> isOK

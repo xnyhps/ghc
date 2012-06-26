@@ -47,6 +47,7 @@ import DmdAnal          ( dmdAnalPgm )
 import WorkWrap         ( wwTopBinds )
 import Vectorise        ( vectorise )
 import FastString
+import SrcLoc
 import Util
 
 import UniqSupply       ( UniqSupply, mkSplitUniqSupply, splitUniqSupply )
@@ -327,9 +328,10 @@ loadPlugins hsc_env
 loadPlugin :: HscEnv -> ModuleName -> IO Plugin
 loadPlugin hsc_env mod_name
   = do { let plugin_rdr_name = mkRdrQual mod_name (mkVarOcc "plugin")
+             dflags = hsc_dflags hsc_env
        ; mb_name <- lookupRdrNameInModule hsc_env mod_name plugin_rdr_name
        ; case mb_name of {
-            Nothing -> throwGhcException (CmdLineError $ showSDoc $ hsep
+            Nothing -> throwGhcException (CmdLineError $ showSDoc dflags $ hsep
                           [ ptext (sLit "The module"), ppr mod_name
                           , ptext (sLit "did not export the plugin name")
                           , ppr plugin_rdr_name ]) ;
@@ -338,7 +340,7 @@ loadPlugin hsc_env mod_name
      do { plugin_tycon <- forceLoadTyCon hsc_env pluginTyConName
         ; mb_plugin <- getValueSafely hsc_env name (mkTyConTy plugin_tycon)
         ; case mb_plugin of
-            Nothing -> throwGhcException (CmdLineError $ showSDoc $ hsep
+            Nothing -> throwGhcException (CmdLineError $ showSDoc dflags $ hsep
                           [ ptext (sLit "The value"), ppr name
                           , ptext (sLit "did not have the type")
                           , ppr pluginTyConName, ptext (sLit "as required")])
@@ -362,54 +364,54 @@ runCorePasses passes guts
     do_pass guts pass
        = do { dflags <- getDynFlags
             ; liftIO $ showPass dflags pass
-            ; guts' <- doCorePass pass guts
+            ; guts' <- doCorePass dflags pass guts
             ; liftIO $ endPass dflags pass (mg_binds guts') (mg_rules guts')
             ; return guts' }
 
-doCorePass :: CoreToDo -> ModGuts -> CoreM ModGuts
-doCorePass pass@(CoreDoSimplify {})  = {-# SCC "Simplify" #-}
-                                       simplifyPgm pass
+doCorePass :: DynFlags -> CoreToDo -> ModGuts -> CoreM ModGuts
+doCorePass _      pass@(CoreDoSimplify {})  = {-# SCC "Simplify" #-}
+                                              simplifyPgm pass
 
-doCorePass CoreCSE                   = {-# SCC "CommonSubExpr" #-}
-                                       doPass cseProgram
+doCorePass _      CoreCSE                   = {-# SCC "CommonSubExpr" #-}
+                                              doPass cseProgram
 
-doCorePass CoreLiberateCase          = {-# SCC "LiberateCase" #-}
-                                       doPassD liberateCase
+doCorePass _      CoreLiberateCase          = {-# SCC "LiberateCase" #-}
+                                              doPassD liberateCase
 
-doCorePass CoreDoFloatInwards        = {-# SCC "FloatInwards" #-}
-                                       doPass floatInwards
+doCorePass _      CoreDoFloatInwards        = {-# SCC "FloatInwards" #-}
+                                              doPass floatInwards
 
-doCorePass (CoreDoFloatOutwards f)   = {-# SCC "FloatOutwards" #-}
-                                       doPassDUM (floatOutwards f)
+doCorePass _      (CoreDoFloatOutwards f)   = {-# SCC "FloatOutwards" #-}
+                                              doPassDUM (floatOutwards f)
 
-doCorePass CoreDoStaticArgs          = {-# SCC "StaticArgs" #-}
-                                       doPassU doStaticArgs
+doCorePass _      CoreDoStaticArgs          = {-# SCC "StaticArgs" #-}
+                                              doPassU doStaticArgs
 
-doCorePass CoreDoStrictness          = {-# SCC "Stranal" #-}
-                                       doPassDM dmdAnalPgm
+doCorePass _      CoreDoStrictness          = {-# SCC "Stranal" #-}
+                                              doPassDM dmdAnalPgm
 
-doCorePass CoreDoWorkerWrapper       = {-# SCC "WorkWrap" #-}
-                                       doPassU wwTopBinds
+doCorePass dflags CoreDoWorkerWrapper       = {-# SCC "WorkWrap" #-}
+                                              doPassU (wwTopBinds dflags)
 
-doCorePass CoreDoSpecialising        = {-# SCC "Specialise" #-}
-                                       specProgram
+doCorePass dflags CoreDoSpecialising        = {-# SCC "Specialise" #-}
+                                              specProgram dflags
 
-doCorePass CoreDoSpecConstr          = {-# SCC "SpecConstr" #-}
-                                       specConstrProgram
+doCorePass _      CoreDoSpecConstr          = {-# SCC "SpecConstr" #-}
+                                              specConstrProgram
 
-doCorePass CoreDoVectorisation       = {-# SCC "Vectorise" #-}
-                                       vectorise
+doCorePass _      CoreDoVectorisation       = {-# SCC "Vectorise" #-}
+                                              vectorise
 
-doCorePass CoreDoPrintCore              = observe   printCore
-doCorePass (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat
-doCorePass CoreDoNothing                = return
-doCorePass (CoreDoPasses passes)        = runCorePasses passes
+doCorePass _      CoreDoPrintCore              = observe   printCore
+doCorePass _      (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat
+doCorePass _      CoreDoNothing                = return
+doCorePass _      (CoreDoPasses passes)        = runCorePasses passes
 
 #ifdef GHCI
-doCorePass (CoreDoPluginPass _ pass) = {-# SCC "Plugin" #-} pass
+doCorePass _      (CoreDoPluginPass _ pass) = {-# SCC "Plugin" #-} pass
 #endif
 
-doCorePass pass = pprPanic "doCorePass" (ppr pass)
+doCorePass _      pass = pprPanic "doCorePass" (ppr pass)
 \end{code}
 
 %************************************************************************
@@ -419,15 +421,17 @@ doCorePass pass = pprPanic "doCorePass" (ppr pass)
 %************************************************************************
 
 \begin{code}
-printCore :: a -> CoreProgram -> IO ()
-printCore _ binds = Err.dumpIfSet True "Print Core" (pprCoreBindings binds)
+printCore :: DynFlags -> CoreProgram -> IO ()
+printCore dflags binds
+    = Err.dumpIfSet dflags True "Print Core" (pprCoreBindings binds)
 
 ruleCheckPass :: CompilerPhase -> String -> ModGuts -> CoreM ModGuts
 ruleCheckPass current_phase pat guts = do
     rb <- getRuleBase
     dflags <- getDynFlags
     liftIO $ Err.showPass dflags "RuleCheck"
-    liftIO $ printDump (ruleCheckProgram current_phase pat rb (mg_binds guts))
+    liftIO $ log_action dflags dflags Err.SevDump noSrcSpan defaultDumpStyle
+                 (ruleCheckProgram current_phase pat rb (mg_binds guts))
     return guts
 
 
@@ -492,8 +496,8 @@ simplifyExpr dflags expr
               (expr', counts) = initSmpl dflags emptyRuleBase emptyFamInstEnvs us sz $
 				 simplExprGently (simplEnvForGHCi dflags) expr
 
-	; Err.dumpIfSet (dopt Opt_D_dump_simpl_stats dflags)
-		  "Simplifier statistics" (pprSimplCount counts)
+        ; Err.dumpIfSet dflags (dopt Opt_D_dump_simpl_stats dflags)
+                  "Simplifier statistics" (pprSimplCount counts)
 
 	; Err.dumpIfSet_dyn dflags Opt_D_dump_simpl "Simplified expression"
 			(pprCoreExpr expr')
@@ -555,7 +559,7 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
   = do { (termination_msg, it_count, counts_out, guts')
            <- do_iteration us 1 [] binds rules
 
-        ; Err.dumpIfSet (dump_phase && dopt Opt_D_dump_simpl_stats dflags)
+        ; Err.dumpIfSet dflags (dump_phase && dopt Opt_D_dump_simpl_stats dflags)
                   "Simplifier statistics for following pass"
                   (vcat [text termination_msg <+> text "after" <+> ppr it_count <+> text "iterations",
                          blankLine,

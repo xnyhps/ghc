@@ -37,7 +37,6 @@ import Id
 import MkId
 import IdInfo
 import Class
-import IParam
 import TyCon
 import DataCon
 import PrelNames
@@ -958,7 +957,6 @@ tcIfaceCo (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' ->
 tcIfaceCoApp :: IfaceCoCon -> [IfaceType] -> IfL Coercion
 tcIfaceCoApp IfaceReflCo      [t]     = Refl         <$> tcIfaceType t
 tcIfaceCoApp (IfaceCoAx n)    ts      = AxiomInstCo  <$> tcIfaceCoAxiom n <*> mapM tcIfaceCo ts
-tcIfaceCoApp (IfaceIPCoAx ip) ts      = AxiomInstCo  <$> liftM ipCoAxiom (newIPName ip) <*> mapM tcIfaceCo ts
 tcIfaceCoApp IfaceUnsafeCo    [t1,t2] = UnsafeCo     <$> tcIfaceType t1 <*> tcIfaceType t2
 tcIfaceCoApp IfaceSymCo       [t]     = SymCo        <$> tcIfaceCo t
 tcIfaceCoApp IfaceTransCo     [t1,t2] = TransCo      <$> tcIfaceCo t1 <*> tcIfaceCo t2
@@ -997,11 +995,12 @@ tcIfaceExpr (IfaceExt gbl)
 tcIfaceExpr (IfaceLit lit)
   = do lit' <- tcIfaceLit lit
        return (Lit lit')
-
+ 
 tcIfaceExpr (IfaceFCall cc ty) = do
     ty' <- tcIfaceType ty
     u <- newUnique
-    return (Var (mkFCallId u cc ty'))
+    dflags <- getDynFlags
+    return (Var (mkFCallId dflags u cc ty'))
 
 tcIfaceExpr (IfaceTuple boxity args)  = do
     args' <- mapM tcIfaceExpr args
@@ -1081,12 +1080,12 @@ tcIfaceTickish (IfaceSCC  cc tick push) = return (ProfNote cc tick push)
 
 -------------------------
 tcIfaceLit :: Literal -> IfL Literal
--- Integer literals deserialise to (LitInteeger i <error thunk>) 
--- so tcIfaceLit just fills in the mkInteger Id 
+-- Integer literals deserialise to (LitInteger i <error thunk>) 
+-- so tcIfaceLit just fills in the type.
 -- See Note [Integer literals] in Literal
 tcIfaceLit (LitInteger i _)
-  = do mkIntegerId <- tcIfaceExtId mkIntegerName
-       return (mkLitInteger i mkIntegerId)
+  = do t <- tcIfaceTyCon (IfaceTc integerTyConName)
+       return (mkLitInteger i (mkTyConTy t))
 tcIfaceLit lit = return lit
 
 -------------------------
@@ -1243,15 +1242,16 @@ tcIfaceWrapper :: Name -> Type -> IdInfo -> Arity -> IfL Id -> IfL Unfolding
 tcIfaceWrapper name ty info arity get_worker
   = do  { mb_wkr_id <- forkM_maybe doc get_worker
         ; us <- newUniqueSupply
+        ; dflags <- getDynFlags
         ; return (case mb_wkr_id of
                      Nothing     -> noUnfolding
-                     Just wkr_id -> make_inline_rule wkr_id us) }
+                     Just wkr_id -> make_inline_rule dflags wkr_id us) }
   where
     doc = text "Worker for" <+> ppr name
 
-    make_inline_rule wkr_id us 
+    make_inline_rule dflags wkr_id us 
         = mkWwInlineRule wkr_id
-                         (initUs_ us (mkWrapper ty strict_sig) wkr_id) 
+                         (initUs_ us (mkWrapper dflags ty strict_sig) wkr_id) 
                          arity
 
         -- Again we rely here on strictness info always appearing 

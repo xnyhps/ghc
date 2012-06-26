@@ -51,9 +51,9 @@ module TcRnTypes(
         Untouchables(..), inTouchableRange, isNoUntouchables,
 
        -- Canonical constraints
-        Xi, Ct(..), Cts, emptyCts, andCts, andManyCts, 
+        Xi, Ct(..), Cts, emptyCts, andCts, andManyCts, keepWanted,
         singleCt, extendCts, isEmptyCts, isCTyEqCan, isCFunEqCan,
-        isCDictCan_Maybe, isCIPCan_Maybe, isCFunEqCan_Maybe,
+        isCDictCan_Maybe, isCFunEqCan_Maybe,
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt, 
         isGivenCt, 
         ctWantedLoc, ctEvidence,
@@ -119,6 +119,7 @@ import DynFlags
 import Outputable
 import ListSetOps
 import FastString
+import Util
 
 import Data.Set (Set)
 
@@ -322,8 +323,9 @@ data TcGblEnv
         tcg_main      :: Maybe Name,         -- ^ The Name of the main
                                              -- function, if this module is
                                              -- the main module.
-        tcg_safeInfer :: TcRef Bool          -- Has the typechecker infered this
-                                             -- module as -XSafe (Safe Haskell)
+        tcg_safeInfer :: TcRef Bool          -- Has the typechecker
+                                             -- inferred this module
+                                             -- as -XSafe (Safe Haskell)
     }
 
 data RecFieldEnv 
@@ -578,27 +580,11 @@ data TcTyThing
                      -- Can be a mono-kind or a poly-kind; in TcTyClsDcls see
                      -- Note [Type checking recursive type and class declarations]
 
-  | ANothing                    -- see Note [ANothing]
+  | AFamDataCon      -- Data constructor for a data family
+                     -- See Note [AFamDataCon: not promoting data family constructors] in TcRnDriver
 
-{-
-Note [ANothing]
-~~~~~~~~~~~~~~~
-
-We don't want to allow promotion in a strongly connected component
-when kind checking.
-
-Consider:
-  data T f = K (f (K Any))
-
-When kind checking the `data T' declaration the local env contains the
-mappings:
-  T -> AThing <some initial kind>
-  K -> ANothing
-
-ANothing is only used for DataCons, and only used during type checking
-in tcTyClGroup.
--}
-
+  | ARecDataCon      -- Data constructor in a reuursive loop
+                     -- See Note [ARecDataCon: recusion and promoting data constructors] in TcTyClsDecls
 
 instance Outputable TcTyThing where	-- Debugging only
    ppr (AGlobal g)      = pprTyThing g
@@ -609,15 +595,18 @@ instance Outputable TcTyThing where	-- Debugging only
 				 <+> ppr (tct_level elt))
    ppr (ATyVar tv _)    = text "Type variable" <+> quotes (ppr tv)
    ppr (AThing k)       = text "AThing" <+> ppr k
-   ppr ANothing         = text "ANothing"
+   ppr AFamDataCon      = text "AFamDataCon"
+   ppr ARecDataCon      = text "ARecDataCon"
 
 pprTcTyThingCategory :: TcTyThing -> SDoc
 pprTcTyThingCategory (AGlobal thing) = pprTyThingCategory thing
 pprTcTyThingCategory (ATyVar {})     = ptext (sLit "Type variable")
 pprTcTyThingCategory (ATcId {})      = ptext (sLit "Local identifier")
 pprTcTyThingCategory (AThing {})     = ptext (sLit "Kinded thing")
-pprTcTyThingCategory ANothing        = ptext (sLit "Opaque thing")
+pprTcTyThingCategory AFamDataCon     = ptext (sLit "Family data con")
+pprTcTyThingCategory ARecDataCon     = ptext (sLit "Recursive data con")
 \end{code}
+
 
 Note [Bindings with closed types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -858,19 +847,11 @@ data Ct
                        -- See Note [WorkList]
     }
 
-  | CIPCan {	-- ?x::tau
-      -- See note [Canonical implicit parameter constraints].
-      cc_ev :: CtEvidence,
-      cc_ip_nm  :: IPName Name,
-      cc_ip_ty  :: TcTauType,          -- Not a Xi! See same not as above
-      cc_depth  :: SubGoalDepth        -- See Note [WorkList]
-    }
-
   | CIrredEvCan {  -- These stand for yet-unknown predicates
       cc_ev :: CtEvidence,
       cc_ty     :: Xi, -- cc_ty is flat hence it may only be of the form (tv xi1 xi2 ... xin)
                        -- Since, if it were a type constructor application, that'd make the
-                       -- whole constraint a CDictCan, CIPCan, or CTyEqCan. And it can't be
+                       -- whole constraint a CDictCan, or CTyEqCan. And it can't be
                        -- a type family application either because it's a Xi type.
       cc_depth :: SubGoalDepth -- See Note [WorkList]
     }
@@ -917,6 +898,13 @@ ctEvidence = cc_ev
 
 ctPred :: Ct -> PredType 
 ctPred ct = ctEvPred (cc_ev ct)
+
+keepWanted :: Cts -> Cts
+keepWanted = filterBag isWantedCt
+    -- DV: there used to be a note here that read: 
+    -- ``Important: use fold*r*Bag to preserve the order of the evidence variables'' 
+    -- DV: Is this still relevant? 
+
 -- ToDo Check with Dimitrios
 {-
 ctPred (CNonCanonical { cc_ev = fl }) = ctEvPred fl
@@ -926,8 +914,6 @@ ctPred (CTyEqCan { cc_tyvar = tv, cc_rhs = xi })
   = mkTcEqPred (mkTyVarTy tv) xi
 ctPred (CFunEqCan { cc_fun = fn, cc_tyargs = xis1, cc_rhs = xi2 }) 
   = mkTcEqPred (mkTyConApp fn xis1) xi2
-ctPred (CIPCan { cc_ip_nm = nm, cc_ip_ty = xi }) 
-  = mkIPPred nm xi
 ctPred (CIrredEvCan { cc_ty = xi }) = xi
 -}
 \end{code}
@@ -964,10 +950,6 @@ isCDictCan_Maybe :: Ct -> Maybe Class
 isCDictCan_Maybe (CDictCan {cc_class = cls })  = Just cls
 isCDictCan_Maybe _              = Nothing
 
-isCIPCan_Maybe :: Ct -> Maybe (IPName Name)
-isCIPCan_Maybe  (CIPCan {cc_ip_nm = nm }) = Just nm
-isCIPCan_Maybe _                = Nothing
-
 isCIrredEvCan :: Ct -> Bool
 isCIrredEvCan (CIrredEvCan {}) = True
 isCIrredEvCan _                = False
@@ -994,7 +976,6 @@ instance Outputable Ct where
                            CFunEqCan {}     -> "CFunEqCan"
                            CNonCanonical {} -> "CNonCanonical"
                            CDictCan {}      -> "CDictCan"
-                           CIPCan {}        -> "CIPCan"
                            CIrredEvCan {}   -> "CIrredEvCan"
 \end{code}
 
@@ -1401,7 +1382,7 @@ data SkolemInfo
 
   | ArrowSkol 	  	-- An arrow form (see TcArrows)
 
-  | IPSkol [IPName Name]  -- Binding site of an implicit parameter
+  | IPSkol [HsIPName]   -- Binding site of an implicit parameter
 
   | RuleSkol RuleName	-- The LHS of a RULE
 
@@ -1469,7 +1450,7 @@ data CtOrigin
 
   | TypeEqOrigin EqOrigin
 
-  | IPOccOrigin  (IPName Name)	-- Occurrence of an implicit parameter
+  | IPOccOrigin  HsIPName 	-- Occurrence of an implicit parameter
 
   | LiteralOrigin (HsOverLit Name)	-- Occurrence of a literal
   | NegateOrigin			-- Occurrence of syntactic negation

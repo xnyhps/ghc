@@ -10,6 +10,7 @@ module GHC (
         -- * Initialisation
         defaultErrorHandler,
         defaultCleanupHandler,
+        prettyPrintGhcErrors,
 
         -- * GHC Monad
         Ghc, GhcT, GhcMonad(..), HscEnv,
@@ -333,24 +334,24 @@ import Prelude hiding (init)
 -- the top level of your program.  The default handlers output the error
 -- message(s) to stderr and exit cleanly.
 defaultErrorHandler :: (ExceptionMonad m, MonadIO m)
-                    => LogAction -> FlushOut -> m a -> m a
-defaultErrorHandler la (FlushOut flushOut) inner =
+                    => FatalMessager -> FlushOut -> m a -> m a
+defaultErrorHandler fm (FlushOut flushOut) inner =
   -- top-level exception handler: any unrecognised exception is a compiler bug.
   ghandle (\exception -> liftIO $ do
            flushOut
            case fromException exception of
                 -- an IO exception probably isn't our fault, so don't panic
                 Just (ioe :: IOException) ->
-                  fatalErrorMsg' la (text (show ioe))
+                  fatalErrorMsg'' fm (show ioe)
                 _ -> case fromException exception of
                      Just UserInterrupt -> exitWith (ExitFailure 1)
                      Just StackOverflow ->
-                         fatalErrorMsg' la (text "stack overflow: use +RTS -K<size> to increase it")
+                         fatalErrorMsg'' fm "stack overflow: use +RTS -K<size> to increase it"
                      _ -> case fromException exception of
                           Just (ex :: ExitCode) -> throw ex
                           _ ->
-                              fatalErrorMsg' la
-                                  (text (show (Panic (show exception))))
+                              fatalErrorMsg'' fm
+                                  (show (Panic (show exception)))
            exitWith (ExitFailure 1)
          ) $
 
@@ -361,7 +362,7 @@ defaultErrorHandler la (FlushOut flushOut) inner =
                 case ge of
                      PhaseFailed _ code -> exitWith code
                      Signal _ -> exitWith (ExitFailure 1)
-                     _ -> do fatalErrorMsg' la (text (show ge))
+                     _ -> do fatalErrorMsg'' fm (show ge)
                              exitWith (ExitFailure 1)
             ) $
   inner
@@ -589,8 +590,9 @@ guessTarget str Nothing
         if looksLikeModuleName file
            then return (target (TargetModule (mkModuleName file)))
            else do
+        dflags <- getDynFlags
         throwGhcException
-                 (ProgramError (showSDoc $
+                 (ProgramError (showSDoc dflags $
                  text "target" <+> quotes (text file) <+> 
                  text "is not a module name or a source file"))
      where 
@@ -718,9 +720,11 @@ getModSummary :: GhcMonad m => ModuleName -> m ModSummary
 getModSummary mod = do
    mg <- liftM hsc_mod_graph getSession
    case [ ms | ms <- mg, ms_mod_name ms == mod, not (isBootSummary ms) ] of
-     [] -> throw $ mkApiErr (text "Module not part of module graph")
+     [] -> do dflags <- getDynFlags
+              throw $ mkApiErr dflags (text "Module not part of module graph")
      [ms] -> return ms
-     multiple -> throw $ mkApiErr (text "getModSummary is ambiguous: " <+> ppr multiple)
+     multiple -> do dflags <- getDynFlags
+                    throw $ mkApiErr dflags (text "getModSummary is ambiguous: " <+> ppr multiple)
 
 -- | Parse a module.
 --
@@ -856,15 +860,6 @@ compileToCoreModule = compileCore False
 -- as to return simplified and tidied Core.
 compileToCoreSimplified :: GhcMonad m => FilePath -> m CoreModule
 compileToCoreSimplified = compileCore True
-{-
--- | Provided for backwards-compatibility: compileToCore returns just the Core
--- bindings, but for most purposes, you probably want to call
--- compileToCoreModule.
-compileToCore :: GhcMonad m => FilePath -> m [CoreBind]
-compileToCore fn = do
-   mod <- compileToCoreModule session fn
-   return $ cm_binds mod
--}
 -- | Takes a CoreModule and compiles the bindings therein
 -- to object code. The first argument is a bool flag indicating
 -- whether to run the simplifier.
@@ -1190,7 +1185,8 @@ getModuleSourceAndFlags :: GhcMonad m => Module -> m (String, StringBuffer, DynF
 getModuleSourceAndFlags mod = do
   m <- getModSummary (moduleName mod)
   case ml_hs_file $ ms_location m of
-    Nothing -> throw $ mkApiErr (text "No source available for module " <+> ppr mod)
+    Nothing -> do dflags <- getDynFlags
+                  throw $ mkApiErr dflags (text "No source available for module " <+> ppr mod)
     Just sourceFile -> do
         source <- liftIO $ hGetStringBuffer sourceFile
         return (sourceFile, source, ms_hspp_opts m)
@@ -1206,7 +1202,9 @@ getTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts  -> return ts
-    PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
+    PFailed span err ->
+        do dflags <- getDynFlags
+           throw $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
 
 -- | Give even more information on the source than 'getTokenStream'
 -- This function allows reconstructing the source completely with
@@ -1217,7 +1215,9 @@ getRichTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts -> return $ addSourceToTokens startLoc source ts
-    PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
+    PFailed span err ->
+        do dflags <- getDynFlags
+           throw $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
 
 -- | Given a source location and a StringBuffer corresponding to this
 -- location, return a rich token stream with the source associated to the
@@ -1292,11 +1292,11 @@ findModule mod_name maybe_pkg = withSession $ \hsc_env -> do
            res <- findImportedModule hsc_env mod_name maybe_pkg
            case res of
              Found loc m | modulePackageId m /= this_pkg -> return m
-                         | otherwise -> modNotLoadedError m loc
+                         | otherwise -> modNotLoadedError dflags m loc
              err -> noModError dflags noSrcSpan mod_name err
 
-modNotLoadedError :: Module -> ModLocation -> IO a
-modNotLoadedError m loc = ghcError $ CmdLineError $ showSDoc $
+modNotLoadedError :: DynFlags -> Module -> ModLocation -> IO a
+modNotLoadedError dflags m loc = ghcError $ CmdLineError $ showSDoc dflags $
    text "module is not loaded:" <+> 
    quotes (ppr (moduleName m)) <+>
    parens (text (expectJust "modNotLoadedError" (ml_hs_file loc)))
@@ -1389,7 +1389,7 @@ parser str dflags filename =
    case unP Parser.parseModule (mkPState dflags buf loc) of
 
      PFailed span err   -> 
-         Left (unitBag (mkPlainErrMsg span err))
+         Left (unitBag (mkPlainErrMsg dflags span err))
 
      POk pst rdr_module ->
          let (warns,_) = getMessages pst in

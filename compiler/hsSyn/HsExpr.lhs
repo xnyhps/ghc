@@ -32,7 +32,7 @@ import Name
 import BasicTypes
 import DataCon
 import SrcLoc
-import Util( dropTail )
+import Util
 import StaticFlags( opt_PprStyle_Debug )
 import Outputable
 import FastString
@@ -106,7 +106,7 @@ noSyntaxTable = []
 -- | A Haskell expression.
 data HsExpr id
   = HsVar     id                        -- ^ variable
-  | HsIPVar   (IPName id)               -- ^ implicit parameter
+  | HsIPVar   HsIPName                  -- ^ implicit parameter
   | HsOverLit (HsOverLit id)            -- ^ Overloaded literals
 
   | HsLit     HsLit                     -- ^ Simple (non-overloaded) literals

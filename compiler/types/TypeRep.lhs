@@ -71,6 +71,7 @@ import Outputable
 import FastString
 import Pair
 import StaticFlags( opt_PprStyle_Debug )
+import Util
 
 -- libraries
 import qualified Data.Data        as Data hiding ( TyCon )
@@ -158,9 +159,7 @@ Note [The kind invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 The kinds
    #          UnliftedTypeKind
-   ArgKind    super-kind of *, #
-   (#)        UbxTupleKind
-   OpenKind   super-kind of ArgKind, ubxTupleKind
+   OpenKind   super-kind of *, #
 
 can never appear under an arrow or type constructor in a kind; they
 can only be at the top level of a kind.  It follows that primitive TyCons,
@@ -552,17 +551,18 @@ instance Outputable Type where
 instance Outputable TyLit where
    ppr = pprTyLit
 
-instance Outputable name => OutputableBndr (IPName name) where
-    pprBndr _ n   = ppr n	-- Simple for now
-    pprInfixOcc  n = ppr n 
-    pprPrefixOcc n = ppr n 
-
 ------------------
 	-- OK, here's the main printer
 
 ppr_type :: Prec -> Type -> SDoc
 ppr_type _ (TyVarTy tv)	      = ppr_tvar tv
+
+ppr_type _ (TyConApp tc [LitTy (StrTyLit n),ty])
+  | tc `hasKey` ipClassNameKey
+  = char '?' <> ftext n <> ptext (sLit "::") <> ppr_type TopPrec ty
+
 ppr_type p (TyConApp tc tys)  = pprTcApp p ppr_type tc tys
+
 ppr_type p (LitTy l)          = ppr_tylit p l
 ppr_type p ty@(ForAllTy {})   = ppr_forall_type p ty
 
@@ -662,7 +662,6 @@ pprTcApp _ _ tc []      -- No brackets for SymOcc
 pprTcApp _ pp tc [ty]
   | tc `hasKey` listTyConKey   = pprPromotionQuote tc <> brackets   (pp TopPrec ty)
   | tc `hasKey` parrTyConKey   = pprPromotionQuote tc <> paBrackets (pp TopPrec ty)
-  | Just n <- tyConIP_maybe tc = ppr n <> ptext (sLit "::") <> pp TopPrec ty
 
 pprTcApp p pp tc tys
   | isTupleTyCon tc && tyConArity tc == length tys

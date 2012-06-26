@@ -7,14 +7,13 @@
 -- for details
 
 module TcCanonical(
-    canonicalize, flatten, flattenMany, 
+    canonicalize, flatten, flattenMany, occurCheckExpand,
     FlattenMode (..),
     StopOrContinue (..)
  ) where
 
 #include "HsVersions.h"
 
-import BasicTypes ( IPName )
 import TcRnTypes
 import TcType
 import Type
@@ -23,7 +22,6 @@ import TcEvidence
 import Class
 import TyCon
 import TypeRep
-import Name ( Name )
 import Var
 import VarEnv
 import Outputable
@@ -36,7 +34,7 @@ import VarSet
 import TcSMonad
 import FastString
 
-import Util ( equalLength )
+import Util
 
 
 import TysWiredIn ( eqTyCon )
@@ -199,11 +197,6 @@ canonicalize (CFunEqCan { cc_depth = d
   = {-# SCC "canEqLeafFunEqLeftRec" #-}
     canEqLeafFunEqLeftRec d fl (fn,xis1) xi2
 
-canonicalize (CIPCan { cc_depth = d
-                     , cc_ev = fl
-                     , cc_ip_nm  = nm
-                     , cc_ip_ty  = xi })
-  = canIP d fl nm xi
 canonicalize (CIrredEvCan { cc_ev = fl
                           , cc_depth = d
                           , cc_ty = xi })
@@ -219,7 +212,6 @@ canEvVar d fl pred_classifier
   = case pred_classifier of
       ClassPred cls tys -> canClassNC d fl cls tys 
       EqPred ty1 ty2    -> canEqNC    d fl ty1 ty2 
-      IPPred nm ty      -> canIP      d fl nm ty
       IrredPred ev_ty   -> canIrred   d fl ev_ty
       TuplePred tys     -> canTuple   d fl tys
 \end{code}
@@ -245,43 +237,6 @@ canTuple d fl tys
     add_to_work fl = addToWork $ canEvVar d fl (classifyPredType (ctEvPred fl))
 \end{code}
 
-
-%************************************************************************
-%*                                                                      *
-%*                      Implicit Parameter Canonicalization
-%*                                                                      *
-%************************************************************************
-
-\begin{code}
-canIP :: SubGoalDepth -- Depth 
-      -> CtEvidence
-      -> IPName Name -> Type -> TcS StopOrContinue
--- Precondition: EvVar is implicit parameter evidence
-canIP d fl nm ty
-  =    -- Note [Canonical implicit parameter constraints] explains why it's 
-       -- possible in principle to not flatten, but since flattening applies 
-       -- the inert substitution we choose to flatten anyway.
-    do { (xi,co) <- flatten d FMFullFlatten fl (mkIPPred nm ty)
-       ; mb <- rewriteCtFlavor fl xi co 
-       ; case mb of
-            Just new_fl -> let IPPred _ xi_in = classifyPredType xi
-                           in continueWith $ CIPCan { cc_ev = new_fl
-                                                    , cc_ip_nm = nm, cc_ip_ty = xi_in
-                                                    , cc_depth = d }
-            Nothing -> return Stop }
-
-\end{code}
-
-Note [Canonical implicit parameter constraints]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The type in a canonical implicit parameter constraint doesn't need to
-be a xi (type-function-free type) since we can defer the flattening
-until checking this type for equality with another type.  If we
-encounter two IP constraints with the same name, they MUST have the
-same type, and at that point we can generate a flattened equality
-constraint between the types.  (On the other hand, the types in two
-class constraints for the same class MAY be equal, so they need to be
-flattened in the first place to facilitate comparing them.)
 
 %************************************************************************
 %*                                                                      *
@@ -441,7 +396,6 @@ is_improvement_pty ty = go (classifyPredType ty)
     go (EqPred {})         = True 
     go (ClassPred cls _tys) = not $ null fundeps
       where (_,fundeps) = classTvsFds cls
-    go (IPPred {})         = False
     go (TuplePred ts)      = any is_improvement_pty ts
     go (IrredPred {})      = True -- Might have equalities after reduction?
 \end{code}
@@ -663,31 +617,6 @@ flatten d _f ctxt ty@(ForAllTy {})
   = do { let (tvs, rho) = splitForAllTys ty
        ; (rho', co) <- flatten d FMSubstOnly ctxt rho
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
-                      {- DELETEME  
-       ; when (under_families tvs rho) $ wrapErrTcS $ flattenForAllErrorTcS ctxt ty
-       ; (rho', co) <- flatten d FMSubstOnly ctxt rho
-                       -- Only do substitutions, not flattening under ForAlls
-       ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
-
--- DV: Simon and I have a better plan here related to #T5934 and that plan is to 
--- first normalize completely the rho type with respect to the top-level instances, 
--- and then flatten out only the family equations that do not mention the quantified
--- variable. Keep the rest as they are. There is no worry that we don't normalize with
--- the givens because the givens can't possibly mention the quantified variable anyway!
-
-  where under_families tvs rho 
-            = go (mkVarSet tvs) rho 
-            where go _bound (TyVarTy _tv) = False
-                  go _ (LitTy {}) = False
-                  go bound (TyConApp tc tys)
-                      | isSynFamilyTyCon tc
-                      , (args,rest) <- splitAt (tyConArity tc) tys
-                      = (tyVarsOfTypes args `intersectsVarSet` bound) || any (go bound) rest
-                      | otherwise = any (go bound) tys
-                  go bound (FunTy arg res)  = go bound arg || go bound res
-                  go bound (AppTy fun arg)  = go bound fun || go bound arg
-                  go bound (ForAllTy tv ty) = go (bound `extendVarSet` tv) ty
--}
 
 \end{code}
 
@@ -1290,8 +1219,8 @@ canEqLeafTyVarLeft d fl tv s2       -- eqv : tv ~ s2
            return Stop
          else do
        -- Not reflexivity but maybe an occurs error
-       { occ_check_result <- canOccursCheck fl tv xi2
-       ; let xi2' = fromMaybe xi2 occ_check_result
+       { let occ_check_result = occurCheckExpand tv xi2
+             xi2' = fromMaybe xi2 occ_check_result
              
              not_occ_err = isJust occ_check_result
                   -- Delicate: don't want to cache as solved a constraint with occurs error!
@@ -1307,28 +1236,20 @@ canEqLeafTyVarLeft d fl tv s2       -- eqv : tv ~ s2
                             canEqFailure d new_fl
            Nothing -> return Stop
         } }
-
--- See Note [Type synonyms and canonicalization].
--- Check whether the given variable occurs in the given type.  We may
--- have needed to do some type synonym unfolding in order to get rid
--- of the variable, so we also return the unfolded version of the
--- type, which is guaranteed to be syntactically free of the given
--- type variable.  If the type is already syntactically free of the
--- variable, then the same type is returned.
---
--- Precondition: the two types are not equal (looking though synonyms)
-canOccursCheck :: CtEvidence -> TcTyVar -> Xi -> TcS (Maybe Xi)
-canOccursCheck _gw tv xi = return (expandAway tv xi)
 \end{code}
 
-@expandAway tv xi@ expands synonyms in xi just enough to get rid of
-occurrences of tv, if that is possible; otherwise, it returns Nothing.
+Note [Occurs check expansion]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@occurCheckExpand tv xi@ expands synonyms in xi just enough to get rid
+of occurrences of tv outside type function arguments, if that is
+possible; otherwise, it returns Nothing.
+
 For example, suppose we have
   type F a b = [a]
 Then
-  expandAway b (F Int b) = Just [Int]
+  occurCheckExpand b (F Int b) = Just [Int]
 but
-  expandAway a (F a Int) = Nothing
+  occurCheckExpand a (F a Int) = Nothing
 
 We don't promise to do the absolute minimum amount of expanding
 necessary, but we try not to do expansions we don't need to.  We
@@ -1336,49 +1257,61 @@ prefer doing inner expansions first.  For example,
   type F a b = (a, Int, a, [a])
   type G b   = Char
 We have
-  expandAway b (F (G b)) = F Char
+  occurCheckExpand b (F (G b)) = F Char
 even though we could also expand F to get rid of b.
 
+See also Note [Type synonyms and canonicalization].
+
 \begin{code}
-expandAway :: TcTyVar -> Xi -> Maybe Xi
-expandAway tv t@(TyVarTy tv')
-  | tv == tv' = Nothing
-  | otherwise = Just t
-expandAway tv xi
-  | not (tv `elemVarSet` tyVarsOfType xi) = Just xi
-expandAway tv (AppTy ty1 ty2) 
-  = do { ty1' <- expandAway tv ty1
-       ; ty2' <- expandAway tv ty2 
-       ; return (mkAppTy ty1' ty2') }
--- mkAppTy <$> expandAway tv ty1 <*> expandAway tv ty2
-expandAway tv (FunTy ty1 ty2)
-  = do { ty1' <- expandAway tv ty1 
-       ; ty2' <- expandAway tv ty2 
-       ; return (mkFunTy ty1' ty2') } 
--- mkFunTy <$> expandAway tv ty1 <*> expandAway tv ty2
-expandAway tv ty@(ForAllTy {}) 
-  = let (tvs,rho) = splitForAllTys ty
-        tvs_knds  = map tyVarKind tvs 
-    in if tv `elemVarSet` tyVarsOfTypes tvs_knds then
-       -- Can't expand away the kinds unless we create 
-       -- fresh variables which we don't want to do at this point.
-           Nothing 
-       else do { rho' <- expandAway tv rho
-               ; return (mkForAllTys tvs rho') }
--- For a type constructor application, first try expanding away the
--- offending variable from the arguments.  If that doesn't work, next
--- see if the type constructor is a type synonym, and if so, expand
--- it and try again.
-expandAway tv ty@(TyConApp tc tys)
-  = (mkTyConApp tc <$> mapM (expandAway tv) tys) <|> (tcView ty >>= expandAway tv)
+occurCheckExpand :: TcTyVar -> Type -> Maybe Type
+-- Check whether the given variable occurs in the given type.  We may
+-- have needed to do some type synonym unfolding in order to get rid
+-- of the variable, so we also return the unfolded version of the
+-- type, which is guaranteed to be syntactically free of the given
+-- type variable.  If the type is already syntactically free of the
+-- variable, then the same type is returned.
 
-expandAway _ xi@(LitTy {}) = return xi
+occurCheckExpand tv ty
+  | not (tv `elemVarSet` tyVarsOfType ty) = Just ty
+  | otherwise                             = go ty
+  where
+    go t@(TyVarTy tv') | tv == tv' = Nothing
+                       | otherwise = Just t
+    go ty@(LitTy {}) = return ty
+    go (AppTy ty1 ty2) = do { ty1' <- go ty1
+           		    ; ty2' <- go ty2  
+           		    ; return (mkAppTy ty1' ty2') }
+    -- mkAppTy <$> go ty1 <*> go ty2
+    go (FunTy ty1 ty2) = do { ty1' <- go ty1 
+           		    ; ty2' <- go ty2 
+           		    ; return (mkFunTy ty1' ty2') } 
+    -- mkFunTy <$> go ty1 <*> go ty2
+    go ty@(ForAllTy {})
+       | tv `elemVarSet` tyVarsOfTypes tvs_knds = Nothing
+           -- Can't expand away the kinds unless we create 
+           -- fresh variables which we don't want to do at this point.
+       | otherwise = do { rho' <- go rho
+                        ; return (mkForAllTys tvs rho') }
+       where
+         (tvs,rho) = splitForAllTys ty
+         tvs_knds  = map tyVarKind tvs 
 
+    -- For a type constructor application, first try expanding away the
+    -- offending variable from the arguments.  If that doesn't work, next
+    -- see if the type constructor is a type synonym, and if so, expand
+    -- it and try again.
+    go ty@(TyConApp tc tys)
+      | isSynFamilyTyCon tc    -- It's ok for tv to occur under a type family application
+       = return ty             -- Eg.  (a ~ F a) is not an occur-check error
+                               -- NB This case can't occur during canonicalisation,
+                               --    because the arg is a Xi-type, but can occur in the
+                               --    call from TcErrors
+      | otherwise
+      = (mkTyConApp tc <$> mapM go tys) <|> (tcView ty >>= go)
 \end{code}
 
 Note [Type synonyms and canonicalization]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 We treat type synonym applications as xi types, that is, they do not
 count as type function applications.  However, we do need to be a bit
 careful with type synonyms: like type functions they may not be

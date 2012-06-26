@@ -539,7 +539,7 @@ mkAx u n vs asmps lhs rhs = CoAxiomRule
   { co_axr_unique = mkAxUique u
   , co_axr_name   = mkAxName n
   , co_axr_tvs    = vs
-  , co_axr_asmps  = zip [ 0 .. ] asmps
+  , co_axr_asmps  = asmps
   , co_axr_lhs    = lhs
   , co_axr_rhs    = rhs
   }

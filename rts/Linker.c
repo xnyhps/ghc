@@ -74,7 +74,7 @@
     (   defined(linux_HOST_OS    ) || defined(freebsd_HOST_OS) || \
         defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS ) || \
         defined(openbsd_HOST_OS  ) || defined(darwin_HOST_OS ) || \
-        defined(kfreebsdgnu_HOST_OS) )
+        defined(kfreebsdgnu_HOST_OS) || defined(gnu_HOST_OS))
 /* Don't use mmap on powerpc_HOST_ARCH as mmap doesn't support
  * reallocating but we need to allocate jump islands just after each
  * object images. Otherwise relative branches to jump islands can fail
@@ -90,7 +90,7 @@
 
 #endif
 
-#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) || defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(openbsd_HOST_OS)
+#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) || defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
 #  define OBJFORMAT_ELF
 #  include <regex.h>    // regex is already used by dlopen() so this is OK
                         // to use here without requiring an additional lib
@@ -540,6 +540,7 @@ typedef struct _RtsSymbolVal {
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp__fstat64))    \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp__wsopen))     \
       RTS_WIN64_ONLY(SymI_HasProto(__imp__environ))      \
+      RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetFileAttributesA))          \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetFileInformationByHandle))  \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetFileType))                 \
       RTS_WIN64_ONLY(SymI_NeedsProto(__imp_GetLastError))                \
@@ -1071,6 +1072,7 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(getOrSetSystemEventThreadEventManagerStore)         \
       SymI_HasProto(getOrSetSystemEventThreadIOManagerThreadStore)      \
       SymI_HasProto(getGCStats)                         \
+      SymI_HasProto(getGCStatsEnabled)                  \
       SymI_HasProto(genSymZh)                           \
       SymI_HasProto(genericRaise)                       \
       SymI_HasProto(getProgArgv)                        \
@@ -1290,7 +1292,7 @@ typedef struct _RtsSymbolVal {
 
 
 // 64-bit support functions in libgcc.a
-#if defined(__GNUC__) && SIZEOF_VOID_P <= 4
+#if defined(__GNUC__) && SIZEOF_VOID_P <= 4 && !defined(_ABIN32)
 #define RTS_LIBGCC_SYMBOLS                             \
       SymI_NeedsProto(__divdi3)                        \
       SymI_NeedsProto(__udivdi3)                       \

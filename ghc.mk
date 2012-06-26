@@ -144,6 +144,7 @@ endif
 include rules/prof.mk
 include rules/trace.mk
 include rules/make-command.mk
+include rules/pretty_commands.mk
 
 # -----------------------------------------------------------------------------
 # Macros for standard targets
@@ -309,7 +310,7 @@ endif
 # They do not say "this package will be built"; see $(PACKAGES_xx) for that
 
 # Packages that are built but not installed
-PKGS_THAT_ARE_INTREE_ONLY := haskeline mtl terminfo utf8-string xhtml
+PKGS_THAT_ARE_INTREE_ONLY := haskeline transformers terminfo utf8-string xhtml
 
 PKGS_THAT_ARE_DPH := \
     dph/dph-base \
@@ -420,7 +421,6 @@ $(eval $(call addPackage,binary))
 $(eval $(call addPackage,bin-package-db))
 $(eval $(call addPackage,hoopl))
 $(eval $(call addPackage,transformers))
-$(eval $(call addPackage,mtl))
 $(eval $(call addPackage,utf8-string))
 $(eval $(call addPackage,xhtml))
 $(eval $(call addPackage,terminfo,($$(Windows),NO)))
@@ -1030,9 +1030,9 @@ ifeq "$(mingw32_TARGET_OS)" "1"
 endif
 
 ifeq "$(mingw32_TARGET_OS)" "1"
-DOCDIR_TO_PUBLISH = bindisttest/"install dir"/doc
+DOCDIR_TO_PUBLISH = $(BIN_DIST_INST_DIR)/doc
 else
-DOCDIR_TO_PUBLISH = bindisttest/"install dir"/share/doc/ghc
+DOCDIR_TO_PUBLISH = $(BIN_DIST_INST_DIR)/share/doc/ghc
 endif
 
 .PHONY: publish-docs
