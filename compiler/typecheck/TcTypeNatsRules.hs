@@ -9,7 +9,7 @@ import Coercion ( TypeNatCoAxiom (..), CoAxiomRule(..) )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
                 , mkEqPred, mkTyConApp
                 , splitTyConApp_maybe
-                , isTyLit, eqType
+                , eqType
                 )
 import PrelNames( typeNatLeqTyFamName
                 , typeNatAddTyFamName
@@ -48,8 +48,7 @@ import TcSMonad ( TcS, InertSet
 
 -- From base libraries
 import Prelude hiding ( exp )
-import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing )
-import Data.List (find)
+import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing, catMaybes )
 import qualified Data.IntMap as IMap
 import qualified Data.Map    as Map
 import qualified Data.IntSet as ISet
@@ -559,66 +558,178 @@ mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
 natVars :: [TyVar]
 natVars = tyVarList typeNatKind
 
+
+useAxiom :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
+useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
+  -- XXX: Change this after changing the constructor in "Coercion"
+  where mk = undefined
+
 --------------------------------------------------------------------------------
 
+axAddDef :: Integer -> Integer -> CoAxiomRule
+axAddDef a b = mkAx 1 "AddDef" [] []
+             (mkAdd (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a + b))
+
+axMulDef :: Integer -> Integer -> CoAxiomRule
+axMulDef a b = mkAx 2 "MulDef" [] []
+             (mkMul (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a * b))
+
+axExpDef :: Integer -> Integer -> CoAxiomRule
+axExpDef a b = mkAx 3 "ExpDef" [] []
+             (mkExp (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a ^ b))
+
 axAddComm :: CoAxiomRule
-axAddComm = mkAx 0 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
+axAddComm = mkAx 10 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
   where a : b : c : _ = map mkTyVarTy natVars
+
+
+
 
 --------------------------------------------------------------------------------
 
 type SimpleSubst = [ (TyVar, Type) ]
-type TypePat     = Type
+data TypePat     = TPVar TyVar | TPCon TyCon [TypePat] | TPOther Type
+type Eqn         = (TypePat, TypePat)
 
+tpCon :: TyCon -> [TypePat] -> TypePat
+tpCon tc tps = case check tps of
+                 Just ts  -> TPOther $ mkTyConApp tc ts
+                 Nothing  -> TPCon tc tps
+  where
+  check (TPOther x : xs)  = do ys <- check xs
+                               return (x : ys)
+  check (_ : _)           = Nothing
+  check []                = return []
+
+
+
+toTypePat :: [TyVar] -> Type -> TypePat
+toTypePat as ty
+  | Just x <- getTyVar_maybe ty, x `elem` as  = TPVar x
+toTypePat as ty
+  | Just (tc,ts) <- splitTyConApp_maybe ty = tpCon tc (map (toTypePat as) ts)
+toTypePat _ ty  = TPOther ty    -- assumes no variables here.
+
+-- Check to see if a type  macthes a type pattern.
 matchType :: TypePat -> Type -> Maybe SimpleSubst
-matchType t1 t2 | Just x <- getTyVar_maybe t1 = return [(x,t2)]
+matchType (TPVar x) t2 = return [(x,t2)]
+matchType (TPCon tc1 ts1) t2
+  | Just (tc2,ts2) <- splitTyConApp_maybe t2
+    = guard (tc1 == tc2) >> matchTypes ts1 ts2
+matchType (TPOther t1) t2
+  | eqType t1 t2  = return []
+matchType _ _ = Nothing
 
-matchType t1 t2 | Just (tc1,ts1) <- splitTyConApp_maybe t1
-                , Just (tc2,ts2) <- splitTyConApp_maybe t2
-                  = guard (tc1 == tc2) >> matchTypes ts1 ts2
 
-matchType t1 t2 | Just x1 <- isTyLit t1
-                , Just x2 <- isTyLit t2
-                  = guard (x1 == x2) >> return []
-
-matchType _ _   = Nothing
-
+-- Match a list of patterns agains a list of types.
 matchTypes :: [TypePat] -> [Type] -> Maybe SimpleSubst
 matchTypes [] []              = Just []
-matchTypes (x : xs) (y : ys)  = do su1 <- matchType x y
-                                   su2 <- matchTypes xs ys
-                                   mergeSimpleSubst su1 su2
+matchTypes (x : xs) (y : ys)  =
+  do su1 <- matchType x y
+     su2 <- matchTypes (apSimpSubst su1 xs) ys
+     return (su1 ++ su2)
 matchTypes _ _                = Nothing
 
 
-mergeSimpleSubst :: SimpleSubst -> SimpleSubst -> Maybe SimpleSubst
-mergeSimpleSubst xs ys = check xs ys
-  where
-  check done [] = return done
-  check done ((y,t) : more) =
-    case find ((y == ) . fst) xs of
-      Nothing     -> check ((y,t):done) more
-      Just (_,t1) -> guard (eqType t t1) >> check done more
+
+class AppSimpSubst t where
+  apSimpSubst :: SimpleSubst -> t -> t
+
+instance AppSimpSubst a => AppSimpSubst [a] where
+  apSimpSubst su = map (apSimpSubst su)
+
+instance (AppSimpSubst a, AppSimpSubst b) => AppSimpSubst (a,b) where
+  apSimpSubst su (x,y) = (apSimpSubst su x, apSimpSubst su y)
+
+instance AppSimpSubst TypePat where
+  apSimpSubst su t@(TPVar x)   = case lookup x su of
+                                   Just t1 -> TPOther t1
+                                   Nothing -> t
+  apSimpSubst su (TPCon tc ts) = tpCon tc (apSimpSubst su ts)
+  apSimpSubst _ t@(TPOther {}) = t
 
 
-substType :: SimpleSubst -> Type -> Type
-substType su t
-  | Just x <- getTyVar_maybe t  = case lookup x su of
-                                    Just t1 -> t1
-                                    Nothing -> t
-  | Just (tc,ts) <- splitTyConApp_maybe t = mkTyConApp tc
-                                                        (map (substType su) ts)
-
-  | Just _ <- isTyLit t = t
-  | otherwise           = panic "TcTypeNatRule.substType: unexpected type"
-
+type Solver = Eqn -> Maybe (SimpleSubst, EvTerm)
 
 -- Tries to instantuate the equation with the constraint.
-matchCt :: Type -> Type -> Ct -> Maybe SimpleSubst
-matchCt lhs rhs (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
-  matchTypes [lhs, rhs] [ mkTyConApp tc ts, t ]
-matchCt lhs rhs (CTyEqCan { cc_tyvar = x, cc_rhs = t }) =
-  matchTypes [lhs, rhs] [ mkTyVarTy x, t ]
-matchCt _ _ _ = Nothing
+byAsmp :: Ct -> Solver
+
+byAsmp ct@(CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) (lhs,rhs) =
+  do su <- matchTypes [lhs, rhs] [ mkTyConApp tc ts, t ]
+     return (su, ctEvTerm (ctEvidence ct))
+
+byAsmp ct@(CTyEqCan { cc_tyvar = x, cc_rhs = t }) (lhs,rhs) =
+  do su <- matchTypes [lhs, rhs] [ mkTyVarTy x, t ]
+     return (su, ctEvTerm (ctEvidence ct))
+
+byAsmp _ _ = Nothing
+
+
+
+-- Check if we can solve the equation using one of the family of axioms.
+byAxiom :: Solver
+
+byAxiom (TPOther ty, TPVar r)
+  | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
+  , Just a <- isNumLitTy tp1, Just b <- isNumLitTy tp2
+
+  = do (ax,op) <- case tyConName tc of
+                    name | name == typeNatAddTyFamName -> Just (axAddDef, (+))
+                         | name == typeNatMulTyFamName -> Just (axMulDef, (*))
+                         | name == typeNatExpTyFamName -> Just (axExpDef, (^))
+                    _ -> Nothing
+
+       return ( [ (r, mkNumLitTy (op a b)) ], useAxiom (ax a b) [] [] )
+
+
+byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
+  | Just b <- isNumLitTy tp1, Just c <- isNumLitTy tp2
+
+  = do (ax,op) <- case tyConName tc of
+                    n | n == typeNatAddTyFamName -> Just (axAddDef, minus)
+                      | n == typeNatMulTyFamName -> Just (axMulDef, divide)
+                      | n == typeNatExpTyFamName -> Just (axExpDef, rootExact)
+                    _ -> Nothing
+       a <- op c b
+       return ( [ (r, mkNumLitTy a) ], useAxiom (ax a b) [] [] )
+
+
+byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
+  | Just a <- isNumLitTy tp1, Just c <- isNumLitTy tp2
+
+  = do (ax,op) <- case tyConName tc of
+                    n | n == typeNatAddTyFamName -> Just (axAddDef, minus)
+                      | n == typeNatMulTyFamName -> Just (axMulDef, divide)
+                      | n == typeNatExpTyFamName -> Just (axExpDef, logExact)
+                    _ -> Nothing
+       b <- op c a
+       return ([ (r, mkNumLitTy b) ], useAxiom (ax a b) [] [] )
+
+byAxiom _ = Nothing
+
+
+solveEqn :: [Ct] -> Eqn -> [(SimpleSubst, EvTerm)]
+solveEqn cts ax = catMaybes (byAxiom ax : map (`byAsmp` ax) cts)
+
+{- A (possibly over-compliacted) example illustrating how the
+order in which we do the matching for the assumptions makes a difference
+to the concusion of the rule.  I am not sure that at present we have rules
+that are as complex.
+
+
+asmps:
+G: 2 + p = q1
+G: 3 + p = q2
+
+rule:
+a ^ b = c, a + p = q1, b + p = q2, c + y = 10 => P ...
+
+P { a = 2, b = 3, c = 8, y = 2 }
+P { a = 3, b = 2, c = 9, y = 1 }
+P { a = 2, b = 2, c = 4, y = 6 }
+-}
+
+
+
 
 
