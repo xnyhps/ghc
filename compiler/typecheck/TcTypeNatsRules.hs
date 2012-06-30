@@ -28,6 +28,7 @@ import Name     ( mkInternalName )
 import OccName  ( mkOccName, tcName )
 import Unique   ( mkPreludeMiscIdUnique )
 import Panic    ( panic )
+import Bag      ( bagToList )
 
 -- From type checker
 import TcType         ( TcPredType )
@@ -44,11 +45,15 @@ import TcSMonad ( TcS, InertSet
                 , getTcSInerts, foldFamHeadMap, inert_cans, inert_funeqs
                 , updWorkListTcS, appendWorkListCt
                 , traceTcS
+                , partCtFamHeadMap
                 )
 
 -- From base libraries
 import Prelude hiding ( exp )
-import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing, catMaybes )
+import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing, catMaybes
+                  , mapMaybe )
+import Data.List  ( (\\), sortBy )
+import Data.Ord   ( comparing )
 import qualified Data.IntMap as IMap
 import qualified Data.Map    as Map
 import qualified Data.IntSet as ISet
@@ -583,7 +588,8 @@ axAddComm = mkAx 10 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
   where a : b : c : _ = map mkTyVarTy natVars
 
 
-
+theRules :: [CoAxiomRule]
+theRules = []
 
 --------------------------------------------------------------------------------
 
@@ -647,6 +653,7 @@ instance AppSimpSubst TypePat where
                                    Nothing -> t
   apSimpSubst su (TPCon tc ts) = tpCon tc (apSimpSubst su ts)
   apSimpSubst _ t@(TPOther {}) = t
+
 
 
 type Solver = Eqn -> Maybe (SimpleSubst, EvTerm)
@@ -713,7 +720,7 @@ solveEqn cts ax = catMaybes (byAxiom ax : map (`byAsmp` ax) cts)
 
 {- A (possibly over-compliacted) example illustrating how the
 order in which we do the matching for the assumptions makes a difference
-to the concusion of the rule.  I am not sure that at present we have rules
+to the conlusion of the rule.  I am not sure that at present we have rules
 that are as complex.
 
 
@@ -728,6 +735,136 @@ P { a = 2, b = 3, c = 8, y = 2 }
 P { a = 3, b = 2, c = 9, y = 1 }
 P { a = 2, b = 2, c = 4, y = 6 }
 -}
+
+
+data ActiveRule = AR
+  { axRule    :: CoAxiomRule
+  , doneSubst :: SimpleSubst
+  , doneArgs  :: [(Int,EvTerm)]
+
+  , todoVars  :: [TyVar]
+    -- todoVars == co_axr_tvs axRule \\ map fst doneSubst
+
+  , todoArgs  :: [(Int,(TypePat,TypePat))]
+    {- todoArgs ==
+        [ (n, (cvt t1, cvt t2))
+            | (n,(t1,t2)) <- zip [ 0 .. ] (co_axr_asmps axRule)
+            , n `notElem` map fst doneArgs
+            , let cvt = apSimpSubst doneArgs . toTypePat (co_axr_tvs axRule)
+        ]
+    -}
+  }
+
+
+activate :: CoAxiomRule -> ActiveRule
+activate r = AR
+  { axRule    = r
+  , doneSubst = []
+  , doneArgs  = []
+  , todoVars  = co_axr_tvs r
+  , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
+  }
+  where cvt = toTypePat (co_axr_tvs r)
+
+
+{- Check if the `ActiveRule` is completely instantiated and, if so,
+compute the resulting equation and the evidence for it. -}
+fireRule :: ActiveRule -> Maybe (EvTerm, Type, Type)
+fireRule r =
+  do guard (null (todoVars r) && null (todoArgs r))
+     let ax = axRule r
+         vs = co_axr_tvs ax
+         su = doneSubst r
+
+     -- instantiate conclusion of rule
+     let cvt t = case apSimpSubst su (toTypePat vs t) of
+                   TPOther ty -> Just ty
+                   _          -> Nothing
+     lhs <- cvt (co_axr_lhs ax)
+     rhs <- cvt (co_axr_rhs ax)
+
+     -- prepare evidence arguments
+     tys <- mapM (`lookup` su) vs
+     let evs = map snd $ sortBy (comparing fst) $ doneArgs r
+
+     return (useAxiom ax tys evs, lhs, rhs)
+
+
+-- Define one of the arguments of an active rule.
+setArg :: Int -> (SimpleSubst, EvTerm) -> ActiveRule -> ActiveRule
+setArg n (su,ev) r =
+  AR { axRule    = axRule r
+     , doneSubst = su ++ doneSubst r
+     , doneArgs  = (n,ev) : doneArgs r
+     , todoVars  = todoVars r \\ map fst su
+     , todoArgs  = dropTodo (todoArgs r)
+     }
+  where
+  -- Drop a solved argment, and instantiate the rest appropriately.
+  dropTodo ((x,_) : rest)
+    | n == x               = [ (x, apSimpSubst su eq) | (x,eq) <- rest ]
+  dropTodo ((x,eq) : rest) = (x, apSimpSubst su eq) : dropTodo rest
+  dropTodo []              = []
+
+
+-- Try to solve one of the assumptions by axiom.
+applyAxiom1 :: ActiveRule -> Maybe ActiveRule
+applyAxiom1 r = do guard $ not $ null $ todoVars r
+                   msum $ map attempt $ todoArgs r
+  where
+  attempt (n,eq) = do soln <- byAxiom eq
+                      return (setArg n soln r)
+
+-- Try to satisfy some of the rule's assumptions by axiom.
+applyAxiom :: ActiveRule -> ActiveRule
+applyAxiom r = maybe r applyAxiom (applyAxiom1 r)
+
+{- The various ways in which as assumption fits the arguments of a rule.
+Note: currently, we use an assumption at most once per rule.
+For example, assumption `p` will not make instantiations like `R(p,p)`.
+-}
+applyAsmp :: ActiveRule -> Ct -> [ActiveRule]
+applyAsmp r ct =
+  do -- Find places where this constraint might fit
+     (n,soln) <- mapMaybe attempt (todoArgs r)
+     return (setArg n soln r)
+  where
+  attempt (n,eq) = do ok <- byAsmp ct eq
+                      return (n,ok)
+
+interactActiveRules :: [ActiveRule] -> [Ct] -> [(EvTerm,Type,Type)]
+interactActiveRules rs [] = mapMaybe fireRule rs
+interactActiveRules rs (c : cs) = interactActiveRules newRs cs
+  where
+  newRs = [ r2 | r1 <- rs, r2 <- applyAsmp (applyAxiom r1) c ]
+
+mkGivenCt :: (EvTerm,Type,Type) -> Ct
+mkGivenCt (ev,t1,t2) = mkNonCanonical $
+  Given { ctev_gloc = CtLoc UnkSkol noSrcSpan [] -- XXX: something better?
+        , ctev_pred = mkEqPred t1 t2
+        , ctev_evtm = ev
+        }
+
+-- Get the facts that are known for sure.
+-- Note: currently we do not use the solved ones but we probably should.
+getFacts :: TcS [Ct]
+getFacts =
+  do is <- getTcSInerts
+     return $ bagToList $ fst $ partCtFamHeadMap isGivenCt
+                              $ inert_funeqs $ inert_cans is
+
+computeNewGivenWork' :: Ct -> TcS ()
+computeNewGivenWork' ct =
+  do asmps <- getFacts
+     let active  = concatMap (`applyAsmp` ct) (map activate theRules)
+         newWork = map mkGivenCt $ interactActiveRules active asmps
+     traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
+     updWorkListTcS (appendWorkListCt newWork)
+
+
+
+
+
 
 
 
