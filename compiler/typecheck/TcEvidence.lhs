@@ -43,7 +43,7 @@ import PrelNames
 import VarEnv
 import VarSet
 import Name
-import Coercion (TypeNatCoAxiom, coercionKindTypeNat)
+import Coercion(CoAxiomRule(..))
 
 import Util
 import Bag
@@ -105,7 +105,7 @@ data TcCoercion
   | TcNthCo Int TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
   | TcLetCo TcEvBinds TcCoercion
-  | TcTypeNatCo TypeNatCoAxiom [TcType] [TcCoercion]
+  | TcTypeNatCo CoAxiomRule [TcType] [TcCoercion]
   deriving (Data.Data, Data.Typeable)
 
 isEqVar :: Var -> Bool 
@@ -215,9 +215,9 @@ tcCoercionKind co = go co
     go (TcTransCo co1 co2)    = Pair (pFst (go co1)) (pSnd (go co2))
     go (TcNthCo d co)         = tyConAppArgN d <$> go co
 
-    -- XXX: We are just reusing the definition from Coercion.
-    -- Is there a reason to duplicate it?
-    go (TcTypeNatCo ax ts _)  = coercionKindTypeNat ax ts
+    go (TcTypeNatCo ax ts _)  = let vs = co_axr_tvs ax
+                                in Pair (substTyWith vs ts (co_axr_lhs ax))
+                                        (substTyWith vs ts (co_axr_lhs ax))
 
     -- c.f. Coercion.coercionKind
     go_inst (TcInstCo co ty) tys = go_inst co (ty:tys)
@@ -319,8 +319,8 @@ ppr_co p (TcNthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [
 
 ppr_co p (TcTypeNatCo co ts ps)= maybeParen p TopPrec $ ppr_type_nat_co co ts ps
 
-ppr_type_nat_co :: TypeNatCoAxiom -> [Type] -> [TcCoercion] -> SDoc
-ppr_type_nat_co co ts ps = ppr co <> ppTs ts $$ nest 2 (ppPs ps)
+ppr_type_nat_co :: CoAxiomRule -> [Type] -> [TcCoercion] -> SDoc
+ppr_type_nat_co co ts ps = ppr (co_axr_name co) <> ppTs ts $$ nest 2 (ppPs ps)
   where
   ppTs []   = Outputable.empty
   ppTs [t]  = ptext (sLit "@") <> ppr_type TopPrec t

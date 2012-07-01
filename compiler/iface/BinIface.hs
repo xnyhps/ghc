@@ -50,7 +50,6 @@ import Platform
 import FastString
 import Constants
 import Util
-import Coercion(TypeNatCoAxiom(..))
 
 import Data.Bits
 import Data.Char
@@ -1045,7 +1044,7 @@ instance Binary IfaceCoCon where
    put_ bh IfaceTransCo        = putByte bh 4
    put_ bh IfaceInstCo         = putByte bh 5
    put_ bh (IfaceNthCo d)      = do { putByte bh 6; put_ bh d }
-   put_ bh (IfaceTypeNatCo c)  = do { putByte bh 8; put_ bh c }
+   put_ bh (IfaceCoAxRule c)   = do { putByte bh 8; put_ bh c }
  
    get bh = do
         h <- getByte bh
@@ -1057,119 +1056,8 @@ instance Binary IfaceCoCon where
           4 -> return IfaceTransCo
           5 -> return IfaceInstCo
           6 -> do { d <- get bh; return (IfaceNthCo d) }
-          8 -> do { c <- get bh; return (IfaceTypeNatCo c) }
+          8 -> do { c <- get bh; return (IfaceCoAxRule c) }
           _ -> panic ("get IfaceCoCon " ++ show h)
-
-
-instance Binary TypeNatCoAxiom where
-  put_ bh ax =
-    case ax of
-
-      TnAddDef a b    -> byte 0x00 >> putNatural bh a >> putNatural bh b
-      TnMulDef a b    -> byte 0x01 >> putNatural bh a >> putNatural bh b
-      TnExpDef a b    -> byte 0x02 >> putNatural bh a >> putNatural bh b
-      TnLeqDef a b    -> byte 0x03 >> putNatural bh a >> putNatural bh b
-
-      TnLeqASym       -> byte 0x04
-      TnLeq0          -> byte 0x05
-      TnLeqRefl       -> byte 0x06
-      TnLeqTrans      -> byte 0x07
-
-      TnAdd0L         -> byte 0x08
-      TnAdd0R         -> byte 0x09
-      TnMul0L         -> byte 0x0a
-      TnMul0R         -> byte 0x0b
-      TnMul1L         -> byte 0x0c
-      TnMul1R         -> byte 0x0d
-      TnExp0L         -> byte 0x0e
-      TnExp0R         -> byte 0x0f
-      TnExp1L         -> byte 0x10
-      TnExp1R         -> byte 0x11
-
-      TnAddComm       -> byte 0x12
-      TnMulComm       -> byte 0x13
-
-      TnAddCancelL    -> byte 0x14
-      TnMulCancelL    -> byte 0x15
-      TnExpCancelL    -> byte 0x16
-      TnAddCancelR    -> byte 0x17
-      TnMulCancelR    -> byte 0x18
-      TnExpCancelR    -> byte 0x19
-
-    where byte :: Word8 -> IO ()
-          byte = put_ bh
-
-  get bh = do x <- get bh
-              case x :: Word8 of
-                0x00 -> liftM2 TnAddDef (getNatural bh) (getNatural bh)
-                0x01 -> liftM2 TnMulDef (getNatural bh) (getNatural bh)
-                0x02 -> liftM2 TnExpDef (getNatural bh) (getNatural bh)
-                0x03 -> liftM2 TnLeqDef (getNatural bh) (getNatural bh)
-
-                0x04 -> return TnLeqASym
-                0x05 -> return TnLeq0
-                0x06 -> return TnLeqRefl
-                0x07 -> return TnLeqTrans
-
-                0x08 -> return TnAdd0L
-                0x09 -> return TnAdd0R
-                0x0a -> return TnMul0L
-                0x0b -> return TnMul0R
-                0x0c -> return TnMul1L
-                0x0d -> return TnMul1R
-                0x0e -> return TnExp0L
-                0x0f -> return TnExp0R
-                0x10 -> return TnExp1L
-                0x11 -> return TnExp1R
-
-                0x12 -> return TnAddComm
-                0x13 -> return TnMulComm
-
-                0x14 -> return TnAddCancelL
-                0x15 -> return TnMulCancelL
-                0x16 -> return TnExpCancelL
-                0x17 -> return TnAddCancelR
-                0x18 -> return TnMulCancelR
-                0x19 -> return TnExpCancelR
-
-                _    -> panic ("iface get TypeNatCoAxiom: " ++ show x)
-
-
-getNatural :: BinHandle -> IO Integer
-getNatural bh =
-  do x <- get bh
-     if not ((x :: Word64) `testBit` 63)
-        then return (fromIntegral x)    -- small number
-        else getWords (x `clearBit` 63) 0
-  where
-  getWords 0 n = return n
-  getWords x n = do w64 <- get bh
-                    let n' = (n `shiftL` 64) .|. fromIntegral (w64 :: Word64)
-                    n' `seq` getWords (x-1) n'
-
--- Binary representation for natural numbers.
--- If a number fits in 63 bits, we store it directly as a Word64.
--- Otherwise, we store it as a sequence of 64-bit words.
--- The first 64-bit word has its highest bit set, and when cleared,
--- it contains the number of words to follow.  The following words
--- are stored in big-endian format.
-putNatural :: BinHandle -> Integer -> IO ()
-putNatural bh n
-  | n < 0                 = panic "putNatural of a negative number"
-  | n == fromIntegral w64 = put_ bh w64               -- small rep.
-  | otherwise             = toWords 0 [] n
-  where
-  w64 = (fromInteger n :: Word64) `clearBit` 63
-
-  toWords :: Word64 -> [Word64] -> Integer -> IO ()
-  toWords len ws x
-    | fromIntegral this == x =
-        do put_ bh ((len + 1) `setBit` 63)  -- mark as large rep.
-           mapM_ (put_ bh) (this : ws)
-    | otherwise = let len' = len + 1
-                  in len' `seq` this `seq`
-                     toWords len' (this : ws) (x `shiftR` 64)
-      where this = fromIntegral x :: Word64
 
 
 -------------------------------------------------------------------------

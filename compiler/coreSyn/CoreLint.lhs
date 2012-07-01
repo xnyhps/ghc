@@ -881,7 +881,7 @@ lintCoercion co@(AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
 
 lintCoercion (TypeNatCo co ts cs)
   = do ks  <- mapM lintType ts
-       eqs <- mapM lintCoercion cs
+       _eqs <- mapM lintCoercion cs
 
        -- So far, all type parameters are of kind Nat, so we just
        -- check them in one go here.
@@ -889,110 +889,13 @@ lintCoercion (TypeNatCo co ts cs)
        unless (all (eqKind typeNatKind) ks) $
          failWithL $ ptext $ sLit "Kind mis-match in TypeNatCo (param not Nat)"
 
-       case (co,ks,eqs) of
-         (TnAddDef a b, [], []) -> return (kN, mkAdd (mkN a) (mkN b), mkN (a + b))
-         (TnMulDef a b, [], []) -> return (kN, mkMul (mkN a) (mkN b), mkN (a * b))
-         (TnExpDef a b, [], []) -> return (kN, mkExp (mkN a) (mkN b), mkN (a ^ b))
-         (TnLeqDef a b, [], []) -> return (kB, mkLeq (mkN a) (mkN b), mkB (a <= b))
+       let vs = co_axr_tvs co
+           inst = substTyWith vs ts
 
-         -- XXX: Check proofs
-         (TnLeqASym, [a,b], [_,_]) -> return (kN, a, b)
-
-         (TnLeq0,  [a], [])     -> return (kB, mkLeq (mkN 0) a, mkB True)
-         (TnLeqRefl, [a], [])   -> return (kB, mkLeq a a, mkB True)
-         -- XXX: Check proofs
-         (TnLeqTrans, [a,_,c], [_,_]) -> return (kB, mkLeq a c, mkB True)
-
-         (TnAdd0L, [a], []) -> return (kN, mkAdd (mkN 0) a, a)
-         (TnMul0L, [a], []) -> return (kN, mkMul (mkN 0) a, mkN 0)
-         (TnMul1L, [a], []) -> return (kN, mkMul (mkN 1) a, a)
-         (TnExp0L, [a], []) -> return (kN, mkExp (mkN 0) a, mkN 0)
-         (TnExp1L, [a], []) -> return (kN, mkExp (mkN 1) a, mkN 1)
-
-         (TnAdd0R, [a], []) -> return (kN, mkAdd a (mkN 0), a)
-         (TnMul0R, [a], []) -> return (kN, mkMul a (mkN 0), mkN 0)
-         (TnMul1R, [a], []) -> return (kN, mkMul a (mkN 1), a)
-         (TnExp0R, [a], []) -> return (kN, mkExp a (mkN 0), mkN 1)
-         (TnExp1R, [a], []) -> return (kN, mkExp a (mkN 1), a)
-
-         (TnAddComm, [a,b,c], [(k,a',b')])
-            | k `eqKind` typeNatKind && a `eqType` a' && b `eqType` b'
-                            -> return (kN, mkAdd b a, c)
-
-         (TnMulComm, [a,b,c], [(k,a',b')])
-            | k `eqKind` typeNatKind && a `eqType` a' && b `eqType` b'
-                            -> return (kN, mkMul b a, c)
-
-         (TnAddCancelL, [a,b1,b2,c], [(k1,ab1,c1),(k2,ab2,c2)]) -> do
-           lintCancel k1 k2 c c1 c2
-           assert "ab1" (isBinop typeNatAddTyCon ab1 a b1)
-           assert "ab2" (isBinop typeNatAddTyCon ab2 a b2)
-           return (kN, b1, b2)
-
-         (TnMulCancelL, [a,b1,b2,c], [side,(k1,ab1,c1),(k2,ab2,c2)]) -> do
-           lintSide 1 a side
-           lintCancel k1 k2 c c1 c2
-           assert "ab1" (isBinop typeNatMulTyCon ab1 a b1)
-           assert "ab2" (isBinop typeNatMulTyCon ab2 a b2)
-           return (kN, b1, b2)
-
-         (TnExpCancelL, [a,b1,b2,c], [side,(k1,ab1,c1),(k2,ab2,c2)]) -> do
-           lintSide 2 a side
-           lintCancel k1 k2 c c1 c2
-           assert "ab1" (isBinop typeNatExpTyCon ab1 a b1)
-           assert "ab2" (isBinop typeNatExpTyCon ab2 a b2)
-           return (kN, b1, b2)
-
-         (TnAddCancelR, [a1,a2,b,c], [(k1,a1b,c1),(k2,a2b,c2)]) -> do
-           lintCancel k1 k2 c c1 c2
-           assert "a1b" (isBinop typeNatAddTyCon a1b a1 b)
-           assert "a2b" (isBinop typeNatAddTyCon a2b a1 b)
-           return (kN, a1, a2)
-
-         (TnMulCancelR, [a1,a2,b,c], [side,(k1,a1b,c1),(k2,a2b,c2)]) -> do
-           lintSide 1 b side
-           lintCancel k1 k2 c c1 c2
-           assert "a1b" (isBinop typeNatMulTyCon a1b a1 b)
-           assert "a2b" (isBinop typeNatMulTyCon a2b a1 b)
-           return (kN, a1, a2)
-
-         (TnExpCancelR, [a1,a2,b,c], [side,(k1,a1b,c1),(k2,a2b,c2)]) -> do
-           lintSide 1 b side
-           lintCancel k1 k2 c c1 c2
-           assert "a1b" (isBinop typeNatExpTyCon a1b a1 b)
-           assert "a2b" (isBinop typeNatExpTyCon a2b a1 b)
-           return (kN, a1, a2)
-
-         _ -> failWithL $ ptext $ sLit $ "Lint failed on type nat coercion"
-
-       where
-       mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
-       mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
-       mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
-       mkLeq _ _ = panic "mkLeq: TODO"
-       mkN n     = mkNumLitTy n
-       mkB _     = panic "mkB: TOD"
-       kN        = typeNatKind
-       kB        = panic "kB: TODO"
-       assert m b = unless b (failWithL (ptext (sLit m)))
-
-       isBinop op ty l r =
-         case splitTyConApp_maybe ty of
-           Just (op',[l',r']) -> op' == op && l `eqType` l' && r `eqType` r'
-           _                  -> False
-
-       lintSide o a (k,o',a') = do
-         assert "k" (k `eqKind` kB)
-         assert "1 ~ o'" $ case isNumLitTy o' of
-           Just n -> o == n
-           _      -> False
-         assert "a ~ a'" (a `eqType` a')
-
-       lintCancel k1 k2 c c1 c2 = do
-         assert "k1"      (k1 `eqKind` kN)
-         assert "k2"      (k2 `eqKind` kN)
-         assert "c ~ c1" (c  `eqType` c1)
-         assert "c1 ~ c2" (c1 `eqType` c2)
+       -- XXX: Do some more checking (e.g., that the coercions proof
+       -- what we expect they should)
+       -- XXX: With <=, some of the kinds will be Bool
+       return (typeNatKind, inst (co_axr_lhs co), inst (co_axr_rhs co))
 
 
 \end{code}

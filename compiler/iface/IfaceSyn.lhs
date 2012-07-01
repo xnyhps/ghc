@@ -898,7 +898,7 @@ freeNamesIfTc (IfaceTc tc) = unitNameSet tc
 
 freeNamesIfCo :: IfaceCoCon -> NameSet
 freeNamesIfCo (IfaceCoAx tc) = unitNameSet tc
--- ToDo: include IfaceIPCoAx? Probably not necessary.
+freeNamesIfCo (IfaceCoAxRule tc) = unitNameSet tc
 freeNamesIfCo _ = emptyNameSet
 
 freeNamesIfRule :: IfaceRule -> NameSet

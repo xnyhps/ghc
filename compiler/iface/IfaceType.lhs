@@ -98,7 +98,7 @@ data IfaceCoCon
   | IfaceReflCo    | IfaceUnsafeCo  | IfaceSymCo
   | IfaceTransCo   | IfaceInstCo
   | IfaceNthCo Int
-  | IfaceTypeNatCo TypeNatCoAxiom
+  | IfaceCoAxRule IfExtName   -- XXX: or just the number of the rule...
 \end{code}
 
 %************************************************************************
@@ -277,7 +277,7 @@ instance Outputable IfaceCoCon where
   ppr IfaceTransCo     = ptext (sLit "Trans")
   ppr IfaceInstCo      = ptext (sLit "Inst")
   ppr (IfaceNthCo d)   = ptext (sLit "Nth:") <> int d
-  ppr (IfaceTypeNatCo x) = ptext (sLit (show x))
+  ppr (IfaceCoAxRule n) = ppr n
 
 instance Outputable IfaceTyLit where
   ppr = ppr_tylit
@@ -376,10 +376,13 @@ coToIfaceType (NthCo d co)          = IfaceCoConApp (IfaceNthCo d)
 coToIfaceType (InstCo co ty)        = IfaceCoConApp IfaceInstCo 
                                                     [ coToIfaceType co
                                                     , toIfaceType ty ]
-coToIfaceType (TypeNatCo co ts cs)  = IfaceCoConApp (IfaceTypeNatCo co)
+coToIfaceType (TypeNatCo co ts cs)  = IfaceCoConApp (coAxiomRuleToIfaceType co)
                                     (map toIfaceType ts ++ map coToIfaceType cs)
 
 coAxiomToIfaceType :: CoAxiom -> IfaceCoCon
 coAxiomToIfaceType con = IfaceCoAx (coAxiomName con)
+
+coAxiomRuleToIfaceType :: CoAxiomRule -> IfaceCoCon
+coAxiomRuleToIfaceType con = IfaceCoAxRule (co_axr_name con)
 \end{code}
 

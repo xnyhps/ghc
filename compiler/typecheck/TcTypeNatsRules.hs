@@ -5,7 +5,7 @@ import Outputable ( ppr, vcat )
 import SrcLoc   ( noSrcSpan )
 import Var      ( Var, TyVar )
 import TyCon    ( TyCon, tyConName )
-import Coercion ( TypeNatCoAxiom (..), CoAxiomRule(..) )
+import Coercion ( CoAxiomRule(..) )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
                 , mkEqPred, mkTyConApp
                 , splitTyConApp_maybe
@@ -17,32 +17,31 @@ import PrelNames( typeNatLeqTyFamName
                 , typeNatExpTyFamName
                 , unboundKey
                 )
-import TysPrim  ( typeNatLeqTyCon
-                , typeNatAddTyCon
+import TysPrim  ( typeNatAddTyCon
                 , typeNatMulTyCon
                 , typeNatExpTyCon
                 , tyVarList
                 , typeNatKind
                 )
-import Name     ( mkInternalName )
+import Name     ( mkSystemName )
 import OccName  ( mkOccName, tcName )
 import Unique   ( mkPreludeMiscIdUnique )
-import Panic    ( panic )
+-- import Panic    ( panic )
 import Bag      ( bagToList )
 
 -- From type checker
-import TcType         ( TcPredType )
 import TcRnTypes      ( Xi, Ct(..), ctEvidence, ctEvTerm, isGivenCt
                       , CtEvidence(..), CtLoc(..), SkolemInfo(..)
                       , mkNonCanonical
                       )
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
-import TcEvidence     ( EvTerm(..), TcCoercion (..)
+import TcEvidence     ( EvTerm(..)
                       , mkTcSymCo, mkTcTransCo
                       , evTermCoercion
+                      , TcCoercion(TcTypeNatCo)
                       )
 import TcSMonad ( TcS, InertSet
-                , getTcSInerts, foldFamHeadMap, inert_cans, inert_funeqs
+                , getTcSInerts, inert_cans, inert_funeqs
                 , updWorkListTcS, appendWorkListCt
                 , traceTcS
                 , partCtFamHeadMap
@@ -50,13 +49,9 @@ import TcSMonad ( TcS, InertSet
 
 -- From base libraries
 import Prelude hiding ( exp )
-import Data.Maybe ( fromMaybe, maybeToList, listToMaybe, isNothing, catMaybes
-                  , mapMaybe )
-import Data.List  ( (\\), sortBy )
+import Data.Maybe ( isNothing, mapMaybe )
+import Data.List  ( sortBy )
 import Data.Ord   ( comparing )
-import qualified Data.IntMap as IMap
-import qualified Data.Map    as Map
-import qualified Data.IntSet as ISet
 import Control.Monad ( msum, guard )
 
 
@@ -76,34 +71,6 @@ data Term   = Var  !TVar    -- ^ Matches anything
 data Prop   = Prop Op [Term]
 data Op     = Eq | Leq | Add | Mul | Exp
               deriving (Eq,Ord)
-
-data Rule   = Rule [(PVar,Prop)]    -- Named assumptions of the rule
-                   Prop             -- Conclusion of the rule
-                   Proof            -- Proof of conclusion (uses assumptions)
-
-data Proof  = By TypeNatCoAxiom [Term] [ Proof ]
-            | Assumed PVar
-            | Proved EvTerm
-            | Sym Proof | Trans Proof Proof   -- used in `funRule`
-
-eq :: Term -> Term -> Prop
-eq x y = Prop Eq [ x, y ]
-
-leq :: Term -> Term -> Prop
-leq x y = Prop Leq [ Bool True, x, y ]
-
-add :: Term -> Term -> Term -> Prop
-add x y z = Prop Add [ z, x, y ]
-
-mul :: Term -> Term -> Term -> Prop
-mul x y z = Prop Mul [ z, x, y ]
-
-exp :: Term -> Term -> Term -> Prop
-exp x y z = Prop Exp [ z, x, y ]
-
-
-
-
 
 --------------------------------------------------------------------------------
 fromXi :: Xi -> Maybe Term
@@ -129,86 +96,10 @@ fromCt (CTyEqCan { cc_tyvar = x, cc_rhs = t }) =
 
 fromCt _ = Nothing
 
-toTcPredTy :: Prop -> TcPredType
-toTcPredTy (Prop op ts) =
-  case (op, map toXi ts) of
-    (Eq,  [t1,t2])    -> mkEqPred t1 t2
-    (Leq, [t1,t2,t3]) -> mkEqPred (mk typeNatLeqTyCon t2 t3) t1
-    (Add, [t1,t2,t3]) -> mkEqPred (mk typeNatAddTyCon t2 t3) t1
-    (Mul, [t1,t2,t3]) -> mkEqPred (mk typeNatMulTyCon t2 t3) t1
-    (Exp, [t1,t2,t3]) -> mkEqPred (mk typeNatExpTyCon t2 t3) t1
-    _                 -> panic "toTcPredTy: Unexpected Prop"
-  where
-  mk f a b = mkTyConApp f [a,b]
-
-toEvTerm :: Proof -> EvTerm
-toEvTerm proof  =
-  case proof of
-    By ax ts ps -> EvCoercion $ TcTypeNatCo ax (map toXi ts) (map toCoercion ps)
-    Sym p       -> EvCoercion $ mkTcSymCo (toCoercion p)
-    Trans p q   -> EvCoercion $ mkTcTransCo (toCoercion p) (toCoercion q)
-    Proved t    -> t
-    Assumed _   -> panic "Incomplete proof"
-
-toCoercion :: Proof -> TcCoercion
-toCoercion = evTermCoercion . toEvTerm
-
-toXi :: Term -> Xi
-toXi term =
-  case term of
-    Var _  -> panic "Incomplete term"
-    Bool _ -> panic "XXX: Make boolean literal"
-    Num n  -> mkNumLitTy n
-    Con c  -> mkTyVarTy c
-
-
-{- While the resulting constraints are mostly in canonical form,
-sometimes they are not:  for example, we might get new work like this:
-
-2 ~ 3
-
-This indicates that someone gave us an inconsistent context,
-and will be detected on the next iteration of the solver.
--}
-toGivenCt :: (Proof,Prop) -> Ct
-toGivenCt (proof,prop) = mkNonCanonical $
-  Given { ctev_gloc = CtLoc UnkSkol noSrcSpan [] -- XXX: something better?
-        , ctev_pred = toTcPredTy prop
-        , ctev_evtm = toEvTerm proof
-        }
-
-
---------------------------------------------------------------------------------
 
 
 
---------------------------------------------------------------------------------
-
--- XXX: We should be able to cope with some assumptions in backward
--- reasoning too.
-bRules :: [Rule]
-bRules = map (uncurry simpleRule)
-  [ (TnLeq0    , leq n0 a)
-  , (TnLeqRefl , leq a a)
-
-  , (TnAdd0L   , add n0 a a)
-  , (TnAdd0R   , add a n0 a)
-
-  , (TnMul0L   , mul n0 a n0)
-  , (TnMul0R   , mul a n0 n0)
-  , (TnMul1L   , mul n1 a a)
-  , (TnMul1R   , mul a n1 a)
-
-  -- TnExp0L
-  , (TnExp0R   , exp a n0 n1)
-  , (TnExp1L   , exp n1 a n1)
-  , (TnExp1R   , exp a n1 a)
-  ]
-  where a  = Var 0
-        n0 = Num 0
-        n1 = Num 1
-
-
+{-
 fRules :: [Rule]
 fRules =
   map funRule [ Add, Mul, Exp, Leq ]
@@ -231,199 +122,12 @@ fRules =
   a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
   n1 = Num 1
   n2 = Num 2
-
-
-
--- | A smart constructor for easier rule constrction.
-rule :: TypeNatCoAxiom -> [Prop] -> Prop -> Rule
-rule ax asmps conc = Rule as conc $ By ax (map Var $ ISet.toList vs)
-                                  $ map (Assumed . fst) as
-  where
-  as          = zip [ 0 .. ] asmps
-  vs          = fvs asmps
-
-simpleRule :: TypeNatCoAxiom -> Prop -> Rule
-simpleRule ax p = rule ax [] p
-
-{- This slightly duplicates the functionality of GHC's solver but
-we have it here so that it can react with axioms.
-For example, the following is justified using a fun-rule and an axiom:
-
-(5 + 3 ~ x) => (x ~ 8)
-like this:
-(5 + 3 ~ x, 5 + 3 ~ 8) => (x ~ 8)
 -}
-
--- p: a + b ~ c1, q: a + b ~ c2
--- sym p `trans` q
-funRule :: Op -> Rule
-funRule op = Rule [ (p, Prop op [ c1, a, b]), (q, Prop op [ c2, a, b ]) ]
-                  (eq c1 c2)
-                  (Trans (Sym (Assumed p)) (Assumed q))
-  where a : b : c1 : c2 : _ = map Var [ 0 .. ]
-        p : q : _           = [ 0 .. ]
-
-
---------------------------------------------------------------------------------
-
-
-
---------------------------------------------------------------------------------
-class ApSubst t => Match t where
-  match :: t -> t -> Maybe Subst
-
-instance Match Term where
-  match t1 t2 | t1 == t2  = return IMap.empty
-  match (Var a) t         = return (IMap.singleton a t)
-  match t (Var a)         = return (IMap.singleton a t)
-  match _ _               = Nothing
-
-instance Match t => Match [t] where
-  match [] [] = return IMap.empty
-  match (x : xs) (y : ys) = do su1 <- match x y
-                               su2 <- match (apSubst su1 xs) (apSubst su1 ys)
-                               return (IMap.union su1 su2)
-  match _ _ = Nothing
-
-instance Match Prop where
-  match (Prop x xs) (Prop y ys) = guard (x == y) >> match xs ys
-
-
-
-
-
---------------------------------------------------------------------------------
-
-
--- | Try to satisfy a rule assumption with an existing constraint.
-usingCt :: Ct -> Prop -> [(Subst, Proof)]
-usingCt ct q =
-  maybeToList $
-  do p  <- fromCt ct
-     su <- match q p
-     return (su, Proved $ ctEvTerm $ ctEvidence ct)
-
--- Assumes that the proof came from the inert set, and so it
--- contains no rule variables.
-usingAsmps :: Asmps -> Prop -> [(Subst, Proof)]
-usingAsmps asmps (Prop op ts) =
-  do (proof,ts1) <- asmpsFor op asmps
-     su <- maybeToList $ match ts ts1
-     return (su, Proved proof)
-
-
--- | Try to stisfy a rule assumption with an axiom.
-usingAxiom :: Prop -> [(Subst, Proof)]
-
-usingAxiom (Prop op [r, Num a, Num b]) =
-  maybeToList $
-  do (na,ax) <- case op of
-                  Add -> Just (Num  (a + b), TnAddDef a b)
-                  Mul -> Just (Num  (a * b), TnMulDef a b)
-                  Exp -> Just (Num  (a ^ b), TnExpDef a b)
-                  Leq -> Just (Bool (a <= b), TnLeqDef a b)
-                  Eq  -> Nothing
-
-     su <- match r na
-     return (su, By ax [] [])
-
-usingAxiom (Prop op [Num r, a, Num b]) =
-  maybeToList $
-  do let mkAx ax mb = mb >>= \na -> Just (Num na, ax na b)
-     (na,ax) <- case op of
-                  Add -> mkAx TnAddDef (minus r b)
-                  Mul -> mkAx TnMulDef (divide r b)
-                  Exp -> mkAx TnExpDef (rootExact r b)
-                  Leq -> Nothing
-                  Eq  -> Nothing
-
-     su <- match a na
-     return (su, By ax [] [])
-
-usingAxiom (Prop op [Num r, Num a, b]) =
-  maybeToList $
-  do let mkAx ax mb = mb >>= \nb -> Just (Num nb, ax a nb)
-     (nb,ax) <- case op of
-                  Add -> mkAx TnAddDef (minus r a)
-                  Mul -> mkAx TnMulDef (divide r a)
-                  Exp -> mkAx TnExpDef (logExact r a)
-                  Leq -> Nothing
-                  Eq  -> Nothing
-
-     su <- match b nb
-     return (su, By ax [] [])
-
-usingAxiom _ = []
-
-
--- Currently, only using rules with no premises.
-usingRule :: Rule -> Prop -> [(Subst, Proof)]
-usingRule (Rule [] conc proof) p =
-  maybeToList $
-  do su <- match freshConc p
-     return (su, freshProof)
-  where
-  (freshConc, freshProof) =
-     case ISet.maxView (fvs p) of
-       Just (n,_) ->
-         let bump = 1 + n
-         in (fresh bump conc, fresh bump proof)
-       Nothing -> (conc, proof)
-
-usingRule _ _ = []
-
-
-specRule :: Rule -> (Prop -> [(Subst, Proof)]) -> [Rule]
-specRule (Rule as c proof) tactic =
-  do ((n,p), rest) <- choose as
-     (su, aP)      <- tactic p
-     return $ apSubst su $ Rule rest c $ define n aP proof
-
-
-fireRules :: Asmps -> Ct -> [(Proof,Prop)]
-fireRules asmps newFact = loop []
-                        $ concatMap (`specRule` usingCt newFact) fRules
-  where
-  step r  = specRule r usingAxiom
-         ++ [ r1 | b <- bRules, r1 <- specRule r (usingRule b) ]
-         ++ [ r1 | r1 <- specRule r (usingAsmps asmps) ]
-
-  loop done (Rule [] p proof : more) = loop ((proof,p) : done) more
-  loop done (r : more)               = loop done (step r ++ more)
-  loop done []                       = done
-
-
-type Asmps = Map.Map Op [ (EvTerm, [Term]) ]
-
-asmpsFor :: Op -> Asmps -> [ (EvTerm, [Term]) ]
-asmpsFor op asmps = Map.findWithDefault [] op asmps
-
-toAsmps :: Bool -> InertSet -> Asmps
-toAsmps alsoWanted = foldFamHeadMap addAsmp Map.empty
-                   . inert_funeqs
-                   . inert_cans
-  where
-  addAsmp ct as = fromMaybe as $
-                  do guard (isGivenCt ct || alsoWanted)
-                     Prop op ts <- fromCt ct
-                     let fact = (ctEvTerm (ctEvidence ct), ts)
-                     return $ Map.insertWith (++) op [fact] as
-
-computeNewGivenWork :: Ct -> TcS ()
-computeNewGivenWork ct =
-  do is <- getTcSInerts
-     let newWork = map toGivenCt $ fireRules (toAsmps False is) ct
-     traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
-     updWorkListTcS (appendWorkListCt newWork)
-
 
 --------------------------------------------------------------------------------
 
 solve :: Ct -> Maybe EvTerm
-solve ct =
-  do p <- fromCt ct
-     (_, p) <- listToMaybe $ msum $ usingAxiom p : map (`usingRule` p) bRules
-     return (toEvTerm p)
+solve ct = msum $ solveWithAxiom ct : map (`solveWithRule` ct) bRules
 
 
 impossible :: Ct -> Bool
@@ -454,89 +158,6 @@ impossible ct =
 
 
 --------------------------------------------------------------------------------
-type Subst  = IMap.IntMap Term  -- ^ Maps TVars to Terms
-
-class ApSubst t where
-  apSubst :: Subst -> t -> t
-
-instance ApSubst t => ApSubst [t] where
-  apSubst su ts             = map (apSubst su) ts
-
-instance ApSubst Term where
-  apSubst su term           = case term of
-                                Var a -> fromMaybe term (IMap.lookup a su)
-                                _     -> term
-
-instance ApSubst Prop where
-  apSubst su (Prop op ts)   = Prop op (apSubst su ts)
-
-instance ApSubst Rule where
-  apSubst su (Rule as c p)  = Rule [ (n, apSubst su a) | (n,a) <- as ]
-                                   (apSubst su c) (apSubst su p)
-
-instance ApSubst Proof where
-  apSubst su (By ax ts ps)  = By ax (apSubst su ts) (apSubst su ps)
-  apSubst _ (Proved v)      = Proved v
-  apSubst _ (Assumed n)     = Assumed n
-  apSubst su (Sym p)        = Sym (apSubst su p)
-  apSubst su (Trans p q)    = Trans (apSubst su p) (apSubst su q)
-
-
--- | Define an assumption paramater in the proof of a rule.
-define :: PVar -> Proof -> Proof -> Proof
-define n p (Assumed m) | n == m   = p
-define n p (By ax ts ps)          = By ax ts (map (define n p) ps)
-define n p (Sym q)                = Sym (define n p q)
-define n p (Trans q r)            = Trans (define n p q) (define n p r)
-define _ _ p                      = p
-
-
--- Consider each element of the list (and the rest)
-choose :: [a] -> [(a,[a])]
-choose []       = []
-choose (a : as) = (a, as) : [ (b, a : bs) | (b,bs) <- choose as ]
-
-
-class FVS t where
-  fvs :: t -> ISet.IntSet
-
-instance FVS Term where
-  fvs (Var x)     = ISet.singleton x
-  fvs _           = ISet.empty
-
-instance FVS t => FVS [t] where
-  fvs ts          = ISet.unions (map fvs ts)
-
-instance FVS Prop where
-  fvs (Prop _ ts) = fvs ts
-
-
--- ^ Increments all variables, to get a fresh instance of something.
-class Fresh t where
-  fresh :: Int -> t -> t
-
-instance Fresh Term where
-  fresh n (Var x)       = Var (n + x)
-  fresh _ t             = t
-
-instance Fresh t => Fresh [t] where
-  fresh n ts            = map (fresh n) ts
-
-instance Fresh Prop where
-  fresh n (Prop op ts)  = Prop op (fresh n ts)
-
-instance Fresh Proof where
-  fresh n proof =
-    case proof of
-      Sym p       -> Sym (fresh n p)
-      Trans p q   -> Trans (fresh n p) (fresh n q)
-      Proved x    -> Proved x
-      Assumed x   -> Assumed x
-      By a ts ps  -> By a (fresh n ts) (fresh n ps)
-
-
-
---------------------------------------------------------------------------------
 
 mkAx :: Int -> String -> [TyVar] -> [(Type,Type)] -> Type -> Type -> CoAxiomRule
 mkAx u n vs asmps lhs rhs = CoAxiomRule
@@ -549,7 +170,7 @@ mkAx u n vs asmps lhs rhs = CoAxiomRule
   }
   where
   mkAxUique  = mkPreludeMiscIdUnique
-  mkAxName x = mkInternalName unboundKey (mkOccName tcName x) noSrcSpan
+  mkAxName x = mkSystemName unboundKey (mkOccName tcName x)
 
 mkAdd :: Type -> Type -> Type
 mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
@@ -566,30 +187,61 @@ natVars = tyVarList typeNatKind
 
 useAxiom :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
 useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
-  -- XXX: Change this after changing the constructor in "Coercion"
-  where mk = undefined
+  where mk = TcTypeNatCo
 
 --------------------------------------------------------------------------------
 
+axName :: String -> Integer -> Integer -> String
+axName x a b = x ++ "_" ++ show a ++ "_" ++ show b
+
 axAddDef :: Integer -> Integer -> CoAxiomRule
-axAddDef a b = mkAx 1 "AddDef" [] []
+axAddDef a b = mkAx 1 (axName "AddDef" a b) [] []
              (mkAdd (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a + b))
 
 axMulDef :: Integer -> Integer -> CoAxiomRule
-axMulDef a b = mkAx 2 "MulDef" [] []
+axMulDef a b = mkAx 2 (axName "MulDef" a b) [] []
              (mkMul (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a * b))
 
 axExpDef :: Integer -> Integer -> CoAxiomRule
-axExpDef a b = mkAx 3 "ExpDef" [] []
+axExpDef a b = mkAx 3 (axName "ExpDef" a b) [] []
              (mkExp (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a ^ b))
 
+
+-- XXX: We should be able to cope with some assumptions in backward
+-- reasoning too.
+bRules :: [CoAxiomRule]
+bRules =
+  [ bRule 10 "Add0L" (mkAdd n0 a) a
+  , bRule 11 "Add0R" (mkAdd a n0) a
+
+  , bRule 12 "Mul0L" (mkMul n0 a) n0
+  , bRule 13 "Mul0R" (mkMul a n0) n0
+  , bRule 14 "Mul1L" (mkMul n1 a) a
+  , bRule 15 "Mul1R" (mkMul a n1) a
+
+  -- TnExp0L
+  , bRule 17 "TnExp0R" (mkExp a n0) n1
+  , bRule 18 "TnExp1L" (mkExp n1 a) n1
+  , bRule 19 "TnExp1R" (mkExp a n1) a
+  ]
+  where
+  bRule x y = mkAx x y (take 1 natVars) []
+  a : _     = map mkTyVarTy natVars
+  n0        = mkNumLitTy 0
+  n1        = mkNumLitTy 1
+
+
+
+
 axAddComm :: CoAxiomRule
-axAddComm = mkAx 10 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
+axAddComm = mkAx 30 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
   where a : b : c : _ = map mkTyVarTy natVars
 
 
 theRules :: [CoAxiomRule]
 theRules = []
+
+
 
 --------------------------------------------------------------------------------
 
@@ -712,11 +364,22 @@ byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
        b <- op c a
        return ([ (r, mkNumLitTy b) ], useAxiom (ax a b) [] [] )
 
+
+byAxiom (TPOther ty, TPOther tp3)
+  | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
+  , Just a <- isNumLitTy tp1
+  , Just b <- isNumLitTy tp2
+  , Just c <- isNumLitTy tp3
+  = do (ax,op) <- case tyConName tc of
+                    n | n == typeNatAddTyFamName -> Just (axAddDef, (+))
+                      | n == typeNatMulTyFamName -> Just (axMulDef, (*))
+                      | n == typeNatExpTyFamName -> Just (axExpDef, (^))
+                    _ -> Nothing
+       guard (op a b == c)
+       return ([], useAxiom (ax a b) [] [])
+
 byAxiom _ = Nothing
 
-
-solveEqn :: [Ct] -> Eqn -> [(SimpleSubst, EvTerm)]
-solveEqn cts ax = catMaybes (byAxiom ax : map (`byAsmp` ax) cts)
 
 {- A (possibly over-compliacted) example illustrating how the
 order in which we do the matching for the assumptions makes a difference
@@ -737,13 +400,29 @@ P { a = 2, b = 2, c = 4, y = 6 }
 -}
 
 
-data ActiveRule = AR
-  { axRule    :: CoAxiomRule
-  , doneSubst :: SimpleSubst
-  , doneArgs  :: [(Int,EvTerm)]
 
-  , todoVars  :: [TyVar]
-    -- todoVars == co_axr_tvs axRule \\ map fst doneSubst
+solveWithRule :: CoAxiomRule -> Ct -> Maybe EvTerm
+solveWithRule r ct =
+  do guard $ null $ co_axr_asmps r    -- Currently we just use simple axioms.
+     let vs  = co_axr_tvs r
+         lhs = toTypePat vs $ co_axr_lhs r
+         rhs = toTypePat vs $ co_axr_rhs r
+     (su,_) <- byAsmp ct (lhs,rhs)    -- Just for the instantiation
+     tys <- mapM (`lookup` su) vs
+     return (useAxiom r tys [])
+
+solveWithAxiom :: Ct -> Maybe EvTerm
+solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
+  do ([],ev) <- byAxiom (TPOther (mkTyConApp tc ts), TPOther t)
+     return ev
+solveWithAxiom _ = Nothing
+
+--------------------------------------------------------------------------------
+
+data ActiveRule = AR
+  { proof     :: [Type] -> [EvTerm] -> EvTerm
+  , doneTys   :: [TypePat]
+  , doneArgs  :: [(Int,EvTerm)]
 
   , todoArgs  :: [(Int,(TypePat,TypePat))]
     {- todoArgs ==
@@ -753,51 +432,64 @@ data ActiveRule = AR
             , let cvt = apSimpSubst doneArgs . toTypePat (co_axr_tvs axRule)
         ]
     -}
+
+  , concl    :: (TypePat,TypePat)
   }
 
 
 activate :: CoAxiomRule -> ActiveRule
 activate r = AR
-  { axRule    = r
-  , doneSubst = []
+  { proof     = useAxiom r
+  , doneTys   = map TPVar vs
   , doneArgs  = []
-  , todoVars  = co_axr_tvs r
   , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
+  , concl     = (cvt (co_axr_lhs r), cvt (co_axr_rhs r))
   }
-  where cvt = toTypePat (co_axr_tvs r)
+  where cvt = toTypePat vs
+        vs  = co_axr_tvs r
+
+-- p: a + b ~ c1, q: a + b ~ c2
+-- sym p `trans` q
+funRule :: TyCon -> ActiveRule
+funRule tc = AR
+  { proof     = \_ [p,q] -> EvCoercion
+                          $ mkTcTransCo (mkTcSymCo $ evTermCoercion p)
+                                        (evTermCoercion q)
+  , doneTys   = map TPVar [ a, b, c1, c2 ]
+  , doneArgs  = []
+  , todoArgs  = [ (0, (TPCon tc [ TPVar a, TPVar b], TPVar c1))
+                , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
+  , concl     = (TPVar c1, TPVar c2)
+  }
+  where a : b : c1 : c2 : _ = natVars
 
 
 {- Check if the `ActiveRule` is completely instantiated and, if so,
 compute the resulting equation and the evidence for it. -}
 fireRule :: ActiveRule -> Maybe (EvTerm, Type, Type)
 fireRule r =
-  do guard (null (todoVars r) && null (todoArgs r))
-     let ax = axRule r
-         vs = co_axr_tvs ax
-         su = doneSubst r
+  do guard $ null $ todoArgs r
+     let (t1,t2) = concl r
 
-     -- instantiate conclusion of rule
-     let cvt t = case apSimpSubst su (toTypePat vs t) of
-                   TPOther ty -> Just ty
-                   _          -> Nothing
-     lhs <- cvt (co_axr_lhs ax)
-     rhs <- cvt (co_axr_rhs ax)
-
-     -- prepare evidence arguments
-     tys <- mapM (`lookup` su) vs
+     ts <- mapM cvt (doneTys r)
+     lhs <- cvt t1
+     rhs <- cvt t2
      let evs = map snd $ sortBy (comparing fst) $ doneArgs r
 
-     return (useAxiom ax tys evs, lhs, rhs)
+     return (proof r ts evs, lhs, rhs)
+
+  where cvt (TPOther t) = Just t
+        cvt _           = Nothing
 
 
 -- Define one of the arguments of an active rule.
 setArg :: Int -> (SimpleSubst, EvTerm) -> ActiveRule -> ActiveRule
 setArg n (su,ev) r =
-  AR { axRule    = axRule r
-     , doneSubst = su ++ doneSubst r
+  AR { proof     = proof r
+     , doneTys   = apSimpSubst su (doneTys r)
      , doneArgs  = (n,ev) : doneArgs r
-     , todoVars  = todoVars r \\ map fst su
      , todoArgs  = dropTodo (todoArgs r)
+     , concl     = apSimpSubst su (concl r)
      }
   where
   -- Drop a solved argment, and instantiate the rest appropriately.
@@ -809,8 +501,7 @@ setArg n (su,ev) r =
 
 -- Try to solve one of the assumptions by axiom.
 applyAxiom1 :: ActiveRule -> Maybe ActiveRule
-applyAxiom1 r = do guard $ not $ null $ todoVars r
-                   msum $ map attempt $ todoArgs r
+applyAxiom1 r = msum $ map attempt $ todoArgs r
   where
   attempt (n,eq) = do soln <- byAxiom eq
                       return (setArg n soln r)
@@ -853,13 +544,14 @@ getFacts =
      return $ bagToList $ fst $ partCtFamHeadMap isGivenCt
                               $ inert_funeqs $ inert_cans is
 
-computeNewGivenWork' :: Ct -> TcS ()
-computeNewGivenWork' ct =
+computeNewGivenWork :: Ct -> TcS ()
+computeNewGivenWork ct =
   do asmps <- getFacts
      let active  = concatMap (`applyAsmp` ct) (map activate theRules)
          newWork = map mkGivenCt $ interactActiveRules active asmps
      traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
      updWorkListTcS (appendWorkListCt newWork)
+
 
 
 

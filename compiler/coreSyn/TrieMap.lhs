@@ -119,9 +119,6 @@ instance Ord k => TrieMap (Map.Map k) where
   alterTM k f m = Map.alter f k m
   foldTM k m z = Map.fold k z m
 
-xtMap :: Ord k => k -> XT a -> Map.Map k a -> Map.Map k a
-xtMap k f m = Map.alter f k m
-
 instance TrieMap UniqFM where
   type Key UniqFM = Unique
   emptyTM = emptyUFM
@@ -436,8 +433,7 @@ data CoercionMap a
        , km_trans  :: CoercionMap (CoercionMap a)
        , km_nth    :: IntMap.IntMap (CoercionMap a)
        , km_inst   :: CoercionMap (TypeMap a)
-       , km_type_nats :: Map.Map TypeNatCoAxiom
-                            (ListMap TypeMap (ListMap CoercionMap a))
+       , km_type_nats :: NameEnv (ListMap TypeMap (ListMap CoercionMap a))
        }
 
 wrapEmptyKM :: CoercionMap a
@@ -470,7 +466,7 @@ lkC env co m
     go (CoVarCo v)         = km_var    >.> lkVar env v
     go (SymCo c)           = km_sym    >.> lkC env c
     go (NthCo n c)         = km_nth    >.> lookupTM n >=> lkC env c
-    go (TypeNatCo co ts cs) = km_type_nats >.> lookupTM co         >=>
+    go (TypeNatCo co ts cs) = km_type_nats >.> lkNamed co          >=>
                                                lkList (lkT env) ts >=>
                                                lkList (lkC env) cs
 
@@ -489,7 +485,7 @@ xtC env (CoVarCo v)         f m = m { km_var 	= km_var m |> xtVar env  v f }
 xtC env (SymCo c)           f m = m { km_sym 	= km_sym m |> xtC env    c f }
 xtC env (NthCo n c)         f m = m { km_nth 	= km_nth m |> xtInt n |>> xtC env c f } 
 xtC env (TypeNatCo co ts cs) f m = m { km_type_nats = km_type_nats m
-                                     |>  xtMap co
+                                     |>  xtNamed co
                                      |>> xtList (xtT env) ts
                                      |>> xtList (xtC env) cs f}
 

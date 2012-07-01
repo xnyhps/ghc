@@ -16,13 +16,12 @@
 --
 module Coercion (
         -- * Main data type
-        Coercion(..), TypeNatCoAxiom(..), Var, CoVar,
+        Coercion(..), Var, CoVar,
         CoAxiomRule(..),
 
         -- ** Functions over coercions
         coVarKind,
         coercionType, coercionKind, coercionKinds, isReflCo,
-        coercionKindTypeNat,
         isReflCo_maybe,
         mkCoercionType,
 
@@ -101,7 +100,6 @@ import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import Control.Arrow (second)
 import FastString
-import TysPrim(typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon)
 
 import qualified Data.Data as Data hiding ( TyCon )
 \end{code}
@@ -151,7 +149,7 @@ data Coercion
   | SymCo Coercion
   | TransCo Coercion Coercion
 
-  | TypeNatCo TypeNatCoAxiom [Type] [Coercion]
+  | TypeNatCo CoAxiomRule [Type] [Coercion]
 
   -- These are destructors
   | NthCo Int Coercion          -- Zero-indexed
@@ -182,57 +180,8 @@ instance Data.Data CoAxiomRule where
   gunfold _ _  = error "gunfold"
   dataTypeOf _ = mkNoRepType "CoAxiomRule"
 
-
-
-data TypeNatCoAxiom
-
-  -- Definitional axioms (for the functions we store just the inputs)
-  = TnAddDef Integer Integer        -- 2 + 3 ~ 5
-  | TnMulDef Integer Integer        -- 2 * 3 ~ 6
-  | TnExpDef Integer Integer        -- 2 ^ 3 ~ 8
-  | TnLeqDef Integer Integer        -- 2 <=? 3 ~ True
-
-  -- Order
-  | TnLeqASym   -- forall a b.   (a <=? b ~ True, b <=? a ~ True) => a ~ b
-  | TnLeq0      -- forall a.     0 <=? a ~ True
-  | TnLeqRefl   -- forall a.     a <=? a ~ True
-  | TnLeqTrans  -- forall a b c. (a <=? b ~ True, b <=? c ~ TRue) => a <=? c ~ True
-  -- Note: Anti-symmetry is in the coercion type, TypeNatCoAxiom
-
-
-  -- Units and anihilators
-  | TnAdd0L      -- forall a. 0 + a ~ a
-  | TnAdd0R      -- forall a. a + 0 ~ a
-  | TnMul0L      -- forall a. 0 * a ~ 0
-  | TnMul0R      -- forall a. a * 0 ~ 0
-  | TnMul1L      -- forall a. 1 * a ~ a
-  | TnMul1R      -- forall a. a * 1 ~ a
-  | TnExp0L      -- forall a. (1 <=? a ~ True) => 0 ^ a ~ 0
-  | TnExp0R      -- forall a. a ^ 0 ~ 1
-  | TnExp1L      -- forall a. 1 ^ a ~ 1
-  | TnExp1R      -- forall a. a ^ 1 ~ a
-
-  -- Commutativity
-  | TnAddComm    -- forall a b c. (a + b ~ c) => b + a ~ c
-  | TnMulComm    -- forall a b c. (a * b ~ c) => b * a ~ c
-
-  -- Cancellation
-  | TnAddCancelL -- forall a b1 b2 c. ( a + b1 ~ c, a + b2 ~ c ) => b1 ~ b2
-  | TnMulCancelL -- forall a b1 b2 c. ( 1 <=? a ~ True
-                 --                   , a * b1 ~ c, a * b2 ~ c ) => b1 ~ b2
-  | TnExpCancelL -- forall a b1 b2 c. ( 2 <=? a ~ True
-                 --                   , a ^ b1 ~ c, a ^ b2 ~ c ) => b1 ~ b2
-
-  | TnAddCancelR -- forall a1 a2 b c. ( a1 + b ~ c, a2 + b ~ c ) => a1 ~ a2
-  | TnMulCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
-                 --                   , a1 * b ~ c, a2 * b ~ c ) => a1 ~ a2
-  | TnExpCancelR -- forall a1 a2 b c. ( 1 <=? b ~ True
-                 --                   , a1 ^ b ~ c, a2 ^ b ~ c ) => a1 ~ a2
-
-  -- XXX: Associativity, distributivity, and + ^ and ^ ^  interactions
-    deriving (Eq, Ord, Show, Data.Data, Data.Typeable)
-
-
+instance NamedThing CoAxiomRule where
+  getName = co_axr_name
 
 \end{code}
 
@@ -475,9 +424,6 @@ very high.
 instance Outputable Coercion where
   ppr = pprCo
 
-instance Outputable TypeNatCoAxiom where
-  ppr = text . show
-
 pprCo, pprParendCo :: Coercion -> SDoc
 pprCo       co = ppr_co TopPrec   co
 pprParendCo co = ppr_co TyConPrec co
@@ -509,8 +455,8 @@ ppr_co p (NthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pp
 ppr_co p (TypeNatCo co ts cs) = maybeParen p TopPrec $
                                 ppr_type_nat_co co ts cs
 
-ppr_type_nat_co :: TypeNatCoAxiom -> [Type] -> [Coercion] -> SDoc
-ppr_type_nat_co co ts ps = ppr co <> ppTs ts $$ nest 2 (ppPs ps)
+ppr_type_nat_co :: CoAxiomRule -> [Type] -> [Coercion] -> SDoc
+ppr_type_nat_co co ts ps = ppr (co_axr_name co) <> ppTs ts $$ nest 2 (ppPs ps)
   where
   ppTs []   = Outputable.empty
   ppTs [t]  = ptext (sLit "@") <> ppr_type TopPrec t
@@ -1229,7 +1175,9 @@ coercionKind co = go co
     go (NthCo d co)         = tyConAppArgN d <$> go co
     go (InstCo aco ty)      = go_app aco [ty]
 
-    go (TypeNatCo co ts _)  = coercionKindTypeNat co ts
+    go (TypeNatCo co ts _)  = let vs = co_axr_tvs co
+                              in Pair (substTyWith vs ts $ co_axr_lhs co)
+                                      (substTyWith vs ts $ co_axr_rhs co)
 
     go_app :: Coercion -> [Type] -> Pair Type
     -- Collect up all the arguments and apply all at once
@@ -1240,50 +1188,6 @@ coercionKind co = go co
 -- | Apply 'coercionKind' to multiple 'Coercion's
 coercionKinds :: [Coercion] -> Pair [Type]
 coercionKinds tys = sequenceA $ map coercionKind tys
-
-
-coercionKindTypeNat :: TypeNatCoAxiom -> [Type] -> Pair Type
-coercionKindTypeNat ax ts =
-  case (ax, ts) of
-
-    (TnAddDef a b, ~[])          -> Pair (mkAdd (mkN a) (mkN b)) (mkN (a + b))
-    (TnMulDef a b, ~[])          -> Pair (mkMul (mkN a) (mkN b)) (mkN (a * b))
-    (TnExpDef a b, ~[])          -> Pair (mkExp (mkN a) (mkN b)) (mkN (a ^ b))
-    (TnLeqDef _ _, ~[])    -> panic "tcCoercionKindTypeNat" "XXX: LeqDef"
-
-    (TnLeqASym, ~[a,b])          -> Pair a b
-    (TnLeq0,  ~[_])        -> panic "tcCoercionKindTypeNat" "XXX: Leq0"
-    (TnLeqRefl, ~[_])      -> panic "tcCoercionKindTypeNat" "XXX: LeqRefl"
-    (TnLeqTrans, ~[_,_,_]) -> panic "tcCoercionKindTypeNat" "XXX: LeqTrans"
-
-    (TnAdd0L, ~[a])              -> Pair (mkAdd (mkN 0) a      ) a
-    (TnMul0L, ~[a])              -> Pair (mkMul (mkN 0) a      ) (mkN 0)
-    (TnMul1L, ~[a])              -> Pair (mkMul (mkN 1) a      ) a
-    (TnExp0L, ~[a])              -> Pair (mkExp (mkN 0) a      ) (mkN 0)
-    (TnExp1L, ~[a])              -> Pair (mkExp (mkN 1) a      ) (mkN 1)
-
-    (TnAdd0R, ~[a])              -> Pair (mkAdd a (mkN 0)) a
-    (TnMul0R, ~[a])              -> Pair (mkMul a (mkN 0)) (mkN 0)
-    (TnMul1R, ~[a])              -> Pair (mkMul a (mkN 1)) a
-    (TnExp0R, ~[a])              -> Pair (mkExp a (mkN 0)) (mkN 1)
-    (TnExp1R, ~[a])              -> Pair (mkExp a (mkN 1)) a
-
-    (TnAddComm, ~[a,b,c])        -> Pair (mkAdd b a) c
-    (TnMulComm, ~[a,b,c])        -> Pair (mkMul b a) c
-
-    (TnAddCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
-    (TnMulCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
-    (TnExpCancelL, ~[_,b1,b2,_]) -> Pair b1 b2
-
-    (TnAddCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
-    (TnMulCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
-    (TnExpCancelR, ~[a1,a2,_,_]) -> Pair a1 a2
-
-  where mkAdd a b = mkTyConApp typeNatAddTyCon [a,b]
-        mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
-        mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
-        mkN n     = mkNumLitTy n
-
 
 \end{code}
 
