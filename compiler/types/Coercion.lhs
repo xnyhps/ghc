@@ -166,8 +166,7 @@ data Coercion
 -- In the longer run, it would probably be good to unify this and `CoAxiom`,
 -- as `CoAxiom` is the special case when `co_axr_asmps` is [].
 data CoAxiomRule = CoAxiomRule
-  { co_axr_unique   :: Unique
-  , co_axr_name     :: Name
+  { co_axr_name     :: Name
   , co_axr_tvs      :: [TyVar]        -- ^ Quantified variabes
   , co_axr_asmps    :: [(Type,Type)]  -- ^ Assumptions
   , co_axr_lhs      :: Type           -- ^ LHS of conclusion

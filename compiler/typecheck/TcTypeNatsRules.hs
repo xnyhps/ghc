@@ -13,7 +13,6 @@ import TysPrim  ( typeNatAddTyCon
                 )
 import Name     ( mkSystemName )
 import OccName  ( mkOccName, tcName )
-import Unique   ( mkPreludeMiscIdUnique )
 
 
 
@@ -45,17 +44,15 @@ fRules =
 
 --------------------------------------------------------------------------------
 
-mkAx :: Int -> String -> [TyVar] -> [(Type,Type)] -> Type -> Type -> CoAxiomRule
-mkAx u n vs asmps lhs rhs = CoAxiomRule
-  { co_axr_unique = mkAxUique u
-  , co_axr_name   = mkAxName n
+mkAx :: String -> [TyVar] -> [(Type,Type)] -> Type -> Type -> CoAxiomRule
+mkAx n vs asmps lhs rhs = CoAxiomRule
+  { co_axr_name   = mkAxName n
   , co_axr_tvs    = vs
   , co_axr_asmps  = asmps
   , co_axr_lhs    = lhs
   , co_axr_rhs    = rhs
   }
   where
-  mkAxUique  = mkPreludeMiscIdUnique
   mkAxName x = mkSystemName unboundKey (mkOccName tcName x)
 
 mkAdd :: Type -> Type -> Type
@@ -77,15 +74,15 @@ axName :: String -> Integer -> Integer -> String
 axName x a b = x ++ "_" ++ show a ++ "_" ++ show b
 
 axAddDef :: Integer -> Integer -> CoAxiomRule
-axAddDef a b = mkAx 1 (axName "AddDef" a b) [] []
+axAddDef a b = mkAx (axName "AddDef" a b) [] []
              (mkAdd (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a + b))
 
 axMulDef :: Integer -> Integer -> CoAxiomRule
-axMulDef a b = mkAx 2 (axName "MulDef" a b) [] []
+axMulDef a b = mkAx (axName "MulDef" a b) [] []
              (mkMul (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a * b))
 
 axExpDef :: Integer -> Integer -> CoAxiomRule
-axExpDef a b = mkAx 3 (axName "ExpDef" a b) [] []
+axExpDef a b = mkAx (axName "ExpDef" a b) [] []
              (mkExp (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a ^ b))
 
 
@@ -93,21 +90,21 @@ axExpDef a b = mkAx 3 (axName "ExpDef" a b) [] []
 -- reasoning too.
 bRules :: [CoAxiomRule]
 bRules =
-  [ bRule 10 "Add0L" (mkAdd n0 a) a
-  , bRule 11 "Add0R" (mkAdd a n0) a
+  [ bRule "Add0L" (mkAdd n0 a) a
+  , bRule "Add0R" (mkAdd a n0) a
 
-  , bRule 12 "Mul0L" (mkMul n0 a) n0
-  , bRule 13 "Mul0R" (mkMul a n0) n0
-  , bRule 14 "Mul1L" (mkMul n1 a) a
-  , bRule 15 "Mul1R" (mkMul a n1) a
+  , bRule "Mul0L" (mkMul n0 a) n0
+  , bRule "Mul0R" (mkMul a n0) n0
+  , bRule "Mul1L" (mkMul n1 a) a
+  , bRule "Mul1R" (mkMul a n1) a
 
   -- TnExp0L
-  , bRule 17 "TnExp0R" (mkExp a n0) n1
-  , bRule 18 "TnExp1L" (mkExp n1 a) n1
-  , bRule 19 "TnExp1R" (mkExp a n1) a
+  , bRule "TnExp0R" (mkExp a n0) n1
+  , bRule "TnExp1L" (mkExp n1 a) n1
+  , bRule "TnExp1R" (mkExp a n1) a
   ]
   where
-  bRule x y = mkAx x y (take 1 natVars) []
+  bRule y   = mkAx y (take 1 natVars) []
   a : _     = map mkTyVarTy natVars
   n0        = mkNumLitTy 0
   n1        = mkNumLitTy 1
@@ -116,7 +113,7 @@ bRules =
 
 
 axAddComm :: CoAxiomRule
-axAddComm = mkAx 30 "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
+axAddComm = mkAx "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
   where a : b : c : _ = map mkTyVarTy natVars
 
 
