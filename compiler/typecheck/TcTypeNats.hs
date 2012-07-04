@@ -1,11 +1,5 @@
 module TcTypeNats where
 
-import TcSMonad( TcS, emitFrozenError, setEvBind )
-import TcCanonical( StopOrContinue(..) )
-import TcRnTypes( Ct(..), isGiven, isWanted, ctEvidence, ctEvId )
-
-import TcTypeNatsRules( bRules, theRules, axAddDef, axMulDef, axExpDef, natVars)
-
 import PrelNames( typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
@@ -16,7 +10,7 @@ import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( CoAxiomRule(..) )
-import Type     ( Type, isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
+import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , mkEqPred, mkTyConApp
                 , splitTyConApp_maybe
                 , eqType
@@ -24,17 +18,21 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, mkTyVarTy, mkNumLitTy
 import Bag      ( bagToList )
 
 -- From type checker
-import TcRnTypes      ( ctEvTerm, isGivenCt
-                      , CtEvidence(..), CtLoc(..), SkolemInfo(..)
-                      , mkNonCanonical
-                      )
+import TcTypeNatsRules( bRules, theRules, axAddDef, axMulDef, axExpDef, natVars)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
+import TcCanonical( StopOrContinue(..) )
+import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
+                  , ctEvTerm, isGivenCt
+                  , CtEvidence(..), CtLoc(..), SkolemInfo(..)
+                  , mkNonCanonical
+                  )
 import TcEvidence     ( EvTerm(..)
                       , evTermCoercion
                       , TcCoercion(TcTypeNatCo)
                       , mkTcSymCo, mkTcTransCo
                       )
-import TcSMonad ( InertSet
+import TcSMonad ( TcS, emitFrozenError, setEvBind
+                , InertSet
                 , getTcSInerts, inert_cans, inert_funeqs
                 , updWorkListTcS, appendWorkListCt
                 , traceTcS
@@ -122,10 +120,75 @@ impossible _ = False
 
 --------------------------------------------------------------------------------
 
-type SimpleSubst = [ (TyVar, Type) ]
-type Eqn         = (TypePat, TypePat)
+{- `TypePat`s are used in `ActiveRule`s to distinguish between the variables
+bound by the rule, and other variables occuring in types.  For our purposes,
+other variables in types are simply uninterpreted constants, while `TPVar`s
+need to be instantiated for the rule to fire.
 
--- Check to see if a type  macthes a type pattern.
+Invariant: The children of `TPCon` contain at least one variable.
+`TPCon`s with no variables should be represened with type applications
+in `TPOther`. -}
+
+data TypePat     = TPVar TyVar | TPCon TyCon [TypePat] | TPOther Type
+
+
+-- A smart constructor for the `TypePat` invariant.
+tpCon :: TyCon -> [TypePat] -> TypePat
+tpCon tc tps = case check tps of
+                 Just ts  -> TPOther $ mkTyConApp tc ts
+                 Nothing  -> TPCon tc tps
+  where
+  check (TPOther x : xs)  = do ys <- check xs
+                               return (x : ys)
+  check (_ : _)           = Nothing
+  check []                = return []
+
+-- Convert a `Type` to a `TypePat`, abstracting the given set of variables.
+toTypePat :: [TyVar] -> Type -> TypePat
+toTypePat as ty
+  | Just x <- getTyVar_maybe ty, x `elem` as  = TPVar x
+toTypePat as ty
+  | Just (tc,ts) <- splitTyConApp_maybe ty = tpCon tc (map (toTypePat as) ts)
+toTypePat _ ty  = TPOther ty
+
+
+
+
+{- A `SimpSubst` instantiates the `TPVar`s in a rule.  Note that
+the domain of the substitution is `TPVar`s but its codomain is types,
+which may not mention `TPVar`s.  Thus `SimpSubst` are always idempotent
+because---esentially---the RHS contains no free variables.  For example,
+consider the substiution:
+
+    [ ("x", TVar "x") ]
+
+The `x` on the RHS refers to a variable bound by a rule, while
+the `x` on the LHS refers to an uninterpreted constant.
+-}
+
+type SimpleSubst = [ (TyVar, Type) ]
+
+-- Applying substitutions to (structures containing) `TypePat`s.
+class AppSimpSubst t where
+  apSimpSubst :: SimpleSubst -> t -> t
+
+instance AppSimpSubst a => AppSimpSubst [a] where
+  apSimpSubst su = map (apSimpSubst su)
+
+instance (AppSimpSubst a, AppSimpSubst b) => AppSimpSubst (a,b) where
+  apSimpSubst su (x,y) = (apSimpSubst su x, apSimpSubst su y)
+
+instance AppSimpSubst TypePat where
+  apSimpSubst su t@(TPVar x)   = case lookup x su of
+                                   Just t1 -> TPOther t1
+                                   Nothing -> t
+  apSimpSubst su (TPCon tc ts) = tpCon tc (apSimpSubst su ts)
+  apSimpSubst _ t@(TPOther {}) = t
+
+
+
+
+-- Check to see if a type macthes a type pattern.
 matchType :: TypePat -> Type -> Maybe SimpleSubst
 matchType (TPVar x) t2 = return [(x,t2)]
 matchType (TPCon tc1 ts1) t2
@@ -146,44 +209,26 @@ matchTypes (x : xs) (y : ys)  =
 matchTypes _ _                = Nothing
 
 
-
-class AppSimpSubst t where
-  apSimpSubst :: SimpleSubst -> t -> t
-
-instance AppSimpSubst a => AppSimpSubst [a] where
-  apSimpSubst su = map (apSimpSubst su)
-
-instance (AppSimpSubst a, AppSimpSubst b) => AppSimpSubst (a,b) where
-  apSimpSubst su (x,y) = (apSimpSubst su x, apSimpSubst su y)
-
-instance AppSimpSubst TypePat where
-  apSimpSubst su t@(TPVar x)   = case lookup x su of
-                                   Just t1 -> TPOther t1
-                                   Nothing -> t
-  apSimpSubst su (TPCon tc ts) = tpCon tc (apSimpSubst su ts)
-  apSimpSubst _ t@(TPOther {}) = t
-
-
-
-type Solver = Eqn -> Maybe (SimpleSubst, EvTerm)
+--------------------------------------------------------------------------------
 
 -- Tries to instantuate the equation with the constraint.
-byAsmp :: Ct -> Solver
+byAsmp :: Ct -> (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
 
-byAsmp ct@(CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) (lhs,rhs) =
-  do su <- matchTypes [lhs, rhs] [ mkTyConApp tc ts, t ]
+byAsmp ct (lhs,rhs) =
+  do (t1,t2) <- case ct of
+
+                  CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t } ->
+                                                Just (mkTyConApp tc ts, t)
+
+                  _ -> Nothing
+
+     su <- matchTypes [lhs,rhs] [t1,t2]
      return (su, ctEvTerm (ctEvidence ct))
-
-byAsmp ct@(CTyEqCan { cc_tyvar = x, cc_rhs = t }) (lhs,rhs) =
-  do su <- matchTypes [lhs, rhs] [ mkTyVarTy x, t ]
-     return (su, ctEvTerm (ctEvidence ct))
-
-byAsmp _ _ = Nothing
 
 
 
 -- Check if we can solve the equation using one of the family of axioms.
-byAxiom :: Solver
+byAxiom :: (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
 
 byAxiom (TPOther ty, TPVar r)
   | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
@@ -237,24 +282,9 @@ byAxiom (TPOther ty, TPOther tp3)
 
 byAxiom _ = Nothing
 
-
-{- A (possibly over-compliacted) example illustrating how the
-order in which we do the matching for the assumptions makes a difference
-to the conlusion of the rule.  I am not sure that at present we have rules
-that are as complex.
-
-
-asmps:
-G: 2 + p = q1
-G: 3 + p = q2
-
-rule:
-a ^ b = c, a + p = q1, b + p = q2, c + y = 10 => P ...
-
-P { a = 2, b = 3, c = 8, y = 2 }
-P { a = 3, b = 2, c = 9, y = 1 }
-P { a = 2, b = 2, c = 4, y = 6 }
--}
+useAxiom :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
+useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
+  where mk = TcTypeNatCo
 
 
 
@@ -275,6 +305,68 @@ solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
 solveWithAxiom _ = Nothing
 
 --------------------------------------------------------------------------------
+
+-- An `ActiveRule` is a partially constructed proof for some predicate.
+data ActiveRule = AR
+  { proof     :: [Type] -> [EvTerm] -> EvTerm
+  , doneTys   :: [TypePat]
+  , doneArgs  :: [(Int,EvTerm)]
+
+  , todoArgs  :: [(Int,(TypePat,TypePat))]
+    {- todoArgs ==
+        [ (n, (cvt t1, cvt t2))
+            | (n,(t1,t2)) <- zip [ 0 .. ] (co_axr_asmps axRule)
+            , n `notElem` map fst doneArgs
+            , let cvt = apSimpSubst doneArgs . toTypePat (co_axr_tvs axRule)
+        ]
+    -}
+
+  , concl    :: (TypePat,TypePat)
+  }
+
+
+activate :: CoAxiomRule -> ActiveRule
+activate r = AR
+  { proof     = useAxiom r
+  , doneTys   = map TPVar vs
+  , doneArgs  = []
+  , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
+  , concl     = (cvt (co_axr_lhs r), cvt (co_axr_rhs r))
+  }
+  where cvt = toTypePat vs
+        vs  = co_axr_tvs r
+
+{- Function rules have this form:
+
+    p: a + b ~ c1, q: a + b ~ c2
+    sym p `trans` q : c1 ~ c2
+
+The rest of GHC's constraint solver already knows about this type of
+rule but we need them here too so that they can get interacted with
+the infinity famiy of built-in axioms, thus performing evaluation.
+
+For example, if we have `5 + 3 ~ x` we can use the fun-rule for `(+)`
+to conclude that `x = 8`:
+
+    (5 + 3 ~ x, 5 + 3 ~ 8) => (x ~ 8)
+-}
+
+funRule :: TyCon -> ActiveRule
+funRule tc = AR
+  { proof     = \_ [p,q] -> EvCoercion
+                          $ mkTcTransCo (mkTcSymCo $ evTermCoercion p)
+                                        (evTermCoercion q)
+  , doneTys   = map TPVar [ a, b, c1, c2 ]
+  , doneArgs  = []
+  , todoArgs  = [ (0, (TPCon tc [ TPVar a, TPVar b], TPVar c1))
+                , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
+  , concl     = (TPVar c1, TPVar c2)
+  }
+  where a : b : c1 : c2 : _ = natVars
+
+
+
+
 
 
 {- Check if the `ActiveRule` is completely instantiated and, if so,
@@ -323,7 +415,7 @@ applyAxiom1 r = msum $ map attempt $ todoArgs r
 applyAxiom :: ActiveRule -> ActiveRule
 applyAxiom r = maybe r applyAxiom (applyAxiom1 r)
 
-{- The various ways in which as assumption fits the arguments of a rule.
+{- The various ways in which an assumption fits the arguments of a rule.
 Note: currently, we use an assumption at most once per rule.
 For example, assumption `p` will not make instantiations like `R(p,p)`.
 -}
@@ -341,6 +433,31 @@ interactActiveRules rs [] = mapMaybe fireRule rs
 interactActiveRules rs (c : cs) = interactActiveRules newRs cs
   where
   newRs = [ r2 | r1 <- rs, r2 <- applyAsmp (applyAxiom r1) c ]
+
+
+{- A (possibly over-compliacted) example illustrating how the
+order in which we do the matching for the assumptions makes a difference
+to the conlusion of the rule.  I am not sure that at present we have rules
+that are as complex.
+
+
+asmps:
+G: 2 + p = q1
+G: 3 + p = q2
+
+rule:
+a ^ b = c, a + p = q1, b + p = q2, c + y = 10 => P ...
+
+P { a = 2, b = 3, c = 8, y = 2 }
+P { a = 3, b = 2, c = 9, y = 1 }
+P { a = 2, b = 2, c = 4, y = 6 }
+-}
+
+
+
+
+
+--------------------------------------------------------------------------------
 
 mkGivenCt :: (EvTerm,Type,Type) -> Ct
 mkGivenCt (ev,t1,t2) = mkNonCanonical $
@@ -364,84 +481,6 @@ computeNewGivenWork ct =
          newWork = map mkGivenCt $ interactActiveRules active asmps
      traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
      updWorkListTcS (appendWorkListCt newWork)
-
-
-
-useAxiom :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
-useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
-  where mk = TcTypeNatCo
-
-
-
--- p: a + b ~ c1, q: a + b ~ c2
--- sym p `trans` q
-funRule :: TyCon -> ActiveRule
-funRule tc = AR
-  { proof     = \_ [p,q] -> EvCoercion
-                          $ mkTcTransCo (mkTcSymCo $ evTermCoercion p)
-                                        (evTermCoercion q)
-  , doneTys   = map TPVar [ a, b, c1, c2 ]
-  , doneArgs  = []
-  , todoArgs  = [ (0, (TPCon tc [ TPVar a, TPVar b], TPVar c1))
-                , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
-  , concl     = (TPVar c1, TPVar c2)
-  }
-  where a : b : c1 : c2 : _ = natVars
-
-
-data ActiveRule = AR
-  { proof     :: [Type] -> [EvTerm] -> EvTerm
-  , doneTys   :: [TypePat]
-  , doneArgs  :: [(Int,EvTerm)]
-
-  , todoArgs  :: [(Int,(TypePat,TypePat))]
-    {- todoArgs ==
-        [ (n, (cvt t1, cvt t2))
-            | (n,(t1,t2)) <- zip [ 0 .. ] (co_axr_asmps axRule)
-            , n `notElem` map fst doneArgs
-            , let cvt = apSimpSubst doneArgs . toTypePat (co_axr_tvs axRule)
-        ]
-    -}
-
-  , concl    :: (TypePat,TypePat)
-  }
-
-
-activate :: CoAxiomRule -> ActiveRule
-activate r = AR
-  { proof     = useAxiom r
-  , doneTys   = map TPVar vs
-  , doneArgs  = []
-  , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
-  , concl     = (cvt (co_axr_lhs r), cvt (co_axr_rhs r))
-  }
-  where cvt = toTypePat vs
-        vs  = co_axr_tvs r
-
-
-
-data TypePat     = TPVar TyVar | TPCon TyCon [TypePat] | TPOther Type
-
-tpCon :: TyCon -> [TypePat] -> TypePat
-tpCon tc tps = case check tps of
-                 Just ts  -> TPOther $ mkTyConApp tc ts
-                 Nothing  -> TPCon tc tps
-  where
-  check (TPOther x : xs)  = do ys <- check xs
-                               return (x : ys)
-  check (_ : _)           = Nothing
-  check []                = return []
-
-
-
-toTypePat :: [TyVar] -> Type -> TypePat
-toTypePat as ty
-  | Just x <- getTyVar_maybe ty, x `elem` as  = TPVar x
-toTypePat as ty
-  | Just (tc,ts) <- splitTyConApp_maybe ty = tpCon tc (map (toTypePat as) ts)
-toTypePat _ ty  = TPOther ty    -- assumes no variables here.
-
-
 
 
 
