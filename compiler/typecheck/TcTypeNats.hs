@@ -11,7 +11,7 @@ import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
 import Coercion ( CoAxiomRule(..) )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
-                , mkEqPred, mkTyConApp
+                , mkTyConApp
                 , splitTyConApp_maybe
                 , eqType
                 )
@@ -26,11 +26,12 @@ import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , CtEvidence(..), CtLoc(..), SkolemInfo(..)
                   , mkNonCanonical
                   )
-import TcEvidence     ( EvTerm(..)
-                      , evTermCoercion
-                      , TcCoercion(TcTypeNatCo)
-                      , mkTcSymCo, mkTcTransCo
-                      )
+import TcType     ( mkTcEqPred )
+import TcEvidence ( EvTerm(..)
+                  , evTermCoercion
+                  , TcCoercion(TcTypeNatCo)
+                  , mkTcSymCo, mkTcTransCo, mkTcReflCo, mkTcTyConAppCo
+                  )
 import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , InertSet
                 , getTcSInerts, inert_cans, inert_funeqs
@@ -371,20 +372,47 @@ funRule tc = AR
 
 {- Check if the `ActiveRule` is completely instantiated and, if so,
 compute the resulting equation and the evidence for it. -}
-fireRule :: ActiveRule -> Maybe (EvTerm, Type, Type)
+fireRule :: ActiveRule -> Maybe Ct
 fireRule r =
   do guard $ null $ todoArgs r
      let (t1,t2) = concl r
 
-     ts <- mapM cvt (doneTys r)
+     ts  <- mapM cvt (doneTys r)
      lhs <- cvt t1
      rhs <- cvt t2
      let evs = map snd $ sortBy (comparing fst) $ doneArgs r
 
-     return (proof r ts evs, lhs, rhs)
+         ev  = Given { ctev_gloc = CtLoc UnkSkol noSrcSpan []
+                     , ctev_pred = mkTcEqPred lhs rhs
+                     , ctev_evtm = proof r ts evs
+                     }
 
-  where cvt (TPOther t) = Just t
-        cvt _           = Nothing
+         sym_ev = Given { ctev_gloc = CtLoc UnkSkol noSrcSpan []
+                        , ctev_pred = mkTcEqPred rhs lhs
+                        , ctev_evtm = EvCoercion $ mkTcSymCo
+                                    $ evTermCoercion $ proof r ts evs }
+     case () of
+       _ | eqType lhs rhs -> Nothing    -- not interested in trivial facts
+
+       _ | Just (tc,ts) <- splitTyConApp_maybe lhs ->
+            return CFunEqCan { cc_ev = ev, cc_depth = 0
+                             , cc_fun = tc, cc_tyargs = ts, cc_rhs = rhs }
+
+       _ | Just x <- getTyVar_maybe lhs ->
+            return CTyEqCan { cc_ev = ev, cc_depth = 0
+                            , cc_tyvar = x, cc_rhs = rhs }
+
+       _ | Just x <- getTyVar_maybe rhs ->
+            return CTyEqCan { cc_ev = sym_ev, cc_depth = 0
+                            , cc_tyvar = x, cc_rhs = lhs }
+
+       _ | otherwise ->
+            return $ mkNonCanonical ev
+
+  where
+  cvt (TPOther t) = Just t
+  cvt _           = Nothing
+
 
 
 -- Define one of the arguments of an active rule.
@@ -428,7 +456,7 @@ applyAsmp r ct =
   attempt (n,eq) = do ok <- byAsmp ct eq
                       return (n,ok)
 
-interactActiveRules :: [ActiveRule] -> [Ct] -> [(EvTerm,Type,Type)]
+interactActiveRules :: [ActiveRule] -> [Ct] -> [Ct]
 interactActiveRules rs [] = mapMaybe fireRule rs
 interactActiveRules rs (c : cs) = interactActiveRules newRs cs
   where
@@ -453,18 +481,45 @@ P { a = 3, b = 2, c = 9, y = 1 }
 P { a = 2, b = 2, c = 4, y = 6 }
 -}
 
+--------------------------------------------------------------------------------
+
+{- Rewriting with equality.  This probably duplicates functionality
+in other parts of the constraint solver, so we'd probably want to
+combine these later. (ISD: I'm not sure exactly how/what to combine so
+I'm adding this code so that I can progress with the implementation
+of the number solver.  -}
+
+{- Equations (with proofs) in a normalized form.
+This is similar to an ordinary substitution but we also keep
+the evidence explaining why the variable is equal to the type. -}
+
+type EqnSubst = [(TyVar, (TcCoercion,Type))]
+
+-- Apply a substitution.  `rewrite su t = (c,t1)` where `c : t ~ t1`.
+rewriteType :: EqnSubst -> Type -> (TcCoercion, Type)
+rewriteType su t
+  | Just x <- getTyVar_maybe t, Just r <- lookup x su = r
+  | Just (tc,ts) <- splitTyConApp_maybe t =
+      let (cs,ts1) = unzip $ map (rewriteType su) ts
+      in (mkTcTyConAppCo tc cs, mkTyConApp tc ts1)
+  | otherwise = (mkTcReflCo t, t)
+
+
+{-
+-- Given `p : t1 ~ t2`, apply the substitution to derive
+-- `p' : t1' ~ t2'`, where t1' and t2' are the rewritten versions of t1 and t2.
+rewriteFact :: EqnSubst -> Fact -> Fact
+rewriteFact su (p, t1, t2) =
+  let (c1,t1') = rewriteType su t1
+      (c2,t2') = rewriteType su t2
+  in (EvCoercion $ mkTcSymCo c1 `mkTcTransCo` evTermCoercion p `mkTcTransCo` c2
+     , t1', t2')
+-}
 
 
 
 
 --------------------------------------------------------------------------------
-
-mkGivenCt :: (EvTerm,Type,Type) -> Ct
-mkGivenCt (ev,t1,t2) = mkNonCanonical $
-  Given { ctev_gloc = CtLoc UnkSkol noSrcSpan [] -- XXX: something better?
-        , ctev_pred = mkEqPred t1 t2
-        , ctev_evtm = ev
-        }
 
 -- Get the facts that are known for sure.
 -- Note: currently we do not use the solved ones but we probably should.
@@ -477,8 +532,9 @@ getFacts =
 computeNewGivenWork :: Ct -> TcS ()
 computeNewGivenWork ct =
   do asmps <- getFacts
+     -- XXX: Add fun rules.
      let active  = concatMap (`applyAsmp` ct) (map activate theRules)
-         newWork = map mkGivenCt $ interactActiveRules active asmps
+         newWork = interactActiveRules active asmps
      traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
      updWorkListTcS (appendWorkListCt newWork)
 
