@@ -7,6 +7,7 @@ import PrelNames( typeNatAddTyFamName
 
 import Outputable ( ppr, pprWithCommas
                   , Outputable
+                  , SDoc
                   , (<>), (<+>), colon, text, vcat, parens, braces
                   )
 import SrcLoc   ( noSrcSpan )
@@ -33,6 +34,8 @@ import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , ctEvTerm, isGivenCt
                   , CtEvidence(..), CtLoc(..), SkolemInfo(..)
                   , mkNonCanonical
+                  , getWantedLoc
+                  , ctEvPred
                   )
 import TcType     ( mkTcEqPred )
 import TcEvidence ( EvTerm(..)
@@ -54,7 +57,7 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
 import Data.Maybe ( isNothing, mapMaybe )
 import Data.List  ( sortBy, partition )
 import Data.Ord   ( comparing )
-import Control.Monad ( msum, guard )
+import Control.Monad ( msum, guard, when )
 
 -- import Debug.Trace
 
@@ -71,29 +74,34 @@ typeNatStage' _dflags ct
 
   -- XXX: Probably need to add the 'ct' to somewhere
   | impossible ct =
-      do traceTcS "NAT: impssoble: " (ppr ct)
+      do natTrace "impssoble: " (ppr ct)
          emitFrozenError ev (cc_depth ct)
          return Stop
 
   | isGiven ev =
     case solve ct of
-      Just _ -> return Stop                 -- trivial fact
-      _      -> do computeNewGivenWork ct   -- add some new facts (if any)
-                   return $ ContinueWith ct
+      Just _ -> return Stop              -- trivial fact
+      _      -> checkBad =<< computeNewGivenWork ct
 
   | isWanted ev =
     case solve ct of
-      Just c  -> do traceTcS "NAT: solved wanted: " (ppr ct)
+      Just c  -> do natTrace "solved wanted: " (ppr ct)
                     setEvBind (ctEvId ev) c
                     return Stop
-      Nothing -> do traceTcS "NAT: failed to solve wanted: " (ppr ct)
-                    return $ ContinueWith ct   --- XXX: Try improvement here
+      Nothing -> do natTrace "failed to solve wanted: " (ppr ct)
+                    checkBad =<< computeNewDerivedWork ct
 
   -- XXX: TODO
   | otherwise = return $ ContinueWith ct
 
 
-  where ev = ctEvidence ct
+  where
+  ev = ctEvidence ct
+  checkBad bad
+    | null bad  = return (ContinueWith ct)
+    | otherwise = do natTrace "Contradictions:" (vcat $ map ppr bad)
+                     emitFrozenError ev (cc_depth ct)
+                     return Stop
 
 
 --------------------------------------------------------------------------------
@@ -538,6 +546,8 @@ P { a = 2, b = 2, c = 4, y = 6 }
 
 --------------------------------------------------------------------------------
 
+-- XXX: These are not used at the moment.
+
 {- Rewriting with equality.  This probably duplicates functionality
 in other parts of the constraint solver, so we'd probably want to
 combine these later. (ISD: I'm not sure exactly how/what to combine so
@@ -589,41 +599,78 @@ getAllCts =
   do is <- getTcSInerts
      return $ foldFamHeadMap (:) [] $ inert_funeqs $ inert_cans is
 
-allRules :: [ActiveRule]
-allRules = funRule typeNatAddTyCon
-         : funRule typeNatMulTyCon
-         : funRule typeNatExpTyCon
-         : map activate theRules
 
-computeNewGivenWork :: Ct -> TcS ()
-computeNewGivenWork ct =
-  do asmps <- getFacts
-     let active  = concatMap (`applyAsmp` ct) allRules
-         newWork = interactActiveRules active asmps
-         (bad,good) = partition isBad newWork
+--------------------------------------------------------------------------------
 
-     traceTcS "NATS: SOLVER GIVENS CONTRADICTIONS:" (vcat $ map ppr bad)
-     mapM_ (\x -> emitFrozenError (ctEvidence x) (cc_depth x)) bad
+{- Add a new constraint to the inert set.
+The resulting constraints are return in `Given` form because they have
+proofs.  When the new constraint was a "wanted", we discard the proofs
+and convert them to "derived".
 
-     traceTcS "NATS: SOLVER NEW GIVENS:" (vcat $ map ppr good)
-     updWorkListTcS (appendWorkListCt good)
-  where
+The first set of constraints are ones that indicate a contradiction
+                                                          (e.g., 2 ~ 3).
+The second set are "good" constraints (not obviously contradicting each other).
+-}
+interactCt :: Ct -> [Ct] -> ([Ct],[Ct])
+interactCt ct asmps =
+  let active  = concatMap (`applyAsmp` ct)
+              $ funRule typeNatAddTyCon
+              : funRule typeNatMulTyCon
+              : funRule typeNatExpTyCon
+              : map activate theRules
+
+      newWork = interactActiveRules active asmps
+  in partition isBad newWork
+
+ where
   -- cf. `fireRule`: the only way to get a non-canonical constraint
   -- is if it impossible to solve.
   isBad (CNonCanonical {})  = True
   isBad _                   = False
 
-{-
-computeNewDerivedWork :: Ct -> TcS ()
-computeNewDerivedWork ct =
-  do asmps <- getAllCts
-     let active  = concatMap (`applyAsmp` ct) allRules
-         newWork = interactActiveRules active asmps
-     traceTcS "NATS: SOLVER NEW DERIVED:" (vcat $ map ppr newWork)
-     updWorkListTcS (appendWorkListCt newWork)
-  where
-  cvt 
+
+
+{- Compute additional givens, computed by combining this one with
+existing givens.
+
+Returns any obvious contradictions that we found.
 -}
+computeNewGivenWork :: Ct -> TcS [Ct]
+computeNewGivenWork ct =
+  do (bad,good) <- interactCt ct `fmap` getFacts
+
+     when (null bad) $
+       do natTrace "New givens:" (vcat $ map ppr good)
+          updWorkListTcS (appendWorkListCt good)
+
+     return bad
 
 
+{- Compute additional work, assuming that the wanted will stay for now.
+The additional work is always "derived" (i.e., facts we can conclude
+by interactig the constraint with existing constraints.
+
+Returns any obvious contradictions that we found. -}
+
+computeNewDerivedWork :: Ct -> TcS [Ct]
+computeNewDerivedWork ct =
+  do (bad,good) <- interactCt ct `fmap` getAllCts
+     let newWork = map cvtEv good
+
+     when (null bad) $
+       do natTrace "New derived:" (vcat $ map ppr newWork)
+          updWorkListTcS (appendWorkListCt newWork)
+
+     return (map cvtEv bad)
+
+  where
+  cvtEv e = e { cc_ev = Derived { ctev_wloc = getWantedLoc (cc_ev ct)
+                                , ctev_pred = ctEvPred (cc_ev e)
+                                } }
+
+
+--------------------------------------------------------------------------------
+
+natTrace :: String -> SDoc -> TcS ()
+natTrace x y = traceTcS ("[NATS] " ++ x) y
 
