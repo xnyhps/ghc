@@ -1327,6 +1327,7 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
                -- Don't try to typecheck if the renamer fails!
         ; ghciStep <- getGhciStepIO
         ; uniq <- newUnique
+        ; interPrintName <- getInteractivePrintName
         ; let fresh_it  = itName uniq loc
               matches   = [mkMatch [] rn_expr emptyLocalBinds]
               -- [it = expr]
@@ -1345,7 +1346,7 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
                                            (HsVar bindIOName) noSyntaxExpr
 
               -- [; print it]
-              print_it  = L loc $ ExprStmt (nlHsApp (nlHsVar printName) (nlHsVar fresh_it))
+              print_it  = L loc $ ExprStmt (nlHsApp (nlHsVar interPrintName) (nlHsVar fresh_it))
                                            (HsVar thenIOName) noSyntaxExpr placeHolderType
 
         -- The plans are:
