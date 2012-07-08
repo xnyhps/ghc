@@ -5,7 +5,10 @@ import PrelNames( typeNatAddTyFamName
                 , typeNatExpTyFamName
                 )
 
-import Outputable ( ppr, vcat )
+import Outputable ( ppr, pprWithCommas
+                  , Outputable
+                  , (<>), (<+>), colon, text, vcat, parens, braces
+                  )
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
@@ -15,7 +18,12 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , splitTyConApp_maybe
                 , eqType
                 )
+import TysPrim  ( typeNatAddTyCon
+                , typeNatMulTyCon
+                , typeNatExpTyCon
+                )
 import Bag      ( bagToList )
+import DynFlags ( DynFlags )
 
 -- From type checker
 import TcTypeNatsRules( bRules, theRules, axAddDef, axMulDef, axExpDef, natVars)
@@ -38,25 +46,33 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , updWorkListTcS, appendWorkListCt
                 , traceTcS
                 , partCtFamHeadMap
+                , foldFamHeadMap
+                , getDynFlags
                 )
 
 -- From base libraries
 import Data.Maybe ( isNothing, mapMaybe )
-import Data.List  ( sortBy )
+import Data.List  ( sortBy, partition )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard )
 
-
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
 
 typeNatStage :: Ct -> TcS StopOrContinue
-typeNatStage ct
+typeNatStage ct =
+  do fs <- getDynFlags
+     typeNatStage' fs ct
+
+typeNatStage' :: DynFlags -> Ct -> TcS StopOrContinue
+typeNatStage' _dflags ct
 
   -- XXX: Probably need to add the 'ct' to somewhere
   | impossible ct =
-      do emitFrozenError ev (cc_depth ct)
+      do traceTcS "NAT: impssoble: " (ppr ct)
+         emitFrozenError ev (cc_depth ct)
          return Stop
 
   | isGiven ev =
@@ -67,9 +83,11 @@ typeNatStage ct
 
   | isWanted ev =
     case solve ct of
-      Just c  -> do setEvBind (ctEvId ev) c
+      Just c  -> do traceTcS "NAT: solved wanted: " (ppr ct)
+                    setEvBind (ctEvId ev) c
                     return Stop
-      Nothing -> return $ ContinueWith ct   --- XXX: Try improvement here
+      Nothing -> do traceTcS "NAT: failed to solve wanted: " (ppr ct)
+                    return $ ContinueWith ct   --- XXX: Try improvement here
 
   -- XXX: TODO
   | otherwise = return $ ContinueWith ct
@@ -131,6 +149,11 @@ Invariant: The children of `TPCon` contain at least one variable.
 in `TPOther`. -}
 
 data TypePat     = TPVar TyVar | TPCon TyCon [TypePat] | TPOther Type
+
+instance Outputable TypePat where
+  ppr (TPVar x)     = text "?" <> ppr x
+  ppr (TPCon x xs)  = ppr x <> parens (pprWithCommas ppr xs)
+  ppr (TPOther x)   = ppr x
 
 
 -- A smart constructor for the `TypePat` invariant.
@@ -309,7 +332,8 @@ solveWithAxiom _ = Nothing
 
 -- An `ActiveRule` is a partially constructed proof for some predicate.
 data ActiveRule = AR
-  { proof     :: [Type] -> [EvTerm] -> EvTerm
+  { isSym     :: Bool -- See Note [Symmetric Rules]
+  , proof     :: [Type] -> [EvTerm] -> EvTerm
   , doneTys   :: [TypePat]
   , doneArgs  :: [(Int,EvTerm)]
 
@@ -325,10 +349,35 @@ data ActiveRule = AR
   , concl    :: (TypePat,TypePat)
   }
 
+{- Note [Symmetric Rules]
 
-activate :: CoAxiomRule -> ActiveRule
-activate r = AR
-  { proof     = useAxiom r
+For symmetric rules, we look for at most one argument that can be
+satisfied by an assumption.  For example, the function rules are symmetric:
+
+(a + b ~ c1, a + b ~ c2) => c1 ~ c2
+
+Notice that if we have an assumtion that matches the first argument,
+there is no point in checking if this same assumption matches the second
+one because we would just end up with another way to prove the same thing.
+
+-}
+
+instance Outputable ActiveRule where
+  ppr r =
+    braces (pprWithCommas ppr (doneTys r)) <+>
+    parens (pprWithCommas ppArg (todoArgs r)) <+> text "=>" <+>
+    ppEq (concl r)
+    where
+    ppArg (x,e) = ppr x <> colon <+> ppr e
+    ppEq (a,b)  = ppr a <+> text "~" <+> ppr b
+
+
+
+
+activate :: (CoAxiomRule,Bool) -> ActiveRule
+activate (r,sym) = AR
+  { isSym     = sym
+  , proof     = useAxiom r
   , doneTys   = map TPVar vs
   , doneArgs  = []
   , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
@@ -354,7 +403,8 @@ to conclude that `x = 8`:
 
 funRule :: TyCon -> ActiveRule
 funRule tc = AR
-  { proof     = \_ [p,q] -> EvCoercion
+  { isSym     = True
+  , proof     = \_ [p,q] -> EvCoercion
                           $ mkTcTransCo (mkTcSymCo $ evTermCoercion p)
                                         (evTermCoercion q)
   , doneTys   = map TPVar [ a, b, c1, c2 ]
@@ -364,7 +414,6 @@ funRule tc = AR
   , concl     = (TPVar c1, TPVar c2)
   }
   where a : b : c1 : c2 : _ = natVars
-
 
 
 
@@ -406,6 +455,8 @@ fireRule r =
             return CTyEqCan { cc_ev = sym_ev, cc_depth = 0
                             , cc_tyvar = x, cc_rhs = lhs }
 
+       -- The only possibility here is something like: 2 ~ 3
+       -- which means we've detected an error!
        _ | otherwise ->
             return $ mkNonCanonical ev
 
@@ -418,7 +469,8 @@ fireRule r =
 -- Define one of the arguments of an active rule.
 setArg :: Int -> (SimpleSubst, EvTerm) -> ActiveRule -> ActiveRule
 setArg n (su,ev) r =
-  AR { proof     = proof r
+  AR { isSym     = isSym r
+     , proof     = proof r
      , doneTys   = apSimpSubst su (doneTys r)
      , doneArgs  = (n,ev) : doneArgs r
      , todoArgs  = dropTodo (todoArgs r)
@@ -449,19 +501,22 @@ For example, assumption `p` will not make instantiations like `R(p,p)`.
 -}
 applyAsmp :: ActiveRule -> Ct -> [ActiveRule]
 applyAsmp r ct =
+  restrict $
   do -- Find places where this constraint might fit
      (n,soln) <- mapMaybe attempt (todoArgs r)
      return (setArg n soln r)
   where
   attempt (n,eq) = do ok <- byAsmp ct eq
                       return (n,ok)
+  restrict | isSym r    = take 1
+           | otherwise  = id
 
 interactActiveRules :: [ActiveRule] -> [Ct] -> [Ct]
-interactActiveRules rs [] = mapMaybe fireRule rs
-interactActiveRules rs (c : cs) = interactActiveRules newRs cs
+interactActiveRules rs0 cs0 = loop (map applyAxiom rs0) cs0
   where
-  newRs = [ r2 | r1 <- rs, r2 <- applyAsmp (applyAxiom r1) c ]
-
+  loop rs []       = mapMaybe fireRule rs
+  loop rs (c : cs) = let new = map applyAxiom (concatMap (`applyAsmp` c) rs)
+                     in loop (new ++ rs) cs
 
 {- A (possibly over-compliacted) example illustrating how the
 order in which we do the matching for the assumptions makes a difference
@@ -529,15 +584,46 @@ getFacts =
      return $ bagToList $ fst $ partCtFamHeadMap isGivenCt
                               $ inert_funeqs $ inert_cans is
 
+getAllCts :: TcS [Ct]
+getAllCts =
+  do is <- getTcSInerts
+     return $ foldFamHeadMap (:) [] $ inert_funeqs $ inert_cans is
+
+allRules :: [ActiveRule]
+allRules = funRule typeNatAddTyCon
+         : funRule typeNatMulTyCon
+         : funRule typeNatExpTyCon
+         : map activate theRules
+
 computeNewGivenWork :: Ct -> TcS ()
 computeNewGivenWork ct =
   do asmps <- getFacts
-     -- XXX: Add fun rules.
-     let active  = concatMap (`applyAsmp` ct) (map activate theRules)
+     let active  = concatMap (`applyAsmp` ct) allRules
          newWork = interactActiveRules active asmps
-     traceTcS "TYPE NAT SOLVER NEW GIVENS:" (vcat $ map ppr newWork)
-     updWorkListTcS (appendWorkListCt newWork)
+         (bad,good) = partition isBad newWork
 
+     traceTcS "NATS: SOLVER GIVENS CONTRADICTIONS:" (vcat $ map ppr bad)
+     mapM_ (\x -> emitFrozenError (ctEvidence x) (cc_depth x)) bad
+
+     traceTcS "NATS: SOLVER NEW GIVENS:" (vcat $ map ppr good)
+     updWorkListTcS (appendWorkListCt good)
+  where
+  -- cf. `fireRule`: the only way to get a non-canonical constraint
+  -- is if it impossible to solve.
+  isBad (CNonCanonical {})  = True
+  isBad _                   = False
+
+{-
+computeNewDerivedWork :: Ct -> TcS ()
+computeNewDerivedWork ct =
+  do asmps <- getAllCts
+     let active  = concatMap (`applyAsmp` ct) allRules
+         newWork = interactActiveRules active asmps
+     traceTcS "NATS: SOLVER NEW DERIVED:" (vcat $ map ppr newWork)
+     updWorkListTcS (appendWorkListCt newWork)
+  where
+  cvt 
+-}
 
 
 

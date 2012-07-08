@@ -19,8 +19,6 @@ import OccName  ( mkOccName, tcName )
 {-
 fRules :: [Rule]
 fRules =
-  map funRule [ Add, Mul, Exp, Leq ]
-  ++
   [ rule TnLeqASym    [ leq a b, leq b a ] $ eq a b
   , rule TnLeqTrans   [ leq a b, leq b c ] $ leq a c
 
@@ -117,7 +115,7 @@ axAddComm = mkAx "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
   where a : b : c : _ = map mkTyVarTy natVars
 
 
-theRules :: [CoAxiomRule]
+theRules :: [(CoAxiomRule,Bool)]
 theRules = []
 
 
