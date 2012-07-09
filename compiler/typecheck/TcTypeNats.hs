@@ -382,8 +382,8 @@ instance Outputable ActiveRule where
 
 
 
-activate :: (CoAxiomRule,Bool) -> ActiveRule
-activate (r,sym) = AR
+activate :: (Bool,CoAxiomRule) -> ActiveRule
+activate (sym,r) = AR
   { isSym     = sym
   , proof     = useAxiom r
   , doneTys   = map TPVar vs

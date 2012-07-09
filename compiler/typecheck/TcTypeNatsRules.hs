@@ -16,32 +16,6 @@ import OccName  ( mkOccName, tcName )
 
 
 
-{-
-fRules :: [Rule]
-fRules =
-  [ rule TnLeqASym    [ leq a b, leq b a ] $ eq a b
-  , rule TnLeqTrans   [ leq a b, leq b c ] $ leq a c
-
-  , rule TnAddComm    [ add a b c ] $ add b a c
-  , rule TnMulComm    [ mul a b c ] $ mul b a c
-
-  , rule TnAddCancelL [           add a b1 c, add a b2 c ] $ eq b1 b2
-  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ eq b1 b2
-  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ eq b1 b2
-
-  , rule TnAddCancelR [           add a1 b c, add a2 b c ] $ eq a1 a2
-  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ eq a1 a2
-  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ eq a1 a2
-  ]
-  where
-  a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
-  n1 = Num 1
-  n2 = Num 2
--}
-
-
---------------------------------------------------------------------------------
-
 mkAx :: String -> [TyVar] -> [(Type,Type)] -> Type -> Type -> CoAxiomRule
 mkAx n vs asmps lhs rhs = CoAxiomRule
   { co_axr_name   = mkAxName n
@@ -110,12 +84,61 @@ bRules =
 
 
 
-axAddComm :: CoAxiomRule
-axAddComm = mkAx "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c
-  where a : b : c : _ = map mkTyVarTy natVars
+theRules :: [(Bool,CoAxiomRule)]
+theRules =
+{-
+  [ (True, mkAx "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c)
+  , (True, mkAx "MulComm" (take 3 natVars) [ (mkMul a b, c) ] (mkMul b a) c)
+-}
+
+  [ (True, mkAx "AddCancelL" (take 4 natVars)
+            [ (mkAdd a b, d), (mkAdd a c, d) ] b c)
+
+  , (True, mkAx "AddCancelR" (take 4 natVars)
+            [ (mkAdd a c, d), (mkAdd b c, d) ] a b)
+  ]
+
+  where a : b : c : d : _ = map mkTyVarTy natVars
 
 
-theRules :: [(CoAxiomRule,Bool)]
-theRules = []
+
+{-
+fRules :: [Rule]
+fRules =
+  [ rule TnLeqASym    [ leq a b, leq b a ] $ eq a b
+  , rule TnLeqTrans   [ leq a b, leq b c ] $ leq a c
+
+  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ eq b1 b2
+  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ eq b1 b2
+
+  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ eq a1 a2
+  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ eq a1 a2
+  ]
+  where
+  a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
+  n1 = Num 1
+  n2 = Num 2
+-}
+
+
+--------------------------------------------------------------------------------
+
+
+{-
+
+Consider a problem like this:
+
+  [W] a + b ~ b + a
+
+GHC de-sugars this into:
+
+  [W] p: a + b ~ c
+  [W] q: b + a ~ c
+
+When we add the 2nd one, we should notice that it can be solved in terms
+of the first one...
+-}
+
+
 
 
