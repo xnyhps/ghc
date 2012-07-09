@@ -11,6 +11,8 @@ import TysPrim  ( tyVarList
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
+                  , typeNatLeqTyCon
+                  , trueTy, falseTy
                   )
 
 import Name     ( mkSystemName )
@@ -38,6 +40,9 @@ mkMul a b = mkTyConApp typeNatMulTyCon [a,b]
 mkExp :: Type -> Type -> Type
 mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
 
+mkLeq :: Type -> Type -> Type
+mkLeq a b = mkTyConApp typeNatLeqTyCon [a,b]
+
 natVars :: [TyVar]
 natVars = tyVarList typeNatKind
 
@@ -59,6 +64,13 @@ axExpDef :: Integer -> Integer -> CoAxiomRule
 axExpDef a b = mkAx (axName "ExpDef" a b) [] []
              (mkExp (mkNumLitTy a) (mkNumLitTy b)) (mkNumLitTy (a ^ b))
 
+axLeqDef :: Integer -> Integer -> CoAxiomRule
+axLeqDef a b
+  | a <= b    = mkAx (axName "LeqDef" a b)    [] [] prop trueTy
+  | otherwise = mkAx (axName "NotLeqDef" a b) [] [] prop falseTy
+  where prop = mkLeq (mkNumLitTy a) (mkNumLitTy b)
+
+
 
 -- XXX: We should be able to cope with some assumptions in backward
 -- reasoning too.
@@ -76,6 +88,9 @@ bRules =
   , bRule "TnExp0R" (mkExp a n0) n1
   , bRule "TnExp1L" (mkExp n1 a) n1
   , bRule "TnExp1R" (mkExp a n1) a
+
+  , bRule "Leq0"    (mkLeq n0 a) trueTy
+  , bRule "LeqRefl" (mkLeq a a) trueTy
   ]
   where
   bRule y   = mkAx y (take 1 natVars) []

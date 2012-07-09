@@ -73,7 +73,12 @@ module TysWiredIn (
         eqTyCon_RDR, eqTyCon, eqTyConName, eqBoxDataCon,
 
         -- * Type families used to compute at the type level.
-        typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon
+        typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon,
+
+        -- * Lifted booleans
+        boolKindCon, boolKind,
+        trueTyCon, trueTy,
+        falseTyCon, falseTy
 
     ) where
 
@@ -767,10 +772,9 @@ Type functions related to type-nats.
 
 \begin{code}
 
--- XXX: THIS IS WRONG.  IT SHOULD RETURN A PROMOTED BOOL.
 typeNatLeqTyCon :: TyCon
 typeNatLeqTyCon = mkSynTyCon typeNatLeqTyFamName
-                    (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
+                    (mkArrowKinds [ typeNatKind, typeNatKind ] boolKind)
                     (take 2 $ tyVarList typeNatKind)
                     SynFamilyTyCon
                     NoParentTyCon
@@ -793,6 +797,24 @@ typeNatExpTyCon = mkTypeNatFunTyCon typeNatExpTyFamName
 \end{code}
 
 
+Promoted Booleans
+
+\begin{code}
+
+boolKindCon, trueTyCon, falseTyCon :: TyCon
+boolKindCon = buildPromotedTyCon boolTyCon
+trueTyCon   = buildPromotedDataCon trueDataCon
+falseTyCon   = buildPromotedDataCon falseDataCon
+
+
+boolKind :: Kind
+boolKind = mkTyConApp boolKindCon []
+
+trueTy, falseTy :: Type
+trueTy  = mkTyConApp trueTyCon []
+falseTy = mkTyConApp falseTyCon []
 
 
 
+
+\end{code}

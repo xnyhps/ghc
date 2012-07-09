@@ -3,6 +3,7 @@ module TcTypeNats where
 import PrelNames( typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
+                , typeNatLeqTyFamName
                 )
 
 import Outputable ( ppr, pprWithCommas
@@ -22,12 +23,15 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
+                  , trueTy, falseTy
                   )
 import Bag      ( bagToList )
 import DynFlags ( DynFlags )
 
 -- From type checker
-import TcTypeNatsRules( bRules, theRules, axAddDef, axMulDef, axExpDef, natVars)
+import TcTypeNatsRules( bRules, theRules
+                      , axAddDef, axMulDef, axExpDef, axLeqDef
+                      , natVars)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcCanonical( StopOrContinue(..) )
 import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
@@ -266,13 +270,17 @@ byAxiom (TPOther ty, TPVar r)
   | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
   , Just a <- isNumLitTy tp1, Just b <- isNumLitTy tp2
 
-  = do (ax,op) <- case tyConName tc of
-                    name | name == typeNatAddTyFamName -> Just (axAddDef, (+))
-                         | name == typeNatMulTyFamName -> Just (axMulDef, (*))
-                         | name == typeNatExpTyFamName -> Just (axExpDef, (^))
-                    _ -> Nothing
+  = do (ax,val) <-
+          let num op  = mkNumLitTy (op a b)
+              bool op = if op a b then trueTy else falseTy
+          in case tyConName tc of
+               name | name == typeNatAddTyFamName -> Just (axAddDef, num (+))
+                    | name == typeNatMulTyFamName -> Just (axMulDef, num (*))
+                    | name == typeNatExpTyFamName -> Just (axExpDef, num (^))
+                    | name == typeNatLeqTyFamName -> Just (axLeqDef, bool (<=))
+               _ -> Nothing
 
-       return ( [ (r, mkNumLitTy (op a b)) ], useAxiom (ax a b) [] [] )
+       return ( [ (r, val) ], useAxiom (ax a b) [] [] )
 
 
 byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
@@ -303,14 +311,15 @@ byAxiom (TPOther ty, TPOther tp3)
   | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
   , Just a <- isNumLitTy tp1
   , Just b <- isNumLitTy tp2
-  , Just c <- isNumLitTy tp3
-  = do (ax,op) <- case tyConName tc of
-                    n | n == typeNatAddTyFamName -> Just (axAddDef, (+))
-                      | n == typeNatMulTyFamName -> Just (axMulDef, (*))
-                      | n == typeNatExpTyFamName -> Just (axExpDef, (^))
-                    _ -> Nothing
-       guard (op a b == c)
-       return ([], useAxiom (ax a b) [] [])
+  = do ax <- case tyConName tc of
+               n | n == typeNatAddTyFamName -> Just axAddDef
+                 | n == typeNatMulTyFamName -> Just axMulDef
+                 | n == typeNatExpTyFamName -> Just axExpDef
+                 | n == typeNatLeqTyFamName -> Just axLeqDef
+               _ -> Nothing
+       let r = ax a b
+       guard (eqType (co_axr_rhs r) tp3)
+       return ([], useAxiom r [] [])
 
 byAxiom _ = Nothing
 
