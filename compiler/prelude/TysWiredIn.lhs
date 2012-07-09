@@ -72,6 +72,9 @@ module TysWiredIn (
         -- * Equality predicates
         eqTyCon_RDR, eqTyCon, eqTyConName, eqBoxDataCon,
 
+        -- * Type families used to compute at the type level.
+        typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon
+
     ) where
 
 #include "HsVersions.h"
@@ -751,3 +754,45 @@ mkPArrFakeCon arity  = data_con
 isPArrFakeCon      :: DataCon -> Bool
 isPArrFakeCon dcon  = dcon == parrFakeCon (dataConSourceArity dcon)
 \end{code}
+
+
+%*******************************************************************
+%*
+\subsection[TysWiredIn-TypeNat]{Type-level Numbers}
+%*
+%*******************************************************************
+
+
+Type functions related to type-nats.
+
+\begin{code}
+
+-- XXX: THIS IS WRONG.  IT SHOULD RETURN A PROMOTED BOOL.
+typeNatLeqTyCon :: TyCon
+typeNatLeqTyCon = mkSynTyCon typeNatLeqTyFamName
+                    (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
+                    (take 2 $ tyVarList typeNatKind)
+                    SynFamilyTyCon
+                    NoParentTyCon
+
+mkTypeNatFunTyCon :: Name -> TyCon
+mkTypeNatFunTyCon op = mkSynTyCon op
+                    (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
+                    (take 2 $ tyVarList typeNatKind)
+                    SynFamilyTyCon
+                    NoParentTyCon
+
+typeNatAddTyCon :: TyCon
+typeNatAddTyCon = mkTypeNatFunTyCon typeNatAddTyFamName
+
+typeNatMulTyCon :: TyCon
+typeNatMulTyCon = mkTypeNatFunTyCon typeNatMulTyFamName
+
+typeNatExpTyCon :: TyCon
+typeNatExpTyCon = mkTypeNatFunTyCon typeNatExpTyFamName
+\end{code}
+
+
+
+
+

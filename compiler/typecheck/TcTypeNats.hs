@@ -19,10 +19,10 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , splitTyConApp_maybe
                 , eqType
                 )
-import TysPrim  ( typeNatAddTyCon
-                , typeNatMulTyCon
-                , typeNatExpTyCon
-                )
+import TysWiredIn ( typeNatAddTyCon
+                  , typeNatMulTyCon
+                  , typeNatExpTyCon
+                  )
 import Bag      ( bagToList )
 import DynFlags ( DynFlags )
 

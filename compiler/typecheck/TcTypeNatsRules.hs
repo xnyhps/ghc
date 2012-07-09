@@ -5,12 +5,14 @@ import Var      ( TyVar )
 import Coercion ( CoAxiomRule(..) )
 import Type     ( Type,  mkTyVarTy, mkNumLitTy, mkTyConApp )
 import PrelNames( unboundKey )
-import TysPrim  ( typeNatAddTyCon
-                , typeNatMulTyCon
-                , typeNatExpTyCon
-                , tyVarList
+import TysPrim  ( tyVarList
                 , typeNatKind
                 )
+import TysWiredIn ( typeNatAddTyCon
+                  , typeNatMulTyCon
+                  , typeNatExpTyCon
+                  )
+
 import Name     ( mkSystemName )
 import OccName  ( mkOccName, tcName )
 
