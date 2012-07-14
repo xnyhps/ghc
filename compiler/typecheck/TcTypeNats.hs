@@ -14,7 +14,7 @@ import Outputable ( ppr, pprWithCommas
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
-import Coercion ( CoAxiomRule(..) )
+import Coercion ( CoAxiomRule, co_axr_inst, co_axr_is_rule )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
@@ -27,6 +27,7 @@ import TysWiredIn ( typeNatAddTyCon
                   )
 import Bag      ( bagToList )
 import DynFlags ( DynFlags )
+import Panic    ( panic )
 
 -- From type checker
 import TcTypeNatsRules( bRules, theRules
@@ -280,7 +281,7 @@ byAxiom (TPOther ty, TPVar r)
                     | name == typeNatLeqTyFamName -> Just (axLeqDef, bool (<=))
                _ -> Nothing
 
-       return ( [ (r, val) ], useAxiom (ax a b) [] [] )
+       return ( [ (r, val) ], useAxiom ax [tp1,tp2] [] )
 
 
 byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
@@ -292,7 +293,8 @@ byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
                       | n == typeNatExpTyFamName -> Just (axExpDef, rootExact)
                     _ -> Nothing
        a <- op c b
-       return ( [ (r, mkNumLitTy a) ], useAxiom (ax a b) [] [] )
+       let t = mkNumLitTy a
+       return ( [ (r, t) ], useAxiom ax [t,tp1] [] )
 
 
 byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
@@ -304,22 +306,22 @@ byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
                       | n == typeNatExpTyFamName -> Just (axExpDef, logExact)
                     _ -> Nothing
        b <- op c a
-       return ([ (r, mkNumLitTy b) ], useAxiom (ax a b) [] [] )
+       let t = mkNumLitTy b
+       return ([ (r, t) ], useAxiom ax [tp1,t] [] )
 
 
 byAxiom (TPOther ty, TPOther tp3)
   | Just (tc,[tp1,tp2]) <- splitTyConApp_maybe ty
-  , Just a <- isNumLitTy tp1
-  , Just b <- isNumLitTy tp2
+  , Just _ <- isNumLitTy tp1, Just _ <- isNumLitTy tp2
   = do ax <- case tyConName tc of
                n | n == typeNatAddTyFamName -> Just axAddDef
                  | n == typeNatMulTyFamName -> Just axMulDef
                  | n == typeNatExpTyFamName -> Just axExpDef
                  | n == typeNatLeqTyFamName -> Just axLeqDef
                _ -> Nothing
-       let r = ax a b
-       guard (eqType (co_axr_rhs r) tp3)
-       return ([], useAxiom r [] [])
+       let ([],(_,r)) = co_axr_inst ax [tp1,tp2]
+       guard (eqType r tp3)
+       return ([], useAxiom ax [tp1,tp2] [])
 
 byAxiom _ = Nothing
 
@@ -331,10 +333,9 @@ useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
 
 solveWithRule :: CoAxiomRule -> Ct -> Maybe EvTerm
 solveWithRule r ct =
-  do guard $ null $ co_axr_asmps r    -- Currently we just use simple axioms.
-     let vs  = co_axr_tvs r
-         lhs = toTypePat vs $ co_axr_lhs r
-         rhs = toTypePat vs $ co_axr_rhs r
+  do (vs,[],(a,b)) <- co_axr_is_rule r -- Currently we just use simple axioms.
+     let lhs = toTypePat vs a
+         rhs = toTypePat vs b
      (su,_) <- byAsmp ct (lhs,rhs)    -- Just for the instantiation
      tys <- mapM (`lookup` su) vs
      return (useAxiom r tys [])
@@ -392,16 +393,18 @@ instance Outputable ActiveRule where
 
 
 activate :: (Bool,CoAxiomRule) -> ActiveRule
-activate (sym,r) = AR
-  { isSym     = sym
-  , proof     = useAxiom r
-  , doneTys   = map TPVar vs
-  , doneArgs  = []
-  , todoArgs  = zip [ 0 .. ] [ (cvt t1, cvt t2) | (t1,t2) <- co_axr_asmps r ]
-  , concl     = (cvt (co_axr_lhs r), cvt (co_axr_rhs r))
-  }
-  where cvt = toTypePat vs
-        vs  = co_axr_tvs r
+activate (sym,r)
+  | Just (vs,as,c) <- co_axr_is_rule r
+  , let cvt         = toTypePat vs
+        cvt2 (x,y)  = (cvt x, cvt y)
+  = AR { isSym     = sym
+       , proof     = useAxiom r
+       , doneTys   = map TPVar vs
+       , doneArgs  = []
+       , todoArgs  = zip [ 0 .. ] (map cvt2 as)
+       , concl     = cvt2 c
+       }
+activate _ = panic "Tried to activate a non-rule."
 
 {- Function rules have this form:
 

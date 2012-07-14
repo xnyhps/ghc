@@ -53,6 +53,7 @@ module Unique (
 	mkPreludeMiscIdUnique, mkPreludeDataConUnique,
 	mkPreludeTyConUnique, mkPreludeClassUnique,
 	mkPArrDataConUnique,
+	mkAxiomRuleUnique,
 
     mkVarOccUnique, mkDataOccUnique, mkTvOccUnique, mkTcOccUnique,
         mkRegSingleUnique, mkRegPairUnique, mkRegClassUnique, mkRegSubUnique,
@@ -293,6 +294,7 @@ Allocation of unique supply characters:
 	0-9: prelude things below
 	     (no numbers left any more..)
 	::   (prelude) parallel array data constructors
+        +:   names of evidence rules for type-level proofs.
 
 	other a-z: lower case chars for unique supplies.  Used so far:
 
@@ -313,6 +315,7 @@ mkTupleDataConUnique   :: TupleSort -> Int -> Unique
 mkPrimOpIdUnique       :: Int -> Unique
 mkPreludeMiscIdUnique  :: Int -> Unique
 mkPArrDataConUnique    :: Int -> Unique
+mkAxiomRuleUnique      :: Int -> Unique
 
 mkAlphaTyVarUnique i            = mkUnique '1' i
 
@@ -343,6 +346,8 @@ mkPreludeMiscIdUnique  i    = mkUnique '0' i
 
 -- No numbers left anymore, so I pick something different for the character tag 
 mkPArrDataConUnique a	        = mkUnique ':' (2*a)
+
+mkAxiomRuleUnique a         = mkUnique '+' a
 
 -- The "tyvar uniques" print specially nicely: a, b, c, etc.
 -- See pprUnique for details

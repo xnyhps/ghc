@@ -98,7 +98,7 @@ data IfaceCoCon
   | IfaceReflCo    | IfaceUnsafeCo  | IfaceSymCo
   | IfaceTransCo   | IfaceInstCo
   | IfaceNthCo Int
-  | IfaceCoAxRule IfExtName   -- XXX: or just the number of the rule...
+  | IfaceCoAxRule IfExtName
 \end{code}
 
 %************************************************************************
@@ -383,6 +383,6 @@ coAxiomToIfaceType :: CoAxiom -> IfaceCoCon
 coAxiomToIfaceType con = IfaceCoAx (coAxiomName con)
 
 coAxiomRuleToIfaceType :: CoAxiomRule -> IfaceCoCon
-coAxiomRuleToIfaceType con = IfaceCoAxRule (co_axr_name con)
+coAxiomRuleToIfaceType con = IfaceCoAxRule (getName con)
 \end{code}
 

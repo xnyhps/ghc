@@ -880,23 +880,34 @@ lintCoercion co@(AxiomInstCo (CoAxiom { co_ax_tvs = ktvs
                      Type.extendTvSubst subst_r ktv t2) } 
 
 lintCoercion (TypeNatCo co ts cs)
-  = do ks  <- mapM lintType ts
-       _eqs <- mapM lintCoercion cs
+  = do _ks <- mapM lintType ts
+       eqs <- mapM lintCoercion cs
 
-       -- So far, all type parameters are of kind Nat, so we just
-       -- check them in one go here.
+       let (asmps,(l,r)) = co_axr_inst co ts
 
-       unless (all (eqKind typeNatKind) ks) $
-         failWithL $ ptext $ sLit "Kind mis-match in TypeNatCo (param not Nat)"
+       kL <- lintType l
+       kR <- lintType r
+       checkL (eqKind kL kR)
+          $ err "Kind error in CoAxiomRule" [ppr kL <+> txt "/=" <+> ppr kR]
 
-       let vs = co_axr_tvs co
-           inst = substTyWith vs ts
+       check asmps eqs
+       return (kL, l, r)
 
-       -- XXX: Do some more checking (e.g., that the coercions proof
-       -- what we expect they should)
-       -- XXX: With <=, some of the kinds will be Bool
-       return (typeNatKind, inst (co_axr_lhs co), inst (co_axr_rhs co))
+  where
+  txt = ptext . sLit
+  eqn (x,y) = ppr x <+> txt "~" <+> ppr y
+  err m xs  = hang (txt m) 2 $ vcat (txt "Rule:" <+> ppr (getName co) : xs)
 
+  check [] [] = return ()
+  check ((l,r) : as) ((_,t1,t2) : bs) =
+           do checkL (eqType l t1 && eqType r t2)
+                $ err "Mismatch in assumption"
+                      [ txt "Proof needed:" <+> eqn (l,r)
+                      , txt "Proof given:"  <+> eqn (t1,t2)
+                      ]
+              check as bs
+  check [] _  = failWithL $ err "Too many proofs" []
+  check _ []  = failWithL $ err "Not enough proofs" []
 
 \end{code}
 

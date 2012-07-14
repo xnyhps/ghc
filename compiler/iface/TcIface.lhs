@@ -20,6 +20,7 @@ import IfaceEnv
 import BuildTyCl
 import TcRnMonad
 import TcType
+import TcTypeNatsRules (allRules)
 import Type
 import Coercion
 import TypeRep
@@ -957,7 +958,12 @@ tcIfaceCo (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' ->
 tcIfaceCoApp :: IfaceCoCon -> [IfaceType] -> IfL Coercion
 tcIfaceCoApp IfaceReflCo      [t]     = Refl         <$> tcIfaceType t
 tcIfaceCoApp (IfaceCoAx n)    ts      = AxiomInstCo  <$> tcIfaceCoAxiom n <*> mapM tcIfaceCo ts
-tcIfaceCoApp (IfaceCoAxRule _) _      = panic "tcIfaceCoApp: TODO type nat"
+tcIfaceCoApp (IfaceCoAxRule n) ts =
+  do co <- tcIfaceCoAxiomRule n
+     let ar = length ts - length (co_axr_asmps co)
+         (xs,ys) = splitAt ar ts
+     TypeNatCo co <$> mapM tcIfaceType xs <*> mapM tcIfaceCo ys
+
 tcIfaceCoApp IfaceUnsafeCo    [t1,t2] = UnsafeCo     <$> tcIfaceType t1 <*> tcIfaceType t2
 tcIfaceCoApp IfaceSymCo       [t]     = SymCo        <$> tcIfaceCo t
 tcIfaceCoApp IfaceTransCo     [t1,t2] = TransCo      <$> tcIfaceCo t1 <*> tcIfaceCo t2
@@ -1383,6 +1389,14 @@ tcIfaceKindCon (IfaceTc name)
 tcIfaceCoAxiom :: Name -> IfL CoAxiom
 tcIfaceCoAxiom name = do { thing <- tcIfaceGlobal name
                          ; return (tyThingCoAxiom thing) }
+
+tcIfaceCoAxiomRule :: Name -> IfL CoAxiomRule
+tcIfaceCoAxiomRule n =
+  case lookupUFM allRules n of
+    Just r  -> return r
+    Nothing -> pprPanic "tcIfaceCoAxiomRule" (ppr n)
+
+
 
 tcIfaceDataCon :: Name -> IfL DataCon
 tcIfaceDataCon name = do { thing <- tcIfaceGlobal name
