@@ -53,6 +53,9 @@ mkBoolLiTy b = if b then trueTy else falseTy
 (===) :: Type -> Type -> Eqn
 x === y = (x,y)
 
+(<==) :: Type -> Type -> Eqn
+x <== y = (mkLeq x y, trueTy)
+
 
 --------------------------------------------------------------------------------
 
@@ -125,29 +128,28 @@ theRules =
 
   , (True, mkAx 31 "AddCancelR" (take 4 natVars)
             [ mkAdd a c === d, mkAdd b c === d ] (a === b))
+
+  , (True, mkAx 32 "MulCancelL" (take 4 natVars)
+            [ n1 <== a, mkMul a b === d, mkMul a c === d ] (b === c))
+
+  , (True, mkAx 33 "MulCancelR" (take 4 natVars)
+            [ n1 <== c, mkMul a c === d, mkMul b c === d ] (a === b))
+
+  , (True, mkAx 34 "ExpCancelL" (take 4 natVars)
+            [ n2 <== a, mkExp a b === d, mkExp a c === d ] (b === c))
+
+  , (True, mkAx 35 "ExpCancelR" (take 4 natVars)
+            [ n1 <== c, mkExp a c === d, mkExp b c === d ] (a === b))
+
+  , (True, mkAx 36 "LeqASym" (take 2 natVars)
+            [ a <== b, b <== a ] (a === b))
+
   ]
 
-  where a : b : c : d : _ = map mkTyVarTy natVars
-
-
-
-{-
-fRules :: [Rule]
-fRules =
-  [ rule TnLeqASym    [ leq a b, leq b a ] $ eq a b
-  , rule TnLeqTrans   [ leq a b, leq b c ] $ leq a c
-
-  , rule TnMulCancelL [ leq n1 a, mul a b1 c, mul a b2 c ] $ eq b1 b2
-  , rule TnExpCancelL [ leq n2 a, exp a b1 c, exp a b2 c ] $ eq b1 b2
-
-  , rule TnMulCancelR [ leq n1 b, mul a1 b c, mul a2 b c ] $ eq a1 a2
-  , rule TnExpCancelR [ leq n1 b, exp a1 b c, exp a2 b c ] $ eq a1 a2
-  ]
   where
-  a : a1 : a2 : b : b1 : b2 : c : _ = map Var [ 0 .. ]
-  n1 = Num 1
-  n2 = Num 2
--}
+  a : b : c : d : _ = map mkTyVarTy natVars
+  n1 = mkNumLitTy 1
+  n2 = mkNumLitTy 2
 
 
 --------------------------------------------------------------------------------
