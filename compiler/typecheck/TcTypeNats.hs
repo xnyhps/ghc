@@ -26,7 +26,6 @@ import TysWiredIn ( typeNatAddTyCon
                   , trueTy, falseTy
                   )
 import Bag      ( bagToList )
-import DynFlags ( DynFlags )
 import Panic    ( panic )
 
 -- From type checker
@@ -55,7 +54,6 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , traceTcS
                 , partCtFamHeadMap
                 , foldFamHeadMap
-                , getDynFlags
                 )
 
 -- From base libraries
@@ -70,12 +68,7 @@ import Control.Monad ( msum, guard, when )
 --------------------------------------------------------------------------------
 
 typeNatStage :: Ct -> TcS StopOrContinue
-typeNatStage ct =
-  do fs <- getDynFlags
-     typeNatStage' fs ct
-
-typeNatStage' :: DynFlags -> Ct -> TcS StopOrContinue
-typeNatStage' _dflags ct
+typeNatStage ct
 
   -- XXX: Probably need to add the 'ct' to somewhere
   | impossible ct =
