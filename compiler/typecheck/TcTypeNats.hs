@@ -344,20 +344,23 @@ solveWithAxiom _ = Nothing
 -- An `ActiveRule` is a partially constructed proof for some predicate.
 data ActiveRule = AR
   { isSym     :: Bool -- See Note [Symmetric Rules]
-  , proof     :: [Type] -> [EvTerm] -> EvTerm
+
+  -- This is the instantiation of the rule.
   , doneTys   :: [TypePat]
+
+  -- These are equations that we already solved, and are ready to be used.
+  -- The `Int` records the position of the evidence when the rule fires.
   , doneArgs  :: [(Int,EvTerm)]
 
+  -- These are equations that we need to solve before the rule can fire.
+  -- The `Int` records the position of the evidence when the rule fires.
   , todoArgs  :: [(Int,(TypePat,TypePat))]
-    {- todoArgs ==
-        [ (n, (cvt t1, cvt t2))
-            | (n,(t1,t2)) <- zip [ 0 .. ] (co_axr_asmps axRule)
-            , n `notElem` map fst doneArgs
-            , let cvt = apSimpSubst doneArgs . toTypePat (co_axr_tvs axRule)
-        ]
-    -}
 
-  , concl    :: (TypePat,TypePat)
+  -- This is what we'll prove when the rule fires.
+  , concl     :: (TypePat,TypePat)
+
+  -- This is the evidence we'll use when the rule fires.
+  , proof     :: [Type] -> [EvTerm] -> EvTerm
   }
 
 {- Note [Symmetric Rules]
