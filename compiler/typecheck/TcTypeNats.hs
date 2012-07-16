@@ -14,7 +14,7 @@ import Outputable ( ppr, pprWithCommas
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
-import Coercion ( CoAxiomRule, co_axr_inst, co_axr_is_rule )
+import Coercion ( CoAxiomRule, Eqn, co_axr_inst, co_axr_is_rule )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
@@ -29,7 +29,7 @@ import Bag      ( bagToList )
 import Panic    ( panic )
 
 -- From type checker
-import TcTypeNatsRules( bRules, theRules
+import TcTypeNatsRules( bRules, theRules {-, backRules-}
                       , axAddDef, axMulDef, axExpDef, axLeqDef
                       , natVars)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
@@ -40,6 +40,8 @@ import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , mkNonCanonical
                   , getWantedLoc
                   , ctEvPred
+                  , isDerived
+                  , CtOrigin(..), EqOrigin(..)
                   )
 import TcType     ( mkTcEqPred )
 import TcEvidence ( EvTerm(..)
@@ -57,7 +59,7 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 )
 
 -- From base libraries
-import Data.Maybe ( isNothing, mapMaybe )
+import Data.Maybe ( isNothing, mapMaybe {-, listToMaybe-} )
 import Data.List  ( sortBy, partition )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard, when )
@@ -241,8 +243,8 @@ matchTypes _ _                = Nothing
 
 --------------------------------------------------------------------------------
 
--- Tries to instantuate the equation with the constraint.
-byAsmp :: Ct -> (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
+-- Tries to instantiate the equation with the constraint.
+byAsmp :: Ct -> (TypePat, TypePat) -> Maybe (SimpleSubst, Maybe EvTerm)
 
 byAsmp ct (lhs,rhs) =
   do (t1,t2) <- case ct of
@@ -253,7 +255,9 @@ byAsmp ct (lhs,rhs) =
                   _ -> Nothing
 
      su <- matchTypes [lhs,rhs] [t1,t2]
-     return (su, ctEvTerm (ctEvidence ct))
+     return (su, do let ev = ctEvidence ct
+                    guard (not (isDerived ev))
+                    return (ctEvTerm ev))
 
 
 
@@ -333,6 +337,14 @@ solveWithRule r ct =
      tys <- mapM (`lookup` su) vs
      return (useAxiom r tys [])
 
+{-
+solveWithAsmps :: [Ct] -> Ct -> Maybe EvTerm
+solveWithAsmps asmps ct =
+  do let rs = mapMaybe (`activateBackward` ct) backRules
+     new <- listToMaybe (interactActiveRules rs asmps)
+     undefined -- extract proof from constraint
+-}
+
 solveWithAxiom :: Ct -> Maybe EvTerm
 solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
   do ([],ev) <- byAxiom (TPOther (mkTyConApp tc ts), TPOther t)
@@ -352,6 +364,12 @@ data ActiveRule = AR
   -- The `Int` records the position of the evidence when the rule fires.
   , doneArgs  :: [(Int,EvTerm)]
 
+  {- These are equations that were solved using a `Derived` fact.
+  If we are interested in the proof for this rule (i.e., we are
+  not just computing another derived), then we need to find evidence
+  for these. -}
+  , subgoals  :: [(Int,(TypePat,TypePat))]
+
   -- These are equations that we need to solve before the rule can fire.
   -- The `Int` records the position of the evidence when the rule fires.
   , todoArgs  :: [(Int,(TypePat,TypePat))]
@@ -361,6 +379,7 @@ data ActiveRule = AR
 
   -- This is the evidence we'll use when the rule fires.
   , proof     :: [Type] -> [EvTerm] -> EvTerm
+
   }
 
 {- Note [Symmetric Rules]
@@ -388,6 +407,7 @@ instance Outputable ActiveRule where
 
 
 
+-- Activate a rule for forward reasoning.
 activate :: (Bool,CoAxiomRule) -> ActiveRule
 activate (sym,r)
   | Just (vs,as,c) <- co_axr_is_rule r
@@ -397,10 +417,24 @@ activate (sym,r)
        , proof     = useAxiom r
        , doneTys   = map TPVar vs
        , doneArgs  = []
+       , subgoals  = []
        , todoArgs  = zip [ 0 .. ] (map cvt2 as)
        , concl     = cvt2 c
        }
 activate _ = panic "Tried to activate a non-rule."
+
+
+{- Try to activate a rule for backward reasoning, by matching
+the conclusion with the given constraint. -}
+activateBackward :: (Bool,CoAxiomRule) -> Ct -> Maybe ActiveRule
+activateBackward r ct =
+  do let act = activate r
+     (su, _) <- byAsmp ct (concl act)
+     return act { doneTys = apSimpSubst su (doneTys act) }
+
+
+
+
 
 {- Function rules have this form:
 
@@ -409,7 +443,7 @@ activate _ = panic "Tried to activate a non-rule."
 
 The rest of GHC's constraint solver already knows about this type of
 rule but we need them here too so that they can get interacted with
-the infinity famiy of built-in axioms, thus performing evaluation.
+the infinite family of built-in axioms, thus performing evaluation.
 
 For example, if we have `5 + 3 ~ x` we can use the fun-rule for `(+)`
 to conclude that `x = 8`:
@@ -425,6 +459,7 @@ funRule tc = AR
                                         (evTermCoercion q)
   , doneTys   = map TPVar [ a, b, c1, c2 ]
   , doneArgs  = []
+  , subgoals  = []
   , todoArgs  = [ (0, (TPCon tc [ TPVar a, TPVar b], TPVar c1))
                 , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
   , concl     = (TPVar c1, TPVar c2)
@@ -433,79 +468,121 @@ funRule tc = AR
 
 
 
+data RuleResult = RuleResult
+  { conclusion       :: Eqn                 -- what we proved
+  , derived_subgoals :: [Eqn]               -- derived parameters used
+  , evidence         :: [EvTerm] -> EvTerm  -- proof, given evidence for derived
+  }
 
 
 {- Check if the `ActiveRule` is completely instantiated and, if so,
-compute the resulting equation and the evidence for it. -}
-fireRule :: ActiveRule -> Maybe Ct
+compute the resulting equation and the evidence for it.
+
+If some of the parameters for the equation were matched by
+`Derived` constraints, then the evidence for the term will be parmatereized
+by proofs for them.
+-}
+fireRule :: ActiveRule -> Maybe RuleResult
 fireRule r =
   do guard $ null $ todoArgs r
-     let (t1,t2) = concl r
 
-     ts  <- mapM cvt (doneTys r)
-     lhs <- cvt t1
-     rhs <- cvt t2
-     let evs = map snd $ sortBy (comparing fst) $ doneArgs r
+     ts        <- mapM cvt (doneTys r)
+     (lhs,rhs) <- cvt2 (concl r)
+     let (locs,subs) = unzip (subgoals r)
+     todo      <- mapM cvt2 subs
 
-         ev  = Given { ctev_gloc = CtLoc UnkSkol noSrcSpan []
-                     , ctev_pred = mkTcEqPred lhs rhs
-                     , ctev_evtm = proof r ts evs
-                     }
+     guard $ not $ eqType lhs rhs   -- Not interested in trivial results.
 
-         sym_ev = Given { ctev_gloc = CtLoc UnkSkol noSrcSpan []
-                        , ctev_pred = mkTcEqPred rhs lhs
-                        , ctev_evtm = EvCoercion $ mkTcSymCo
-                                    $ evTermCoercion $ proof r ts evs }
-     case () of
-       _ | eqType lhs rhs -> Nothing    -- not interested in trivial facts
-
-       _ | Just (tc,ts) <- splitTyConApp_maybe lhs ->
-            return CFunEqCan { cc_ev = ev, cc_depth = 0
-                             , cc_fun = tc, cc_tyargs = ts, cc_rhs = rhs }
-
-       _ | Just x <- getTyVar_maybe lhs ->
-            return CTyEqCan { cc_ev = ev, cc_depth = 0
-                            , cc_tyvar = x, cc_rhs = rhs }
-
-       _ | Just x <- getTyVar_maybe rhs ->
-            return CTyEqCan { cc_ev = sym_ev, cc_depth = 0
-                            , cc_tyvar = x, cc_rhs = lhs }
-
-       -- The only possibility here is something like: 2 ~ 3
-       -- which means we've detected an error!
-       _ | otherwise ->
-            return $ mkNonCanonical ev
+     return RuleResult
+       { conclusion = (lhs,rhs)
+       , derived_subgoals = todo
+       , evidence = \es -> proof r ts $ map snd $ sortBy (comparing fst)
+                                      $ zip locs es ++ doneArgs r
+       }
 
   where
+  cvt2 (x,y)      = do a <- cvt x
+                       b <- cvt y
+                       return (a,b)
+
   cvt (TPOther t) = Just t
   cvt _           = Nothing
+
+eqnToCt :: Eqn -> Maybe EvTerm -> Ct
+eqnToCt (lhs,rhs) evt
+  | Just (tc,ts) <- splitTyConApp_maybe lhs =
+      CFunEqCan { cc_ev = ev False, cc_depth = 0
+                , cc_fun = tc, cc_tyargs = ts, cc_rhs = rhs }
+
+  | Just x <- getTyVar_maybe lhs =
+      CTyEqCan { cc_ev = ev False, cc_depth = 0, cc_tyvar = x, cc_rhs = rhs }
+
+  | Just x <- getTyVar_maybe rhs =
+      CTyEqCan { cc_ev = ev True, cc_depth = 0, cc_tyvar = x, cc_rhs = lhs }
+
+  -- The only possibility here is something like: 2 ~ 3
+  -- which means we've detected an error!
+  | otherwise = mkNonCanonical (ev False)
+
+  where
+  ty = mkTcEqPred lhs rhs
+
+  ev swap =
+    case evt of
+      Nothing -> Derived
+        { ctev_wloc = CtLoc wloc noSrcSpan [], ctev_pred = ty }
+
+      Just t  -> Given
+        { ctev_gloc = CtLoc UnkSkol noSrcSpan []
+        , ctev_pred = ty
+        , ctev_evtm = if swap then EvCoercion $ mkTcSymCo $ evTermCoercion t
+                              else t
+        }
+
+  -- XXX: This is somewhat bogus.
+  wloc = TypeEqOrigin (UnifyOrigin lhs rhs)
+
+ruleResultToGiven :: RuleResult -> Ct
+ruleResultToGiven r = eqnToCt (conclusion r) (Just (evidence r []))
+
+ruleResultToDerived :: RuleResult -> Ct
+ruleResultToDerived r = eqnToCt (conclusion r) Nothing
+
 
 
 
 -- Define one of the arguments of an active rule.
-setArg :: Int -> (SimpleSubst, EvTerm) -> ActiveRule -> ActiveRule
+setArg :: Int -> (SimpleSubst, Maybe EvTerm) -> ActiveRule -> ActiveRule
 setArg n (su,ev) r =
   AR { isSym     = isSym r
      , proof     = proof r
      , doneTys   = apSimpSubst su (doneTys r)
-     , doneArgs  = (n,ev) : doneArgs r
-     , todoArgs  = dropTodo (todoArgs r)
+     , subgoals  = newSubgoals
+     , doneArgs  = newDone
+     , todoArgs  = todo
      , concl     = apSimpSubst su (concl r)
      }
   where
-  -- Drop a solved argment, and instantiate the rest appropriately.
-  dropTodo ((x,_) : rest)
-    | n == x               = [ (x, apSimpSubst su eq) | (x,eq) <- rest ]
-  dropTodo ((x,eq) : rest) = (x, apSimpSubst su eq) : dropTodo rest
-  dropTodo []              = []
+  -- Remove the solved goal form the list of work.
+  -- Also looks up what was proved, in case we need to mark it as a subgoal.
+  (goal, todo)  = case break ((n == ) . fst) $ inst $ todoArgs r of
+                    (as,b:bs) -> (b,as++bs)
+                    _ -> panic "setArg: Tried to set a non-existent param."
 
+  -- XXX: Can the subgoal scontain variables?
+  (newSubgoals, newDone) =
+    case ev of
+      Nothing -> (goal : inst (subgoals r),         doneArgs r)
+      Just e  -> (       inst (subgoals r), (n,e) : doneArgs r)
+
+  inst xs = [ (x,apSimpSubst su y) | (x,y) <- xs ]
 
 -- Try to solve one of the assumptions by axiom.
 applyAxiom1 :: ActiveRule -> Maybe ActiveRule
 applyAxiom1 r = msum $ map attempt $ todoArgs r
   where
-  attempt (n,eq) = do soln <- byAxiom eq
-                      return (setArg n soln r)
+  attempt (n,eq) = do (su,ev) <- byAxiom eq
+                      return (setArg n (su, Just ev) r)
 
 -- Try to satisfy some of the rule's assumptions by axiom.
 applyAxiom :: ActiveRule -> ActiveRule
@@ -527,7 +604,13 @@ applyAsmp r ct =
   restrict | isSym r    = take 1
            | otherwise  = id
 
-interactActiveRules :: [ActiveRule] -> [Ct] -> [Ct]
+
+{- Does forward reasoning:  compute new facts by interacting
+existing facts with a set of rules.
+
+If `withEv` is `True`, then we generate given constraints,
+otherwise they are derived. -}
+interactActiveRules :: [ActiveRule] -> [Ct] -> [RuleResult]
 interactActiveRules rs0 cs0 = loop (map applyAxiom rs0) cs0
   where
   loop rs []       = mapMaybe fireRule rs
@@ -619,8 +702,8 @@ The first set of constraints are ones that indicate a contradiction
                                                           (e.g., 2 ~ 3).
 The second set are "good" constraints (not obviously contradicting each other).
 -}
-interactCt :: Ct -> [Ct] -> ([Ct],[Ct])
-interactCt ct asmps =
+interactCt :: Bool -> Ct -> [Ct] -> ([Ct],[Ct])
+interactCt withEv ct asmps =
   let active  = concatMap (`applyAsmp` ct)
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
@@ -628,7 +711,8 @@ interactCt ct asmps =
               : map activate theRules
 
       newWork = interactActiveRules active asmps
-  in partition isBad newWork
+  in partition isBad $ if withEv then map ruleResultToGiven newWork
+                                 else map ruleResultToDerived newWork
 
  where
   -- cf. `fireRule`: the only way to get a non-canonical constraint
@@ -645,7 +729,7 @@ Returns any obvious contradictions that we found.
 -}
 computeNewGivenWork :: Ct -> TcS [Ct]
 computeNewGivenWork ct =
-  do (bad,good) <- interactCt ct `fmap` getFacts
+  do (bad,good) <- interactCt True ct `fmap` getFacts
 
      when (null bad) $
        do natTrace "New givens:" (vcat $ map ppr good)
@@ -662,7 +746,7 @@ Returns any obvious contradictions that we found. -}
 
 computeNewDerivedWork :: Ct -> TcS [Ct]
 computeNewDerivedWork ct =
-  do (bad,good) <- interactCt ct `fmap` getAllCts
+  do (bad,good) <- interactCt False ct `fmap` getAllCts
      let newWork = map cvtEv good
 
      when (null bad) $
