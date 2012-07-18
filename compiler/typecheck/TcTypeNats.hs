@@ -29,7 +29,7 @@ import Bag      ( bagToList )
 import Panic    ( panic )
 
 -- From type checker
-import TcTypeNatsRules( bRules, theRules {-, backRules-}
+import TcTypeNatsRules( bRules, theRules, widenRules
                       , axAddDef, axMulDef, axExpDef, axLeqDef
                       , natVars)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
@@ -38,31 +38,33 @@ import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , ctEvTerm, isGivenCt
                   , CtEvidence(..), CtLoc(..), SkolemInfo(..)
                   , mkNonCanonical
-                  , getWantedLoc
-                  , ctEvPred
+                  , ctPred
+                  -- , getWantedLoc
                   , isDerived
+                  , isWantedCt
                   , CtOrigin(..), EqOrigin(..)
                   )
 import TcType     ( mkTcEqPred )
 import TcEvidence ( EvTerm(..)
                   , evTermCoercion
                   , TcCoercion(TcTypeNatCo)
-                  , mkTcSymCo, mkTcTransCo, mkTcReflCo, mkTcTyConAppCo
+                  , mkTcSymCo, mkTcTransCo
                   )
 import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , InertSet
                 , getTcSInerts, inert_cans, inert_funeqs
                 , updWorkListTcS, appendWorkListCt
+                , modifyInertTcS
                 , traceTcS
                 , partCtFamHeadMap
                 , foldFamHeadMap
                 )
 
 -- From base libraries
-import Data.Maybe ( isNothing, mapMaybe {-, listToMaybe-} )
-import Data.List  ( sortBy, partition )
+import Data.Maybe ( isNothing, mapMaybe )
+import Data.List  ( sortBy, partition, find )
 import Data.Ord   ( comparing )
-import Control.Monad ( msum, guard, when )
+import Control.Monad ( msum, guard, when, mplus )
 
 -- import Debug.Trace
 
@@ -84,15 +86,19 @@ typeNatStage ct
       _      -> checkBad =<< computeNewGivenWork ct
 
   | isWanted ev =
-    case solve ct of
+    getEvCt >>= \asmps ->
+    case deepSolve asmps ct of
       Just c  -> do natTrace "solved wanted: " (ppr ct)
                     setEvBind (ctEvId ev) c
                     return Stop
       Nothing -> do natTrace "failed to solve wanted: " (ppr ct)
+                    reExamineWanteds asmps ct
                     checkBad =<< computeNewDerivedWork ct
 
-  -- XXX: TODO
-  | otherwise = return $ ContinueWith ct
+  | otherwise =
+    case solve ct of
+      Just _  -> return Stop
+      Nothing -> checkBad =<< computeNewDerivedWork ct
 
 
   where
@@ -104,9 +110,54 @@ typeNatStage ct
                      return Stop
 
 
+reExamineWanteds :: [Ct] -> Ct -> TcS ()
+reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
+  where
+  (given,wanted) = partition isGivenCt asmps0
+
+  dropSolved s i = ((), i { inert_cans =
+                             let ics = inert_cans i
+                                 fs  = inert_funeqs ics
+                                 shouldDrop c = isWantedCt c && getId c `elem` s
+                                 (_,f1) = partCtFamHeadMap shouldDrop fs
+                             in ics { inert_funeqs = f1 }
+                          })
+
+  getId = ctEvId . ctEvidence
+
+  loop solved _ [] = modifyInertTcS (dropSolved solved)
+
+  loop solved asmps (w : ws) =
+    case deepSolve (ws ++ asmps) w of
+      Just ev -> do let x = getId w
+                    setEvBind x ev
+                    loop (x : solved) asmps ws
+      Nothing -> loop solved (w : asmps) ws
+
+
 --------------------------------------------------------------------------------
 solve :: Ct -> Maybe EvTerm
 solve ct = msum $ solveWithAxiom ct : map (`solveWithRule` ct) bRules
+
+{- XXX: This is not quite enough.  We really need to do some backward
+reasoning also.
+
+Example:
+
+Assumptions: (2 <= x, x * a1 ~ c, x * a2 ~ c)
+Conclusion needed:a1 ~ a2
+
+If we had (1 <= x) in the assumptions, it would react with the the
+two multiplications to cancel things out.  However, we have 2 <= x, instead.
+We need to notice that this implies (1 <= x).  In the other implementation
+this happened automatically because of the custom system for reasoning
+about <=.
+-}
+deepSolve :: [Ct] -> Ct -> Maybe EvTerm
+deepSolve asmps ct = solve ct `mplus` fmap ev (find this (widenAsmps asmps))
+  where
+  ev   = ctEvTerm . ctEvidence
+  this = sameCt ct
 
 
 impossible :: Ct -> Bool
@@ -569,7 +620,7 @@ setArg n (su,ev) r =
                     (as,b:bs) -> (b,as++bs)
                     _ -> panic "setArg: Tried to set a non-existent param."
 
-  -- XXX: Can the subgoal scontain variables?
+  -- XXX: Can the subgoals contain variables?
   (newSubgoals, newDone) =
     case ev of
       Nothing -> (goal : inst (subgoals r),         doneArgs r)
@@ -635,44 +686,6 @@ P { a = 3, b = 2, c = 9, y = 1 }
 P { a = 2, b = 2, c = 4, y = 6 }
 -}
 
---------------------------------------------------------------------------------
-
--- XXX: These are not used at the moment.
-
-{- Rewriting with equality.  This probably duplicates functionality
-in other parts of the constraint solver, so we'd probably want to
-combine these later. (ISD: I'm not sure exactly how/what to combine so
-I'm adding this code so that I can progress with the implementation
-of the number solver.  -}
-
-{- Equations (with proofs) in a normalized form.
-This is similar to an ordinary substitution but we also keep
-the evidence explaining why the variable is equal to the type. -}
-
-type EqnSubst = [(TyVar, (TcCoercion,Type))]
-
--- Apply a substitution.  `rewrite su t = (c,t1)` where `c : t ~ t1`.
-rewriteType :: EqnSubst -> Type -> (TcCoercion, Type)
-rewriteType su t
-  | Just x <- getTyVar_maybe t, Just r <- lookup x su = r
-  | Just (tc,ts) <- splitTyConApp_maybe t =
-      let (cs,ts1) = unzip $ map (rewriteType su) ts
-      in (mkTcTyConAppCo tc cs, mkTyConApp tc ts1)
-  | otherwise = (mkTcReflCo t, t)
-
-
-{-
--- Given `p : t1 ~ t2`, apply the substitution to derive
--- `p' : t1' ~ t2'`, where t1' and t2' are the rewritten versions of t1 and t2.
-rewriteFact :: EqnSubst -> Fact -> Fact
-rewriteFact su (p, t1, t2) =
-  let (c1,t1') = rewriteType su t1
-      (c2,t2') = rewriteType su t2
-  in (EvCoercion $ mkTcSymCo c1 `mkTcTransCo` evTermCoercion p `mkTcTransCo` c2
-     , t1', t2')
--}
-
-
 
 
 --------------------------------------------------------------------------------
@@ -685,11 +698,20 @@ getFacts =
      return $ bagToList $ fst $ partCtFamHeadMap isGivenCt
                               $ inert_funeqs $ inert_cans is
 
+getEvCt:: TcS [Ct]
+getEvCt =
+  do is <- getTcSInerts
+     return $ bagToList $ fst $ partCtFamHeadMap hasEv
+                              $ inert_funeqs $ inert_cans is
+  where hasEv c = isGivenCt c || isWantedCt c
+
 getAllCts :: TcS [Ct]
 getAllCts =
   do is <- getTcSInerts
      return $ foldFamHeadMap (:) [] $ inert_funeqs $ inert_cans is
 
+sameCt :: Ct -> Ct -> Bool
+sameCt c1 c2 = eqType (ctPred c1) (ctPred c2)
 
 --------------------------------------------------------------------------------
 
@@ -721,6 +743,29 @@ interactCt withEv ct asmps =
   isBad _                   = False
 
 
+-- Given a set of facts, apply forward reasoning using the "difficult"
+-- rules to derive some additional facts.
+-- NOTE: assumes that the initial set all have evidence
+-- (i.e., they are either givens or wanted)
+widenAsmps :: [Ct] -> [Ct]
+widenAsmps asmps = step given wanted []
+
+  where (given, wanted) = partition isGivenCt asmps
+
+        known c cs  = any (sameCt c) cs
+
+        step done [] [] = reverse done
+        step done [] cs = step done (reverse cs) []
+        step done (c : cs) ds
+          | known c done  = step done cs ds
+          | otherwise
+            = let active = concatMap (`applyAsmp` c) $ map activate widenRules
+                  new = map ruleResultToGiven $ interactActiveRules active done
+              in step (c : done) cs (new ++ ds)
+
+
+--------------------------------------------------------------------------------
+
 
 {- Compute additional givens, computed by combining this one with
 existing givens.
@@ -747,18 +792,12 @@ Returns any obvious contradictions that we found. -}
 computeNewDerivedWork :: Ct -> TcS [Ct]
 computeNewDerivedWork ct =
   do (bad,good) <- interactCt False ct `fmap` getAllCts
-     let newWork = map cvtEv good
 
      when (null bad) $
-       do natTrace "New derived:" (vcat $ map ppr newWork)
-          updWorkListTcS (appendWorkListCt newWork)
+       do natTrace "New derived:" (vcat $ map ppr good)
+          updWorkListTcS (appendWorkListCt good)
 
-     return (map cvtEv bad)
-
-  where
-  cvtEv e = e { cc_ev = Derived { ctev_wloc = getWantedLoc (cc_ev ct)
-                                , ctev_pred = ctEvPred (cc_ev e)
-                                } }
+     return bad
 
 
 --------------------------------------------------------------------------------

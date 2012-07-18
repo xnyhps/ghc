@@ -118,11 +118,6 @@ bRules =
 
 theRules :: [(Bool,CoAxiomRule)]
 theRules =
-{-
-  [ (True, mkAx "AddComm" (take 3 natVars) [ (mkAdd a b, c) ] (mkAdd b a) c)
-  , (True, mkAx "MulComm" (take 3 natVars) [ (mkMul a b, c) ] (mkMul b a) c)
--}
-
   [ (True, mkAx 30 "AddCancelL" (take 4 natVars)
             [ mkAdd a b === d, mkAdd a c === d ] (b === c))
 
@@ -144,12 +139,28 @@ theRules =
   , (True, mkAx 36 "LeqASym" (take 2 natVars)
             [ a <== b, b <== a ] (a === b))
 
-  ]
+  ] ++ widenRules
 
   where
   a : b : c : d : _ = map mkTyVarTy natVars
   n1 = mkNumLitTy 1
   n2 = mkNumLitTy 2
+
+
+widenRules :: [(Bool,CoAxiomRule)]
+widenRules =
+  [ (True, mkAx 40 "AddComm" (take 3 natVars)
+            [ mkAdd a b === c ] (mkAdd b a === c))
+
+  , (True, mkAx 41 "MulComm" (take 3 natVars)
+            [ mkMul a b === c ] (mkMul b a === c))
+
+  , (False, mkAx 42 "LeqTrans" (take 3 natVars)
+            [ a <== b, b <== c ] (a <== c))
+  ]
+  where
+  a : b : c : _ = map mkTyVarTy natVars
+
 
 
 --------------------------------------------------------------------------------
