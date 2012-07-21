@@ -47,12 +47,6 @@ module Coercion (
 	-- ** Coercion variables
 	mkCoVar, isCoVar, isCoVarType, coVarName, setCoVarName, setCoVarUnique,
 
-        -- ** Coercion rules
-        CoAxiomRule, Eqn,
-        co_axr_rule, co_axr_tylit_rule, co_axr_tynum2_rule,
-        co_axr_inst, co_axr_asmps, co_axr_is_rule,
-
-
         -- ** Free variables
         tyCoVarsOfCo, tyCoVarsOfCos, coVarsOfCo, coercionSize,
 	
@@ -162,74 +156,6 @@ data Coercion
   deriving (Data.Data, Data.Typeable)
 
 
-type Eqn = (Type,Type)
-
-{- Conditional axioms.  The genral idea is that a `CoAxiomRule` looks like this:
-
-    forall as. (r1 ~ r2, s1 ~ s2) => t1 ~ t2
-
-My intension is to reuse these for both (~) and (~#).
-The short-term plan is to use this datatype to represent the type-nat axioms.
-In the longer run, it would probably be good to unify this and `CoAxiom`,
-as `CoAxiom` is the special case when there are no assumptions.
-
-`CoAxiomTyLit` is used for axiom schemes defining equations between
-type-literal constants.  Currently, they contain no type variables
-or assumptions.
--}
-data CoAxiomRule
-  = CoAxiomRule  Name [TyVar] [Eqn] Eqn
-  | CoAxiomTyLit Name ([TyLit] -> Eqn)
-  deriving (Data.Typeable)
-
-co_axr_rule :: Name -> [TyVar] -> [Eqn] -> Eqn -> CoAxiomRule
-co_axr_rule = CoAxiomRule
-
-co_axr_tylit_rule :: Name -> ([TyLit] -> Eqn) -> CoAxiomRule
-co_axr_tylit_rule = CoAxiomTyLit
-
--- A common case: binary functions on type naturals.
-co_axr_tynum2_rule :: Name -> (Integer -> Integer -> Eqn) -> CoAxiomRule
-co_axr_tynum2_rule n f = co_axr_tylit_rule n toEqn
-  where toEqn [ NumTyLit a, NumTyLit b ] = f a b
-        toEqn _ = panic "`co_axr_tynum2_rule` requires 2 numeric literals."
-
-co_axr_inst :: CoAxiomRule -> [Type] -> ([Eqn], Eqn)
-co_axr_inst (CoAxiomRule _ vs as c) ts = (map inst2 as, inst2 c)
-  where inst        = substTyWith vs ts
-        inst2 (a,b) = (inst a, inst b)
-
-co_axr_inst (CoAxiomTyLit _ f) ts =
-  case mapM isTyLit ts of
-    Just tls -> ([], f tls)
-    Nothing  -> pprPanic "co_axr_inst"
-                 (vcat ( text "CoAxiomTyLit was used with a non-literal type."
-                       : map ppr ts
-                       ))
-
-
-co_axr_asmps :: CoAxiomRule -> [Eqn]
-co_axr_asmps (CoAxiomRule _ _ as _) = as
-co_axr_asmps (CoAxiomTyLit _ _)     = []
-
-co_axr_is_rule :: CoAxiomRule -> Maybe ([TyVar], [Eqn], Eqn)
-co_axr_is_rule (CoAxiomRule _ a b c) = Just (a,b,c)
-co_axr_is_rule (CoAxiomTyLit _ _)    = Nothing
-
-
-
-instance Data.Data CoAxiomRule where
-  -- don't traverse?
-  toConstr _   = abstractConstr "CoAxiomRule"
-  gunfold _ _  = error "gunfold"
-  dataTypeOf _ = mkNoRepType "CoAxiomRule"
-
-instance NamedThing CoAxiomRule where
-  getName (CoAxiomRule n _ _ _) = n
-  getName (CoAxiomTyLit n _)    = n
-
-instance Uniquable CoAxiomRule where
-  getUnique = getUnique . getName
 \end{code}
 
 Note [Refl invariant]

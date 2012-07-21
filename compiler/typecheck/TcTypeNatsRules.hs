@@ -2,9 +2,9 @@ module TcTypeNatsRules where
 
 -- From other GHC locations
 import Var      ( TyVar )
-import Coercion ( CoAxiomRule, Eqn, co_axr_rule, co_axr_tynum2_rule
+import Type     ( Type,  mkTyVarTy, mkNumLitTy, mkTyConApp
+                , CoAxiomRule, Eqn, co_axr_rule, co_axr_tynum2_rule
                 )
-import Type     ( Type,  mkTyVarTy, mkNumLitTy, mkTyConApp )
 import TysPrim  ( tyVarList
                 , typeNatKind
                 )

@@ -48,7 +48,12 @@ module TypeRep (
         tyVarsOfType, tyVarsOfTypes,
 
         -- Substitutions
-        TvSubst(..), TvSubstEnv
+        TvSubst(..), TvSubstEnv,
+
+        -- Coercion rules
+        CoAxiomRule(..), Eqn,
+
+
     ) where
 
 #include "HsVersions.h"
@@ -153,6 +158,58 @@ type Kind = Type
 --
 -- > TyConApp SuperKindTyCon ...
 type SuperKind = Type
+\end{code}
+
+
+% Rules for building Evidence
+% ---------------------------
+
+
+Conditional axioms.  The genral idea is that a `CoAxiomRule` looks like this:
+
+    forall as. (r1 ~ r2, s1 ~ s2) => t1 ~ t2
+
+My intension is to reuse these for both (~) and (~#).
+The short-term plan is to use this datatype to represent the type-nat axioms.
+In the longer run, it would probably be good to unify this and `CoAxiom`,
+as `CoAxiom` is the special case when there are no assumptions.
+
+`CoAxiomTyLit` is used for axiom schemes defining equations between
+type-literal constants.  Currently, they contain no type variables
+or assumptions.
+
+Note that if we think of equality as a (special) class:
+
+    class a ~ b where
+      cast :: a -> b
+
+then the `CoAxiomRule`s are various custom instances of the class.
+At present, these instances may only mention equation in their contexts.
+This is so that thing fit with the rest of GHC's coercion machinery,
+but we may want to lift that restriction in the future.
+
+
+\begin{code}
+-- | A more explicit representation for `t1 ~ t2`.
+type Eqn = (Type,Type)
+
+data CoAxiomRule
+  = CoAxiomRule  Name [TyVar] [Eqn] Eqn   -- ordinary instance
+  | CoAxiomTyLit Name ([TyLit] -> Eqn)    -- instance family
+  deriving (Data.Typeable)
+
+instance Data.Data CoAxiomRule where
+  -- don't traverse?
+  toConstr _   = abstractConstr "CoAxiomRule"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "CoAxiomRule"
+
+instance NamedThing CoAxiomRule where
+  getName (CoAxiomRule n _ _ _) = n
+  getName (CoAxiomTyLit n _)    = n
+
+instance Uniquable CoAxiomRule where
+  getUnique = getUnique . getName
 \end{code}
 
 Note [The kind invariant]

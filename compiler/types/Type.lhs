@@ -133,6 +133,11 @@ module Type (
         pprTvBndr, pprTvBndrs, pprForAll, pprSigmaType,
 	pprEqPred, pprTheta, pprThetaArrowTy, pprClassPred, 
         pprKind, pprParendKind, pprSourceTyCon,
+
+        -- * Constructing coercion axioms.
+        CoAxiomRule, Eqn,
+        co_axr_rule, co_axr_tylit_rule, co_axr_tynum2_rule,
+        co_axr_inst, co_axr_asmps, co_axr_is_rule,
     ) where
 
 #include "HsVersions.h"
@@ -155,6 +160,7 @@ import {-# SOURCE #-} TysWiredIn ( eqTyCon, mkBoxedTupleTy )
 import PrelNames	         ( eqTyConKey, ipClassName )
 
 -- others
+import Name             ( Name )
 import Unique		( Unique, hasKey )
 import BasicTypes	( Arity, RepArity )
 import NameSet
@@ -1623,3 +1629,43 @@ When unifying two internal type variables, we collect their kind constraints by
 finding the GLB of the two.  Since the partial order is a tree, they only
 have a glb if one is a sub-kind of the other.  In that case, we bind the
 less-informative one to the more informative one.  Neat, eh?
+
+
+
+
+\begin{code}
+co_axr_rule :: Name -> [TyVar] -> [Eqn] -> Eqn -> CoAxiomRule
+co_axr_rule = CoAxiomRule
+
+co_axr_tylit_rule :: Name -> ([TyLit] -> Eqn) -> CoAxiomRule
+co_axr_tylit_rule = CoAxiomTyLit
+
+-- A common case: binary functions on type naturals.
+co_axr_tynum2_rule :: Name -> (Integer -> Integer -> Eqn) -> CoAxiomRule
+co_axr_tynum2_rule n f = co_axr_tylit_rule n toEqn
+  where toEqn [ NumTyLit a, NumTyLit b ] = f a b
+        toEqn _ = panic "`co_axr_tynum2_rule` requires 2 numeric literals."
+
+co_axr_inst :: CoAxiomRule -> [Type] -> ([Eqn], Eqn)
+co_axr_inst (CoAxiomRule _ vs as c) ts = (map inst2 as, inst2 c)
+  where inst        = substTyWith vs ts
+        inst2 (a,b) = (inst a, inst b)
+
+co_axr_inst (CoAxiomTyLit _ f) ts =
+  case mapM isTyLit ts of
+    Just tls -> ([], f tls)
+    Nothing  -> pprPanic "co_axr_inst"
+                 (vcat ( text "CoAxiomTyLit was used with a non-literal type."
+                       : map ppr ts
+                       ))
+
+
+co_axr_asmps :: CoAxiomRule -> [Eqn]
+co_axr_asmps (CoAxiomRule _ _ as _) = as
+co_axr_asmps (CoAxiomTyLit _ _)     = []
+
+co_axr_is_rule :: CoAxiomRule -> Maybe ([TyVar], [Eqn], Eqn)
+co_axr_is_rule (CoAxiomRule _ a b c) = Just (a,b,c)
+co_axr_is_rule (CoAxiomTyLit _ _)    = Nothing
+
+\end{code}

@@ -14,11 +14,11 @@ import Outputable ( ppr, pprWithCommas
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
-import Coercion ( CoAxiomRule, Eqn, co_axr_inst, co_axr_is_rule )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
                 , eqType
+                , CoAxiomRule, Eqn, co_axr_inst, co_axr_is_rule
                 )
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon

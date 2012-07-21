@@ -36,14 +36,14 @@ import Var
 import PprCore ()   -- Instance OutputableBndr TyVar
 import TypeRep  -- Knows type representation
 import TcType
-import Type( tyConAppArgN, getEqPredTys_maybe, tyConAppTyCon_maybe, getEqPredTys )
+import Type( tyConAppArgN, getEqPredTys_maybe, tyConAppTyCon_maybe, getEqPredTys
+           , co_axr_inst )
 import TysPrim( funTyCon )
 import TyCon
 import PrelNames
 import VarEnv
 import VarSet
 import Name
-import Coercion(CoAxiomRule, co_axr_inst)
 
 import Util
 import Bag
