@@ -1513,6 +1513,9 @@ tyThingToIfaceDecl (ACoAxiom ax)
    lhs = toIfaceType (coAxiomLHS ax)
    rhs = toIfaceType (coAxiomRHS ax)
 
+tyThingToIfaceDecl (ACoAxiomRule _)
+  = pprPanic "tyThingToIfaceDecl: declaration for a CoAxiomRule?" empty
+
 tyThingToIfaceDecl (ADataCon dc)
  = pprPanic "toIfaceDecl" (ppr dc)      -- Should be trimmed out earlier
 

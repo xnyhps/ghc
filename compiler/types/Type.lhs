@@ -138,6 +138,7 @@ module Type (
         CoAxiomRule, Eqn,
         co_axr_rule, co_axr_tylit_rule, co_axr_tynum2_rule,
         co_axr_inst, co_axr_asmps, co_axr_is_rule,
+        isImplicitCoAxiomRule
     ) where
 
 #include "HsVersions.h"
@@ -1667,5 +1668,10 @@ co_axr_asmps (CoAxiomTyLit _ _)     = []
 co_axr_is_rule :: CoAxiomRule -> Maybe ([TyVar], [Eqn], Eqn)
 co_axr_is_rule (CoAxiomRule _ a b c) = Just (a,b,c)
 co_axr_is_rule (CoAxiomTyLit _ _)    = Nothing
+
+-- This determines if the rule is built-in or declared somewhere.
+-- Currently we only support built-in rules.
+isImplicitCoAxiomRule :: CoAxiomRule -> Bool
+isImplicitCoAxiomRule _ = True
 
 \end{code}

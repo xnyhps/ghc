@@ -96,6 +96,7 @@ pprTyThingHdr pefas (AnId id)          = pprId         pefas id
 pprTyThingHdr pefas (ADataCon dataCon) = pprDataConSig pefas dataCon
 pprTyThingHdr pefas (ATyCon tyCon)     = pprTyConHdr   pefas tyCon
 pprTyThingHdr _     (ACoAxiom ax)      = pprCoAxiom ax
+pprTyThingHdr _     (ACoAxiomRule ax)  = ppr ax
 
 ------------------------
 ppr_ty_thing :: PrintExplicitForalls -> ShowSub -> TyThing -> SDoc
@@ -103,6 +104,7 @@ ppr_ty_thing pefas _  (AnId id)          = pprId         pefas id
 ppr_ty_thing pefas _  (ADataCon dataCon) = pprDataConSig pefas dataCon
 ppr_ty_thing pefas ss (ATyCon tyCon)   	 = pprTyCon      pefas ss tyCon
 ppr_ty_thing _     _  (ACoAxiom ax)    	 = pprCoAxiom    ax
+ppr_ty_thing _     _  (ACoAxiomRule ax)  = ppr ax
 pprTyConHdr :: PrintExplicitForalls -> TyCon -> SDoc
 pprTyConHdr pefas tyCon
   | Just (fam_tc, tys) <- tyConFamInst_maybe tyCon
