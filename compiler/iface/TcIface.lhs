@@ -20,7 +20,6 @@ import IfaceEnv
 import BuildTyCl
 import TcRnMonad
 import TcType
-import TcTypeNatsRules (allRules)
 import Type
 import Coercion
 import TypeRep
@@ -1392,9 +1391,9 @@ tcIfaceCoAxiom name = do { thing <- tcIfaceGlobal name
 
 tcIfaceCoAxiomRule :: Name -> IfL CoAxiomRule
 tcIfaceCoAxiomRule n =
-  case lookupUFM allRules n of
-    Just r  -> return r
-    Nothing -> pprPanic "tcIfaceCoAxiomRule" (ppr n)
+  case wiredInNameTyThing_maybe n of
+    Just (ACoAxiomRule ax) -> return ax
+    _  -> pprPanic "tcIfaceCoAxiomRule" (ppr n)
 
 
 

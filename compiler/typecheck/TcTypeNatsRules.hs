@@ -4,7 +4,9 @@ module TcTypeNatsRules where
 import Var      ( TyVar )
 import Type     ( Type,  mkTyVarTy, mkNumLitTy, mkTyConApp
                 , CoAxiomRule, Eqn, co_axr_rule, co_axr_tynum2_rule
+                , TyThing(ACoAxiomRule)
                 )
+import PrelNames ( gHC_PRIM )
 import TysPrim  ( tyVarList
                 , typeNatKind
                 )
@@ -15,20 +17,35 @@ import TysWiredIn ( typeNatAddTyCon
                   , trueTy, falseTy
                   )
 
-import Name     ( Name, mkSystemName )
+import Name     ( Name, mkWiredInName, BuiltInSyntax(..) )
 import OccName  ( mkOccName, tcName )
 import Unique   ( mkAxiomRuleUnique )
-import UniqFM   ( UniqFM, listToUFM )
 
 
-mkAxName :: Int -> String -> Name
-mkAxName n s = mkSystemName (mkAxiomRuleUnique n) (mkOccName tcName s)
+
+typeNatRuleThings :: [TyThing]
+typeNatRuleThings = map ACoAxiomRule $
+  [ axAddDef, axMulDef, axExpDef, axLeqDef ]
+    ++ bRules
+    ++ map snd theRules
+    ++ map snd widenRules
+
+
+--------------------------------------------------------------------------------
+mkAxName :: Int -> String -> (Name -> CoAxiomRule) -> CoAxiomRule
+mkAxName n s r = thing
+  where
+  thing = r name
+
+  -- XXX: I'm not sure that we should be using the type name space here
+  name  = mkWiredInName gHC_PRIM (mkOccName tcName s) (mkAxiomRuleUnique n)
+                          (ACoAxiomRule thing) BuiltInSyntax
 
 mkAx :: Int -> String -> [TyVar] -> [Eqn] -> Eqn -> CoAxiomRule
-mkAx n s = co_axr_rule (mkAxName n s)
+mkAx u s as es e = mkAxName u s $ \n -> co_axr_rule n as es e
 
 mkDef :: Int -> String -> (Integer -> Integer -> Eqn) -> CoAxiomRule
-mkDef n s = co_axr_tynum2_rule (mkAxName n s)
+mkDef u s f = mkAxName u s $ \n -> co_axr_tynum2_rule n f
 
 
 mkAdd :: Type -> Type -> Type
@@ -55,18 +72,6 @@ x === y = (x,y)
 
 (<==) :: Type -> Type -> Eqn
 x <== y = (mkLeq x y, trueTy)
-
-
---------------------------------------------------------------------------------
-
-allRules :: UniqFM CoAxiomRule
-allRules =
-  let expand x = (x,x)
-  in listToUFM $ map expand $
-      [ axAddDef, axMulDef, axExpDef, axLeqDef ] ++
-      bRules ++
-      map snd theRules
-
 
 
 --------------------------------------------------------------------------------
@@ -162,24 +167,6 @@ widenRules =
   a : b : c : _ = map mkTyVarTy natVars
 
 
-
---------------------------------------------------------------------------------
-
-
-{-
-
-Consider a problem like this:
-
-  [W] a + b ~ b + a
-
-GHC de-sugars this into:
-
-  [W] p: a + b ~ c
-  [W] q: b + a ~ c
-
-When we add the 2nd one, we should notice that it can be solved in terms
-of the first one...
--}
 
 
 
