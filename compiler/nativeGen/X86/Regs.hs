@@ -471,30 +471,39 @@ callClobberedRegs       :: [Reg]
 freeReg esp = fastBool False  --        %esp is the C stack pointer
 #endif
 
+#if i386_TARGET_ARCH
+freeReg esi = fastBool False -- Note [esi/edi not allocatable]
+freeReg edi = fastBool False
+#endif
+
 #if x86_64_TARGET_ARCH
 freeReg rsp = fastBool False  --        %rsp is the C stack pointer
 #endif
 
+-- split patterns in two functions to prevent overlaps
+freeReg r         = freeRegBase r
+
+freeRegBase :: RegNo -> FastBool
+
 #ifdef REG_Base
-freeReg REG_Base = fastBool False
+freeRegBase REG_Base = fastBool False
 #endif
 #ifdef REG_Sp
-freeReg REG_Sp   = fastBool False
+freeRegBase REG_Sp   = fastBool False
 #endif
 #ifdef REG_SpLim
-freeReg REG_SpLim = fastBool False
+freeRegBase REG_SpLim = fastBool False
 #endif
 #ifdef REG_Hp
-freeReg REG_Hp   = fastBool False
+freeRegBase REG_Hp   = fastBool False
 #endif
 #ifdef REG_HpLim
-freeReg REG_HpLim = fastBool False
+freeRegBase REG_HpLim = fastBool False
 #endif
 
 -- All other regs are considered to be "free", because we can track
 -- their liveness accurately.
-freeReg _         = fastBool True
-
+freeRegBase _ = fastBool True
 
 --  | Returns 'Nothing' if this global register is not stored
 -- in a real machine register, otherwise returns @'Just' reg@, where
@@ -646,6 +655,11 @@ allIntArgRegs           = panic "X86.Regs.allIntArgRegs: not defined"
 allFPArgRegs            = panic "X86.Regs.allFPArgRegs: not defined"
 callClobberedRegs       = panic "X86.Regs.callClobberedRegs: not defined"
 
+instrClobberedRegs :: [RealReg]
+instrClobberedRegs = panic "X86.Regs.instrClobberedRegs: not defined for this arch"
+
+allHaskellArgRegs :: [Reg]
+allHaskellArgRegs = panic "X86.Regs.allHaskellArgRegs: not defined for this arch"
 
 #endif
 
@@ -657,4 +671,16 @@ allocatableRegs
    = let isFree i = isFastTrue (freeReg i)
      in  map RealRegSingle $ filter isFree allMachRegNos
 
+{-
+Note [esi/edi not allocatable]
 
+%esi is mapped to R1, so %esi would normally be allocatable while it
+is not being used for R1.  However, %esi has no 8-bit version on x86,
+and the linear register allocator is not sophisticated enough to
+handle this irregularity (we need more RegClasses).  The
+graph-colouring allocator also cannot handle this - it was designed
+with more flexibility in mind, but the current implementation is
+restricted to the same set of classes as the linear allocator.
+
+Hence, on x86 esi and edi are treated as not allocatable.
+-}

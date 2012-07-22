@@ -44,9 +44,9 @@ module StgCmmUtils (
 	mkWordCLit,
 	newStringCLit, newByteStringCLit,
 	packHalfWordsCLit,
-	blankWord,
+        blankWord,
 
-        getSRTInfo, srt_escape
+        srt_escape
   ) where
 
 #include "HsVersions.h"
@@ -66,12 +66,10 @@ import Type
 import TyCon
 import Constants
 import SMRep
-import StgSyn	( SRT(..) )
 import Module
 import Literal
 import Digraph
 import ListSetOps
-import VarSet
 import Util
 import Unique
 import DynFlags
@@ -92,7 +90,7 @@ import Data.Maybe
 -------------------------------------------------------------------------
 
 cgLit :: Literal -> FCode CmmLit
-cgLit (MachStr s) = newByteStringCLit (bytesFS s)
+cgLit (MachStr s) = newByteStringCLit (bytesFB s)
  -- not unpackFS; we want the UTF-8 byte stream.
 cgLit other_lit   = return (mkSimpleLit other_lit)
 
@@ -803,20 +801,6 @@ assignTemp' e
        let reg = CmmLocal lreg
        emitAssign reg e
        return (CmmReg reg)
-
--------------------------------------------------------------------------
---
---	Static Reference Tables
---
--------------------------------------------------------------------------
-
--- | Returns 'True' if there is a non-empty SRT, or 'False' otherwise
--- NB. the SRT attached to an StgBind is still used in the new codegen
--- to decide whether we need a static link field on a static closure
--- or not.
-getSRTInfo :: SRT -> FCode Bool
-getSRTInfo (SRTEntries vs) = return (not (isEmptyVarSet vs))
-getSRTInfo _               = return False
 
 srt_escape :: StgHalfWord
 srt_escape = -1

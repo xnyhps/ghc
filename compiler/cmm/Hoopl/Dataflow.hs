@@ -10,12 +10,8 @@
 --
 
 {-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, EmptyDataDecls, PatternGuards, TypeFamilies, MultiParamTypeClasses #-}
-#if __GLASGOW_HASKELL__ >= 703
 {-# OPTIONS_GHC -fprof-auto-top #-}
-#endif
-#if __GLASGOW_HASKELL__ >= 701
 {-# LANGUAGE Trustworthy #-}
-#endif
 
 module Hoopl.Dataflow
   ( DataflowLattice(..), OldFact(..), NewFact(..), Fact, mkFactBase

@@ -5,6 +5,7 @@
 Functions for working with the typechecker environment (setters, getters...).
 
 \begin{code}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module TcRnMonad(
         module TcRnMonad,
         module TcRnTypes,
@@ -1030,11 +1031,6 @@ emitImplication :: Implication -> TcM ()
 emitImplication ct
   = do { lie_var <- getConstraintVar ;
          updTcRef lie_var (`addImplics` unitBag ct) }
-
-emitWC :: WantedConstraints -> TcM ()
-emitWC wc
-  = do { emitFlats (keepWanted (wc_flat wc))
-       ; emitImplications (wc_impl wc) }
 
 emitImplications :: Bag Implication -> TcM ()
 emitImplications ct

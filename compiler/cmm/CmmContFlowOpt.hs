@@ -157,9 +157,13 @@ callContinuation_maybe _ = Nothing
 
 okToDuplicate :: CmmBlock -> Bool
 okToDuplicate block
-  = case blockSplit block of (_, m, _) -> isEmptyBlock m
-  -- cheap and cheerful; we might expand this in the future to
-  -- e.g. spot blocks that represent a single instruction or two
+  = case blockSplit block of
+      (_, m, CmmBranch _) -> isEmptyBlock m
+      -- cheap and cheerful; we might expand this in the future to
+      -- e.g. spot blocks that represent a single instruction or two.
+      -- Be careful: a CmmCall can be more than one instruction, it
+      -- has a CmmExpr inside it.
+      _otherwise -> False
 
 ------------------------------------------------------------------------
 -- Map over the CmmGraph, replacing each label with its mapping in the
@@ -177,7 +181,7 @@ replaceLabels env g
      txnode (CmmBranch bid)         = CmmBranch (lookup bid)
      txnode (CmmCondBranch p t f)   = mkCmmCondBranch (exp p) (lookup t) (lookup f)
      txnode (CmmSwitch e arms)      = CmmSwitch (exp e) (map (liftM lookup) arms)
-     txnode (CmmCall t k a res r)   = CmmCall (exp t) (liftM lookup k) a res r
+     txnode (CmmCall t k rg a res r) = CmmCall (exp t) (liftM lookup k) rg a res r
      txnode fc@CmmForeignCall{}     = fc{ args = map exp (args fc)
                                         , succ = lookup (succ fc) }
      txnode other                   = mapExpDeep exp other
