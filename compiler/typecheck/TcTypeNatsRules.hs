@@ -153,7 +153,8 @@ theRules =
 
 
 widenRules :: [(Bool,CoAxiomRule)]
-widenRules =
+widenRules = []
+{-
   [ (True, mkAx 40 "AddComm" (take 3 natVars)
             [ mkAdd a b === c ] (mkAdd b a === c))
 
@@ -165,7 +166,7 @@ widenRules =
   ]
   where
   a : b : c : _ = map mkTyVarTy natVars
-
+-}
 
 
 
