@@ -308,6 +308,7 @@ mkTupleDataConUnique   :: TupleSort -> Int -> Unique
 mkPrimOpIdUnique       :: Int -> Unique
 mkPreludeMiscIdUnique  :: Int -> Unique
 mkPArrDataConUnique    :: Int -> Unique
+mkAxiomRuleUnique      :: Int -> Unique
 
 mkAlphaTyVarUnique i            = mkUnique '1' i
 
