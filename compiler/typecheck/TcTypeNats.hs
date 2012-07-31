@@ -29,7 +29,7 @@ import Bag      ( bagToList )
 import Panic    ( panic )
 
 -- From type checker
-import TcTypeNatsRules( bRules, theRules, widenRules
+import TcTypeNatsRules( bRules, impRules, widenRules
                       , axAddDef, axMulDef, axExpDef, axLeqDef
                       , natVars)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
@@ -129,7 +129,8 @@ reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
 
   loop solved asmps (w : ws) =
     case deepSolve (ws ++ asmps) w of
-      Just ev -> do let x = getId w
+      Just ev -> do natTrace "Solved wanted:" (ppr w)
+                    let x = getId w
                     setEvBind x ev
                     loop (x : solved) asmps ws
       Nothing -> loop solved (w : asmps) ws
@@ -730,13 +731,15 @@ interactCt withEv ct asmps =
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
               : funRule typeNatExpTyCon
-              : map activate theRules
+              : map activate (widen ++ impRules)
 
       newWork = interactActiveRules active asmps
   in partition isBad $ if withEv then map ruleResultToGiven newWork
                                  else map ruleResultToDerived newWork
 
  where
+  widen = if withEv then widenRules else []
+
   -- cf. `fireRule`: the only way to get a non-canonical constraint
   -- is if it impossible to solve.
   isBad (CNonCanonical {})  = True

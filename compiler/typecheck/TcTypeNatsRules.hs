@@ -27,7 +27,7 @@ typeNatRuleThings :: [TyThing]
 typeNatRuleThings = map ACoAxiomRule $
   [ axAddDef, axMulDef, axExpDef, axLeqDef ]
     ++ bRules
-    ++ map snd theRules
+    ++ map snd impRules
     ++ map snd widenRules
 
 
@@ -121,8 +121,8 @@ bRules =
 
 
 
-theRules :: [(Bool,CoAxiomRule)]
-theRules =
+impRules :: [(Bool,CoAxiomRule)]
+impRules =
   [ (True, mkAx 30 "AddCancelL" (take 4 natVars)
             [ mkAdd a b === d, mkAdd a c === d ] (b === c))
 
@@ -144,7 +144,7 @@ theRules =
   , (True, mkAx 36 "LeqASym" (take 2 natVars)
             [ a <== b, b <== a ] (a === b))
 
-  ] ++ widenRules
+  ]
 
   where
   a : b : c : d : _ = map mkTyVarTy natVars
@@ -162,10 +162,22 @@ widenRules =
 
   , (False, mkAx 42 "LeqTrans" (take 3 natVars)
             [ a <== b, b <== c ] (a <== c))
+
+  , (False, mkAx 43 "AddAssoc1" (take 6 natVars)
+      [ mkAdd a b === x, mkAdd b c === y, mkAdd a y === z ] (mkAdd x c === z))
+
+  , (False, mkAx 44 "AddAssoc2" (take 6 natVars)
+      [ mkAdd a b === x, mkAdd b c === y, mkAdd x c === z ] (mkAdd a y === z))
+
+  , (False, mkAx 45 "MulAssoc1" (take 6 natVars)
+      [ mkMul a b === x, mkMul b c === y, mkMul a y === z ] (mkMul x c === z))
+
+  , (False, mkAx 46 "MulAssoc2" (take 6 natVars)
+      [ mkMul a b === x, mkMul b c === y, mkMul x c === z ] (mkMul a y === z))
+
   ]
   where
-  a : b : c : _ = map mkTyVarTy natVars
-
+  a : b : c : x : y : z : _ = map mkTyVarTy natVars
 
 
 
