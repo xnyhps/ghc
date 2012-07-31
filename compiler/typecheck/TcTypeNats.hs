@@ -6,6 +6,7 @@ import PrelNames( typeNatAddTyFamName
                 , typeNatLeqTyFamName
                 )
 
+
 import Outputable ( ppr, pprWithCommas
                   , Outputable
                   , SDoc
@@ -17,16 +18,18 @@ import TyCon    ( TyCon, tyConName )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
-                , eqType
+                , eqType, cmpType
                 , CoAxiomRule, Eqn, co_axr_inst, co_axr_is_rule
                 )
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
+                  , typeNatLeqTyCon
                   , trueTy, falseTy
                   )
 import Bag      ( bagToList )
 import Panic    ( panic )
+import TrieMap  (TypeMap, emptyTM)
 
 -- From type checker
 import TcTypeNatsRules( bRules, impRules, widenRules
@@ -65,6 +68,7 @@ import Data.Maybe ( isNothing, mapMaybe )
 import Data.List  ( sortBy, partition, find )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard, when, mplus )
+import qualified Data.Set as S
 
 -- import Debug.Trace
 
@@ -801,6 +805,44 @@ computeNewDerivedWork ct =
           updWorkListTcS (appendWorkListCt good)
 
      return bad
+
+
+--------------------------------------------------------------------------------
+-- Reasoning about order.
+
+type LeqFacts = TypeMap LeqEdges
+data LeqEdge  = LeqEdge { leqProof :: CtEvidence, leqTarget :: Type }
+data LeqEdges = LeqEdges { leqAbove  :: S.Set LeqEdge  -- proof: here <= above
+                         , leqBelow  :: S.Set LeqEdge  -- proof: below <= here
+                         }
+
+instance Eq LeqEdge where
+  x == y  = eqType (leqTarget x) (leqTarget y)
+
+instance Ord LeqEdge where
+  compare x y = cmpType (leqTarget x) (leqTarget y)
+
+nodeFacts :: Type -> LeqEdges -> [Ct]
+nodeFacts x es = toFacts leqBelow lowerFact ++ toFacts leqAbove upperFact
+  where
+  toFacts list f  = map f $ S.toList $ list es
+
+  upperFact f = mkL (leqProof f) x (leqTarget f)
+  lowerFact f = mkL (leqProof f) (leqTarget f) x
+
+  mkL e a b = CFunEqCan
+                 { cc_ev = e, cc_depth = 0
+                 , cc_fun = typeNatLeqTyCon, cc_tyargs = [a,b], cc_rhs = trueTy
+                 }
+
+noLeqEdges :: LeqEdges
+noLeqEdges = LeqEdges { leqAbove = S.empty, leqBelow = S.empty }
+
+noLeqFacts :: LeqFacts
+noLeqFacts = emptyTM
+
+
+
 
 
 --------------------------------------------------------------------------------
