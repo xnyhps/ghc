@@ -1118,11 +1118,16 @@ runPhase cc_phase input_fn dflags
                            then ["-mcpu=v9"]
                            else [])
 
+                       -- GCC 4.6+ doesn't like -Wimplicit when compiling C++.
+                       ++ (if (cc_phase /= Ccpp && cc_phase /= Cobjcpp)
+                             then ["-Wimplicit"]
+                             else [])
+
                        ++ (if hcc
                              then gcc_extra_viac_flags ++ more_hcc_opts
                              else [])
                        ++ verbFlags
-                       ++ [ "-S", "-Wimplicit", cc_opt ]
+                       ++ [ "-S", cc_opt ]
                        ++ [ "-D__GLASGOW_HASKELL__="++cProjectVersionInt ]
                        ++ framework_paths
                        ++ cc_opts
@@ -1175,10 +1180,8 @@ runPhase As input_fn dflags
                         = do
                             llvmVer <- io $ figureLlvmVersion dflags
                             return $ case llvmVer of
-                                -- using cGccLinkerOpts here but not clear if
-                                -- opt_c isn't a better choice
                                 Just n | n >= 30 ->
-                                    (SysTools.runClang, cGccLinkerOpts)
+                                    (SysTools.runClang, getOpts dflags opt_c)
 
                                 _ -> (SysTools.runAs, getOpts dflags opt_a)
 
@@ -1657,6 +1660,7 @@ getHCFilePackages filename =
 linkBinary :: DynFlags -> [FilePath] -> [PackageId] -> IO ()
 linkBinary dflags o_files dep_packages = do
     let platform = targetPlatform dflags
+        mySettings = settings dflags
         verbFlags = getVerbFlags dflags
         output_fn = exeFileName dflags
 
@@ -1769,7 +1773,7 @@ linkBinary dflags o_files dep_packages = do
                       -- like
                       --     ld: warning: could not create compact unwind for .LFB3: non-standard register 5 being saved in prolog
                       -- on x86.
-                      ++ (if cLdHasNoCompactUnwind == "YES"    &&
+                      ++ (if sLdSupportsCompactUnwind mySettings &&
                              platformOS   platform == OSDarwin &&
                              platformArch platform `elem` [ArchX86, ArchX86_64]
                           then ["-Wl,-no_compact_unwind"]
@@ -2091,7 +2095,8 @@ hsSourceCppOpts =
 
 joinObjectFiles :: DynFlags -> [FilePath] -> FilePath -> IO ()
 joinObjectFiles dflags o_files output_fn = do
-  let ld_r args = SysTools.runLink dflags ([
+  let mySettings = settings dflags
+      ld_r args = SysTools.runLink dflags ([
                             SysTools.Option "-nostdlib",
                             SysTools.Option "-nodefaultlibs",
                             SysTools.Option "-Wl,-r"
@@ -2102,28 +2107,18 @@ joinObjectFiles dflags o_files output_fn = do
                          ++ (if platformArch (targetPlatform dflags) == ArchSPARC
                                 then [SysTools.Option "-Wl,-no-relax"]
                                 else [])
-                         ++ [
-                            SysTools.Option ld_build_id,
-                            -- SysTools.Option ld_x_flag,
-                            SysTools.Option "-o",
-                            SysTools.FileOption "" output_fn ]
+                         ++ map SysTools.Option ld_build_id
+                         ++ [ SysTools.Option "-o",
+                              SysTools.FileOption "" output_fn ]
                          ++ args)
-
-      -- Do *not* add the -x flag to ld, because we want to keep those
-      -- local symbols around for the benefit of external tools. e.g.
-      -- the 'perf report' output is much less useful if all the local
-      -- symbols have been stripped out.
-      --
-      -- ld_x_flag | null cLD_X = ""
-      --           | otherwise  = "-Wl,-x"
 
       -- suppress the generation of the .note.gnu.build-id section,
       -- which we don't need and sometimes causes ld to emit a
       -- warning:
-      ld_build_id | cLdHasBuildId == "YES"  = "-Wl,--build-id=none"
-                  | otherwise               = ""
+      ld_build_id | sLdSupportsBuildId mySettings = ["-Wl,--build-id=none"]
+                  | otherwise                     = []
 
-  if cLdIsGNULd == "YES"
+  if sLdIsGnuLd mySettings
      then do
           script <- newTempName dflags "ldscript"
           writeFile script $ "INPUT(" ++ unwords o_files ++ ")"
