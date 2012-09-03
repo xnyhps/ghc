@@ -15,7 +15,7 @@ import Outputable ( ppr, pprWithCommas
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
-import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
+import Type     ( Type, isNumLitTy, getTyVar_maybe, isTyVarTy, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
                 , eqType, cmpType
@@ -24,17 +24,16 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, mkNumLitTy
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
-                  , typeNatLeqTyCon
+                  -- , typeNatLeqTyCon
                   , trueTy, falseTy
                   )
 import Bag      ( bagToList )
 import Panic    ( panic )
-import TrieMap  (TypeMap, emptyTM)
 
 -- From type checker
 import TcTypeNatsRules( bRules, impRules, widenRules
                       , axAddDef, axMulDef, axExpDef, axLeqDef
-                      , natVars)
+                      , natVars, leqRefl, leqTrans, leq0, leqAsym)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcCanonical( StopOrContinue(..) )
 import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
@@ -69,6 +68,7 @@ import Data.List  ( sortBy, partition, find )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard, when, mplus )
 import qualified Data.Set as S
+import qualified Data.Map as M
 
 -- import Debug.Trace
 
@@ -114,6 +114,9 @@ typeNatStage ct
                      return Stop
 
 
+{- We do this before adding a new wanted to the inert set.
+The purpose is to check if the new wanted might help us solve
+some of the existing wanted. -}
 reExamineWanteds :: [Ct] -> Ct -> TcS ()
 reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
   where
@@ -250,8 +253,8 @@ consider the substiution:
 
     [ ("x", TVar "x") ]
 
-The `x` on the RHS refers to a variable bound by a rule, while
-the `x` on the LHS refers to an uninterpreted constant.
+The `x` on the LHS refers to a variable bound by a rule, while
+the `x` on the RHS refers to an uninterpreted constant.
 -}
 
 type SimpleSubst = [ (TyVar, Type) ]
@@ -810,11 +813,18 @@ computeNewDerivedWork ct =
 --------------------------------------------------------------------------------
 -- Reasoning about order.
 
-type LeqFacts = TypeMap LeqEdges
-data LeqEdge  = LeqEdge { leqProof :: CtEvidence, leqTarget :: Type }
+
+-- This is just here so that we can have an Ord instance on types,
+-- so that we can store them in maps and sets
+newtype LeqFacts = LeqFacts (M.Map LeqType LeqEdges)
+newtype LeqType  = LeqType Type
+data LeqEdge  = LeqEdge { leqProof :: EvTerm, leqTarget :: Type }
 data LeqEdges = LeqEdges { leqAbove  :: S.Set LeqEdge  -- proof: here <= above
                          , leqBelow  :: S.Set LeqEdge  -- proof: below <= here
                          }
+
+instance Eq LeqType  where LeqType x == LeqType y          = eqType x y
+instance Ord LeqType where compare (LeqType x) (LeqType y) = cmpType x y
 
 instance Eq LeqEdge where
   x == y  = eqType (leqTarget x) (leqTarget y)
@@ -822,24 +832,197 @@ instance Eq LeqEdge where
 instance Ord LeqEdge where
   compare x y = cmpType (leqTarget x) (leqTarget y)
 
-nodeFacts :: Type -> LeqEdges -> [Ct]
-nodeFacts x es = toFacts leqBelow lowerFact ++ toFacts leqAbove upperFact
-  where
-  toFacts list f  = map f $ S.toList $ list es
 
-  upperFact f = mkL (leqProof f) x (leqTarget f)
-  lowerFact f = mkL (leqProof f) (leqTarget f) x
-
-  mkL e a b = CFunEqCan
-                 { cc_ev = e, cc_depth = 0
-                 , cc_fun = typeNatLeqTyCon, cc_tyargs = [a,b], cc_rhs = trueTy
-                 }
-
-noLeqEdges :: LeqEdges
-noLeqEdges = LeqEdges { leqAbove = S.empty, leqBelow = S.empty }
+leqNoEdges :: LeqEdges
+leqNoEdges = LeqEdges { leqAbove = S.empty, leqBelow = S.empty }
 
 noLeqFacts :: LeqFacts
-noLeqFacts = emptyTM
+noLeqFacts = LeqFacts M.empty
+
+immAbove :: LeqFacts -> Type -> S.Set LeqEdge
+immAbove (LeqFacts lm) t = case M.lookup (LeqType t) lm of
+                             Just edges -> leqAbove edges
+                             Nothing -> S.empty
+
+immBelow :: LeqFacts -> Type -> S.Set LeqEdge
+immBelow (LeqFacts lm) t = case M.lookup (LeqType t) lm of
+                             Just edges -> leqBelow edges
+                             Nothing -> S.empty
+
+-- Try to find a path from one node to another.
+leqReachable :: LeqFacts -> Type -> Type -> Maybe EvTerm
+leqReachable m smaller larger =
+  search S.empty (S.singleton LeqEdge { leqProof = useAxiom leqRefl [smaller] []
+                                      , leqTarget = smaller })
+  where
+  search visited todo =
+    do (LeqEdge { leqProof = pr, leqTarget = term }, rest) <- S.minView todo
+       if term `eqType` larger
+         then return pr
+         else let updProof e = e { leqProof = useAxiom leqTrans
+                                                [smaller,term,leqTarget e]
+                                                [pr, leqProof e] }
+                  new = S.mapMonotonic updProof (immAbove m term)
+                  vis = S.insert (LeqType term) visited
+                  notDone = S.filter (not . (`S.member` vis)
+                                          . LeqType . leqTarget)
+         in search vis (notDone new `S.union` notDone rest)
+
+{-
+
+This diagram illustrates what we do when we link two nodes (leqLink).
+
+We start with a situation like on the left, and we are adding an
+edge from L to U.  The final result is illustrated on the right.
+
+   Before    After
+
+     a         a
+    /|        /
+   / |       /
+  U  |      U\
+  |  L        \L
+  | /         /
+  |/         /
+  d         d
+
+L: lower
+U: upper
+a: a member of "above uedges"  (uus)
+d: a member of "below ledges"  (lls)
+-}
+
+
+leqLink :: EvTerm -> (Type,LeqEdges) -> (Type,LeqEdges) ->
+                                      LeqFacts -> (LeqEdges,LeqEdges,LeqFacts)
+
+leqLink ev (lower, ledges) (upper, uedges) m0 =
+
+  let uus         = S.mapMonotonic (LeqType . leqTarget) (leqAbove uedges)
+      lls         = S.mapMonotonic (LeqType . leqTarget) (leqBelow ledges)
+
+      rm x        = S.filter (not . (`S.member` x) . LeqType . leqTarget)
+
+      newLedges   = ledges { leqAbove =
+                               S.insert (LeqEdge { leqProof  = ev
+                                                 , leqTarget = upper
+                                                 })
+                               $ rm uus
+                               $ leqAbove ledges
+                           }
+      newUedges   = uedges { leqBelow =
+                               S.insert (LeqEdge { leqProof  = ev
+                                                 , leqTarget = lower
+                                                 })
+                               $ rm lls
+                               $ leqBelow uedges
+                           }
+
+{- The "undefined" in 'del' is OK because the proofs are not used in the
+comparison and the set API seems to lack a function to get the same behavior.
+Note that filter-ing is a little different because it has to traverse the
+whole set while here we stop as soon as we found the element that is
+to be removed. -}
+
+      del x       = S.delete LeqEdge { leqTarget = x, leqProof = undefined }
+
+
+      adjust f t (LeqFacts m) = LeqFacts (M.adjust f t m)
+      insert k x (LeqFacts m) = LeqFacts (M.insert (LeqType k) x m)
+
+      adjAbove    = adjust (\e -> e { leqAbove = del upper (leqAbove e) })
+      adjBelow    = adjust (\e -> e { leqBelow = del lower (leqBelow e) })
+      fold f xs x = S.fold f x xs
+
+  in ( newLedges
+     , newUedges
+     , insert lower newLedges
+     $ insert upper newUedges
+     $ fold adjAbove lls
+     $ fold adjBelow uus
+       m0
+     )
+
+-- | Insert a new node in a collection of facts.
+-- Returns the edges surrounding the new node.
+--  * Variable nodes are always linked to 0 (directly or indirectly).
+--  * Constant nodes are always linked to neighbouring constant nodes.
+leqInsNode :: Type -> LeqFacts -> (LeqEdges, LeqFacts)
+leqInsNode t model@(LeqFacts m0) =
+  case M.splitLookup (LeqType t) m0 of
+    (_, Just r, _)  -> (r, model)
+    (left, Nothing, right) ->
+      let new           = leqNoEdges
+          ans1@(es1,m1) = ( new, LeqFacts (M.insert (LeqType t) new m0) )
+      in case () of
+
+           -- type variables get liked to 0
+           _ | isTyVarTy t ->
+             let zero         = mkNumLitTy 0
+                 (zes,zm)     = leqInsNode zero m1    -- Should not modify es1
+                 ax0          = useAxiom leq0 [t] []
+                 (_, es2, m2) = leqLink ax0 (zero,zes) (t,es1) zm
+             in (es2, m2)
+
+           _ | Just _ <- isNumLitTy t ->
+
+             -- link to a smaller constnat, if any
+             let ans2@(es2, m2) =
+                   case toNum M.findMax left of
+                     Nothing -> ans1
+                     Just (n,l)  ->
+                       let (_,x,y) = leqLink (useAxiom axLeqDef [n,t] []) l (t,es1) m1
+                       in (x,y)
+
+             -- link to a larger constant, if any
+             in case toNum M.findMin right of
+                  Nothing -> ans2
+                  Just (n,u)  ->
+                    let (x,_,y) = leqLink (useAxiom axLeqDef [t,n] []) (t,es2) u m2
+                    in (x,y)
+
+           _ -> panic "leqInsNode: not constant or variable"
+
+  where
+  toNum f x = do guard (not (M.null x))
+                 let (LeqType n,e) = f x
+                 _ <- isNumLitTy n
+                 return (n,(n,e))
+
+-- | Try to find a proof that the first term is smaller then the second.
+leqProve :: LeqFacts -> Type -> Type -> Maybe EvTerm
+leqProve model s t =
+  let (_,m1) = leqInsNode s model
+      (_,m2) = leqInsNode t m1
+  in leqReachable m2 s t
+
+
+-- | The result of trying to extend a collection of facts with a new one.
+data AddLeqFact
+  = LeqAdded LeqFacts   -- ^ The fact was added succesfully.
+  | LeqAlreadyKnown     -- ^ The fact was not added because it was known.
+  | LeqImproved EvTerm  -- ^ The fact was not added because there is
+                        -- an equiavlent more useful fact.
+
+-- | Try to add the fact that the first term is smaller then the second
+-- (as evidenced by the proof).
+addFact :: EvTerm -> Type -> Type -> LeqFacts -> AddLeqFact
+addFact ev t1 t2 m0 =
+  let (n1,m1)   = leqInsNode t1 m0
+      (n2,m2)   = leqInsNode t2 m1
+
+  in case leqReachable m2 t2 t1 of
+
+       Nothing ->
+
+         case leqReachable m2 t1 t2 of
+           Nothing -> let (_,_,m3) = leqLink ev (t1,n1) (t2,n2) m2
+                      in LeqAdded m3
+           Just _  -> LeqAlreadyKnown
+
+       {- We know the opposite: we don't add the fact
+          but propose an equality instead. -}
+       Just pOp -> LeqImproved (useAxiom leqAsym [t1,t2] [ev, pOp])
 
 
 

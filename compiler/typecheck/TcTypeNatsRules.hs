@@ -109,8 +109,8 @@ bRules =
   , bRule 18 "TnExp1L" (mkExp n1 a === n1)
   , bRule 19 "TnExp1R" (mkExp a n1 === a)
 
-  , bRule 20 "Leq0"    (mkLeq n0 a === trueTy)
-  , bRule 21 "LeqRefl" (mkLeq a a  === trueTy)
+  , leq0
+  , leqRefl
   ]
   where
   bRule s n = mkAx s n (take 1 natVars) []
@@ -118,6 +118,22 @@ bRules =
   n0        = mkNumLitTy 0
   n1        = mkNumLitTy 1
 
+
+leq0 :: CoAxiomRule
+leq0 = mkAx 20 "Leq0" (take 1 natVars) [] (mkLeq (mkNumLitTy 0) a  === trueTy)
+  where a : _ = map mkTyVarTy natVars
+
+leqRefl :: CoAxiomRule
+leqRefl = mkAx 21 "LeqRefl" (take 1 natVars) [] (mkLeq a a  === trueTy)
+  where a : _ = map mkTyVarTy natVars
+
+leqTrans :: CoAxiomRule
+leqTrans = mkAx 42 "LeqTrans" (take 3 natVars) [ a <== b, b <== c ] (a <== c)
+  where a : b : c : _ = map mkTyVarTy natVars
+
+leqAsym :: CoAxiomRule
+leqAsym = mkAx 36 "LeqASym" (take 2 natVars) [ a <== b, b <== a ] (a === b)
+  where a : b : _ = map mkTyVarTy natVars
 
 
 
@@ -141,9 +157,7 @@ impRules =
   , (True, mkAx 35 "ExpCancelR" (take 4 natVars)
             [ n1 <== c, mkExp a c === d, mkExp b c === d ] (a === b))
 
-  , (True, mkAx 36 "LeqASym" (take 2 natVars)
-            [ a <== b, b <== a ] (a === b))
-
+  , (True, leqAsym)
   ]
 
   where
@@ -160,8 +174,7 @@ widenRules =
   , (True, mkAx 41 "MulComm" (take 3 natVars)
             [ mkMul a b === c ] (mkMul b a === c))
 
-  , (False, mkAx 42 "LeqTrans" (take 3 natVars)
-            [ a <== b, b <== c ] (a <== c))
+  , (False, leqTrans)
 
   , (False, mkAx 43 "AddAssoc1" (take 6 natVars)
       [ mkAdd a b === x, mkAdd b c === y, mkAdd a y === z ] (mkAdd x c === z))
