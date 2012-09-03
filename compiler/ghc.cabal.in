@@ -512,7 +512,6 @@ Library
             PPC.CodeGen
             SPARC.Base
             SPARC.Regs
-            SPARC.RegPlate
             SPARC.Imm
             SPARC.AddrMode
             SPARC.Cond
