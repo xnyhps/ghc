@@ -24,7 +24,6 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, isTyVarTy, mkNumLitTy
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
-                  -- , typeNatLeqTyCon
                   , trueTy, falseTy
                   )
 import Bag      ( bagToList )
@@ -66,7 +65,7 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
 import Data.Maybe ( isNothing, mapMaybe )
 import Data.List  ( sortBy, partition, find )
 import Data.Ord   ( comparing )
-import Control.Monad ( msum, guard, when, mplus )
+import Control.Monad ( msum, guard, when )
 import qualified Data.Set as S
 import qualified Data.Map as M
 
@@ -162,10 +161,14 @@ this happened automatically because of the custom system for reasoning
 about <=.
 -}
 deepSolve :: [Ct] -> Ct -> Maybe EvTerm
-deepSolve asmps ct = solve ct `mplus` fmap ev (find this (widenAsmps asmps))
+deepSolve asmps0 ct = msum [ solve ct
+                           , solveLeq leq ct
+                           , fmap ev (find this (widenAsmps asmps))
+                           ]
   where
   ev   = ctEvTerm . ctEvidence
   this = sameCt ct
+  (leq,asmps) = makeLeqModel asmps0
 
 
 impossible :: Ct -> Bool
@@ -409,6 +412,14 @@ solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
   do ([],ev) <- byAxiom (TPOther (mkTyConApp tc ts), TPOther t)
      return ev
 solveWithAxiom _ = Nothing
+
+solveLeq :: LeqFacts -> Ct -> Maybe EvTerm
+solveLeq m ct =
+  do (t1,t2) <- isLeqCt ct
+     let (_,m1) = leqInsNode t1 m
+         (_,m2) = leqInsNode t2 m1
+     leqReachable m2 t1 t2
+
 
 --------------------------------------------------------------------------------
 
@@ -706,6 +717,7 @@ getFacts =
      return $ bagToList $ fst $ partCtFamHeadMap isGivenCt
                               $ inert_funeqs $ inert_cans is
 
+-- Get constraints with evidence (given or wanted)
 getEvCt:: TcS [Ct]
 getEvCt =
   do is <- getTcSInerts
@@ -713,6 +725,7 @@ getEvCt =
                               $ inert_funeqs $ inert_cans is
   where hasEv c = isGivenCt c || isWantedCt c
 
+-- Get all constraints (given, wanted, derived)
 getAllCts :: TcS [Ct]
 getAllCts =
   do is <- getTcSInerts
@@ -740,6 +753,7 @@ interactCt withEv ct asmps =
               : funRule typeNatExpTyCon
               : map activate (widen ++ impRules)
 
+      -- (leq, asmps) = makeLeqModel asmps0
       newWork = interactActiveRules active asmps
   in partition isBad $ if withEv then map ruleResultToGiven newWork
                                  else map ruleResultToDerived newWork
@@ -869,6 +883,8 @@ leqReachable m smaller larger =
          in search vis (notDone new `S.union` notDone rest)
 
 {-
+The linking function is a bit complex because we keep the ordering database
+minimal.
 
 This diagram illustrates what we do when we link two nodes (leqLink).
 
@@ -898,10 +914,12 @@ leqLink :: EvTerm -> (Type,LeqEdges) -> (Type,LeqEdges) ->
 
 leqLink ev (lower, ledges) (upper, uedges) m0 =
 
-  let uus         = S.mapMonotonic (LeqType . leqTarget) (leqAbove uedges)
-      lls         = S.mapMonotonic (LeqType . leqTarget) (leqBelow ledges)
+  let leqTgt      = LeqType . leqTarget
 
-      rm x        = S.filter (not . (`S.member` x) . LeqType . leqTarget)
+      uus         = S.mapMonotonic leqTgt (leqAbove uedges)
+      lls         = S.mapMonotonic leqTgt (leqBelow ledges)
+
+      rm x        = S.filter (not . (`S.member` x) . leqTgt)
 
       newLedges   = ledges { leqAbove =
                                S.insert (LeqEdge { leqProof  = ev
@@ -989,13 +1007,6 @@ leqInsNode t model@(LeqFacts m0) =
                  _ <- isNumLitTy n
                  return (n,(n,e))
 
--- | Try to find a proof that the first term is smaller then the second.
-leqProve :: LeqFacts -> Type -> Type -> Maybe EvTerm
-leqProve model s t =
-  let (_,m1) = leqInsNode s model
-      (_,m2) = leqInsNode t m1
-  in leqReachable m2 s t
-
 
 -- | The result of trying to extend a collection of facts with a new one.
 data AddLeqFact
@@ -1024,12 +1035,33 @@ addFact ev t1 t2 m0 =
           but propose an equality instead. -}
        Just pOp -> LeqImproved (useAxiom leqAsym [t1,t2] [ev, pOp])
 
+-- | Construct an ordering model and return the remaining, not-leq constraints.
+makeLeqModel :: [Ct] -> (LeqFacts,[Ct])
+makeLeqModel = foldr add (noLeqFacts,[])
+  where
+  add ct (m,rest)
+    | Just (t1,t2) <- isLeqCt ct
+    , Just ev      <- ctEvTermMaybe ct
+    , LeqAdded m1  <- addFact ev t1 t2 m = (m1, rest)
+  add ct (m,rest)                        = (m, ct : rest)
 
+-- | Is this an `a <= b` constraint?
+isLeqCt :: Ct -> Maybe (Type, Type)
+isLeqCt (CFunEqCan { cc_fun = tc, cc_tyargs = [t1,t2], cc_rhs = t })
+  | tyConName tc == typeNatLeqTyFamName && eqType t trueTy = Just (t1,t2)
+isLeqCt _ = Nothing
 
+-- | Get the evidence associated with a constraint, if any.
+ctEvTermMaybe :: Ct -> Maybe EvTerm
+ctEvTermMaybe ct =
+  do let ev = ctEvidence ct
+     guard $ not $ isDerived ev
+     return (ctEvTerm ev)
 
 
 --------------------------------------------------------------------------------
 
 natTrace :: String -> SDoc -> TcS ()
 natTrace x y = traceTcS ("[NATS] " ++ x) y
+
 

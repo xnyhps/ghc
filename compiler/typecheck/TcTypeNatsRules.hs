@@ -108,9 +108,6 @@ bRules =
   , bRule 17 "TnExp0R" (mkExp a n0 === n1)
   , bRule 18 "TnExp1L" (mkExp n1 a === n1)
   , bRule 19 "TnExp1R" (mkExp a n1 === a)
-
-  , leq0
-  , leqRefl
   ]
   where
   bRule s n = mkAx s n (take 1 natVars) []
@@ -173,8 +170,6 @@ widenRules =
 
   , (True, mkAx 41 "MulComm" (take 3 natVars)
             [ mkMul a b === c ] (mkMul b a === c))
-
-  , (False, leqTrans)
 
   , (False, mkAx 43 "AddAssoc1" (take 6 natVars)
       [ mkAdd a b === x, mkAdd b c === y, mkAdd a y === z ] (mkAdd x c === z))
