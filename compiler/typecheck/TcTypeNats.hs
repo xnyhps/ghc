@@ -11,6 +11,7 @@ import Outputable ( ppr, pprWithCommas
                   , Outputable
                   , SDoc
                   , (<>), (<+>), colon, text, vcat, parens, braces
+                  , showSDoc
                   )
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
@@ -58,7 +59,6 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , modifyInertTcS
                 , traceTcS
                 , partCtFamHeadMap
-                , foldFamHeadMap
                 )
 
 -- From base libraries
@@ -69,8 +69,12 @@ import Control.Monad ( msum, guard, when )
 import qualified Data.Set as S
 import qualified Data.Map as M
 
--- import Debug.Trace
+-- Just fore debugging
+import Debug.Trace
+import DynFlags ( tracingDynFlags )
 
+ppsh :: SDoc -> String
+ppsh = showSDoc tracingDynFlags
 
 --------------------------------------------------------------------------------
 
@@ -146,20 +150,6 @@ reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
 solve :: Ct -> Maybe EvTerm
 solve ct = msum $ solveWithAxiom ct : map (`solveWithRule` ct) bRules
 
-{- XXX: This is not quite enough.  We really need to do some backward
-reasoning also.
-
-Example:
-
-Assumptions: (2 <= x, x * a1 ~ c, x * a2 ~ c)
-Conclusion needed:a1 ~ a2
-
-If we had (1 <= x) in the assumptions, it would react with the the
-two multiplications to cancel things out.  However, we have 2 <= x, instead.
-We need to notice that this implies (1 <= x).  In the other implementation
-this happened automatically because of the custom system for reasoning
-about <=.
--}
 deepSolve :: [Ct] -> Ct -> Maybe EvTerm
 deepSolve asmps0 ct = msum [ solve ct
                            , solveLeq leq ct
@@ -306,10 +296,11 @@ matchTypes _ _                = Nothing
 --------------------------------------------------------------------------------
 
 -- Tries to instantiate the equation with the constraint.
-byAsmp :: Ct -> (TypePat, TypePat) -> Maybe (SimpleSubst, Maybe EvTerm)
+byAsmp :: Ct -> (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
 
 byAsmp ct (lhs,rhs) =
-  do (t1,t2) <- case ct of
+  do ev <- ctEvTermMaybe ct
+     (t1,t2) <- case ct of
 
                   CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t } ->
                                                 Just (mkTyConApp tc ts, t)
@@ -317,10 +308,7 @@ byAsmp ct (lhs,rhs) =
                   _ -> Nothing
 
      su <- matchTypes [lhs,rhs] [t1,t2]
-     return (su, do let ev = ctEvidence ct
-                    guard (not (isDerived ev))
-                    return (ctEvTerm ev))
-
+     return (su, ev)
 
 
 -- Check if we can solve the equation using one of the family of axioms.
@@ -399,14 +387,6 @@ solveWithRule r ct =
      tys <- mapM (`lookup` su) vs
      return (useAxiom r tys [])
 
-{-
-solveWithAsmps :: [Ct] -> Ct -> Maybe EvTerm
-solveWithAsmps asmps ct =
-  do let rs = mapMaybe (`activateBackward` ct) backRules
-     new <- listToMaybe (interactActiveRules rs asmps)
-     undefined -- extract proof from constraint
--}
-
 solveWithAxiom :: Ct -> Maybe EvTerm
 solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
   do ([],ev) <- byAxiom (TPOther (mkTyConApp tc ts), TPOther t)
@@ -416,10 +396,7 @@ solveWithAxiom _ = Nothing
 solveLeq :: LeqFacts -> Ct -> Maybe EvTerm
 solveLeq m ct =
   do (t1,t2) <- isLeqCt ct
-     let (_,m1) = leqInsNode t1 m
-         (_,m2) = leqInsNode t2 m1
-     leqReachable m2 t1 t2
-
+     isLeq m t1 t2
 
 --------------------------------------------------------------------------------
 
@@ -433,12 +410,6 @@ data ActiveRule = AR
   -- These are equations that we already solved, and are ready to be used.
   -- The `Int` records the position of the evidence when the rule fires.
   , doneArgs  :: [(Int,EvTerm)]
-
-  {- These are equations that were solved using a `Derived` fact.
-  If we are interested in the proof for this rule (i.e., we are
-  not just computing another derived), then we need to find evidence
-  for these. -}
-  , subgoals  :: [(Int,(TypePat,TypePat))]
 
   -- These are equations that we need to solve before the rule can fire.
   -- The `Int` records the position of the evidence when the rule fires.
@@ -487,7 +458,6 @@ activate (sym,r)
        , proof     = useAxiom r
        , doneTys   = map TPVar vs
        , doneArgs  = []
-       , subgoals  = []
        , todoArgs  = zip [ 0 .. ] (map cvt2 as)
        , concl     = cvt2 c
        }
@@ -529,7 +499,6 @@ funRule tc = AR
                                         (evTermCoercion q)
   , doneTys   = map TPVar [ a, b, c1, c2 ]
   , doneArgs  = []
-  , subgoals  = []
   , todoArgs  = [ (0, (TPCon tc [ TPVar a, TPVar b], TPVar c1))
                 , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
   , concl     = (TPVar c1, TPVar c2)
@@ -540,7 +509,6 @@ funRule tc = AR
 
 data RuleResult = RuleResult
   { conclusion       :: Eqn                 -- what we proved
-  , derived_subgoals :: [Eqn]               -- derived parameters used
   , evidence         :: [EvTerm] -> EvTerm  -- proof, given evidence for derived
   }
 
@@ -552,22 +520,20 @@ If some of the parameters for the equation were matched by
 `Derived` constraints, then the evidence for the term will be parmatereized
 by proofs for them.
 -}
-fireRule :: ActiveRule -> Maybe RuleResult
-fireRule r =
-  do guard $ null $ todoArgs r
+fireRule :: LeqFacts -> ActiveRule -> Maybe RuleResult
+fireRule leq r =
+  trace "Trying to fire rule -------------------" $
+  do doneSides <- mapM solveSide $ todoArgs r
 
-     ts        <- mapM cvt (doneTys r)
+     ts        <- trace "done with sides" $ mapM cvt (doneTys r)
      (lhs,rhs) <- cvt2 (concl r)
-     let (locs,subs) = unzip (subgoals r)
-     todo      <- mapM cvt2 subs
-
      guard $ not $ eqType lhs rhs   -- Not interested in trivial results.
 
-     return RuleResult
+
+     trace ("fired, concluding: " ++ ppsh (ppr lhs) ++ " ~ " ++ ppsh (ppr rhs)) $return RuleResult
        { conclusion = (lhs,rhs)
-       , derived_subgoals = todo
-       , evidence = \es -> proof r ts $ map snd $ sortBy (comparing fst)
-                                      $ zip locs es ++ doneArgs r
+       , evidence = \_ -> proof r ts $ map snd $ sortBy (comparing fst)
+                                     $ doneSides ++ doneArgs r
        }
 
   where
@@ -577,6 +543,16 @@ fireRule r =
 
   cvt (TPOther t) = Just t
   cvt _           = Nothing
+
+
+  solveSide (n, eq@(a,b)) = trace (unwords [ "TRYING SIDE:", ppsh (ppr a), ppsh (ppr b)]) $
+    do (t1,t2) <- cvt2 eq
+       trace "cvt2" $ guard (eqType t2 trueTy)
+       (tc,[x,y]) <- splitTyConApp_maybe t1
+       trace "equals True" $ guard (tyConName tc == typeNatLeqTyFamName)
+       ev <- trace "is leq" $ isLeq leq x y
+       trace "found proof" $ return (n, ev)
+
 
 eqnToCt :: Eqn -> Maybe EvTerm -> Ct
 eqnToCt (lhs,rhs) evt
@@ -622,28 +598,20 @@ ruleResultToDerived r = eqnToCt (conclusion r) Nothing
 
 
 -- Define one of the arguments of an active rule.
-setArg :: Int -> (SimpleSubst, Maybe EvTerm) -> ActiveRule -> ActiveRule
+setArg :: Int -> (SimpleSubst, EvTerm) -> ActiveRule -> ActiveRule
 setArg n (su,ev) r =
   AR { isSym     = isSym r
      , proof     = proof r
      , doneTys   = apSimpSubst su (doneTys r)
-     , subgoals  = newSubgoals
-     , doneArgs  = newDone
+     , doneArgs  = (n,ev) : doneArgs r
      , todoArgs  = todo
      , concl     = apSimpSubst su (concl r)
      }
   where
   -- Remove the solved goal form the list of work.
-  -- Also looks up what was proved, in case we need to mark it as a subgoal.
-  (goal, todo)  = case break ((n == ) . fst) $ inst $ todoArgs r of
-                    (as,b:bs) -> (b,as++bs)
-                    _ -> panic "setArg: Tried to set a non-existent param."
-
-  -- XXX: Can the subgoals contain variables?
-  (newSubgoals, newDone) =
-    case ev of
-      Nothing -> (goal : inst (subgoals r),         doneArgs r)
-      Just e  -> (       inst (subgoals r), (n,e) : doneArgs r)
+  todo = case break ((n == ) . fst) $ inst $ todoArgs r of
+           (as,_:bs) -> as++bs
+           _         -> panic "setArg: Tried to set a non-existent param."
 
   inst xs = [ (x,apSimpSubst su y) | (x,y) <- xs ]
 
@@ -652,7 +620,7 @@ applyAxiom1 :: ActiveRule -> Maybe ActiveRule
 applyAxiom1 r = msum $ map attempt $ todoArgs r
   where
   attempt (n,eq) = do (su,ev) <- byAxiom eq
-                      return (setArg n (su, Just ev) r)
+                      return (setArg n (su, ev) r)
 
 -- Try to satisfy some of the rule's assumptions by axiom.
 applyAxiom :: ActiveRule -> ActiveRule
@@ -680,10 +648,10 @@ existing facts with a set of rules.
 
 If `withEv` is `True`, then we generate given constraints,
 otherwise they are derived. -}
-interactActiveRules :: [ActiveRule] -> [Ct] -> [RuleResult]
-interactActiveRules rs0 cs0 = loop (map applyAxiom rs0) cs0
+interactActiveRules :: LeqFacts -> [ActiveRule] -> [Ct] -> [RuleResult]
+interactActiveRules leq rs0 cs0 = loop (map applyAxiom rs0) cs0
   where
-  loop rs []       = mapMaybe fireRule rs
+  loop rs []       = mapMaybe (fireRule leq) rs
   loop rs (c : cs) = let new = map applyAxiom (concatMap (`applyAsmp` c) rs)
                      in loop (new ++ rs) cs
 
@@ -725,12 +693,6 @@ getEvCt =
                               $ inert_funeqs $ inert_cans is
   where hasEv c = isGivenCt c || isWantedCt c
 
--- Get all constraints (given, wanted, derived)
-getAllCts :: TcS [Ct]
-getAllCts =
-  do is <- getTcSInerts
-     return $ foldFamHeadMap (:) [] $ inert_funeqs $ inert_cans is
-
 sameCt :: Ct -> Ct -> Bool
 sameCt c1 c2 = eqType (ctPred c1) (ctPred c2)
 
@@ -746,19 +708,20 @@ The first set of constraints are ones that indicate a contradiction
 The second set are "good" constraints (not obviously contradicting each other).
 -}
 interactCt :: Bool -> Ct -> [Ct] -> ([Ct],[Ct])
-interactCt withEv ct asmps =
+interactCt withEv ct asmps0 =
   let active  = concatMap (`applyAsmp` ct)
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
               : funRule typeNatExpTyCon
               : map activate (widen ++ impRules)
 
-      -- (leq, asmps) = makeLeqModel asmps0
-      newWork = interactActiveRules active asmps
+      (leq, asmps) = makeLeqModel (ct : asmps0)
+      newWork = interactActiveRules leq active asmps
   in partition isBad $ if withEv then map ruleResultToGiven newWork
                                  else map ruleResultToDerived newWork
 
  where
+  -- XXX: why don't we do widening when computing derived?
   widen = if withEv then widenRules else []
 
   -- cf. `fireRule`: the only way to get a non-canonical constraint
@@ -774,18 +737,22 @@ interactCt withEv ct asmps =
 widenAsmps :: [Ct] -> [Ct]
 widenAsmps asmps = step given wanted []
 
-  where (given, wanted) = partition isGivenCt asmps
+  where
+  (given, wanted) = partition isGivenCt asmps
 
-        known c cs  = any (sameCt c) cs
+  known c cs  = any (sameCt c) cs
 
-        step done [] [] = reverse done
-        step done [] cs = step done (reverse cs) []
-        step done (c : cs) ds
-          | known c done  = step done cs ds
-          | otherwise
-            = let active = concatMap (`applyAsmp` c) $ map activate widenRules
-                  new = map ruleResultToGiven $ interactActiveRules active done
-              in step (c : done) cs (new ++ ds)
+  step done [] [] = reverse done
+  step done [] cs = step done (reverse cs) []
+  step done (c : cs) ds
+    | known c done  = step done cs ds
+    | otherwise
+      = let active = concatMap (`applyAsmp` c) $ map activate widenRules
+            new = map ruleResultToGiven $ interactActiveRules leq active done
+        in step (c : done) cs (new ++ ds)
+
+  -- For the moment, widedning rules have no ordering side conditions.
+  leq = noLeqFacts
 
 
 --------------------------------------------------------------------------------
@@ -815,7 +782,7 @@ Returns any obvious contradictions that we found. -}
 
 computeNewDerivedWork :: Ct -> TcS [Ct]
 computeNewDerivedWork ct =
-  do (bad,good) <- interactCt False ct `fmap` getAllCts
+  do (bad,good) <- interactCt False ct `fmap` getEvCt
 
      when (null bad) $
        do natTrace "New derived:" (vcat $ map ppr good)
@@ -908,6 +875,10 @@ a: a member of "above uedges"  (uus)
 d: a member of "below ledges"  (lls)
 -}
 
+{- XXX: It would be useful to return the edges that were removed because these
+edges can be solved in term of the existing facts, so if some of them correspond
+to wanted constrainst we can discharge them straight aways.   We still get
+the same effect in `reExamineWanteds` but in a much less effecieant way. -}
 
 leqLink :: EvTerm -> (Type,LeqEdges) -> (Type,LeqEdges) ->
                                       LeqFacts -> (LeqEdges,LeqEdges,LeqFacts)
@@ -1006,6 +977,12 @@ leqInsNode t model@(LeqFacts m0) =
                  let (LeqType n,e) = f x
                  _ <- isNumLitTy n
                  return (n,(n,e))
+
+
+isLeq :: LeqFacts -> Type -> Type -> Maybe EvTerm
+isLeq m t1 t2 = leqReachable m2 t1 t2
+  where (_,m1) = leqInsNode t1 m
+        (_,m2) = leqInsNode t2 m1
 
 
 -- | The result of trying to extend a collection of facts with a new one.
