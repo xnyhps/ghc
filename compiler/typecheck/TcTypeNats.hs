@@ -10,8 +10,9 @@ import PrelNames( typeNatAddTyFamName
 import Outputable ( ppr, pprWithCommas
                   , Outputable
                   , SDoc
-                  , (<>), (<+>), colon, text, vcat, parens, braces
-                  , showSDoc
+                  , (<>), (<+>), text, vcat, parens
+                  -- , showSDoc
+                  , hsep
                   )
 import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
@@ -29,6 +30,7 @@ import TysWiredIn ( typeNatAddTyCon
                   )
 import Bag      ( bagToList )
 import Panic    ( panic )
+import Pair     (Pair(..))
 
 -- From type checker
 import TcTypeNatsRules( bRules, impRules, widenRules
@@ -51,6 +53,7 @@ import TcEvidence ( EvTerm(..)
                   , evTermCoercion
                   , TcCoercion(TcTypeNatCo)
                   , mkTcSymCo, mkTcTransCo
+                  , tcCoercionKind
                   )
 import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , InertSet
@@ -69,12 +72,14 @@ import Control.Monad ( msum, guard, when )
 import qualified Data.Set as S
 import qualified Data.Map as M
 
+{-
 -- Just fore debugging
 import Debug.Trace
 import DynFlags ( tracingDynFlags )
 
 ppsh :: SDoc -> String
 ppsh = showSDoc tracingDynFlags
+-}
 
 --------------------------------------------------------------------------------
 
@@ -423,6 +428,19 @@ data ActiveRule = AR
 
   }
 
+instance Outputable ActiveRule where
+  ppr r = args <+> text "=>" <+> eq (concl r)
+
+    where eq (x,y) = ppr x <+> text "~" <+> ppr y
+          todo (n, e) = (n, text"?:" <+> eq e)
+          done (n, ev) = let Pair x y = tcCoercionKind (evTermCoercion ev)
+                         in (n, text "!:" <+> eq (x,y))
+
+          args = hsep
+               $ map snd
+               $ sortBy (comparing fst)
+               $ map todo (todoArgs r) ++ map done (doneArgs r)
+
 {- Note [Symmetric Rules]
 
 For symmetric rules, we look for at most one argument that can be
@@ -436,6 +454,7 @@ one because we would just end up with another way to prove the same thing.
 
 -}
 
+{-
 instance Outputable ActiveRule where
   ppr r =
     braces (pprWithCommas ppr (doneTys r)) <+>
@@ -444,7 +463,7 @@ instance Outputable ActiveRule where
     where
     ppArg (x,e) = ppr x <> colon <+> ppr e
     ppEq (a,b)  = ppr a <+> text "~" <+> ppr b
-
+-}
 
 
 
@@ -522,15 +541,14 @@ by proofs for them.
 -}
 fireRule :: LeqFacts -> ActiveRule -> Maybe RuleResult
 fireRule leq r =
-  trace "Trying to fire rule -------------------" $
   do doneSides <- mapM solveSide $ todoArgs r
 
-     ts        <- trace "done with sides" $ mapM cvt (doneTys r)
+     ts        <- mapM cvt (doneTys r)
      (lhs,rhs) <- cvt2 (concl r)
      guard $ not $ eqType lhs rhs   -- Not interested in trivial results.
 
 
-     trace ("fired, concluding: " ++ ppsh (ppr lhs) ++ " ~ " ++ ppsh (ppr rhs)) $return RuleResult
+     return RuleResult
        { conclusion = (lhs,rhs)
        , evidence = \_ -> proof r ts $ map snd $ sortBy (comparing fst)
                                      $ doneSides ++ doneArgs r
@@ -545,13 +563,10 @@ fireRule leq r =
   cvt _           = Nothing
 
 
-  solveSide (n, eq@(a,b)) = trace (unwords [ "TRYING SIDE:", ppsh (ppr a), ppsh (ppr b)]) $
-    do (t1,t2) <- cvt2 eq
-       trace "cvt2" $ guard (eqType t2 trueTy)
-       (tc,[x,y]) <- splitTyConApp_maybe t1
-       trace "equals True" $ guard (tyConName tc == typeNatLeqTyFamName)
-       ev <- trace "is leq" $ isLeq leq x y
-       trace "found proof" $ return (n, ev)
+  solveSide (n, eq) =
+    do (x,y) <- isLeqEqn =<< cvt2 eq
+       ev    <- isLeq leq x y
+       return (n, ev)
 
 
 eqnToCt :: Eqn -> Maybe EvTerm -> Ct
@@ -708,14 +723,25 @@ The first set of constraints are ones that indicate a contradiction
 The second set are "good" constraints (not obviously contradicting each other).
 -}
 interactCt :: Bool -> Ct -> [Ct] -> ([Ct],[Ct])
-interactCt withEv ct asmps0 =
+interactCt withEv ct asmps0
+  | Just _ <- isLeqCt ct =
+  let active  = map activate impRules
+      -- XXX: We only really need to consider impRules that have
+      -- a side condition.
+
+      (leq, asmps) = makeLeqModel (ct : asmps0)
+      newWork = interactActiveRules leq active asmps
+  in partition isBad $ if withEv then map ruleResultToGiven newWork
+                                 else map ruleResultToDerived newWork
+
+  | otherwise =
   let active  = concatMap (`applyAsmp` ct)
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
               : funRule typeNatExpTyCon
               : map activate (widen ++ impRules)
 
-      (leq, asmps) = makeLeqModel (ct : asmps0)
+      (leq, asmps) = makeLeqModel asmps0
       newWork = interactActiveRules leq active asmps
   in partition isBad $ if withEv then map ruleResultToGiven newWork
                                  else map ruleResultToDerived newWork
@@ -1027,6 +1053,14 @@ isLeqCt :: Ct -> Maybe (Type, Type)
 isLeqCt (CFunEqCan { cc_fun = tc, cc_tyargs = [t1,t2], cc_rhs = t })
   | tyConName tc == typeNatLeqTyFamName && eqType t trueTy = Just (t1,t2)
 isLeqCt _ = Nothing
+
+isLeqEqn :: Eqn -> Maybe (Type,Type)
+isLeqEqn (t1,t2) =
+  do guard (eqType t2 trueTy)
+     (tc,[x,y]) <- splitTyConApp_maybe t1
+     guard (tyConName tc == typeNatLeqTyFamName)
+     return (x,y)
+
 
 -- | Get the evidence associated with a constraint, if any.
 ctEvTermMaybe :: Ct -> Maybe EvTerm
