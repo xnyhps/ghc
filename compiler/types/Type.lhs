@@ -46,6 +46,7 @@ module Type (
         mkNumLitTy, isNumLitTy,
         mkStrLitTy, isStrLitTy,
         isTyLit,
+        isTypeNatSpecialFunTyCon,
 	
 	-- (Newtypes)
 	newTyConInstRhs, carefullySplitNewType_maybe,
@@ -159,7 +160,14 @@ import Class
 import TyCon
 import TysPrim
 import {-# SOURCE #-} TysWiredIn ( eqTyCon, mkBoxedTupleTy )
-import PrelNames	         ( eqTyConKey, ipClassName )
+import PrelNames( eqTyConKey, ipClassName
+                , typeNatAddTyFamName
+                , typeNatMulTyFamName
+                , typeNatExpTyFamName
+                , typeNatLeqTyFamName
+                )
+
+
 
 -- others
 import Name             ( Name )
@@ -426,6 +434,15 @@ isStrLitTy _                    = Nothing
 isTyLit :: Type -> Maybe TyLit
 isTyLit (LitTy x) = Just x
 isTyLit _         = Nothing
+
+isTypeNatSpecialFunTyCon :: TyCon -> Bool
+isTypeNatSpecialFunTyCon tc =
+  n == typeNatAddTyFamName ||
+  n == typeNatMulTyFamName ||
+  n == typeNatExpTyFamName ||
+  n == typeNatLeqTyFamName
+  where n = tyConName tc
+
 
 \end{code}
 

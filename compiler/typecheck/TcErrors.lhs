@@ -210,6 +210,10 @@ reportInsolsAndFlats ctxt insols flats
       = True
       | otherwise 
       = case pred of
+          EqPred ty1 ty2
+            | Just tc <- isTyFun_maybe ty1, isTypeNatSpecialFunTyCon tc -> True
+            | Just tc <- isTyFun_maybe ty2, isTypeNatSpecialFunTyCon tc -> True
+
           EqPred ty1 ty2 -> isNothing (isTyFun_maybe ty1) && isNothing (isTyFun_maybe ty2)
           _              -> False
 
