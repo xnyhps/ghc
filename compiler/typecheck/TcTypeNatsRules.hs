@@ -183,9 +183,32 @@ widenRules =
   , (False, mkAx 46 "MulAssoc2" (take 6 natVars)
       [ mkMul a b === x, mkMul b c === y, mkMul x c === z ] (mkMul a y === z))
 
+
+  -- XXX: Some simple interactions between operators and ordering.
+  -- A proper interval analysis would do better.
+  , (True, mkAx 50 "LeqAdd1" (take 3 natVars)
+      [ mkAdd a b === c ] (a <== c))
+
+  , (True, mkAx 51 "LeqAdd2" (take 3 natVars)
+      [ mkAdd a b === c ] (b <== c))
+
+  , (True, mkAx 52 "LeqMul1" (take 3 natVars)
+      [ n1 <== b, mkMul a b === c ] (a <== c))
+
+  , (True, mkAx 53 "LeqMul2" (take 3 natVars)
+      [ n1 <== a, mkMul a b === c ] (b <== c))
+
+  , (True, mkAx 54 "LeqExp1" (take 3 natVars)
+      [ n1 <== b, mkExp a b === c ] (a <== c))
+
+  , (True, mkAx 54 "LeqExp2" (take 3 natVars)
+      [ n2 <== a, mkExp a b === c ] (b <== c))
+
   ]
   where
   a : b : c : x : y : z : _ = map mkTyVarTy natVars
+  n1 = mkNumLitTy 1
+  n2 = mkNumLitTy 2
 
 
 
