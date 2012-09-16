@@ -174,6 +174,8 @@ impossible (CFunEqCan { cc_fun = tc, cc_tyargs = [t1,t2], cc_rhs = t3 })
       case (mbA,mbB,mbC) of
         (Just a, _     , Just c) -> isNothing (minus c a)
         (_     , Just b, Just c) -> isNothing (minus c b)
+        (Just a, _     , _) | a > 0 -> eqType t2 t3
+        (_     , Just b, _) | b > 0 -> eqType t1 t3
         _                        -> False
 
   | name == typeNatMulTyFamName =
