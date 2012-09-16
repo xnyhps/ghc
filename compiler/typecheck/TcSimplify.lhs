@@ -1239,7 +1239,11 @@ getSolvableCTyFunEqs :: TcsUntouchables
                      -> Cts                -- Precondition: all Wanteds or Derived!
                      -> (Cts, FunEqBinds)  -- Postcondition: returns the unsolvables
 getSolvableCTyFunEqs untch cts
-  = Bag.foldlBag dflt_funeq (emptyCts, emptyFunEqBinds) cts
+  = let (ws,ds) = partitionBag isWantedCt cts
+        s1      = Bag.foldlBag dflt_funeq (emptyCts, emptyFunEqBinds) ws
+    in Bag.foldlBag dflt_funeq s1 ds
+
+
   where
     dflt_funeq :: (Cts, FunEqBinds) -> Ct
                -> (Cts, FunEqBinds)
@@ -1289,6 +1293,19 @@ When is it ok to do so?
 
     3) Notice that 'beta' can't be bound in ty binds already because we rewrite RHS 
        of type family equations. See Inert Set invariants in TcInteract. 
+
+    4) If we have a choice of a wanted and derived equation, we prefer
+       the wanted one.  To see why, consider the following example:
+        [D] b + a ~ c
+        [W] a + b ~ c
+       If we use the derived one, then `c` gets defined to `b + a` and we
+       are left with an unsolved wanted constraint because now `c` has
+       a binding.  However, if we use the wanted first, then we are
+       left with an "unsolved" derived constraint, which is OK because
+       derived constraints don't correspond to goals that need to be solved.
+       (Indeed, it is likely that the derived constraint was generated
+        by the wanted, to enable reactions where the arguments
+        to (+) were swapped)
 
 
 *********************************************************************************
