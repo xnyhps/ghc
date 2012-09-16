@@ -72,21 +72,27 @@ import Control.Monad ( msum, guard, when )
 import qualified Data.Set as S
 import qualified Data.Map as M
 
+
 {-
 -- Just fore debugging
 import Debug.Trace
 import DynFlags ( tracingDynFlags )
+import Outputable (showSDoc)
+
+pureTrace :: String -> a -> a
+pureTrace x a | False = trace x a
+pureTrace _ a = a
 
 ppsh :: SDoc -> String
 ppsh = showSDoc tracingDynFlags
 -}
+
 
 --------------------------------------------------------------------------------
 
 typeNatStage :: Ct -> TcS StopOrContinue
 typeNatStage ct
 
-  -- XXX: Probably need to add the 'ct' to somewhere
   | impossible ct =
       do natTrace "impssoble: " (ppr ct)
          emitFrozenError ev (cc_depth ct)
@@ -124,7 +130,7 @@ typeNatStage ct
 
 {- We do this before adding a new wanted to the inert set.
 The purpose is to check if the new wanted might help us solve
-some of the existing wanted. -}
+some of the existing wanted constarints. -}
 reExamineWanteds :: [Ct] -> Ct -> TcS ()
 reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
   where
@@ -150,6 +156,9 @@ reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
                     loop (x : solved) asmps ws
       Nothing -> loop solved (w : asmps) ws
 
+ppImp :: [Ct] -> Ct -> SDoc
+ppImp qs q = pprWithCommas p qs <+> text "=>" <+> p q
+  where p = ppr . ctPred
 
 --------------------------------------------------------------------------------
 solve :: Ct -> Maybe EvTerm
@@ -335,7 +344,7 @@ byAxiom (TPOther ty, TPVar r)
                     | name == typeNatLeqTyFamName -> Just (axLeqDef, bool (<=))
                _ -> Nothing
 
-       return ( [ (r, val) ], useAxiom ax [tp1,tp2] [] )
+       return ( [ (r, val) ], useRule ax [tp1,tp2] [] )
 
 
 byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
@@ -348,7 +357,7 @@ byAxiom (TPCon tc [TPVar r,TPOther tp1], TPOther tp2)
                     _ -> Nothing
        a <- op c b
        let t = mkNumLitTy a
-       return ( [ (r, t) ], useAxiom ax [t,tp1] [] )
+       return ( [ (r, t) ], useRule ax [t,tp1] [] )
 
 
 byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
@@ -361,7 +370,7 @@ byAxiom (TPCon tc [TPOther tp1, TPVar r], TPOther tp2)
                     _ -> Nothing
        b <- op c a
        let t = mkNumLitTy b
-       return ([ (r, t) ], useAxiom ax [tp1,t] [] )
+       return ([ (r, t) ], useRule ax [tp1,t] [] )
 
 
 byAxiom (TPOther ty, TPOther tp3)
@@ -375,12 +384,14 @@ byAxiom (TPOther ty, TPOther tp3)
                _ -> Nothing
        let ([],(_,r)) = co_axr_inst ax [tp1,tp2]
        guard (eqType r tp3)
-       return ([], useAxiom ax [tp1,tp2] [])
+       return ([], useRule ax [tp1,tp2] [])
 
 byAxiom _ = Nothing
 
-useAxiom :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
-useAxiom ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
+
+-- Construct evidence using a specificaxiom rule.
+useRule :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
+useRule ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
   where mk = TcTypeNatCo
 
 
@@ -392,7 +403,7 @@ solveWithRule r ct =
          rhs = toTypePat vs b
      (su,_) <- byAsmp ct (lhs,rhs)    -- Just for the instantiation
      tys <- mapM (`lookup` su) vs
-     return (useAxiom r tys [])
+     return (useRule r tys [])
 
 solveWithAxiom :: Ct -> Maybe EvTerm
 solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
@@ -445,6 +456,9 @@ instance Outputable ActiveRule where
 
 {- Note [Symmetric Rules]
 
+This is just an optimization.  It is also safe to declare a rule
+as not symmetric.
+
 For symmetric rules, we look for at most one argument that can be
 satisfied by an assumption.  For example, the function rules are symmetric:
 
@@ -464,7 +478,7 @@ activate (sym,r)
   , let cvt         = toTypePat vs
         cvt2 (x,y)  = (cvt x, cvt y)
   = AR { isSym     = sym
-       , proof     = useAxiom r
+       , proof     = useRule r
        , doneTys   = map TPVar vs
        , doneArgs  = []
        , todoArgs  = zip [ 0 .. ] (map cvt2 as)
@@ -651,12 +665,10 @@ applyAsmp r ct =
 
 
 {- Does forward reasoning:  compute new facts by interacting
-existing facts with a set of rules.
-
-If `withEv` is `True`, then we generate given constraints,
-otherwise they are derived. -}
+existing facts with a set of rules. -}
 interactActiveRules :: LeqFacts -> [ActiveRule] -> [Ct] -> [RuleResult]
-interactActiveRules leq rs0 cs0 = loop (map applyAxiom rs0) cs0
+interactActiveRules leq rs0 cs0 =
+  loop (map applyAxiom rs0) cs0
   where
   loop rs []       = mapMaybe (fireRule leq) rs
   loop rs (c : cs) = let new = map applyAxiom (concatMap (`applyAsmp` c) rs)
@@ -705,10 +717,11 @@ sameCt c1 c2 = eqType (ctPred c1) (ctPred c2)
 
 --------------------------------------------------------------------------------
 
-{- Add a new constraint to the inert set.
-The resulting constraints are return in `Given` form because they have
-proofs.  When the new constraint was a "wanted", we discard the proofs
-and convert them to "derived".
+{- Compute new constraints, assuming that we are adding the constraint
+to the inert set.
+
+If `withEv` is True, then we return given constraints,
+otherwise we return derived ones.
 
 The first set of constraints are ones that indicate a contradiction
                                                           (e.g., 2 ~ 3).
@@ -723,35 +736,31 @@ interactCt withEv ct asmps0
 
       (leq, asmps) = makeLeqModel (ct : asmps0)
       newWork = interactActiveRules leq active asmps
-  in partition isBad $ if withEv then map ruleResultToGiven newWork
-                                 else map ruleResultToDerived newWork
+  in partition isBad $ map toCt newWork
 
   | otherwise =
   let active  = concatMap (`applyAsmp` ct)
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
               : funRule typeNatExpTyCon
-              : map activate (widen ++ impRules)
+              : map activate (widenRules ++ impRules)
 
       (leq, asmps) = makeLeqModel asmps0
       newWork = interactActiveRules leq active asmps
-  in partition isBad $ if withEv then map ruleResultToGiven newWork
-                                 else map ruleResultToDerived newWork
+  in partition isBad $ map toCt newWork
 
  where
-  -- XXX: why don't we do widening when computing derived?
-  widen = if withEv then widenRules else []
-
   -- cf. `fireRule`: the only way to get a non-canonical constraint
   -- is if it impossible to solve.
   isBad (CNonCanonical {})  = True
   isBad _                   = False
 
+  toCt = if withEv then ruleResultToGiven else ruleResultToDerived
+
+
 
 -- Given a set of facts, apply forward reasoning using the "difficult"
 -- rules to derive some additional facts.
--- NOTE: assumes that the initial set all have evidence
--- (i.e., they are either givens or wanted)
 widenAsmps :: [Ct] -> [Ct]
 widenAsmps asmps = step given wanted []
 
@@ -776,11 +785,9 @@ widenAsmps asmps = step given wanted []
 --------------------------------------------------------------------------------
 
 
-{- Compute additional givens, computed by combining this one with
-existing givens.
+{- Add new given work to the work list.
+Returns any obvious contradictions that we found.  -}
 
-Returns any obvious contradictions that we found.
--}
 computeNewGivenWork :: Ct -> TcS [Ct]
 computeNewGivenWork ct =
   do (bad,good) <- interactCt True ct `fmap` getFacts
@@ -792,10 +799,7 @@ computeNewGivenWork ct =
      return bad
 
 
-{- Compute additional work, assuming that the wanted will stay for now.
-The additional work is always "derived" (i.e., facts we can conclude
-by interactig the constraint with existing constraints.
-
+{- Add new derived work to the work list.
 Returns any obvious contradictions that we found. -}
 
 computeNewDerivedWork :: Ct -> TcS [Ct]
@@ -811,12 +815,15 @@ computeNewDerivedWork ct =
 
 --------------------------------------------------------------------------------
 -- Reasoning about order.
+--
+-- XXX: It'd be better to use GHC's trie maps here.
 
-
--- This is just here so that we can have an Ord instance on types,
--- so that we can store them in maps and sets
 newtype LeqFacts = LeqFacts (M.Map LeqType LeqEdges)
+
+{- This is just here so that we can have an Ord instance on types,
+so that we can store them in maps and sets. -}
 newtype LeqType  = LeqType Type
+
 data LeqEdge  = LeqEdge { leqProof :: EvTerm, leqTarget :: Type }
 data LeqEdges = LeqEdges { leqAbove  :: S.Set LeqEdge  -- proof: here <= above
                          , leqBelow  :: S.Set LeqEdge  -- proof: below <= here
@@ -851,14 +858,14 @@ immBelow (LeqFacts lm) t = case M.lookup (LeqType t) lm of
 -- Try to find a path from one node to another.
 leqReachable :: LeqFacts -> Type -> Type -> Maybe EvTerm
 leqReachable m smaller larger =
-  search S.empty (S.singleton LeqEdge { leqProof = useAxiom leqRefl [smaller] []
+  search S.empty (S.singleton LeqEdge { leqProof = useRule leqRefl [smaller] []
                                       , leqTarget = smaller })
   where
   search visited todo =
     do (LeqEdge { leqProof = pr, leqTarget = term }, rest) <- S.minView todo
        if term `eqType` larger
          then return pr
-         else let updProof e = e { leqProof = useAxiom leqTrans
+         else let updProof e = e { leqProof = useRule leqTrans
                                                 [smaller,term,leqTarget e]
                                                 [pr, leqProof e] }
                   new = S.mapMonotonic updProof (immAbove m term)
@@ -967,7 +974,7 @@ leqInsNode t model@(LeqFacts m0) =
            _ | isTyVarTy t ->
              let zero         = mkNumLitTy 0
                  (zes,zm)     = leqInsNode zero m1    -- Should not modify es1
-                 ax0          = useAxiom leq0 [t] []
+                 ax0          = useRule leq0 [t] []
                  (_, es2, m2) = leqLink ax0 (zero,zes) (t,es1) zm
              in (es2, m2)
 
@@ -978,14 +985,14 @@ leqInsNode t model@(LeqFacts m0) =
                    case toNum M.findMax left of
                      Nothing -> ans1
                      Just (n,l)  ->
-                       let (_,x,y) = leqLink (useAxiom axLeqDef [n,t] []) l (t,es1) m1
+                       let (_,x,y) = leqLink (useRule axLeqDef [n,t] []) l (t,es1) m1
                        in (x,y)
 
              -- link to a larger constant, if any
              in case toNum M.findMin right of
                   Nothing -> ans2
                   Just (n,u)  ->
-                    let (x,_,y) = leqLink (useAxiom axLeqDef [t,n] []) (t,es2) u m2
+                    let (x,_,y) = leqLink (useRule axLeqDef [t,n] []) (t,es2) u m2
                     in (x,y)
 
            _ -> panic "leqInsNode: not constant or variable"
@@ -1028,7 +1035,7 @@ addFact ev t1 t2 m0 =
 
        {- We know the opposite: we don't add the fact
           but propose an equality instead. -}
-       Just pOp -> LeqImproved (useAxiom leqAsym [t1,t2] [ev, pOp])
+       Just pOp -> LeqImproved (useRule leqAsym [t1,t2] [ev, pOp])
 
 -- | Construct an ordering model and return the remaining, not-leq constraints.
 makeLeqModel :: [Ct] -> (LeqFacts,[Ct])
