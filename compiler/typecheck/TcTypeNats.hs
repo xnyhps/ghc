@@ -456,18 +456,6 @@ one because we would just end up with another way to prove the same thing.
 
 -}
 
-{-
-instance Outputable ActiveRule where
-  ppr r =
-    braces (pprWithCommas ppr (doneTys r)) <+>
-    parens (pprWithCommas ppArg (todoArgs r)) <+> text "=>" <+>
-    ppEq (concl r)
-    where
-    ppArg (x,e) = ppr x <> colon <+> ppr e
-    ppEq (a,b)  = ppr a <+> text "~" <+> ppr b
--}
-
-
 
 -- Activate a rule for forward reasoning.
 activate :: (Bool,CoAxiomRule) -> ActiveRule
