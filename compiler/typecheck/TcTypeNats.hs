@@ -516,9 +516,11 @@ funRule tc = AR
 
 
 
+{- We get these when a rule fires.  Later, they are converted to
+givens or deried, depending on what we are doing. -}
 data RuleResult = RuleResult
-  { conclusion       :: Eqn                 -- what we proved
-  , evidence         :: [EvTerm] -> EvTerm  -- proof, given evidence for derived
+  { conclusion       :: Eqn     -- what we proved
+  , evidence         :: EvTerm  -- proof, given evidence for derived
   }
 
 
@@ -536,12 +538,12 @@ fireRule leq r =
      ts        <- mapM cvt (doneTys r)
      (lhs,rhs) <- cvt2 (concl r)
      guard $ not $ eqType lhs rhs   -- Not interested in trivial results.
-
+     -- XXX: we might want to detect other trivial facts too (e.g. x + 0 ~ x)
 
      return RuleResult
        { conclusion = (lhs,rhs)
-       , evidence = \_ -> proof r ts $ map snd $ sortBy (comparing fst)
-                                     $ doneSides ++ doneArgs r
+       , evidence   = proof r ts $ map snd $ sortBy (comparing fst)
+                                 $ doneSides ++ doneArgs r
        }
 
   where
@@ -594,7 +596,7 @@ eqnToCt (lhs,rhs) evt
   wloc = TypeEqOrigin (UnifyOrigin lhs rhs)
 
 ruleResultToGiven :: RuleResult -> Ct
-ruleResultToGiven r = eqnToCt (conclusion r) (Just (evidence r []))
+ruleResultToGiven r = eqnToCt (conclusion r) (Just (evidence r))
 
 ruleResultToDerived :: RuleResult -> Ct
 ruleResultToDerived r = eqnToCt (conclusion r) Nothing
