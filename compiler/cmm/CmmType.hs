@@ -12,12 +12,15 @@ module CmmType
     , wordWidth, halfWordWidth, cIntWidth, cLongWidth
     , halfWordMask
     , narrowU, narrowS
+    , rEP_CostCentreStack_mem_alloc
+    , rEP_CostCentreStack_scc_count
+    , rEP_StgEntCounter_allocs
    )
 where
 
 #include "HsVersions.h"
 
-import Constants
+import DynFlags
 import FastString
 import Outputable
 
@@ -95,14 +98,18 @@ f32    = cmmFloat W32
 f64    = cmmFloat W64
 
 -- CmmTypes of native word widths
-bWord, bHalfWord, gcWord :: CmmType
-bWord     = cmmBits wordWidth
-bHalfWord = cmmBits halfWordWidth
-gcWord    = CmmType GcPtrCat wordWidth
+bWord :: DynFlags -> CmmType
+bWord dflags = cmmBits (wordWidth dflags)
 
-cInt, cLong :: CmmType
-cInt  = cmmBits cIntWidth
-cLong = cmmBits cLongWidth
+bHalfWord :: DynFlags -> CmmType
+bHalfWord dflags = cmmBits (halfWordWidth dflags)
+
+gcWord :: DynFlags -> CmmType
+gcWord dflags = CmmType GcPtrCat (wordWidth dflags)
+
+cInt, cLong :: DynFlags -> CmmType
+cInt  dflags = cmmBits (cIntWidth  dflags)
+cLong dflags = cmmBits (cLongWidth dflags)
 
 
 ------------ Predicates ----------------
@@ -155,33 +162,34 @@ mrStr W80  = sLit("W80")
 
 
 -------- Common Widths  ------------
-wordWidth, halfWordWidth :: Width
-wordWidth | wORD_SIZE == 4 = W32
-          | wORD_SIZE == 8 = W64
-          | otherwise      = panic "MachOp.wordRep: Unknown word size"
+wordWidth :: DynFlags -> Width
+wordWidth dflags
+ | wORD_SIZE dflags == 4 = W32
+ | wORD_SIZE dflags == 8 = W64
+ | otherwise             = panic "MachOp.wordRep: Unknown word size"
 
-halfWordWidth | wORD_SIZE == 4 = W16
-              | wORD_SIZE == 8 = W32
-              | otherwise      = panic "MachOp.halfWordRep: Unknown word size"
+halfWordWidth :: DynFlags -> Width
+halfWordWidth dflags
+ | wORD_SIZE dflags == 4 = W16
+ | wORD_SIZE dflags == 8 = W32
+ | otherwise             = panic "MachOp.halfWordRep: Unknown word size"
 
-halfWordMask :: Integer
-halfWordMask | wORD_SIZE == 4 = 0xFFFF
-             | wORD_SIZE == 8 = 0xFFFFFFFF
-             | otherwise      = panic "MachOp.halfWordMask: Unknown word size"
+halfWordMask :: DynFlags -> Integer
+halfWordMask dflags
+ | wORD_SIZE dflags == 4 = 0xFFFF
+ | wORD_SIZE dflags == 8 = 0xFFFFFFFF
+ | otherwise             = panic "MachOp.halfWordMask: Unknown word size"
 
 -- cIntRep is the Width for a C-language 'int'
-cIntWidth, cLongWidth :: Width
-#if SIZEOF_INT == 4
-cIntWidth = W32
-#elif  SIZEOF_INT == 8
-cIntWidth = W64
-#endif
-
-#if SIZEOF_LONG == 4
-cLongWidth = W32
-#elif  SIZEOF_LONG == 8
-cLongWidth = W64
-#endif
+cIntWidth, cLongWidth :: DynFlags -> Width
+cIntWidth dflags = case cINT_SIZE dflags of
+                   4 -> W32
+                   8 -> W64
+                   s -> panic ("cIntWidth: Unknown cINT_SIZE: " ++ show s)
+cLongWidth dflags = case cLONG_SIZE dflags of
+                    4 -> W32
+                    8 -> W64
+                    s -> panic ("cIntWidth: Unknown cLONG_SIZE: " ++ show s)
 
 widthInBits :: Width -> Int
 widthInBits W8   = 8
@@ -232,6 +240,26 @@ narrowS W16 x = fromIntegral (fromIntegral x :: Int16)
 narrowS W32 x = fromIntegral (fromIntegral x :: Int32)
 narrowS W64 x = fromIntegral (fromIntegral x :: Int64)
 narrowS _ _ = panic "narrowTo"
+
+-------------------------------------------------------------------------
+
+-- These don't really belong here, but I don't know where is best to
+-- put them.
+
+rEP_CostCentreStack_mem_alloc :: DynFlags -> CmmType
+rEP_CostCentreStack_mem_alloc dflags
+    = cmmBits (widthFromBytes (pc_REP_CostCentreStack_mem_alloc pc))
+    where pc = sPlatformConstants (settings dflags)
+
+rEP_CostCentreStack_scc_count :: DynFlags -> CmmType
+rEP_CostCentreStack_scc_count dflags
+    = cmmBits (widthFromBytes (pc_REP_CostCentreStack_scc_count pc))
+    where pc = sPlatformConstants (settings dflags)
+
+rEP_StgEntCounter_allocs :: DynFlags -> CmmType
+rEP_StgEntCounter_allocs dflags
+    = cmmBits (widthFromBytes (pc_REP_StgEntCounter_allocs pc))
+    where pc = sPlatformConstants (settings dflags)
 
 -------------------------------------------------------------------------
 {-      Note [Signed vs unsigned]

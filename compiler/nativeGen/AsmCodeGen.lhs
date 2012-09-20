@@ -133,16 +133,17 @@ The machine-dependent bits break down as follows:
 
 data NcgImpl statics instr jumpDest = NcgImpl {
     cmmTopCodeGen             :: RawCmmDecl -> NatM [NatCmmDecl statics instr],
-    generateJumpTableForInstr :: DynFlags -> instr -> Maybe (NatCmmDecl statics instr),
+    generateJumpTableForInstr :: instr -> Maybe (NatCmmDecl statics instr),
     getJumpDestBlockId        :: jumpDest -> Maybe BlockId,
     canShortcut               :: instr -> Maybe jumpDest,
     shortcutStatics           :: (BlockId -> Maybe jumpDest) -> statics -> statics,
     shortcutJump              :: (BlockId -> Maybe jumpDest) -> instr -> instr,
     pprNatCmmDecl             :: NatCmmDecl statics instr -> SDoc,
     maxSpillSlots             :: Int,
-    allocatableRegs           :: Platform -> [RealReg],
+    allocatableRegs           :: [RealReg],
     ncg_x86fp_kludge          :: [NatCmmDecl statics instr] -> [NatCmmDecl statics instr],
     ncgExpandTop              :: [NatCmmDecl statics instr] -> [NatCmmDecl statics instr],
+    ncgAllocMoreStack         :: Int -> NatCmmDecl statics instr -> NatCmmDecl statics instr,
     ncgMakeFarBranches        :: [NatBasicBlock instr] -> [NatBasicBlock instr]
     }
 
@@ -154,15 +155,16 @@ nativeCodeGen dflags h us cmms
        nCG' ncgImpl = nativeCodeGen' dflags ncgImpl h us cmms
        x86NcgImpl = NcgImpl {
                          cmmTopCodeGen             = X86.CodeGen.cmmTopCodeGen
-                        ,generateJumpTableForInstr = X86.CodeGen.generateJumpTableForInstr
+                        ,generateJumpTableForInstr = X86.CodeGen.generateJumpTableForInstr dflags
                         ,getJumpDestBlockId        = X86.Instr.getJumpDestBlockId
                         ,canShortcut               = X86.Instr.canShortcut
                         ,shortcutStatics           = X86.Instr.shortcutStatics
                         ,shortcutJump              = X86.Instr.shortcutJump
                         ,pprNatCmmDecl              = X86.Ppr.pprNatCmmDecl
-                        ,maxSpillSlots             = X86.Instr.maxSpillSlots (target32Bit platform)
-                        ,allocatableRegs           = X86.Regs.allocatableRegs
+                        ,maxSpillSlots             = X86.Instr.maxSpillSlots dflags
+                        ,allocatableRegs           = X86.Regs.allocatableRegs platform
                         ,ncg_x86fp_kludge          = id
+                        ,ncgAllocMoreStack         = X86.Instr.allocMoreStack platform
                         ,ncgExpandTop              = id
                         ,ncgMakeFarBranches        = id
                     }
@@ -172,30 +174,32 @@ nativeCodeGen dflags h us cmms
                  ArchPPC ->
                      nCG' $ NcgImpl {
                           cmmTopCodeGen             = PPC.CodeGen.cmmTopCodeGen
-                         ,generateJumpTableForInstr = PPC.CodeGen.generateJumpTableForInstr
+                         ,generateJumpTableForInstr = PPC.CodeGen.generateJumpTableForInstr dflags
                          ,getJumpDestBlockId        = PPC.RegInfo.getJumpDestBlockId
                          ,canShortcut               = PPC.RegInfo.canShortcut
                          ,shortcutStatics           = PPC.RegInfo.shortcutStatics
                          ,shortcutJump              = PPC.RegInfo.shortcutJump
                          ,pprNatCmmDecl              = PPC.Ppr.pprNatCmmDecl
-                         ,maxSpillSlots             = PPC.Instr.maxSpillSlots
-                         ,allocatableRegs           = PPC.Regs.allocatableRegs
+                         ,maxSpillSlots             = PPC.Instr.maxSpillSlots dflags
+                         ,allocatableRegs           = PPC.Regs.allocatableRegs platform
                          ,ncg_x86fp_kludge          = id
+                         ,ncgAllocMoreStack         = noAllocMoreStack
                          ,ncgExpandTop              = id
                          ,ncgMakeFarBranches        = makeFarBranches
                      }
                  ArchSPARC ->
                      nCG' $ NcgImpl {
                           cmmTopCodeGen             = SPARC.CodeGen.cmmTopCodeGen
-                         ,generateJumpTableForInstr = SPARC.CodeGen.generateJumpTableForInstr
+                         ,generateJumpTableForInstr = SPARC.CodeGen.generateJumpTableForInstr dflags
                          ,getJumpDestBlockId        = SPARC.ShortcutJump.getJumpDestBlockId
                          ,canShortcut               = SPARC.ShortcutJump.canShortcut
                          ,shortcutStatics           = SPARC.ShortcutJump.shortcutStatics
                          ,shortcutJump              = SPARC.ShortcutJump.shortcutJump
                          ,pprNatCmmDecl              = SPARC.Ppr.pprNatCmmDecl
-                         ,maxSpillSlots             = SPARC.Instr.maxSpillSlots
-                         ,allocatableRegs           = \_ -> SPARC.Regs.allocatableRegs
+                         ,maxSpillSlots             = SPARC.Instr.maxSpillSlots dflags
+                         ,allocatableRegs           = SPARC.Regs.allocatableRegs
                          ,ncg_x86fp_kludge          = id
+                         ,ncgAllocMoreStack         = noAllocMoreStack
                          ,ncgExpandTop              = map SPARC.CodeGen.Expand.expandTop
                          ,ncgMakeFarBranches        = id
                      }
@@ -205,6 +209,23 @@ nativeCodeGen dflags h us cmms
                      panic "nativeCodeGen: No NCG for PPC 64"
                  ArchUnknown ->
                      panic "nativeCodeGen: No NCG for unknown arch"
+
+
+--
+-- Allocating more stack space for spilling is currently only
+-- supported for the linear register allocator on x86/x86_64, the rest
+-- default to the panic below.  To support allocating extra stack on
+-- more platforms provide a definition of ncgAllocMoreStack.
+--
+noAllocMoreStack :: Int -> NatCmmDecl statics instr -> NatCmmDecl statics instr
+noAllocMoreStack amount _
+  = panic $   "Register allocator: out of stack slots (need " ++ show amount ++ ")\n"
+        ++  "   If you are trying to compile SHA1.hs from the crypto library then this\n"
+        ++  "   is a known limitation in the linear allocator.\n"
+        ++  "\n"
+        ++  "   Try enabling the graph colouring allocator with -fregs-graph instead."
+        ++  "   You can still file a bug report if you like.\n"
+
 
 nativeCodeGen' :: (Outputable statics, Outputable instr, Instruction instr)
                => DynFlags
@@ -378,7 +399,7 @@ cmmNativeGen dflags ncgImpl us cmm count
         -- rewrite assignments to global regs
         let fixed_cmm =
                 {-# SCC "fixStgRegisters" #-}
-                fixStgRegisters platform cmm
+                fixStgRegisters dflags cmm
 
         -- cmm to cmm optimisations
         let (opt_cmm, imports) =
@@ -419,7 +440,7 @@ cmmNativeGen dflags ncgImpl us cmm count
                         = foldr (\r -> plusUFM_C unionUniqSets
                                         $ unitUFM (targetClassOfRealReg platform r) (unitUniqSet r))
                                 emptyUFM
-                        $ allocatableRegs ncgImpl platform
+                        $ allocatableRegs ncgImpl
 
                 -- do the graph coloring register allocation
                 let ((alloced, regAllocStats), usAlloc)
@@ -457,11 +478,20 @@ cmmNativeGen dflags ncgImpl us cmm count
 
           else do
                 -- do linear register allocation
+                let reg_alloc proc = do
+                       (alloced, maybe_more_stack, ra_stats) <-
+                               Linear.regAlloc dflags proc
+                       case maybe_more_stack of
+                         Nothing -> return ( alloced, ra_stats )
+                         Just amount ->
+                           return ( ncgAllocMoreStack ncgImpl amount alloced
+                                  , ra_stats )
+
                 let ((alloced, regAllocStats), usAlloc)
                         = {-# SCC "RegAlloc" #-}
                           initUs usLive
                           $ liftM unzip
-                          $ mapM (Linear.regAlloc dflags) withLiveness
+                          $ mapM reg_alloc withLiveness
 
                 dumpIfSet_dyn dflags
                         Opt_D_dump_asm_regalloc "Registers allocated"
@@ -490,7 +520,7 @@ cmmNativeGen dflags ncgImpl us cmm count
         ---- generate jump tables
         let tabled      =
                 {-# SCC "generateJumpTables" #-}
-                generateJumpTables dflags ncgImpl kludged
+                generateJumpTables ncgImpl kludged
 
         ---- shortcut branches
         let shorted     =
@@ -711,12 +741,12 @@ makeFarBranches blocks
 -- Analyzes all native code and generates data sections for all jump
 -- table instructions.
 generateJumpTables
-        :: DynFlags -> NcgImpl statics instr jumpDest
-    -> [NatCmmDecl statics instr] -> [NatCmmDecl statics instr]
-generateJumpTables dflags ncgImpl xs = concatMap f xs
+        :: NcgImpl statics instr jumpDest
+        -> [NatCmmDecl statics instr] -> [NatCmmDecl statics instr]
+generateJumpTables ncgImpl xs = concatMap f xs
     where f p@(CmmProc _ _ (ListGraph xs)) = p : concatMap g xs
           f p = [p]
-          g (BasicBlock _ xs) = catMaybes (map (generateJumpTableForInstr ncgImpl dflags) xs)
+          g (BasicBlock _ xs) = catMaybes (map (generateJumpTableForInstr ncgImpl) xs)
 
 -- -----------------------------------------------------------------------------
 -- Shortcut branches
@@ -955,13 +985,13 @@ cmmExprConFold referenceKind expr = do
     -- SDM: re-enabled for now, while cmmRewriteAssignments is turned off
     let expr' = if False -- dopt Opt_TryNewCodeGen dflags
                     then expr
-                    else cmmExprCon (targetPlatform dflags) expr
+                    else cmmExprCon dflags expr
     cmmExprNative referenceKind expr'
 
-cmmExprCon :: Platform -> CmmExpr -> CmmExpr
-cmmExprCon platform (CmmLoad addr rep) = CmmLoad (cmmExprCon platform addr) rep
-cmmExprCon platform (CmmMachOp mop args)
-    = cmmMachOpFold platform mop (map (cmmExprCon platform) args)
+cmmExprCon :: DynFlags -> CmmExpr -> CmmExpr
+cmmExprCon dflags (CmmLoad addr rep) = CmmLoad (cmmExprCon dflags addr) rep
+cmmExprCon dflags (CmmMachOp mop args)
+    = cmmMachOpFold dflags mop (map (cmmExprCon dflags) args)
 cmmExprCon _ other = other
 
 -- handles both PIC and non-PIC cases... a very strange mixture
@@ -993,9 +1023,9 @@ cmmExprNative referenceKind expr = do
            -> do
                  dynRef <- cmmMakeDynamicReference dflags addImportCmmOpt referenceKind lbl
                  -- need to optimize here, since it's late
-                 return $ cmmMachOpFold platform (MO_Add wordWidth) [
+                 return $ cmmMachOpFold dflags (MO_Add (wordWidth dflags)) [
                      dynRef,
-                     (CmmLit $ CmmInt (fromIntegral off) wordWidth)
+                     (CmmLit $ CmmInt (fromIntegral off) (wordWidth dflags))
                    ]
 
         -- On powerpc (non-PIC), it's easier to jump directly to a label than

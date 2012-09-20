@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 #
-# (c) 2009 The University of Glasgow
+# (c) 2009-2012 The University of Glasgow
 #
 # This file is part of the GHC build system.
 #
@@ -127,12 +127,19 @@ all_ghc_stage3 : $(GHC_STAGE3)
 $(INPLACE_LIB)/settings : settings
 	"$(CP)" $< $@
 
+$(INPLACE_LIB)/platformConstants: $(includes_GHCCONSTANTS_HASKELL_VALUE)
+	"$(CP)" $< $@
+
 # The GHC programs need to depend on all the helper programs they might call,
 # and the settings files they use
 
-$(GHC_STAGE1) : | $(UNLIT) $(INPLACE_LIB)/settings
-$(GHC_STAGE2) : | $(UNLIT) $(INPLACE_LIB)/settings
-$(GHC_STAGE3) : | $(UNLIT) $(INPLACE_LIB)/settings
+GHC_DEPENDENCIES += $(UNLIT)
+GHC_DEPENDENCIES += $(INPLACE_LIB)/settings
+GHC_DEPENDENCIES += $(INPLACE_LIB)/platformConstants
+
+$(GHC_STAGE1) : | $(GHC_DEPENDENCIES)
+$(GHC_STAGE2) : | $(GHC_DEPENDENCIES)
+$(GHC_STAGE3) : | $(GHC_DEPENDENCIES)
 
 ifeq "$(GhcUnregisterised)" "NO"
 $(GHC_STAGE1) : | $(SPLIT)
@@ -159,7 +166,7 @@ ifeq "$(Windows)" "NO"
 install: install_ghc_link
 .PHONY: install_ghc_link
 install_ghc_link: 
-	$(call removeFiles,"$(DESTDIR)$(bindir)/ghc")
+	$(call removeFiles,"$(DESTDIR)$(bindir)/$(CrossCompilePrefix)ghc")
 	$(LN_S) $(CrossCompilePrefix)ghc-$(ProjectVersion) "$(DESTDIR)$(bindir)/$(CrossCompilePrefix)ghc"
 else
 # On Windows we install the main binary as $(bindir)/ghc.exe
