@@ -31,6 +31,7 @@ import TysWiredIn ( typeNatAddTyCon
 import Bag      ( bagToList )
 import Panic    ( panic )
 import Pair     (Pair(..))
+import UniqSet  ( isEmptyUniqSet )
 
 -- From type checker
 import TcTypeNatsRules( bRules, impRules, widenRules
@@ -62,6 +63,7 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , modifyInertTcS
                 , traceTcS
                 , partCtFamHeadMap
+                , tyVarsOfCt
                 )
 
 -- From base libraries
@@ -779,11 +781,14 @@ widenAsmps asmps = step given wanted []
     | known c done  = step done cs ds
     | otherwise
       = let active = concatMap (`applyAsmp` c) $ map activate widenRules
-            new = map ruleResultToGiven $ interactActiveRules leq active done
+            new = filter nonTrivial $
+                  map ruleResultToGiven $ interactActiveRules leq active done
         in step (c : done) cs (new ++ ds)
 
   -- For the moment, widedning rules have no ordering side conditions.
   leq = noLeqFacts
+
+  nonTrivial ct = impossible ct || not (isEmptyUniqSet (tyVarsOfCt ct))
 
 
 --------------------------------------------------------------------------------
