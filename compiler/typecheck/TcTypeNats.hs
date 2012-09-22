@@ -101,6 +101,11 @@ typeNatStage ct
   | isGiven ev =
     case solve ct of
       Just _ -> return Stop              -- trivial fact
+                -- Note: we don't interact givens with wanteds or derived
+                -- because we assume that they are added before them
+                -- Otherwise we'd basically have to kick-out all of the
+                -- wanteds and restart them, to check if they might be solvable
+                -- with the new assumption.
       _      -> checkBad =<< computeNewGivenWork ct
 
   | isWanted ev =
