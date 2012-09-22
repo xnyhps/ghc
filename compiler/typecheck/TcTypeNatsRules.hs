@@ -15,6 +15,8 @@ import TysWiredIn ( typeNatAddTyCon
                   , typeNatExpTyCon
                   , typeNatLeqTyCon
                   , trueTy, falseTy
+                  , nat1Kind, zeroTy
+                  , fromNat1TyCon
                   )
 
 import Name     ( Name, mkWiredInName, BuiltInSyntax(..) )
@@ -60,8 +62,14 @@ mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
 mkLeq :: Type -> Type -> Type
 mkLeq a b = mkTyConApp typeNatLeqTyCon [a,b]
 
+mkFromNat1 :: Type -> Type
+mkFromNat1 a = mkTyConApp fromNat1TyCon [a]
+
 natVars :: [TyVar]
 natVars = tyVarList typeNatKind
+
+nat1Vars :: [TyVar]
+nat1Vars = tyVarList nat1Kind
 
 mkBoolLiTy :: Bool -> Type
 mkBoolLiTy b = if b then trueTy else falseTy
@@ -204,9 +212,32 @@ widenRules =
   , (True, mkAx 54 "LeqExp2" (take 3 natVars)
       [ n2 <== a, mkExp a b === c ] (b <== c))
 
+
+  , (True, mkAx 60 "FromNat1_inj" (take 2 nat1Vars ++ take 1 (drop 2 natVars))
+      [ mkFromNat1 a1 === c, mkFromNat1 b1 === c] (a1 === b1))
+
+  {- This follows from the injectivity rule, when interacted with the
+     definition for `FromNat1`.  We have the explicit rule here
+     because this is the only function that has explicit user-defined
+     equations and so we have no support for interacting with
+     existing equations.   This could be removed if GHC knows about
+     injective type families. -}
+  , (True, mkAx 61 "FromNat1Zero" (take 1 nat1Vars)
+      [ mkFromNat1 a1 === n0 ] (a === zeroTy))
+
+  {- We also want:
+      forall (a :: Nat1) (b :: Nat).i
+      exists (c :: Nat1)
+        (FromNat1 a ~ b, 1 <= b) => (a ~ Succ c)
+
+    Currently this is implemented with some hand-written code in TcTypeNats.hs
+  -}
+
   ]
   where
-  a : b : c : x : y : z : _ = map mkTyVarTy natVars
+  a  : b  : c : x : y : z : _ = map mkTyVarTy natVars
+  a1 : b1 : _ = map mkTyVarTy nat1Vars
+  n0 = mkNumLitTy 0
   n1 = mkNumLitTy 1
   n2 = mkNumLitTy 2
 
