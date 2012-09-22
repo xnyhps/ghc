@@ -80,8 +80,7 @@ import DynFlags ( tracingDynFlags )
 import Outputable (showSDoc)
 
 pureTrace :: String -> a -> a
-pureTrace x a | False = trace x a
-pureTrace _ a = a
+pureTrace x a = if True then trace x a else a
 
 ppsh :: SDoc -> String
 ppsh = showSDoc tracingDynFlags
