@@ -74,11 +74,17 @@ module TysWiredIn (
 
         -- * Type families used to compute at the type level.
         typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon,
+        fromNat1TyCon,
 
         -- * Lifted booleans
         boolKindCon, boolKind,
         trueTyCon, trueTy,
-        falseTyCon, falseTy
+        falseTyCon, falseTy,
+
+        -- * Liftedn unary natural numbers
+        nat1KindCon, nat1Kind,
+        zeroTyCon, zeroTy,
+        succTyCon, succTy
 
     ) where
 
@@ -156,6 +162,7 @@ wiredInTyCons = [ unitTyCon	-- Not treated like other tuples, because
     	      , listTyCon
 	      , parrTyCon
               , eqTyCon
+              , nat1TyCon
     	      ]
            ++ (case cIntegerLibraryType of
                IntegerGMP -> [integerTyCon]
@@ -794,6 +801,16 @@ typeNatMulTyCon = mkTypeNatFunTyCon typeNatMulTyFamName
 
 typeNatExpTyCon :: TyCon
 typeNatExpTyCon = mkTypeNatFunTyCon typeNatExpTyFamName
+
+fromNat1TyCon :: TyCon
+fromNat1TyCon = mkSynTyCon fromNat1TyFamName
+                    (mkArrowKinds [ nat1Kind ] typeNatKind )
+                    (take 1 $ tyVarList nat1Kind)
+                    SynFamilyTyCon
+                    NoParentTyCon
+
+
+
 \end{code}
 
 
@@ -814,7 +831,49 @@ trueTy, falseTy :: Type
 trueTy  = mkTyConApp trueTyCon []
 falseTy = mkTyConApp falseTyCon []
 
+\end{code}
 
 
+Unary Natural Numbers
+
+\begin{code}
+
+nat1TyConName, succDataConName, zeroDataConName :: Name
+nat1TyConName    = mkWiredInTyConName   UserSyntax gHC_TYPELITS
+                     (fsLit "Nat1") nat1TyConKey nat1TyCon
+zeroDataConName  = mkWiredInDataConName UserSyntax gHC_TYPELITS
+                     (fsLit "Zero") zeroDataConKey  zeroDataCon
+succDataConName  = mkWiredInDataConName UserSyntax gHC_TYPELITS
+                     (fsLit "Succ") succDataConKey succDataCon
+
+nat1TyCon :: TyCon
+nat1TyCon = pcTyCon True Recursive nat1TyConName
+                    (Just (CType Nothing (fsLit "Nat1")))
+                    [] [zeroDataCon, succDataCon]
+
+succDataCon, zeroDataCon :: DataCon
+succDataCon  = pcDataCon succDataConName [] [nat1Ty] nat1TyCon
+zeroDataCon  = pcDataCon zeroDataConName [] [] nat1TyCon
+
+
+
+nat1KindCon, zeroTyCon, succTyCon :: TyCon
+nat1KindCon = buildPromotedTyCon nat1TyCon
+zeroTyCon   = buildPromotedDataCon zeroDataCon
+succTyCon   = buildPromotedDataCon succDataCon
+
+nat1Ty :: Type
+nat1Ty  = mkTyConApp nat1TyCon []
+
+nat1Kind :: Kind
+nat1Kind = mkTyConApp nat1KindCon []
+
+zeroTy :: Type
+zeroTy = mkTyConApp zeroTyCon []
+
+succTy :: Type -> Type
+succTy t = mkTyConApp succTyCon [t]
 
 \end{code}
+
+
