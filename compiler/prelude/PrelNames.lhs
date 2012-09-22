@@ -284,6 +284,7 @@ basicKnownKeyNames
         typeNatAddTyFamName,
         typeNatMulTyFamName,
         typeNatExpTyFamName,
+        fromNat1TyFamName,
 
         -- Implicit parameters
         ipClassName,
@@ -1092,6 +1093,9 @@ typeNatAddTyFamName = tcQual  gHC_TYPELITS (fsLit "+")   typeNatAddTyFamNameKey
 typeNatMulTyFamName = tcQual  gHC_TYPELITS (fsLit "*")   typeNatMulTyFamNameKey
 typeNatExpTyFamName = tcQual  gHC_TYPELITS (fsLit "^")   typeNatExpTyFamNameKey
 
+fromNat1TyFamName :: Name
+fromNat1TyFamName = tcQual  gHC_TYPELITS (fsLit "FromNat1") fromNat1TyFamNameKey
+
 -- Implicit parameters
 ipClassName :: Name
 ipClassName         = clsQual gHC_IP (fsLit "IP")      ipClassNameKey
@@ -1413,6 +1417,10 @@ typeNatAddTyFamNameKey    = mkPreludeTyConUnique 163
 typeNatMulTyFamNameKey    = mkPreludeTyConUnique 164
 typeNatExpTyFamNameKey    = mkPreludeTyConUnique 165
 
+nat1TyConKey, fromNat1TyFamNameKey :: Unique
+nat1TyConKey              = mkPreludeTyConUnique 166
+fromNat1TyFamNameKey      = mkPreludeTyConUnique 167
+
 ---------------- Template Haskell -------------------
 --      USES TyConUniques 200-299
 -----------------------------------------------------
@@ -1471,6 +1479,10 @@ gtDataConKey                            = mkPreludeDataConUnique 29
 integerGmpSDataConKey, integerGmpJDataConKey :: Unique
 integerGmpSDataConKey                   = mkPreludeDataConUnique 30
 integerGmpJDataConKey                   = mkPreludeDataConUnique 31
+
+zeroDataConKey, succDataConKey :: Unique
+zeroDataConKey                          = mkPreludeDataConUnique 40
+succDataConKey                          = mkPreludeDataConUnique 41
 \end{code}
 
 %************************************************************************
