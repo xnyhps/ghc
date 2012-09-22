@@ -4,6 +4,7 @@ import PrelNames( typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
                 , typeNatLeqTyFamName
+                , fromNat1TyFamName
                 )
 
 
@@ -11,7 +12,6 @@ import Outputable ( ppr, pprWithCommas
                   , Outputable
                   , SDoc
                   , (<>), (<+>), text, vcat, parens
-                  -- , showSDoc
                   , hsep
                   )
 import SrcLoc   ( noSrcSpan )
@@ -27,6 +27,7 @@ import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
                   , trueTy, falseTy
+                  , nat1Kind, succTy
                   )
 import Bag      ( bagToList )
 import Panic    ( panic )
@@ -44,7 +45,6 @@ import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , CtEvidence(..), CtLoc(..), SkolemInfo(..)
                   , mkNonCanonical
                   , ctPred
-                  -- , getWantedLoc
                   , isDerived
                   , isWantedCt
                   , CtOrigin(..), EqOrigin(..)
@@ -63,6 +63,7 @@ import TcSMonad ( TcS, emitFrozenError, setEvBind
                 , modifyInertTcS
                 , traceTcS
                 , partCtFamHeadMap
+                , newFlexiTcSTy
                 , tyVarsOfCt
                 )
 
@@ -733,8 +734,9 @@ The first set of constraints are ones that indicate a contradiction
                                                           (e.g., 2 ~ 3).
 The second set are "good" constraints (not obviously contradicting each other).
 -}
-interactCt :: Bool -> Ct -> [Ct] -> ([Ct],[Ct])
+interactCt :: Bool -> Ct -> [Ct] -> TcS ([Ct],[Ct])
 interactCt withEv ct asmps0
+
   | Just _ <- isLeqCt ct =
   let active  = map activate impRules
       -- XXX: We only really need to consider impRules that have
@@ -742,7 +744,7 @@ interactCt withEv ct asmps0
 
       (leq, asmps) = makeLeqModel (ct : asmps0)
       newWork = interactActiveRules leq active asmps
-  in partition isBad $ map toCt newWork
+  in return $ partition isBad $ map toCt newWork
 
   | otherwise =
   let active  = concatMap (`applyAsmp` ct)
@@ -753,7 +755,9 @@ interactCt withEv ct asmps0
 
       (leq, asmps) = makeLeqModel asmps0
       newWork = interactActiveRules leq active asmps
-  in partition isBad $ map toCt newWork
+  in do extra <- if withEv then return []
+                           else customNat1Improvement leq ct
+        return $ partition isBad $ extra ++ map toCt newWork
 
  where
   -- cf. `fireRule`: the only way to get a non-canonical constraint
@@ -762,6 +766,22 @@ interactCt withEv ct asmps0
   isBad _                   = False
 
   toCt = if withEv then ruleResultToGiven else ruleResultToDerived
+
+{- Custom improvement rule for: FromNat1 x ~ y.
+  When we know that `1 <= y` we can derive the fact
+  that `x ~ Succ a` for some `a`.  Currently we just generate a derived
+  fact so that won't work well with givens (e.g., like the problems
+  with fun. deps., but it works in many useful cases. -}
+
+
+customNat1Improvement :: LeqFacts -> Ct -> TcS [Ct]
+customNat1Improvement leq ct
+  | Just (t1,t2) <- isFromNat1Ct ct, Just _ <- isLeq leq (mkNumLitTy 1) t2 =
+    do a <- newFlexiTcSTy nat1Kind
+       return [eqnToCt (t1, succTy a) Nothing]
+  | otherwise = return []
+
+
 
 
 
@@ -799,7 +819,7 @@ Returns any obvious contradictions that we found.  -}
 
 computeNewGivenWork :: Ct -> TcS [Ct]
 computeNewGivenWork ct =
-  do (bad,good) <- interactCt True ct `fmap` getFacts
+  do (bad,good) <- interactCt True ct =<< getFacts
 
      when (null bad) $
        do natTrace "New givens:" (vcat $ map ppr good)
@@ -811,9 +831,10 @@ computeNewGivenWork ct =
 {- Add new derived work to the work list.
 Returns any obvious contradictions that we found. -}
 
+-- XXX: We should probably be using the deived constraints here too
 computeNewDerivedWork :: Ct -> TcS [Ct]
 computeNewDerivedWork ct =
-  do (bad,good) <- interactCt False ct `fmap` getEvCt
+  do (bad,good) <- interactCt False ct =<< getEvCt
 
      when (null bad) $
        do natTrace "New derived:" (vcat $ map ppr good)
@@ -1012,7 +1033,6 @@ leqInsNode t model@(LeqFacts m0) =
                  _ <- isNumLitTy n
                  return (n,(n,e))
 
-
 isLeq :: LeqFacts -> Type -> Type -> Maybe EvTerm
 isLeq m t1 t2 = leqReachable m2 t1 t2
   where (_,m1) = leqInsNode t1 m
@@ -1055,6 +1075,14 @@ makeLeqModel = foldr add (noLeqFacts,[])
     , Just ev      <- ctEvTermMaybe ct
     , LeqAdded m1  <- addFact ev t1 t2 m = (m1, rest)
   add ct (m,rest)                        = (m, ct : rest)
+
+
+-- | Is this a `FromNat1 x ~ y` constraint?
+isFromNat1Ct :: Ct -> Maybe (Type,Type)
+isFromNat1Ct (CFunEqCan { cc_fun = tc, cc_tyargs = [t1], cc_rhs = t })
+  | tyConName tc == fromNat1TyFamName = Just (t1,t)
+isFromNat1Ct _ = Nothing
+
 
 -- | Is this an `a <= b` constraint?
 isLeqCt :: Ct -> Maybe (Type, Type)
