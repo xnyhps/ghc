@@ -20,11 +20,12 @@ module BinIface (
 #include "HsVersions.h"
 
 import TcRnMonad
-import TyCon      (TyCon, tyConName, tupleTyConSort, tupleTyConArity, isTupleTyCon)
+import TyCon
 import DataCon    (dataConName, dataConWorkId, dataConTyCon)
 import PrelInfo   (wiredInThings, basicKnownKeyNames)
 import Id         (idName, isDataConWorkId_maybe)
 import CoreSyn    (DFunArg(..))
+import Coercion   (LeftOrRight(..))
 import TysWiredIn
 import IfaceEnv
 import HscTypes
@@ -1037,6 +1038,15 @@ instance Binary IfaceTyCon where
    put_ bh (IfaceTc ext) = put_ bh ext
    get bh = liftM IfaceTc (get bh)
 
+instance Binary LeftOrRight where
+   put_ bh CLeft  = putByte bh 0
+   put_ bh CRight = putByte bh 1
+
+   get bh = do { h <- getByte bh
+               ; case h of
+                   0 -> return CLeft
+                   _ -> return CRight }
+
 instance Binary IfaceCoCon where
    put_ bh (IfaceCoAx n)       = do { putByte bh 0; put_ bh n }
    put_ bh IfaceReflCo         = putByte bh 1
@@ -1045,8 +1055,9 @@ instance Binary IfaceCoCon where
    put_ bh IfaceTransCo        = putByte bh 4
    put_ bh IfaceInstCo         = putByte bh 5
    put_ bh (IfaceNthCo d)      = do { putByte bh 6; put_ bh d }
+   put_ bh (IfaceLRCo lr)      = do { putByte bh 7; put_ bh lr }
    put_ bh (IfaceCoAxRule c)   = do { putByte bh 8; put_ bh c }
- 
+
    get bh = do
         h <- getByte bh
         case h of
@@ -1057,9 +1068,9 @@ instance Binary IfaceCoCon where
           4 -> return IfaceTransCo
           5 -> return IfaceInstCo
           6 -> do { d <- get bh; return (IfaceNthCo d) }
+          7 -> do { lr <- get bh; return (IfaceLRCo lr) }
           8 -> do { c <- get bh; return (IfaceCoAxRule c) }
           _ -> panic ("get IfaceCoCon " ++ show h)
-
 
 -------------------------------------------------------------------------
 --              IfaceExpr and friends
@@ -1394,6 +1405,18 @@ instance Binary IfaceDecl where
                     a4 <- get bh
                     occ <- return $! mkOccNameFS tcName a1
                     return (IfaceAxiom occ a2 a3 a4)
+
+instance Binary ty => Binary (SynTyConRhs ty) where
+    put_ bh (SynFamilyTyCon a b) = putByte bh 0 >> put_ bh a >> put_ bh b
+    put_ bh (SynonymTyCon ty)    = putByte bh 1 >> put_ bh ty
+
+    get bh = do { h <- getByte bh
+                ; case h of
+                    0 -> do { a <- get bh
+                            ; b <- get bh
+                            ; return (SynFamilyTyCon a b) }
+                    _ -> do { ty <- get bh
+                            ; return (SynonymTyCon ty) } }
 
 instance Binary IfaceClsInst where
     put_ bh (IfaceClsInst cls tys dfun flag orph) = do

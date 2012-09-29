@@ -713,6 +713,9 @@ zonkExpr env (HsWrap co_fn expr)
     zonkExpr env1 expr	`thenM` \ new_expr ->
     return (HsWrap new_co_fn new_expr)
 
+zonkExpr _ HsHole
+  = return HsHole
+
 zonkExpr _ expr = pprPanic "zonkExpr" (ppr expr)
 
 zonkCmdTop :: ZonkEnv -> LHsCmdTop TcId -> TcM (LHsCmdTop Id)
@@ -1114,11 +1117,6 @@ zonkEvTerm env (EvCoercion co)    = do { co' <- zonkTcLCoToLCo env co
 zonkEvTerm env (EvCast tm co)     = do { tm' <- zonkEvTerm env tm
                                        ; co' <- zonkTcLCoToLCo env co
                                        ; return (mkEvCast tm' co') }
-
-zonkEvTerm env (EvKindCast v co)  = do { v'  <- zonkEvTerm env v
-                                       ; co' <- zonkTcLCoToLCo env co
-                                       ; return (mkEvKindCast v' co') }
-
 zonkEvTerm env (EvTupleSel tm n)  = do { tm' <- zonkEvTerm env tm
                                        ; return (EvTupleSel tm' n) }
 zonkEvTerm env (EvTupleMk tms)    = do { tms' <- mapM (zonkEvTerm env) tms
@@ -1257,16 +1255,17 @@ zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
          SkolemTv {}    -> lookup_in_env
          RuntimeUnk {}  -> lookup_in_env
          FlatSkol ty    -> zonkTcTypeToType env ty
-         MetaTv _ ref   -> do { cts <- readMutVar ref
-           		      ; case cts of    
-           		           Flexi -> do { kind <- {-# SCC "zonkKind1" #-}
-                                                         zonkTcTypeToType env (tyVarKind tv)
-                                               ; zonk_unbound_tyvar (setTyVarKind tv kind) }
-           		           Indirect ty -> do { zty <- zonkTcTypeToType env ty 
-                                                     -- Small optimisation: shortern-out indirect steps
-                                                     -- so that the old type may be more easily collected.
-                                                     ; writeMutVar ref (Indirect zty)
-                                                     ; return zty } }
+         MetaTv { mtv_ref = ref }  
+           -> do { cts <- readMutVar ref
+           	 ; case cts of    
+           	      Flexi -> do { kind <- {-# SCC "zonkKind1" #-}
+                                            zonkTcTypeToType env (tyVarKind tv)
+                                  ; zonk_unbound_tyvar (setTyVarKind tv kind) }
+           	      Indirect ty -> do { zty <- zonkTcTypeToType env ty 
+                                        -- Small optimisation: shortern-out indirect steps
+                                        -- so that the old type may be more easily collected.
+                                        ; writeMutVar ref (Indirect zty)
+                                        ; return zty } }
   | otherwise
   = lookup_in_env
   where
@@ -1353,6 +1352,7 @@ zonkTcLCoToLCo env co
                                    ; return (TcCastCo co1' co2') }
     go (TcSymCo co)           = do { co' <- go co; return (mkTcSymCo co')  }
     go (TcNthCo n co)         = do { co' <- go co; return (mkTcNthCo n co')  }
+    go (TcLRCo lr co)         = do { co' <- go co; return (mkTcLRCo lr co')  }
     go (TcTransCo co1 co2)    = do { co1' <- go co1; co2' <- go co2
                                    ; return (mkTcTransCo co1' co2')  }
     go (TcForAllCo tv co)     = ASSERT( isImmutableTyVar tv )

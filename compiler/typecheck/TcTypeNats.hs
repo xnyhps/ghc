@@ -14,7 +14,6 @@ import Outputable ( ppr, pprWithCommas
                   , (<>), (<+>), text, vcat, parens
                   , hsep
                   )
-import SrcLoc   ( noSrcSpan )
 import Var      ( TyVar )
 import TyCon    ( TyCon, tyConName )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, isTyVarTy, mkNumLitTy
@@ -42,12 +41,11 @@ import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcCanonical( StopOrContinue(..) )
 import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
                   , ctEvTerm, isGivenCt
-                  , CtEvidence(..), CtLoc(..), SkolemInfo(..)
+                  , CtEvidence(..), CtLoc(..)
                   , mkNonCanonical
                   , ctPred
                   , isDerived
                   , isWantedCt
-                  , CtOrigin(..), EqOrigin(..)
                   )
 import TcType     ( mkTcEqPred )
 import TcEvidence ( EvTerm(..)
@@ -56,10 +54,10 @@ import TcEvidence ( EvTerm(..)
                   , mkTcSymCo, mkTcTransCo
                   , tcCoercionKind
                   )
-import TcSMonad ( TcS, emitFrozenError, setEvBind
+import TcSMonad ( TcS, emitInsoluble, setEvBind
                 , InertSet
                 , getTcSInerts, inert_cans, inert_funeqs
-                , updWorkListTcS, appendWorkListCt
+                , updWorkListTcS, extendWorkListCts
                 , modifyInertTcS
                 , traceTcS
                 , partCtFamHeadMap
@@ -96,8 +94,8 @@ typeNatStage :: Ct -> TcS StopOrContinue
 typeNatStage ct
 
   | impossible ct =
-      do natTrace "impssoble: " (ppr ct)
-         emitFrozenError ev (cc_depth ct)
+      do natTrace "impossible: " (ppr ct)
+         emitInsoluble ct
          return Stop
 
   | isGiven ev =
@@ -131,7 +129,7 @@ typeNatStage ct
   checkBad bad
     | null bad  = return (ContinueWith ct)
     | otherwise = do natTrace "Contradictions:" (vcat $ map ppr bad)
-                     emitFrozenError ev (cc_depth ct)
+                     emitInsoluble ct
                      return Stop
 
 
@@ -582,45 +580,40 @@ fireRule leq r =
        return (n, ev)
 
 
-eqnToCt :: Eqn -> Maybe EvTerm -> Ct
-eqnToCt (lhs,rhs) evt
+eqnToCt :: CtLoc -> Eqn -> Maybe EvTerm -> Ct
+eqnToCt loc (lhs,rhs) evt
   | Just (tc,ts) <- splitTyConApp_maybe lhs =
-      CFunEqCan { cc_ev = ev False, cc_depth = 0
+      CFunEqCan { cc_ev = ev False, cc_loc = loc
                 , cc_fun = tc, cc_tyargs = ts, cc_rhs = rhs }
 
   | Just x <- getTyVar_maybe lhs =
-      CTyEqCan { cc_ev = ev False, cc_depth = 0, cc_tyvar = x, cc_rhs = rhs }
+      CTyEqCan { cc_ev = ev False, cc_loc = loc, cc_tyvar = x, cc_rhs = rhs }
 
   | Just x <- getTyVar_maybe rhs =
-      CTyEqCan { cc_ev = ev True, cc_depth = 0, cc_tyvar = x, cc_rhs = lhs }
+      CTyEqCan { cc_ev = ev True, cc_loc = loc, cc_tyvar = x, cc_rhs = lhs }
 
   -- The only possibility here is something like: 2 ~ 3
   -- which means we've detected an error!
-  | otherwise = mkNonCanonical (ev False)
+  | otherwise = mkNonCanonical loc (ev False)
 
   where
   ty = mkTcEqPred lhs rhs
 
   ev swap =
     case evt of
-      Nothing -> Derived
-        { ctev_wloc = CtLoc wloc noSrcSpan [], ctev_pred = ty }
+      Nothing -> CtDerived { ctev_pred = ty }
 
-      Just t  -> Given
-        { ctev_gloc = CtLoc UnkSkol noSrcSpan []
-        , ctev_pred = ty
+      Just t  -> CtGiven
+        { ctev_pred = ty
         , ctev_evtm = if swap then EvCoercion $ mkTcSymCo $ evTermCoercion t
                               else t
         }
 
-  -- XXX: This is somewhat bogus.
-  wloc = TypeEqOrigin (UnifyOrigin lhs rhs)
+ruleResultToGiven :: CtLoc -> RuleResult -> Ct
+ruleResultToGiven l r = eqnToCt l (conclusion r) (Just (evidence r))
 
-ruleResultToGiven :: RuleResult -> Ct
-ruleResultToGiven r = eqnToCt (conclusion r) (Just (evidence r))
-
-ruleResultToDerived :: RuleResult -> Ct
-ruleResultToDerived r = eqnToCt (conclusion r) Nothing
+ruleResultToDerived :: CtLoc -> RuleResult -> Ct
+ruleResultToDerived l r = eqnToCt l (conclusion r) Nothing
 
 
 
@@ -765,7 +758,9 @@ interactCt withEv ct asmps0
   isBad (CNonCanonical {})  = True
   isBad _                   = False
 
-  toCt = if withEv then ruleResultToGiven else ruleResultToDerived
+  toCt = if withEv then ruleResultToGiven loc else ruleResultToDerived loc
+  loc  = cc_loc ct
+
 
 {- Custom improvement rule for: FromNat1 x ~ y.
   When we know that `1 <= y` we can derive the fact
@@ -773,12 +768,11 @@ interactCt withEv ct asmps0
   fact so that won't work well with givens (e.g., like the problems
   with fun. deps., but it works in many useful cases. -}
 
-
 customNat1Improvement :: LeqFacts -> Ct -> TcS [Ct]
 customNat1Improvement leq ct
   | Just (t1,t2) <- isFromNat1Ct ct, Just _ <- isLeq leq (mkNumLitTy 1) t2 =
     do a <- newFlexiTcSTy nat1Kind
-       return [eqnToCt (t1, succTy a) Nothing]
+       return [eqnToCt (cc_loc ct) (t1, succTy a) Nothing]
   | otherwise = return []
 
 
@@ -802,7 +796,8 @@ widenAsmps asmps = step given wanted []
     | otherwise
       = let active = concatMap (`applyAsmp` c) $ map activate widenRules
             new = filter nonTrivial $
-                  map ruleResultToGiven $ interactActiveRules leq active done
+                  map (ruleResultToGiven (cc_loc c))
+                      $ interactActiveRules leq active done
         in step (c : done) cs (new ++ ds)
 
   -- For the moment, widedning rules have no ordering side conditions.
@@ -823,7 +818,7 @@ computeNewGivenWork ct =
 
      when (null bad) $
        do natTrace "New givens:" (vcat $ map ppr good)
-          updWorkListTcS (appendWorkListCt good)
+          updWorkListTcS (extendWorkListCts good)
 
      return bad
 
@@ -838,7 +833,7 @@ computeNewDerivedWork ct =
 
      when (null bad) $
        do natTrace "New derived:" (vcat $ map ppr good)
-          updWorkListTcS (appendWorkListCt good)
+          updWorkListTcS (extendWorkListCts good)
 
      return bad
 

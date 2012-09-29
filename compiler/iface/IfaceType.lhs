@@ -99,7 +99,7 @@ data IfaceCoCon
   = IfaceCoAx IfExtName
   | IfaceReflCo    | IfaceUnsafeCo  | IfaceSymCo
   | IfaceTransCo   | IfaceInstCo
-  | IfaceNthCo Int
+  | IfaceNthCo Int | IfaceLRCo LeftOrRight
   | IfaceCoAxRule IfExtName
 \end{code}
 
@@ -279,6 +279,7 @@ instance Outputable IfaceCoCon where
   ppr IfaceTransCo     = ptext (sLit "Trans")
   ppr IfaceInstCo      = ptext (sLit "Inst")
   ppr (IfaceNthCo d)   = ptext (sLit "Nth:") <> int d
+  ppr (IfaceLRCo lr)   = ppr lr
   ppr (IfaceCoAxRule n) = ppr n
 
 instance Outputable IfaceTyLit where
@@ -377,6 +378,8 @@ coToIfaceType (TransCo co1 co2)     = IfaceCoConApp IfaceTransCo
                                                     [ coToIfaceType co1
                                                     , coToIfaceType co2 ]
 coToIfaceType (NthCo d co)          = IfaceCoConApp (IfaceNthCo d)
+                                                    [ coToIfaceType co ]
+coToIfaceType (LRCo lr co)          = IfaceCoConApp (IfaceLRCo lr)
                                                     [ coToIfaceType co ]
 coToIfaceType (InstCo co ty)        = IfaceCoConApp IfaceInstCo 
                                                     [ coToIfaceType co

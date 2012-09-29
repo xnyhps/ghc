@@ -16,14 +16,14 @@ module TcEvidence (
 
   EvBind(..), emptyTcEvBinds, isEmptyTcEvBinds, 
 
-  EvTerm(..), mkEvCast, evVarsOfTerm, mkEvKindCast,
+  EvTerm(..), mkEvCast, evVarsOfTerm, 
   EvLit(..), evTermCoercion,
 
   -- TcCoercion
-  TcCoercion(..), 
+  TcCoercion(..), LeftOrRight(..), pickLR,
   mkTcReflCo, mkTcTyConAppCo, mkTcAppCo, mkTcAppCos, mkTcFunCo,
   mkTcAxInstCo, mkTcForAllCo, mkTcForAllCos, 
-  mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcInstCos,
+  mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcLRCo, mkTcInstCos,
   tcCoercionKind, coVarsOfTcCo, isEqVar, mkTcCoVarCo, 
   isTcReflCo, isTcReflCo_maybe, getTcCoVar_maybe,
   liftTcCoSubstWith
@@ -32,7 +32,7 @@ module TcEvidence (
 #include "HsVersions.h"
 
 import Var
-
+import Coercion( LeftOrRight(..), pickLR )
 import PprCore ()   -- Instance OutputableBndr TyVar
 import TypeRep  -- Knows type representation
 import TcType
@@ -103,6 +103,7 @@ data TcCoercion
   | TcSymCo TcCoercion
   | TcTransCo TcCoercion TcCoercion
   | TcNthCo Int TcCoercion
+  | TcLRCo LeftOrRight TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
   | TcLetCo TcEvBinds TcCoercion
   | TcTypeNatCo CoAxiomRule [TcType] [TcCoercion]
@@ -169,6 +170,10 @@ mkTcNthCo :: Int -> TcCoercion -> TcCoercion
 mkTcNthCo n (TcRefl ty) = TcRefl (tyConAppArgN n ty)
 mkTcNthCo n co          = TcNthCo n co
 
+mkTcLRCo :: LeftOrRight -> TcCoercion -> TcCoercion
+mkTcLRCo lr (TcRefl ty) = TcRefl (pickLR lr (tcSplitAppTy ty))
+mkTcLRCo lr co          = TcLRCo lr co
+
 mkTcAppCos :: TcCoercion -> [TcCoercion] -> TcCoercion
 mkTcAppCos co1 tys = foldl mkTcAppCo co1 tys
 
@@ -213,6 +218,7 @@ tcCoercionKind co = go co
     go (TcSymCo co)           = swap (go co)
     go (TcTransCo co1 co2)    = Pair (pFst (go co1)) (pSnd (go co2))
     go (TcNthCo d co)         = tyConAppArgN d <$> go co
+    go (TcLRCo lr co)         = (pickLR lr . tcSplitAppTy) <$> go co
 
     go (TcTypeNatCo ax ts _)  = let (_,(l,r)) = co_axr_inst ax ts
                                 in Pair l r
@@ -244,6 +250,7 @@ coVarsOfTcCo tc_co
     go (TcSymCo co)              = go co
     go (TcTransCo co1 co2)       = go co1 `unionVarSet` go co2
     go (TcNthCo _ co)            = go co
+    go (TcLRCo  _ co)            = go co
     go (TcLetCo (EvBinds bs) co) = foldrBag (unionVarSet . go_bind) (go co) bs
                                    `minusVarSet` get_bndrs bs
     go (TcLetCo {}) = emptyVarSet    -- Harumph. This does legitimately happen in the call
@@ -312,6 +319,7 @@ ppr_co p (TcTransCo co1 co2) = maybeParen p FunPrec $
                                <+> ppr_co FunPrec co2
 ppr_co p (TcSymCo co)         = pprPrefixApp p (ptext (sLit "Sym")) [pprParendTcCo co]
 ppr_co p (TcNthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pprParendTcCo co]
+ppr_co p (TcLRCo lr co)       = pprPrefixApp p (ppr lr) [pprParendTcCo co]
 
 ppr_co p (TcTypeNatCo co ts ps)= maybeParen p TopPrec $ ppr_type_nat_co co ts ps
 
@@ -498,8 +506,6 @@ data EvTerm
                                  -- dictionaries, even though the former have no
                                  -- selector Id.  We count up from _0_
 
-  | EvKindCast EvTerm TcCoercion  -- See Note [EvKindCast]
-
   | EvLit EvLit                  -- Dictionary for class "SingI" for type lits.
                                  -- Note [EvLit]
 
@@ -535,19 +541,6 @@ because that does not satisfy the invariant.  Instead we make a binding
 and the constraint
     [G] g1 :: a~Bool
 See Trac [7238]
-
-Note [EvKindCast] 
-~~~~~~~~~~~~~~~~~ 
-EvKindCast g kco is produced when we have a constraint (g : s1 ~ s2) 
-but the kinds of s1 and s2 (k1 and k2 respectively) don't match but 
-are rather equal by a coercion. You may think that this coercion will
-always turn out to be ReflCo, so why is this needed? Because sometimes
-we will want to defer kind errors until the runtime and in these cases
-that coercion will be an 'error' term, which we want to evaluate rather
-than silently forget about!
-
-The relevant (and only) place where such a coercion is produced in 
-the simplifier is in TcCanonical.emitKindConstraint.
 
 Note [EvBinds/EvTerm]
 ~~~~~~~~~~~~~~~~~~~~~
@@ -610,11 +603,6 @@ mkEvCast ev lco
   | isTcReflCo lco = ev
   | otherwise      = EvCast ev lco
 
-mkEvKindCast :: EvTerm -> TcCoercion -> EvTerm
-mkEvKindCast ev lco
-  | isTcReflCo lco = ev
-  | otherwise      = EvKindCast ev lco
-
 emptyTcEvBinds :: TcEvBinds
 emptyTcEvBinds = EvBinds emptyBag
 
@@ -640,7 +628,6 @@ evVarsOfTerm (EvSuperClass v _)   = evVarsOfTerm v
 evVarsOfTerm (EvCast tm co)       = evVarsOfTerm tm `unionVarSet` coVarsOfTcCo co
 evVarsOfTerm (EvTupleMk evs)      = evVarsOfTerms evs
 evVarsOfTerm (EvDelayedError _ _) = emptyVarSet
-evVarsOfTerm (EvKindCast v co)    = coVarsOfTcCo co `unionVarSet` evVarsOfTerm v
 evVarsOfTerm (EvLit _)            = emptyVarSet
 
 evVarsOfTerms :: [EvTerm] -> VarSet
@@ -698,7 +685,6 @@ instance Outputable EvBind where
 instance Outputable EvTerm where
   ppr (EvId v)           = ppr v
   ppr (EvCast v co)      = ppr v <+> (ptext (sLit "`cast`")) <+> pprParendTcCo co
-  ppr (EvKindCast v co)  = ppr v <+> (ptext (sLit "`kind-cast`")) <+> pprParendTcCo co
   ppr (EvCoercion co)    = ptext (sLit "CO") <+> ppr co
   ppr (EvTupleSel v n)   = ptext (sLit "tupsel") <> parens (ppr (v,n))
   ppr (EvTupleMk vs)     = ptext (sLit "tupmk") <+> ppr vs

@@ -56,7 +56,8 @@ module Type (
 	isDictLikeTy,
         mkEqPred, mkPrimEqPred,
         mkClassPred,
-        noParenPred, isClassPred, isEqPred, isIPPred, isIPPred_maybe,
+        noParenPred, isClassPred, isEqPred, 
+        isIPPred, isIPPred_maybe, isIPTyCon, isIPClass,
         
         -- Deconstructing predicate types
         PredTree(..), predTreePredType, classifyPredType,
@@ -160,7 +161,7 @@ import Class
 import TyCon
 import TysPrim
 import {-# SOURCE #-} TysWiredIn ( eqTyCon, mkBoxedTupleTy )
-import PrelNames( eqTyConKey, ipClassName
+import PrelNames( eqTyConKey, ipClassNameKey
                 , typeNatAddTyFamName
                 , typeNatMulTyFamName
                 , typeNatExpTyFamName
@@ -886,13 +887,20 @@ isEqPred ty = case tyConAppTyCon_maybe ty of
     _          -> False
 
 isIPPred ty = case tyConAppTyCon_maybe ty of
-    Just tyCon -> tyConName tyCon == ipClassName
-    _          -> False
+    Just tc -> isIPTyCon tc
+    _       -> False
+
+isIPTyCon :: TyCon -> Bool
+isIPTyCon tc = tc `hasKey` ipClassNameKey
+
+isIPClass :: Class -> Bool
+isIPClass cls = cls `hasKey` ipClassNameKey
+  -- Class and it corresponding TyCon have the same Unique
 
 isIPPred_maybe :: Type -> Maybe (FastString, Type)
 isIPPred_maybe ty =
   do (tc,[t1,t2]) <- splitTyConApp_maybe ty
-     guard (tyConName tc == ipClassName)
+     guard (isIPTyCon tc)
      x <- isStrLitTy t1
      return (x,t2)
 \end{code}
@@ -904,7 +912,7 @@ Make PredTypes
 -- | Creates a type equality predicate
 mkEqPred :: Type -> Type -> PredType
 mkEqPred ty1 ty2
-  = WARN( not (k `eqKind` typeKind ty2), ppr ty1 $$ ppr ty2 )
+  = WARN( not (k `eqKind` typeKind ty2), ppr ty1 $$ ppr ty2 $$ ppr k $$ ppr (typeKind ty2) )
     TyConApp eqTyCon [k, ty1, ty2]
   where 
     k = typeKind ty1
@@ -1651,7 +1659,6 @@ less-informative one to the more informative one.  Neat, eh?
 
 
 
-
 \begin{code}
 co_axr_rule :: Name -> [TyVar] -> [Eqn] -> Eqn -> CoAxiomRule
 co_axr_rule = CoAxiomRule
@@ -1693,3 +1700,6 @@ isImplicitCoAxiomRule :: CoAxiomRule -> Bool
 isImplicitCoAxiomRule _ = True
 
 \end{code}
+
+
+

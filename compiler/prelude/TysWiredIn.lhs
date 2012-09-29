@@ -783,14 +783,16 @@ typeNatLeqTyCon :: TyCon
 typeNatLeqTyCon = mkSynTyCon typeNatLeqTyFamName
                     (mkArrowKinds [ typeNatKind, typeNatKind ] boolKind)
                     (take 2 $ tyVarList typeNatKind)
-                    SynFamilyTyCon
+                    SynFamilyTyCon { synf_open = False, synf_injective = False }
                     NoParentTyCon
 
+
+-- Note: none if the type nat functions are injective in both arguments
 mkTypeNatFunTyCon :: Name -> TyCon
 mkTypeNatFunTyCon op = mkSynTyCon op
                     (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
                     (take 2 $ tyVarList typeNatKind)
-                    SynFamilyTyCon
+                    SynFamilyTyCon { synf_open = False, synf_injective = False }
                     NoParentTyCon
 
 typeNatAddTyCon :: TyCon
@@ -806,11 +808,8 @@ fromNat1TyCon :: TyCon
 fromNat1TyCon = mkSynTyCon fromNat1TyFamName
                     (mkArrowKinds [ nat1Kind ] typeNatKind )
                     (take 1 $ tyVarList nat1Kind)
-                    SynFamilyTyCon
+                    SynFamilyTyCon { synf_open = False, synf_injective = True }
                     NoParentTyCon
-
-
-
 \end{code}
 
 
