@@ -767,7 +767,9 @@ uUnfilledVar origin swapped tv1 details1 non_var_ty2  -- ty2 is not a type varia
       MetaTv { mtv_info = TauTv, mtv_ref = ref1 }
         -> do { mb_ty2' <- checkTauTvUpdate tv1 non_var_ty2
               ; case mb_ty2' of
-                  Nothing   -> do { traceTc "Occ/kind defer" (ppr tv1); defer }
+                  Nothing   -> do { traceTc "Occ/kind defer" (ppr tv1 <+> dcolon <+> ppr (tyVarKind tv1)
+                                                              $$ ppr non_var_ty2 $$ ppr (typeKind non_var_ty2))
+                                  ; defer }
                   Just ty2' -> updateMeta tv1 ref1 ty2'
               }
 
@@ -854,9 +856,17 @@ checkTauTvUpdate :: TcTyVar -> TcType -> TcM (Maybe TcType)
 -- we return Nothing, leaving it to the later constraint simplifier to
 -- sort matters out.
 
+-- Used in debug meesages only
+_ppr_sub :: Maybe Ordering -> SDoc
+_ppr_sub (Just LT) = text "LT"
+_ppr_sub (Just EQ) = text "EQ"
+_ppr_sub (Just GT) = text "GT"
+_ppr_sub Nothing   = text "Nothing"
+
 checkTauTvUpdate tv ty
   = do { ty'   <- zonkTcType ty
        ; sub_k <- unifyKindX (tyVarKind tv) (typeKind ty')
+--       ; traceTc "checktttv" (ppr tv $$ ppr ty' $$ ppr (tyVarKind tv) $$ ppr (typeKind ty') $$ _ppr_sub sub_k)
        ; case sub_k of
            Nothing -> return Nothing
            Just LT -> return Nothing
@@ -920,7 +930,7 @@ function @occ_check_ok@.
 
 
 Note [Type family sharing]
-~~~~~~~~~~~~~~ 
+~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 We must avoid eagerly unifying type variables to types that contain function symbols, 
 because this may lead to loss of sharing, and in turn, in very poor performance of the
 constraint simplifier. Assume that we have a wanted constraint: 
@@ -1003,18 +1013,21 @@ happy to have types of kind Constraint on either end of an arrow.
 matchExpectedFunKind :: TcKind -> TcM (Maybe (TcKind, TcKind))
 -- Like unifyFunTy, but does not fail; instead just returns Nothing
 
-matchExpectedFunKind (TyVarTy kvar) = do
-    maybe_kind <- readMetaTyVar kvar
-    case maybe_kind of
-      Indirect fun_kind -> matchExpectedFunKind fun_kind
-      Flexi ->
-          do { arg_kind <- newMetaKindVar
-             ; res_kind <- newMetaKindVar
-             ; writeMetaTyVar kvar (mkArrowKind arg_kind res_kind)
-             ; return (Just (arg_kind,res_kind)) }
+matchExpectedFunKind (FunTy arg_kind res_kind) 
+  = return (Just (arg_kind,res_kind))
 
-matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind))
-matchExpectedFunKind _                         = return Nothing
+matchExpectedFunKind (TyVarTy kvar) 
+  | isTcTyVar kvar, isMetaTyVar kvar
+  = do { maybe_kind <- readMetaTyVar kvar
+       ; case maybe_kind of
+            Indirect fun_kind -> matchExpectedFunKind fun_kind
+            Flexi ->
+                do { arg_kind <- newMetaKindVar
+                   ; res_kind <- newMetaKindVar
+                   ; writeMetaTyVar kvar (mkArrowKind arg_kind res_kind)
+                   ; return (Just (arg_kind,res_kind)) } }
+
+matchExpectedFunKind _ = return Nothing
 
 -----------------  
 unifyKindX :: TcKind           -- k1 (actual)

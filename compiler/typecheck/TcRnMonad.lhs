@@ -376,6 +376,11 @@ newName occ
        ; loc  <- getSrcSpanM
        ; return (mkInternalName uniq occ loc) }
 
+newSysName :: OccName -> TcM Name
+newSysName occ
+  = do { uniq <- newUnique
+       ; return (mkSystemName uniq occ) }
+
 newSysLocalIds :: FastString -> [TcType] -> TcRnIf gbl lcl [TcId]
 newSysLocalIds fs tys
   = do  { us <- newUniqueSupply
@@ -622,8 +627,7 @@ discardWarnings thing_inside
 \begin{code}
 mkLongErrAt :: SrcSpan -> MsgDoc -> MsgDoc -> TcRn ErrMsg
 mkLongErrAt loc msg extra
-  = do { traceTc "Adding error:" (mkLocMessage SevError loc (msg $$ extra)) ;
-         rdr_env <- getGlobalRdrEnv ;
+  = do { rdr_env <- getGlobalRdrEnv ;
          dflags <- getDynFlags ;
          return $ mkLongErrMsg dflags loc (mkPrintUnqualified dflags rdr_env) msg extra }
 
@@ -635,13 +639,15 @@ reportErrors = mapM_ reportError
 
 reportError :: ErrMsg -> TcRn ()
 reportError err
-  = do { errs_var <- getErrsVar ;
+  = do { traceTc "Adding error:" (pprLocErrMsg err) ;
+         errs_var <- getErrsVar ;
          (warns, errs) <- readTcRef errs_var ;
          writeTcRef errs_var (warns, errs `snocBag` err) }
 
 reportWarning :: ErrMsg -> TcRn ()
 reportWarning warn
-  = do { errs_var <- getErrsVar ;
+  = do { traceTc "Adding warning:" (pprLocErrMsg warn) ;
+         errs_var <- getErrsVar ;
          (warns, errs) <- readTcRef errs_var ;
          writeTcRef errs_var (warns `snocBag` warn, errs) }
 

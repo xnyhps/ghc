@@ -497,6 +497,12 @@ tcTopSpliceExpr :: TcM (LHsExpr Id) -> TcM (LHsExpr Id)
 tcTopSpliceExpr tc_action
   = checkNoErrs $  -- checkNoErrs: must not try to run the thing
                    -- if the type checker fails!
+    unsetDOptM Opt_DeferTypeErrors $
+                   -- Don't defer type errors.  Not only are we
+                   -- going to run this code, but we do an unsafe
+                   -- coerce, so we get a seg-fault if, say we
+                   -- splice a type into a place where an expression
+                   -- is expected (Trac #7276)
     setStage Splice $
     do {    -- Typecheck the expression
          (expr', lie) <- captureConstraints tc_action
@@ -1375,10 +1381,10 @@ reify_kc_app :: TyCon -> [TypeRep.Kind] -> TcM TH.Kind
 reify_kc_app kc kis
   = fmap (foldl TH.AppT r_kc) (mapM reifyKind kis)
   where
-    r_kc | isPromotedTyCon kc &&
-           isTupleTyCon (promotedTyCon kc)  = TH.TupleT (tyConArity kc)
-         | kc `hasKey` listTyConKey         = TH.ListT
-         | otherwise                        = TH.ConT (reifyName kc)
+    r_kc | Just tc <- isPromotedTyCon_maybe kc
+         , isTupleTyCon tc          = TH.TupleT (tyConArity kc)
+         | kc `hasKey` listTyConKey = TH.ListT
+         | otherwise                = TH.ConT (reifyName kc)
 
 reifyCxt :: [PredType] -> TcM [TH.Pred]
 reifyCxt   = mapM reifyPred
@@ -1409,8 +1415,8 @@ reify_tc_app tc tys
   where
     arity = tyConArity tc
     r_tc | isTupleTyCon tc            = if isPromotedDataCon tc
-                                          then TH.PromotedTupleT arity
-                                          else TH.TupleT arity
+                                        then TH.PromotedTupleT arity
+                                        else TH.TupleT arity
          | tc `hasKey` listTyConKey   = TH.ListT
          | tc `hasKey` nilDataConKey  = TH.PromotedNilT
          | tc `hasKey` consDataConKey = TH.PromotedConsT

@@ -423,10 +423,11 @@ ppr_co p co@(ForAllCo {})      = ppr_forall_co p co
 ppr_co _ (CoVarCo cv)          = parenSymOcc (getOccName cv) (ppr cv)
 ppr_co p (AxiomInstCo con cos) = pprTypeNameApp p ppr_co (getName con) cos
 
-ppr_co p (TransCo co1 co2) = maybeParen p FunPrec $
-                             ppr_co FunPrec co1
-                             <+> ptext (sLit ";")
-                             <+> ppr_co FunPrec co2
+ppr_co p co@(TransCo {}) = maybeParen p FunPrec $
+                           case trans_co_list co [] of
+                             [] -> panic "ppr_co"
+                             (co:cos) -> sep ( ppr_co FunPrec co
+                                             : [ char ';' <+> ppr_co FunPrec co | co <- cos])
 ppr_co p (InstCo co ty) = maybeParen p TyConPrec $
                           pprParendCo co <> ptext (sLit "@") <> pprType ty
 
@@ -437,6 +438,10 @@ ppr_co p (NthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <> int n) [ppr
 ppr_co p (LRCo sel co)      = pprPrefixApp p (ppr sel) [pprParendCo co]
 ppr_co p (TypeNatCo co ts cs) = maybeParen p TopPrec $
                                 ppr_type_nat_co co ts cs
+
+trans_co_list :: Coercion -> [Coercion] -> [Coercion]
+trans_co_list (TransCo co1 co2) cos = trans_co_list co1 (trans_co_list co2 cos)
+trans_co_list co                cos = co : cos
 
 instance Outputable LeftOrRight where
   ppr CLeft    = ptext (sLit "Left")
