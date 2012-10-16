@@ -18,7 +18,7 @@ module StaticFlagParser (
 #include "HsVersions.h"
 
 import qualified StaticFlags as SF
-import StaticFlags ( v_opt_C_ready, opt_SimplExcessPrecision )
+import StaticFlags ( v_opt_C_ready )
 import CmdLineParser
 import SrcLoc
 import Util
@@ -65,15 +65,7 @@ parseStaticFlagsFull flagsAvailable args = do
     -- see sanity code in staticOpts
   writeIORef v_opt_C_ready True
 
-    -- HACK: -fexcess-precision is both a static and a dynamic flag.  If
-    -- the static flag parser has slurped it, we must return it as a
-    -- leftover too.  ToDo: make -fexcess-precision dynamic only.
-  let excess_prec
-       | opt_SimplExcessPrecision = map (mkGeneralLocated "in excess_prec")
-                                        ["-fexcess-precision"]
-       | otherwise                = []
-
-  return (excess_prec ++ leftover, warns)
+  return (leftover, warns)
 
 flagsStatic :: [Flag IO]
 -- All the static flags should appear in this list.  It describes how each
@@ -92,14 +84,6 @@ flagsStatic :: [Flag IO]
 flagsStatic = [
         ------ Debugging ----------------------------------------------------
     Flag "dppr-debug"                  (PassFlag addOpt)
-  , Flag "dsuppress-all"               (PassFlag addOpt)
-  , Flag "dsuppress-uniques"           (PassFlag addOpt)
-  , Flag "dsuppress-coercions"         (PassFlag addOpt)
-  , Flag "dsuppress-module-prefixes"   (PassFlag addOpt)
-  , Flag "dsuppress-type-applications" (PassFlag addOpt)
-  , Flag "dsuppress-idinfo"            (PassFlag addOpt)
-  , Flag "dsuppress-var-kinds"         (PassFlag addOpt)
-  , Flag "dsuppress-type-signatures"   (PassFlag addOpt)
   , Flag "dno-debug-output"            (PassFlag addOpt)
       -- rest of the debugging flags are dynamic
 
@@ -127,24 +111,13 @@ isStaticFlag f =
     "fno-hi-version-check",
     "dno-black-holing",
     "fno-state-hack",
-    "fsimple-list-literals",
     "fruntime-types",
-    "fno-pre-inlining",
     "fno-opt-coercion",
     "fno-flat-cache",
-    "fexcess-precision",
     "fhardwire-lib-paths",
-    "fcpr-off",
-    "ferror-spans"
+    "fcpr-off"
     ]
   || any (`isPrefixOf` f) [
-    "fliberate-case-threshold",
-    "fmax-worker-args",
-    "funfolding-creation-threshold",
-    "funfolding-dict-threshold",
-    "funfolding-use-threshold",
-    "funfolding-fun-discount",
-    "funfolding-keeness-factor"
      ]
 
 -----------------------------------------------------------------------------

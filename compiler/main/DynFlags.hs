@@ -11,9 +11,6 @@
 --
 -------------------------------------------------------------------------------
 
-{-# OPTIONS_GHC -fno-warn-missing-fields #-}
--- So that tracingSettings works properly
-
 module DynFlags (
         -- * Dynamic flags and associated configuration types
         DynFlag(..),
@@ -114,8 +111,6 @@ module DynFlags (
 -- exposes the appropriate runtime boolean
         rtsIsProfiled,
 #endif
-        -- ** Only for use in the tracing functions in Outputable
-        tracingDynFlags,
 
 #include "../includes/dist-derivedconstants/header/GHCConstantsHaskellExports.hs"
         bLOCK_SIZE_W,
@@ -130,15 +125,17 @@ module DynFlags (
 import Platform
 import Module
 import PackageConfig
-import PrelNames        ( mAIN )
+import {-# SOURCE #-} PrelNames ( mAIN )
 import {-# SOURCE #-} Packages (PackageState)
 import DriverPhases     ( Phase(..), phaseInputExt )
 import Config
 import CmdLineParser
 import Constants
 import Panic
+import StaticFlags
 import Util
 import Maybes           ( orElse )
+import MonadUtils
 import qualified Pretty
 import SrcLoc
 import FastString
@@ -294,6 +291,7 @@ data DynFlag
    | Opt_CmmSink
    | Opt_CmmElimCommonBlocks
    | Opt_OmitYields
+   | Opt_SimpleListLiterals
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -343,8 +341,31 @@ data DynFlag
    | Opt_RelativeDynlibPaths
    | Opt_Hpc
 
+   -- PreInlining is on by default. The option is there just to see how
+   -- bad things get if you turn it off!
+   | Opt_SimplPreInlining
+
    -- output style opts
+   | Opt_ErrorSpans -- Include full span info in error messages,
+                    -- instead of just the start position.
    | Opt_PprCaseAsLet
+
+   -- Suppress all coercions, them replacing with '...'
+   | Opt_SuppressCoercions
+   | Opt_SuppressVarKinds
+   -- Suppress module id prefixes on variables.
+   | Opt_SuppressModulePrefixes
+   -- Suppress type applications.
+   | Opt_SuppressTypeApplications
+   -- Suppress info such as arity and unfoldings on identifiers.
+   | Opt_SuppressIdInfo
+   -- Suppress separate type signatures in core, but leave types on
+   -- lambda bound vars
+   | Opt_SuppressTypeSignatures
+   -- Suppress unique ids on variables.
+   -- Except for uniques, as some simplifier phases introduce new
+   -- variables that have otherwise identical names.
+   | Opt_SuppressUniques
 
    -- temporary flags
    | Opt_RunCPS
@@ -620,6 +641,8 @@ data DynFlags = DynFlags {
   -- know what to clean when an exception happens
   filesToClean          :: IORef [FilePath],
   dirsToClean           :: IORef (Map FilePath FilePath),
+  filesToNotIntermediateClean :: IORef [FilePath],
+
 
   -- Names of files which were generated from -ddump-to-file; used to
   -- track which ones we need to truncate because it's our first run
@@ -646,6 +669,17 @@ data DynFlags = DynFlags {
   -- extensionFlags should always be equal to
   --     flattenExtensionFlags language extensions
   extensionFlags        :: IntSet,
+
+  -- Unfolding control
+  -- See Note [Discounts and thresholds] in CoreUnfold
+  ufCreationThreshold   :: Int,
+  ufUseThreshold        :: Int,
+  ufFunAppDiscount      :: Int,
+  ufDictDiscount        :: Int,
+  ufKeenessFactor       :: Float,
+  ufDearOp              :: Int,
+
+  maxWorkerArgs         :: Int,
 
   -- | MsgDoc output action: use "ErrUtils" instead of this if you can
   log_action            :: LogAction,
@@ -876,7 +910,7 @@ data PackageFlag
   | IgnorePackage   String
   | TrustPackage    String
   | DistrustPackage String
-  deriving Eq
+  deriving (Eq, Show)
 
 defaultHscTarget :: Platform -> HscTarget
 defaultHscTarget = defaultObjectTarget
@@ -990,36 +1024,42 @@ wayDesc WayPar      = "Parallel"
 wayDesc WayGran     = "GranSim"
 wayDesc WayNDP      = "Nested data parallelism"
 
+wayDynFlags :: Platform -> Way -> [DynFlag]
+wayDynFlags _ WayThreaded = []
+wayDynFlags _ WayDebug = []
+wayDynFlags platform WayDyn =
+        case platformOS platform of
+            -- On Windows, code that is to be linked into a dynamic
+            -- library must be compiled with -fPIC. Labels not in
+            -- the current package are assumed to be in a DLL
+            -- different from the current one.
+            OSMinGW32 -> [Opt_PIC]
+            OSDarwin  -> [Opt_PIC]
+            OSLinux   -> [Opt_PIC]
+            _         -> []
+wayDynFlags _ WayProf     = [Opt_SccProfilingOn]
+wayDynFlags _ WayEventLog = []
+wayDynFlags _ WayPar      = [Opt_Parallel]
+wayDynFlags _ WayGran     = [Opt_GranMacros]
+wayDynFlags _ WayNDP      = []
+
 wayExtras :: Platform -> Way -> DynP ()
 wayExtras _ WayThreaded = return ()
-wayExtras _ WayDebug = return ()
-wayExtras platform WayDyn =
-        case platformOS platform of
-            OSMinGW32 ->
-                -- On Windows, code that is to be linked into a dynamic
-                -- library must be compiled with -fPIC. Labels not in
-                -- the current package are assumed to be in a DLL
-                -- different from the current one.
-                setFPIC
-            OSDarwin ->
-                setFPIC
-            _ ->
-                return ()
-wayExtras _ WayProf = setDynFlag Opt_SccProfilingOn
+wayExtras _ WayDebug    = return ()
+wayExtras _ WayDyn      = return ()
+wayExtras _ WayProf     = return ()
 wayExtras _ WayEventLog = return ()
-wayExtras _ WayPar = do setDynFlag Opt_Parallel
-                        exposePackage "concurrent"
-wayExtras _ WayGran = do setDynFlag Opt_GranMacros
-                         exposePackage "concurrent"
-wayExtras _ WayNDP = do setExtensionFlag Opt_ParallelArrays
-                        setDynFlag Opt_Vectorise
+wayExtras _ WayPar      = exposePackage "concurrent"
+wayExtras _ WayGran     = exposePackage "concurrent"
+wayExtras _ WayNDP      = do setExtensionFlag Opt_ParallelArrays
+                             setDynFlag Opt_Vectorise
 
 wayOptc :: Platform -> Way -> [String]
 wayOptc platform WayThreaded = case platformOS platform of
                                OSOpenBSD -> ["-pthread"]
                                OSNetBSD  -> ["-pthread"]
                                _         -> []
-wayOptc _ WayDebug      = []
+wayOptc _ WayDebug      = ["-O0", "-g"]
 wayOptc _ WayDyn        = ["-DDYNAMIC"]
 wayOptc _ WayProf       = ["-DPROFILING"]
 wayOptc _ WayEventLog   = ["-DTRACING"]
@@ -1074,11 +1114,13 @@ initDynFlags :: DynFlags -> IO DynFlags
 initDynFlags dflags = do
  refFilesToClean <- newIORef []
  refDirsToClean <- newIORef Map.empty
+ refFilesToNotIntermediateClean <- newIORef []
  refGeneratedDumps <- newIORef Set.empty
  refLlvmVersion <- newIORef 28
  return dflags{
         filesToClean   = refFilesToClean,
         dirsToClean    = refDirsToClean,
+        filesToNotIntermediateClean = refFilesToNotIntermediateClean,
         generatedDumps = refGeneratedDumps,
         llvmVersion    = refLlvmVersion
         }
@@ -1160,6 +1202,7 @@ defaultDynFlags mySettings =
         -- end of ghc -M values
         filesToClean   = panic "defaultDynFlags: No filesToClean",
         dirsToClean    = panic "defaultDynFlags: No dirsToClean",
+        filesToNotIntermediateClean = panic "defaultDynFlags: No filesToNotIntermediateClean",
         generatedDumps = panic "defaultDynFlags: No generatedDumps",
         haddockOptions = Nothing,
         flags = IntSet.fromList (map fromEnum (defaultFlags mySettings)),
@@ -1174,6 +1217,23 @@ defaultDynFlags mySettings =
         warnUnsafeOnLoc = noSrcSpan,
         extensions = [],
         extensionFlags = flattenExtensionFlags Nothing [],
+
+        -- The ufCreationThreshold threshold must be reasonably high to
+        -- take account of possible discounts.
+        -- E.g. 450 is not enough in 'fulsom' for Interval.sqr to inline
+        -- into Csg.calc (The unfolding for sqr never makes it into the
+        -- interface file.)
+        ufCreationThreshold = 750,
+        ufUseThreshold      = 60,
+        ufFunAppDiscount    = 60,
+        -- Be fairly keen to inline a fuction if that means
+        -- we'll be able to pick the right method from a dictionary
+        ufDictDiscount      = 30,
+        ufKeenessFactor     = 1.5,
+        ufDearOp            = 40,
+
+        maxWorkerArgs = 10,
+
         log_action = defaultLogAction,
         flushOut = defaultFlushOut,
         flushErr = defaultFlushErr,
@@ -1185,24 +1245,6 @@ defaultDynFlags mySettings =
         interactivePrint = Nothing
       }
 
---------------------------------------------------------------------------
--- Do not use tracingDynFlags!
--- tracingDynFlags is a hack, necessary because we need to be able to
--- show SDocs when tracing, but we don't always have DynFlags available.
--- Do not use it if you can help it. It will not reflect options set
--- by the commandline flags, and all fields may be either wrong or
--- undefined.
-tracingDynFlags :: DynFlags
-tracingDynFlags = defaultDynFlags tracingSettings
-
-tracingSettings :: Settings
-tracingSettings = trace "panic: Settings not defined in tracingDynFlags" $
-                  Settings { sTargetPlatform = tracingPlatform }
-                  -- Missing flags give a nice error
-
-tracingPlatform :: Platform
-tracingPlatform = Platform { platformWordSize = 4, platformOS = OSUnknown }
-                  -- Missing flags give a nice error
 --------------------------------------------------------------------------
 
 type FatalMessager = String -> IO ()
@@ -1604,7 +1646,7 @@ getStgToDo dflags
 -- the parsed 'DynFlags', the left-over arguments, and a list of warnings.
 -- Throws a 'UsageError' if errors occurred during parsing (such as unknown
 -- flags or missing arguments).
-parseDynamicFlagsCmdLine :: Monad m => DynFlags -> [Located String]
+parseDynamicFlagsCmdLine :: MonadIO m => DynFlags -> [Located String]
                          -> m (DynFlags, [Located String], [Located String])
                             -- ^ Updated 'DynFlags', left-over arguments, and
                             -- list of warnings.
@@ -1614,7 +1656,7 @@ parseDynamicFlagsCmdLine = parseDynamicFlagsFull flagsAll True
 -- | Like 'parseDynamicFlagsCmdLine' but does not allow the package flags
 -- (-package, -hide-package, -ignore-package, -hide-all-packages, -package-db).
 -- Used to parse flags set in a modules pragma.
-parseDynamicFilePragma :: Monad m => DynFlags -> [Located String]
+parseDynamicFilePragma :: MonadIO m => DynFlags -> [Located String]
                        -> m (DynFlags, [Located String], [Located String])
                           -- ^ Updated 'DynFlags', left-over arguments, and
                           -- list of warnings.
@@ -1625,7 +1667,7 @@ parseDynamicFilePragma = parseDynamicFlagsFull flagsDynamic False
 -- the dynamic flag parser that the other methods simply wrap. It allows
 -- saying which flags are valid flags and indicating if we are parsing
 -- arguments from the command line or from a file pragma.
-parseDynamicFlagsFull :: Monad m
+parseDynamicFlagsFull :: MonadIO m
                   => [Flag (CmdLineP DynFlags)]    -- ^ valid flags to match against
                   -> Bool                          -- ^ are the arguments from the command line?
                   -> DynFlags                      -- ^ current dynamic flags
@@ -1664,6 +1706,8 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
                               intercalate "/" (map wayDesc theWays)))
 
   let (dflags4, consistency_warnings) = makeDynFlagsConsistent dflags3
+
+  liftIO $ setUnsafeGlobalDynFlags dflags4
 
   return (dflags4, leftover, consistency_warnings ++ sh_warns ++ warns)
 
@@ -1907,6 +1951,15 @@ dynamic_flags = [
   , Flag "dppr-user-length" (intSuffix (\n d -> d{ pprUserLength = n }))
   , Flag "dppr-cols"        (intSuffix (\n d -> d{ pprCols = n }))
   , Flag "dtrace-level"     (intSuffix (\n d -> d{ traceLevel = n }))
+  -- Suppress all that is suppressable in core dumps.
+  -- Except for uniques, as some simplifier phases introduce new varibles that
+  -- have otherwise identical names.
+  , Flag "dsuppress-all"    (NoArg $ do setDynFlag Opt_SuppressCoercions
+                                        setDynFlag Opt_SuppressVarKinds
+                                        setDynFlag Opt_SuppressModulePrefixes
+                                        setDynFlag Opt_SuppressTypeApplications
+                                        setDynFlag Opt_SuppressIdInfo
+                                        setDynFlag Opt_SuppressTypeSignatures)
 
         ------ Debugging ----------------------------------------------------
   , Flag "dstg-stats"     (NoArg (setDynFlag Opt_StgStats))
@@ -1914,7 +1967,7 @@ dynamic_flags = [
   , Flag "ddump-cmm"               (setDumpFlag Opt_D_dump_cmm)
   , Flag "ddump-raw-cmm"           (setDumpFlag Opt_D_dump_raw_cmm)
   , Flag "ddump-cmmz"              (setDumpFlag Opt_D_dump_cmmz)
-  , Flag "ddump-cmmz-cfg"          (setDumpFlag Opt_D_dump_cmmz_cbe)
+  , Flag "ddump-cmmz-cfg"          (setDumpFlag Opt_D_dump_cmmz_cfg)
   , Flag "ddump-cmmz-cbe"          (setDumpFlag Opt_D_dump_cmmz_cbe)
   , Flag "ddump-cmmz-spills"       (setDumpFlag Opt_D_dump_cmmz_spills)
   , Flag "ddump-cmmz-proc"         (setDumpFlag Opt_D_dump_cmmz_proc)
@@ -2044,6 +2097,14 @@ dynamic_flags = [
   , Flag "ffloat-all-lams"             (noArg (\d -> d{ floatLamArgs = Nothing }))
   , Flag "fhistory-size"               (intSuffix (\n d -> d{ historySize = n }))
 
+  , Flag "funfolding-creation-threshold" (intSuffix   (\n d -> d {ufCreationThreshold = n}))
+  , Flag "funfolding-use-threshold"      (intSuffix   (\n d -> d {ufUseThreshold = n}))
+  , Flag "funfolding-fun-discount"       (intSuffix   (\n d -> d {ufFunAppDiscount = n}))
+  , Flag "funfolding-dict-discount"      (intSuffix   (\n d -> d {ufDictDiscount = n}))
+  , Flag "funfolding-keeness-factor"     (floatSuffix (\n d -> d {ufKeenessFactor = n}))
+
+  , Flag "fmax-worker-args" (intSuffix (\n d -> d {maxWorkerArgs = n}))
+
         ------ Profiling ----------------------------------------------------
 
         -- OLD profiling flags
@@ -2080,8 +2141,8 @@ dynamic_flags = [
         ------ Safe Haskell flags -------------------------------------------
   , Flag "fpackage-trust"   (NoArg setPackageTrust)
   , Flag "fno-safe-infer"   (NoArg (setSafeHaskell Sf_None))
-  , Flag "fPIC"             (NoArg setFPIC)
-  , Flag "fno-PIC"          (NoArg unSetFPIC)
+  , Flag "fPIC"             (NoArg (setDynFlag Opt_PIC))
+  , Flag "fno-PIC"          (NoArg (unSetDynFlag Opt_PIC))
  ]
  ++ map (mkFlag turnOn  ""     setDynFlag  ) negatableFlags
  ++ map (mkFlag turnOff "no-"  unSetDynFlag) negatableFlags
@@ -2216,11 +2277,19 @@ negatableFlags = [
 -- | These @-d\<blah\>@ flags can all be reversed with @-dno-\<blah\>@
 dFlags :: [FlagSpec DynFlag]
 dFlags = [
-  ( "ppr-case-as-let",                  Opt_PprCaseAsLet, nop ) ]
+  ( "suppress-coercions",               Opt_SuppressCoercions,          nop),
+  ( "suppress-var-kinds",               Opt_SuppressVarKinds,           nop),
+  ( "suppress-module-prefixes",         Opt_SuppressModulePrefixes,     nop),
+  ( "suppress-type-applications",       Opt_SuppressTypeApplications,   nop),
+  ( "suppress-idinfo",                  Opt_SuppressIdInfo,             nop),
+  ( "suppress-type-signatures",         Opt_SuppressTypeSignatures,     nop),
+  ( "suppress-uniques",                 Opt_SuppressUniques,            nop),
+  ( "ppr-case-as-let",                  Opt_PprCaseAsLet,               nop)]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
 fFlags :: [FlagSpec DynFlag]
 fFlags = [
+  ( "error-spans",                      Opt_ErrorSpans, nop ),
   ( "print-explicit-foralls",           Opt_PrintExplicitForalls, nop ),
   ( "strictness",                       Opt_Strictness, nop ),
   ( "specialise",                       Opt_Specialise, nop ),
@@ -2263,6 +2332,7 @@ fFlags = [
   ( "cmm-sink",                         Opt_CmmSink, nop ),
   ( "cmm-elim-common-blocks",           Opt_CmmElimCommonBlocks, nop ),
   ( "omit-yields",                      Opt_OmitYields, nop ),
+  ( "simple-list-literals",             Opt_SimpleListLiterals, nop ),
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -2276,6 +2346,7 @@ fFlags = [
   ( "prof-count-entries",               Opt_ProfCountEntries, nop ),
   ( "prof-cafs",                        Opt_AutoSccsOnIndividualCafs, nop ),
   ( "hpc",                              Opt_Hpc, nop ),
+  ( "pre-inlining",                     Opt_SimplPreInlining, nop ),
   ( "use-rpaths",                       Opt_RPath, nop )
   ]
 
@@ -2457,6 +2528,7 @@ defaultFlags settings
       Opt_GhciHistory,
       Opt_HelpfulErrors,
       Opt_ProfCountEntries,
+      Opt_SimplPreInlining,
       Opt_RPath
     ]
 
@@ -2471,7 +2543,7 @@ defaultFlags settings
         _ -> [])
 
     ++ (if pc_dYNAMIC_BY_DEFAULT (sPlatformConstants settings)
-        then []
+        then wayDynFlags platform WayDyn
         else [Opt_Static])
 
     where platform = sTargetPlatform settings
@@ -2728,6 +2800,9 @@ sepArg fn = SepArg (upd . fn)
 intSuffix :: (Int -> DynFlags -> DynFlags) -> OptKind (CmdLineP DynFlags)
 intSuffix fn = IntSuffix (\n -> upd (fn n))
 
+floatSuffix :: (Float -> DynFlags -> DynFlags) -> OptKind (CmdLineP DynFlags)
+floatSuffix fn = FloatSuffix (\n -> upd (fn n))
+
 optIntSuffixM :: (Maybe Int -> DynFlags -> DynP DynFlags)
               -> OptKind (CmdLineP DynFlags)
 optIntSuffixM fn = OptIntSuffix (\mi -> updM (fn mi))
@@ -2739,7 +2814,9 @@ setDumpFlag dump_flag = NoArg (setDumpFlag' dump_flag)
 addWay :: Way -> DynP ()
 addWay w = do upd (\dfs -> dfs { ways = w : ways dfs })
               dfs <- liftEwM getCmdLineState
-              wayExtras (targetPlatform dfs) w
+              let platform = targetPlatform dfs
+              wayExtras platform w
+              mapM_ setDynFlag $ wayDynFlags platform w
 
 removeWay :: Way -> DynP ()
 removeWay w = upd (\dfs -> dfs { ways = filter (w /=) (ways dfs) })
@@ -2878,14 +2955,6 @@ setObjTarget l = updM set
      | isObjectTarget (hscTarget dflags)
        = return $ dflags { hscTarget = l }
      | otherwise = return dflags
-
-setFPIC :: DynP ()
-setFPIC = updM set
-    where set dflags = return $ dopt_set dflags Opt_PIC
-
-unSetFPIC :: DynP ()
-unSetFPIC = updM set
-    where set dflags = return $ dopt_unset dflags Opt_PIC
 
 setOptLevel :: Int -> DynFlags -> DynP DynFlags
 setOptLevel n dflags
