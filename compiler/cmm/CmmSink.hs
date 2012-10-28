@@ -178,7 +178,7 @@ cmmSink dflags graph = ofBlockList (g_entry graph) $ sink mapEmpty $ blocks
       drop_if a@(r,rhs,_) live_sets = (should_drop, live_sets')
           where
             should_drop =  conflicts dflags a final_last
-                        || {- not (isSmall rhs) && -} live_in_multi live_sets r
+                        || not (isTrivial rhs) && live_in_multi live_sets r
                         || r `Set.member` live_in_joins
 
             live_sets' | should_drop = live_sets
@@ -205,12 +205,12 @@ isSmall (CmmLit _) = True
 isSmall (CmmMachOp (MO_Add _) [x,y]) = isTrivial x && isTrivial y
 isSmall (CmmRegOff (CmmLocal _) _) = True
 isSmall _ = False
+-}
 
 isTrivial :: CmmExpr -> Bool
 isTrivial (CmmReg (CmmLocal _)) = True
-isTrivial (CmmLit _) = True
+-- isTrivial (CmmLit _) = True
 isTrivial _ = False
--}
 
 --
 -- annotate each node with the set of registers live *after* the node
@@ -365,38 +365,38 @@ tryToInline dflags live node assigs = go usages node [] assigs
   go _usages node _skipped [] = (node, [])
 
   go usages node skipped (a@(l,rhs,_) : rest)
-   | can_inline              = inline_and_discard
-   | False {- isTiny rhs -}  = inline_and_keep
-     --  ^^ seems to make things slightly worse
+   | cannot_inline           = dont_inline
+   | occurs_once             = inline_and_discard
+   | isTrivial rhs           = inline_and_keep
+   | otherwise               = dont_inline
    where
-        inline_and_discard = go usages' node' skipped rest
+        inline_and_discard = go usages' inl_node skipped rest
+          where usages' = foldRegsUsed addUsage usages rhs
 
-        inline_and_keep = (node'', a : rest')
-          where (node'',rest') = go usages' node' (l:skipped) rest
+        dont_inline        = keep node  -- don't inline the assignment, keep it
+        inline_and_keep    = keep inl_node -- inline the assignment, keep it
 
-        can_inline =
-            not (l `elemRegSet` live)
-         && not (skipped `regsUsedIn` rhs)  -- Note [dependent assignments]
-         && okToInline dflags rhs node
-         && lookupUFM usages l == Just 1
+        keep node' = (final_node, a : rest')
+          where (final_node, rest') = go usages' node' (l:skipped) rest
+                usages' = foldRegsUsed (\m r -> addToUFM m r 2) usages rhs
+                -- we must not inline anything that is mentioned in the RHS
+                -- of a binding that we have already skipped, so we set the
+                -- usages of the regs on the RHS to 2.
 
-        usages' = foldRegsUsed addUsage usages rhs
+        cannot_inline = skipped `regsUsedIn` rhs -- Note [dependent assignments]
+                        || l `elem` skipped
+                        || not (okToInline dflags rhs node)
 
-        node' = mapExpDeep inline node
+        occurs_once = not (l `elemRegSet` live)
+                      && lookupUFM usages l == Just 1
+
+        inl_node = mapExpDeep inline node
            where inline (CmmReg    (CmmLocal l'))     | l == l' = rhs
                  inline (CmmRegOff (CmmLocal l') off) | l == l'
                     = cmmOffset dflags rhs off
                     -- re-constant fold after inlining
                  inline (CmmMachOp op args) = cmmMachOpFold dflags op args
                  inline other = other
-
-  go usages node skipped (assig@(l,rhs,_) : rest)
-    = (node', assig : rest')
-    where (node', rest') = go usages' node (l:skipped) rest
-          usages' = foldRegsUsed (\m r -> addToUFM m r 2) usages rhs
-          -- we must not inline anything that is mentioned in the RHS
-          -- of a binding that we have already skipped, so we set the
-          -- usages of the regs on the RHS to 2.
 
 -- Note [dependent assignments]
 --
@@ -416,6 +416,15 @@ tryToInline dflags live node assigs = go usages node [] assigs
 --
 -- For now we do nothing, because this would require putting
 -- everything inside UniqSM.
+--
+-- One more variant of this (#7366):
+--
+--   [ y = e, y = z ]
+--
+-- If we don't want to inline y = e, because y is used many times, we
+-- might still be tempted to inline y = z (because we always inline
+-- trivial rhs's).  But of course we can't, because y is equal to e,
+-- not z.
 
 addUsage :: UniqFM Int -> LocalReg -> UniqFM Int
 addUsage m r = addToUFM_C (+) m r 1
@@ -464,8 +473,8 @@ conflicts dflags (r, rhs, addr) node
   -- foreign call.  See Note [foreign calls clobber GlobalRegs].
   | CmmUnsafeForeignCall{} <- node, anyCallerSavesRegs dflags rhs = True
 
-  -- (5) foreign calls clobber memory, but not heap/stack memory
-  | CmmUnsafeForeignCall{} <- node, AnyMem <- addr                = True
+  -- (5) foreign calls clobber heap: see Note [foreign calls clobber heap]
+  | CmmUnsafeForeignCall{} <- node, memConflicts addr AnyMem      = True
 
   -- (6) native calls clobber any memory
   | CmmCall{} <- node, memConflicts addr AnyMem                   = True
@@ -522,6 +531,21 @@ data AbsMem
 --  functions in Cmm then there might well be reads of heap memory
 --  that was written in the same basic block.  To take advantage of
 --  non-aliasing of heap memory we will have to be more clever.
+
+-- Note [foreign calls clobber]
+--
+-- It is tempting to say that foreign calls clobber only
+-- non-heap/stack memory, but unfortunately we break this invariant in
+-- the RTS.  For example, in stg_catch_retry_frame we call
+-- stmCommitNestedTransaction() which modifies the contents of the
+-- TRec it is passed (this actually caused incorrect code to be
+-- generated).
+--
+-- Since the invariant is true for the majority of foreign calls,
+-- perhaps we ought to have a special annotation for calls that can
+-- modify heap/stack memory.  For now we just use the conservative
+-- definition here.
+
 
 bothMems :: AbsMem -> AbsMem -> AbsMem
 bothMems NoMem    x         = x

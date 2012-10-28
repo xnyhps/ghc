@@ -879,8 +879,8 @@ lookupFlatEqn fam_ty
             , inert_flat_cache = flat_cache
             , inert_cans = IC { inert_funeqs = inert_funeqs } } <- getTcSInerts
        ; return (lookupFamHead solved_funeqs fam_ty `firstJust` 
-                 lookupFamHead flat_cache fam_ty    `firstJust`
-                 lookup_in_inerts inert_funeqs) }
+                 lookup_in_inerts inert_funeqs    `firstJust`
+                 lookupFamHead flat_cache fam_ty) }
   where
     lookup_in_inerts inert_funeqs 
         = case lookupFamHead inert_funeqs fam_ty of
@@ -1017,7 +1017,7 @@ traceFireTcS :: Ct -> SDoc -> TcS ()
 -- Dump a rule-firing trace
 traceFireTcS ct doc 
   = TcS $ \env -> 
-    TcM.ifDOptM Opt_D_dump_cs_trace $ 
+    TcM.whenDOptM Opt_D_dump_cs_trace $ 
     do { n <- TcM.readTcRef (tcs_count env)
        ; let msg = int n <> brackets (int (ctLocDepth (cc_loc ct))) <+> doc
        ; TcM.dumpTcRn msg }

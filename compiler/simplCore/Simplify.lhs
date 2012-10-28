@@ -1585,7 +1585,7 @@ tryRules env rules fn args call_cont
       | otherwise
       = return ()
 
-    log_rule dflags dflag hdr details = liftIO . dumpSDoc dflags dflag "" $
+    log_rule dflags flag hdr details = liftIO . dumpSDoc dflags flag "" $
       sep [text hdr, nest 4 details]
 
 \end{code}
@@ -1796,7 +1796,7 @@ rebuildCase env scrut case_bndr [(_, bndrs, rhs)] cont
           --                            ppr scrut]) $
           tick (CaseElim case_bndr)
         ; env' <- simplNonRecX env case_bndr scrut
-          -- If case_bndr is deads, simplNonRecX will discard
+          -- If case_bndr is dead, simplNonRecX will discard
         ; simplExprF env' rhs cont }
   where
     elim_lifted   -- See Note [Case elimination: lifted case]
