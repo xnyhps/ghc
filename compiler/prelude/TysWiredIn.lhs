@@ -818,9 +818,9 @@ Promoted Booleans
 \begin{code}
 
 boolKindCon, trueTyCon, falseTyCon :: TyCon
-boolKindCon = buildPromotedTyCon boolTyCon
-trueTyCon   = buildPromotedDataCon trueDataCon
-falseTyCon   = buildPromotedDataCon falseDataCon
+boolKindCon = promoteTyCon boolTyCon
+trueTyCon   = promoteDataCon trueDataCon
+falseTyCon  = promoteDataCon falseDataCon
 
 
 boolKind :: Kind
@@ -857,9 +857,9 @@ zeroDataCon  = pcDataCon zeroDataConName [] [] nat1TyCon
 
 
 nat1KindCon, zeroTyCon, succTyCon :: TyCon
-nat1KindCon = buildPromotedTyCon nat1TyCon
-zeroTyCon   = buildPromotedDataCon zeroDataCon
-succTyCon   = buildPromotedDataCon succDataCon
+nat1KindCon = promoteTyCon nat1TyCon
+zeroTyCon   = promoteDataCon zeroDataCon
+succTyCon   = promoteDataCon succDataCon
 
 nat1Ty :: Type
 nat1Ty  = mkTyConApp nat1TyCon []
