@@ -110,7 +110,7 @@ typeNatStage ct
 
   | isWanted ev =
     getEvCt >>= \asmps ->
-    case deepSolve asmps ct of
+    case solveWanted asmps ct of
       Just c  -> do natTrace "solved wanted: " (ppr ct)
                     setEvBind (ctEvId ev) c
                     return Stop
@@ -154,7 +154,7 @@ reExamineWanteds asmps0 newWanted = loop [] (newWanted : given) wanted
   loop solved _ [] = modifyInertTcS (dropSolved solved)
 
   loop solved asmps (w : ws) =
-    case deepSolve (ws ++ asmps) w of
+    case solveWanted (ws ++ asmps) w of
       Just ev -> do natTrace "Solved wanted:" (ppr w)
                     let x = getId w
                     setEvBind x ev
@@ -166,14 +166,20 @@ ppImp qs q = pprWithCommas p qs <+> text "=>" <+> p q
   where p = ppr . ctPred
 
 --------------------------------------------------------------------------------
+
+{- See if the constraint is "obvious" (i.e., it can be solved by an
+axiom with no preconditions). We apply this not only to wanteds, which may
+simply get solved by it, but also to new given and derived constraints.
+Given and dervied constraints that can be solved in this way are ignored
+because they would not be contributing any new information. -}
 solve :: Ct -> Maybe EvTerm
 solve ct = msum $ solveWithAxiom ct : map (`solveWithRule` ct) bRules
 
-deepSolve :: [Ct] -> Ct -> Maybe EvTerm
-deepSolve asmps0 ct = msum [ solve ct
-                           , solveLeq leq ct
-                           , fmap ev (find this (widenAsmps asmps))
-                           ]
+solveWanted :: [Ct] -> Ct -> Maybe EvTerm
+solveWanted asmps0 ct = msum [ solve ct
+                             , solveLeq leq ct
+                             , fmap ev (find this (widenAsmps asmps))
+                             ]
   where
   ev   = ctEvTerm . ctEvidence
   this = sameCt ct
@@ -394,7 +400,7 @@ byAxiom (TPOther ty, TPOther tp3)
 byAxiom _ = Nothing
 
 
--- Construct evidence using a specificaxiom rule.
+-- Construct evidence using a specific axiom rule.
 useRule :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
 useRule ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
   where mk = TcTypeNatCo
@@ -536,7 +542,7 @@ funRule tc = AR
 
 
 {- We get these when a rule fires.  Later, they are converted to
-givens or deried, depending on what we are doing. -}
+givens or derived, depending on what we are doing. -}
 data RuleResult = RuleResult
   { conclusion       :: Eqn     -- what we proved
   , evidence         :: EvTerm  -- proof, given evidence for derived
@@ -730,6 +736,7 @@ The second set are "good" constraints (not obviously contradicting each other).
 interactCt :: Bool -> Ct -> [Ct] -> TcS ([Ct],[Ct])
 interactCt withEv ct asmps0
 
+  -- We are adding a new <= constraint
   | Just _ <- isLeqCt ct =
   let active  = map activate impRules
       -- XXX: We only really need to consider impRules that have
@@ -739,6 +746,7 @@ interactCt withEv ct asmps0
       newWork = interactActiveRules leq active asmps
   in return $ partition isBad $ map toCt newWork
 
+  -- We are adding a function (+,*, etc) equality constraint
   | otherwise =
   let active  = concatMap (`applyAsmp` ct)
               $ funRule typeNatAddTyCon
