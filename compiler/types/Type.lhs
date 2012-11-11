@@ -46,7 +46,6 @@ module Type (
         mkNumLitTy, isNumLitTy,
         mkStrLitTy, isStrLitTy,
         isTyLit,
-        isTypeNatSpecialFunTyCon,
 	
 	-- (Newtypes)
 	newTyConInstRhs, carefullySplitNewType_maybe,
@@ -435,15 +434,6 @@ isStrLitTy _                    = Nothing
 isTyLit :: Type -> Maybe TyLit
 isTyLit (LitTy x) = Just x
 isTyLit _         = Nothing
-
-isTypeNatSpecialFunTyCon :: TyCon -> Bool
-isTypeNatSpecialFunTyCon tc =
-  n == typeNatAddTyFamName ||
-  n == typeNatMulTyFamName ||
-  n == typeNatExpTyFamName ||
-  n == typeNatLeqTyFamName
-  where n = tyConName tc
-
 
 \end{code}
 
