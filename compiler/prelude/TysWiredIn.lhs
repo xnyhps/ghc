@@ -74,6 +74,7 @@ module TysWiredIn (
 
         -- * Type families used to compute at the type level.
         typeNatLeqTyCon, typeNatAddTyCon, typeNatMulTyCon, typeNatExpTyCon,
+        typeNatSubTyCon,
         fromNat1TyCon,
 
         -- * Lifted booleans
@@ -803,6 +804,9 @@ typeNatMulTyCon = mkTypeNatFunTyCon typeNatMulTyFamName
 
 typeNatExpTyCon :: TyCon
 typeNatExpTyCon = mkTypeNatFunTyCon typeNatExpTyFamName
+
+typeNatSubTyCon :: TyCon
+typeNatSubTyCon = mkTypeNatFunTyCon typeNatSubTyFamName
 
 fromNat1TyCon :: TyCon
 fromNat1TyCon = mkSynTyCon fromNat1TyFamName
