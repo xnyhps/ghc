@@ -34,7 +34,7 @@ import Pair     (Pair(..))
 import UniqSet  ( isEmptyUniqSet )
 
 -- From type checker
-import TcTypeNatsRules( bRules, impRules, widenRules
+import TcTypeNatsRules( bRules, iffRules, impRules, widenRules
                       , axAddDef, axMulDef, axExpDef, axLeqDef
                       , natVars, leqRefl, leqTrans, leq0, leqAsym)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
@@ -63,28 +63,29 @@ import TcSMonad ( TcS, emitInsoluble, setEvBind
                 , partCtFamHeadMap
                 , newFlexiTcSTy
                 , tyVarsOfCt
+                , newWantedEvVarNC
+                -- , getDynFlags
                 )
 
 -- From base libraries
 import Data.Maybe ( isNothing, mapMaybe )
 import Data.List  ( sortBy, partition, find )
 import Data.Ord   ( comparing )
-import Control.Monad ( msum, guard, when )
+import Control.Monad ( msum, guard, when, liftM2 )
 import qualified Data.Set as S
 import qualified Data.Map as M
-
 
 {-
 -- Just fore debugging
 import Debug.Trace
-import DynFlags ( tracingDynFlags )
+-- import DynFlags ( tracingDynFlags )
 import Outputable (showSDoc)
 
 pureTrace :: String -> a -> a
 pureTrace x a = if True then trace x a else a
 
 ppsh :: SDoc -> String
-ppsh = showSDoc tracingDynFlags
+ppsh = showSDoc tracingDynFlags   -- tracingDynFlags is gone..
 -}
 
 
@@ -109,15 +110,19 @@ typeNatStage ct
       _      -> checkBad =<< computeNewGivenWork ct
 
   | isWanted ev =
-    getEvCt >>= \asmps ->
-    case solveWanted asmps ct of
-      Just c  -> do natTrace "solved wanted: " (ppr ct)
-                    setEvBind (ctEvId ev) c
-                    return Stop
-      Nothing -> do natTrace "failed to solve wanted: " (ppr ct)
-                    reExamineWanteds asmps ct
-                    checkBad =<< computeNewDerivedWork ct
-
+    do simplified <- solveByIff ct
+       if simplified
+         then do natTrace "solved wanted (by iff): " (ppr ct)
+                 return Stop
+         else
+           getEvCt >>= \asmps ->
+           case solveWanted asmps ct of
+             Just c  -> do natTrace "solved wanted: " (ppr ct)
+                           setEvBind (ctEvId ev) c
+                           return Stop
+             Nothing -> do natTrace "failed to solve wanted: " (ppr ct)
+                           reExamineWanteds asmps ct
+                           checkBad =<< computeNewDerivedWork ct
   | otherwise =
     case solve ct of
       Just _  -> return Stop
@@ -184,6 +189,26 @@ solveWanted asmps0 ct = msum [ solve ct
   ev   = ctEvTerm . ctEvidence
   this = sameCt ct
   (leq,asmps) = makeLeqModel asmps0
+
+{- Try to reformulate the goal in terms of some simpler goals, using
+the given rule. The result indicates if we succeeded. -}
+solveByIff :: Ct -> TcS Bool
+solveByIff ct
+  | CtWanted { ctev_evar = v } <- cc_ev ct
+  , Just (mkEv, gs) <- msum (map tryRule iffRules)
+  =  do (subCts,terms) <- unzip `fmap` mapM (eqnToWanted (cc_loc ct)) gs
+        updWorkListTcS (extendWorkListCts subCts)
+        setEvBind v (mkEv terms)
+        return True
+  | otherwise = return False
+  where
+  tryRule r =
+    do a <- activateBackward r ct
+       tys <- mapM fromTypePat (doneTys a)
+       guard (null (doneArgs a))    -- sanity
+       gs <- mapM (\(_,(x,y)) -> liftM2 (,) (fromTypePat x) (fromTypePat y))
+           $ sortBy (comparing fst) (todoArgs a)
+       return (proof a tys, gs)
 
 
 impossible :: Ct -> Bool
@@ -261,6 +286,11 @@ toTypePat as ty
 toTypePat as ty
   | Just (tc,ts) <- splitTyConApp_maybe ty = tpCon tc (map (toTypePat as) ts)
 toTypePat _ ty  = TPOther ty
+
+-- Fully defined type patterns
+fromTypePat :: TypePat -> Maybe Type
+fromTypePat (TPOther t) = Just t
+fromTypePat _           = Nothing
 
 
 
@@ -500,11 +530,17 @@ activate _ = panic "Tried to activate a non-rule."
 
 {- Try to activate a rule for backward reasoning, by matching
 the conclusion with the given constraint. -}
-activateBackward :: (Bool,CoAxiomRule) -> Ct -> Maybe ActiveRule
+
+{- XXX: We don't really need an `ActiveRule` here, we just need
+the instantiaton and the sub-gols.  See the use of this function
+in `solveByIff` -}
+activateBackward :: CoAxiomRule -> Ct -> Maybe ActiveRule
 activateBackward r ct =
-  do let act = activate r
+  do let act = activate (False,r)
      (su, _) <- byAsmp ct (concl act)
-     return act { doneTys = apSimpSubst su (doneTys act) }
+     return act { doneTys = apSimpSubst su (doneTys act)
+                , todoArgs = [ (n,apSimpSubst su x) | (n,x) <- todoArgs act ]
+                }
 
 
 
@@ -586,6 +622,44 @@ fireRule leq r =
        return (n, ev)
 
 
+
+{- Convert a sub-goal to a constraint.  Also returns an evidence term that
+can be used to refer to the (solution of the) sub-goal.  Usually, this
+term would be just the evidence variable associated with the constrinat.
+However, if the goal was something like `2 ~ x`, then we issue
+the constraint `x ~ 2` (GHC seems to prefer this?), and then the term
+is constructed by applying symmetry to the variable constraint. -}
+
+eqnToWanted :: CtLoc -> Eqn -> TcS (Ct, EvTerm)
+eqnToWanted loc (lhs,rhs)
+  | Just (tc,ts) <- splitTyConApp_maybe lhs =
+      ev False >>= \(w,t) -> return
+      ( CFunEqCan { cc_ev = w , cc_loc = loc
+                  , cc_fun = tc, cc_tyargs = ts, cc_rhs = rhs }, t)
+
+  | Just x <- getTyVar_maybe lhs =
+      ev False >>= \(w,t) -> return
+      ( CTyEqCan { cc_ev = w, cc_loc = loc, cc_tyvar = x, cc_rhs = rhs }, t )
+
+  | Just x <- getTyVar_maybe rhs =
+      ev True >>= \(w,t) -> return
+      ( CTyEqCan { cc_ev = w, cc_loc = loc, cc_tyvar = x, cc_rhs = lhs }, t)
+
+  -- The only possibility here is something like: 2 ~ 3
+  -- which means we've detected an error!
+  | otherwise =
+    ev False >>= \(w,t) -> return
+      (mkNonCanonical loc w, t)
+
+  where
+  ev swap =
+    do let ty = if swap then mkTcEqPred rhs lhs else mkTcEqPred lhs rhs
+       w <- newWantedEvVarNC ty
+       let t = EvId (ctev_evar w)
+       let term = if swap then EvCoercion $ mkTcSymCo $ evTermCoercion t
+                          else t
+       return (w, term)
+
 eqnToCt :: CtLoc -> Eqn -> Maybe EvTerm -> Ct
 eqnToCt loc (lhs,rhs) evt
   | Just (tc,ts) <- splitTyConApp_maybe lhs =
@@ -603,14 +677,14 @@ eqnToCt loc (lhs,rhs) evt
   | otherwise = mkNonCanonical loc (ev False)
 
   where
-  ty = mkTcEqPred lhs rhs
+  ty swap = if swap then mkTcEqPred rhs lhs else mkTcEqPred lhs rhs
 
   ev swap =
     case evt of
-      Nothing -> CtDerived { ctev_pred = ty }
+      Nothing -> CtDerived { ctev_pred = ty swap }
 
       Just t  -> CtGiven
-        { ctev_pred = ty
+        { ctev_pred = ty swap
         , ctev_evtm = if swap then EvCoercion $ mkTcSymCo $ evTermCoercion t
                               else t
         }
@@ -1078,6 +1152,8 @@ makeLeqModel = foldr add (noLeqFacts,[])
     , Just ev      <- ctEvTermMaybe ct
     , LeqAdded m1  <- addFact ev t1 t2 m = (m1, rest)
   add ct (m,rest)                        = (m, ct : rest)
+
+--------------------------------------------------------------------------------
 
 
 -- | Is this a `FromNat1 x ~ y` constraint?

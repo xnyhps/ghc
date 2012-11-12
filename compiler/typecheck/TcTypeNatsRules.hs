@@ -14,6 +14,7 @@ import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
                   , typeNatLeqTyCon
+                  , typeNatSubTyCon
                   , trueTy, falseTy
                   , nat1Kind, zeroTy
                   , fromNat1TyCon
@@ -61,6 +62,9 @@ mkExp a b = mkTyConApp typeNatExpTyCon [a,b]
 
 mkLeq :: Type -> Type -> Type
 mkLeq a b = mkTyConApp typeNatLeqTyCon [a,b]
+
+mkSub :: Type -> Type -> Type
+mkSub a b = mkTyConApp typeNatSubTyCon [a,b]
 
 mkFromNat1 :: Type -> Type
 mkFromNat1 a = mkTyConApp fromNat1TyCon [a]
@@ -112,7 +116,7 @@ bRules =
   , bRule 14 "Mul1L" (mkMul n1 a === a)
   , bRule 15 "Mul1R" (mkMul a n1 === a)
 
-  -- TnExp0L:  (1 <= n) <= 0 ^ n ~ 0
+  -- TnExp0L:  (1 <= n) => 0 ^ n ~ 0
   , bRule 17 "TnExp0R" (mkExp a n0 === n1)
   , bRule 18 "TnExp1L" (mkExp n1 a === n1)
   , bRule 19 "TnExp1R" (mkExp a n1 === a)
@@ -240,6 +244,13 @@ widenRules =
   n0 = mkNumLitTy 0
   n1 = mkNumLitTy 1
   n2 = mkNumLitTy 2
+
+iffRules :: [CoAxiomRule]
+iffRules =
+  [ mkAx 65 "SubDef" (take 3 natVars) [ mkAdd a b === c ] (mkSub c b === a)
+  ]
+  where
+  a : b : c : _ = map mkTyVarTy natVars
 
 
 
