@@ -25,6 +25,7 @@ import Type     ( Type, isNumLitTy, getTyVar_maybe, isTyVarTy, mkNumLitTy
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
+                  , typeNatLeqTyCon
                   , trueTy, falseTy
                   , nat1Kind, succTy
                   )
@@ -36,7 +37,8 @@ import UniqSet  ( isEmptyUniqSet )
 -- From type checker
 import TcTypeNatsRules( bRules, iffRules, impRules, widenRules
                       , axAddDef, axMulDef, axExpDef, axLeqDef
-                      , natVars, leqRefl, leqTrans, leq0, leqAsym)
+                      , natVars, boolVars
+                      , leqRefl, leqTrans, leq0, leqAsym)
 import TcTypeNatsEval ( minus, divide, logExact, rootExact )
 import TcCanonical( StopOrContinue(..) )
 import TcRnTypes  ( Ct(..), isGiven, isWanted, ctEvidence, ctEvId
@@ -573,7 +575,10 @@ funRule tc = AR
                 , (1, (TPCon tc [ TPVar a, TPVar b], TPVar c2)) ]
   , concl     = (TPVar c1, TPVar c2)
   }
-  where a : b : c1 : c2 : _ = natVars
+  where a : b : c1 : c2 : _
+           | tyConName tc == typeNatLeqTyFamName
+                       = take 2 natVars ++ drop 2 boolVars
+           | otherwise = natVars
 
 
 
@@ -826,6 +831,7 @@ interactCt withEv ct asmps0
               $ funRule typeNatAddTyCon
               : funRule typeNatMulTyCon
               : funRule typeNatExpTyCon
+              : funRule typeNatLeqTyCon
               : map activate (widenRules ++ impRules)
 
       (leq, asmps) = makeLeqModel asmps0

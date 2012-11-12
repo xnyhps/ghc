@@ -15,7 +15,7 @@ import TysWiredIn ( typeNatAddTyCon
                   , typeNatExpTyCon
                   , typeNatLeqTyCon
                   , typeNatSubTyCon
-                  , trueTy, falseTy
+                  , boolKind, trueTy, falseTy
                   , nat1Kind, zeroTy
                   , fromNat1TyCon
                   )
@@ -71,6 +71,9 @@ mkFromNat1 a = mkTyConApp fromNat1TyCon [a]
 
 natVars :: [TyVar]
 natVars = tyVarList typeNatKind
+
+boolVars :: [TyVar]
+boolVars = tyVarList boolKind
 
 nat1Vars :: [TyVar]
 nat1Vars = tyVarList nat1Kind
