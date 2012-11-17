@@ -711,6 +711,9 @@ zonkExpr env (HsWrap co_fn expr)
 zonkExpr _ HsHole
   = return HsHole
 
+zonkExpr _ (HsUnboundVar v)
+  = return (HsUnboundVar v)
+
 zonkExpr _ expr = pprPanic "zonkExpr" (ppr expr)
 
 -------------------------------------------------------------------------

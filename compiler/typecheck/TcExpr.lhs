@@ -137,11 +137,9 @@ tcInfExpr e             = tcInfer (tcExpr e)
 
 tcHole :: FastString -> TcRhoType -> CtOrigin -> TcM (HsExpr TcId)
 tcHole nm res_ty origin = do { ty <- newFlexiTyVarTy liftedTypeKind
-      ; traceTc "tcExpr.HsHole" (ppr ty)
       ; ev <- mkSysLocalM nm ty
       ; loc <- getCtLoc origin
       ; let can = CHoleCan { cc_ev = CtWanted ty ev, cc_loc = loc }
-      ; traceTc "tcExpr.HsHole emitting" (ppr can)
       ; emitInsoluble can
       ; tcWrapResult (HsVar ev) ty res_ty }
 \end{code}
