@@ -1519,6 +1519,7 @@ data CtOrigin
   | AnnOrigin           -- An annotation
   | FunDepOrigin
   | HoleOrigin
+  | UnboundOccurrenceOf RdrName
 
 pprO :: CtOrigin -> SDoc
 pprO (GivenOrigin sk)      = ppr sk
@@ -1550,7 +1551,8 @@ pprO (TypeEqOrigin t1 t2)  = ptext (sLit "a type equality") <+> sep [ppr t1, cha
 pprO (KindEqOrigin t1 t2 _) = ptext (sLit "a kind equality arising from") <+> sep [ppr t1, char '~', ppr t2]
 pprO AnnOrigin             = ptext (sLit "an annotation")
 pprO FunDepOrigin          = ptext (sLit "a functional dependency")
-pprO HoleOrigin            = ptext (sLit "a use of the hole") <+> quotes (ptext $ sLit "_")
+pprO HoleOrigin            = ptext (sLit "a use of") <+> quotes (ptext $ sLit "_")
+pprO (UnboundOccurrenceOf name) = hsep [ptext (sLit "an undeclared identifier"), quotes (ppr name)]
 
 instance Outputable CtOrigin where
   ppr = pprO

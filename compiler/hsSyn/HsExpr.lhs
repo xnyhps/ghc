@@ -21,6 +21,7 @@ import HsBinds
 import TcEvidence
 import CoreSyn
 import Var
+import RdrName
 import Name
 import BasicTypes
 import DataCon
@@ -310,6 +311,7 @@ data HsExpr id
   |  HsWrap     HsWrapper    -- TRANSLATION
                 (HsExpr id)
   |  HsHole
+  |  HsUnboundVar RdrName
   deriving (Data, Typeable)
 
 -- HsTupArg is used for tuple sections
@@ -577,6 +579,8 @@ ppr_expr (HsArrForm op _ args)
          4 (sep (map (pprCmdArg.unLoc) args) <+> ptext (sLit "|)"))
 ppr_expr HsHole
   = ptext $ sLit "_"
+ppr_expr (HsUnboundVar nm)
+  = ppr nm
 
 \end{code}
 

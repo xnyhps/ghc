@@ -218,6 +218,7 @@ dsExpr (HsApp fun arg)
   = mkCoreAppDs <$> dsLExpr fun <*>  dsLExpr arg
 
 dsExpr HsHole = panic "dsExpr: HsHole"
+dsExpr (HsUnboundVar _) = panic "dsExpr: HsUnboundVar"
 \end{code}
 
 Note [Desugaring vars]

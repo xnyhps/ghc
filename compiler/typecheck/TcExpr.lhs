@@ -43,6 +43,7 @@ import TcType
 import DsMonad hiding (Splice)
 import Id
 import DataCon
+import RdrName
 import Name
 import TyCon
 import Type
@@ -133,6 +134,16 @@ tcInfExpr (HsPar e) 	= do { (e', ty) <- tcInferRhoNC e
                              ; return (HsPar e', ty) }
 tcInfExpr (HsApp e1 e2) = tcInferApp e1 [e2]                                  
 tcInfExpr e             = tcInfer (tcExpr e)
+
+tcHole :: FastString -> TcRhoType -> CtOrigin -> TcM (HsExpr TcId)
+tcHole nm res_ty origin = do { ty <- newFlexiTyVarTy liftedTypeKind
+      ; traceTc "tcExpr.HsHole" (ppr ty)
+      ; ev <- mkSysLocalM nm ty
+      ; loc <- getCtLoc origin
+      ; let can = CHoleCan { cc_ev = CtWanted ty ev, cc_loc = loc }
+      ; traceTc "tcExpr.HsHole emitting" (ppr can)
+      ; emitInsoluble can
+      ; tcWrapResult (HsVar ev) ty res_ty }
 \end{code}
 
 
@@ -232,14 +243,9 @@ tcExpr (HsType ty) _
 	-- Can't eliminate it altogether from the parser, because the
 	-- same parser parses *patterns*.
 tcExpr HsHole res_ty
-  = do { ty <- newFlexiTyVarTy liftedTypeKind
-      ; traceTc "tcExpr.HsHole" (ppr ty)
-      ; ev <- mkSysLocalM (mkFastString "_") ty
-      ; loc <- getCtLoc HoleOrigin
-      ; let can = CHoleCan { cc_ev = CtWanted ty ev, cc_loc = loc }
-      ; traceTc "tcExpr.HsHole emitting" (ppr can)
-      ; emitInsoluble can
-      ; tcWrapResult (HsVar ev) ty res_ty }
+  = tcHole (fsLit "_") res_ty HoleOrigin
+tcExpr (HsUnboundVar v) res_ty
+  = tcHole (occNameFS $ rdrNameOcc v) res_ty (UnboundOccurrenceOf v)
 \end{code}
 
 

@@ -475,16 +475,16 @@ mkHoleError :: ReportErrCtxt -> Ct -> TcM ErrMsg
 mkHoleError ctxt ct@(CHoleCan {})
   = do { let tyvars = varSetElems (tyVarsOfCt ct)
              tyvars_msg = map loc_msg tyvars
-             msg = (text "Found hole" <+> quotes (text "_") 
-                    <+> text "with type") <+> pprType (ctEvPred (cc_ev ct))
-                   $$ (if null tyvars_msg then empty else text "Where:" <+> vcat tyvars_msg)
+             msg = ptext (sLit "Found hole with type:") <+> quotes (pprType (ctEvPred (cc_ev ct)))
+                   $$ (ptext (sLit "Arising from:") <+> sep [(ppr $ ctl_origin $ cc_loc ct), (ptext (sLit "at")) <+> ppr (tcl_loc $ ctl_env $ cc_loc ct)])
+                   $$ (if null tyvars_msg then empty else ptext (sLit "Where:") <+> vcat tyvars_msg)
        ; (ctxt, binds_doc) <- relevantBindings ctxt ct
        ; mkErrorMsg ctxt ct (msg $$ binds_doc) }
   where
     loc_msg tv 
        = case tcTyVarDetails tv of
           SkolemTv {} -> quotes (ppr tv) <+> skol_msg
-          MetaTv {}   -> quotes (ppr tv) <+> text "is an ambiguous type variable"
+          MetaTv {}   -> quotes (ppr tv) <+> ptext (sLit "is an ambiguous type variable")
           det -> pprTcTyVarDetails det
        where 
           skol_msg = pprSkol (getSkolemInfo (cec_encl ctxt) tv) (getSrcLoc tv)
