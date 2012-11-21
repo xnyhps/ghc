@@ -109,15 +109,12 @@ finishHsVar name
 
 rnExpr (HsVar v)
   = do { opt_TypeHoles <- xoptM Opt_TypeHoles
-       ; if not opt_TypeHoles || ((headFS $ occNameFS $ rdrNameOcc v) /= '_')
+       ; if not opt_TypeHoles || headFS (occNameFS (rdrNameOcc v)) /= '_'
          then do { name <- lookupOccRn v
                  ; finishHsVar name
                  }
          else do { maybe_name <- lookupOccRn_maybe v
-                 ; traceRn (text "rnExpr" <+> ppr maybe_name)
-                 ; case (maybe_name) of
-                        (Just name) -> finishHsVar name
-                        (Nothing)   -> return (HsUnboundVar v, emptyFVs)
+                 ; maybe (return (HsUnboundVar v, emptyFVs)) finishHsVar maybe_name
                  }
        }
 
