@@ -52,7 +52,7 @@
 #     * For each package:
 #	    o configure, generate package-data.mk and inplace-pkg-info
 #           o register each package into inplace/lib/package.conf
-#     * build libffi
+#     * build libffi (if not disabled by --with-system-libffi)
 #     * With bootstrapping compiler:
 #	    o Build libraries/{filepath,hpc,Cabal}
 #           o Build compiler (stage 1)
@@ -662,6 +662,7 @@ BUILD_DIRS += \
    $(MAYBE_COMPILER) \
    $(GHC_HSC2HS_DIR) \
    $(GHC_PKG_DIR) \
+   utils/deriveConstants \
    utils/testremove \
    $(MAYBE_GHCTAGS) \
    utils/ghc-pwd \
@@ -838,7 +839,7 @@ define installLibsTo
 		    $(RANLIB) $2/`basename $$i` ;; \
 		  *.dll) \
 		    $(call INSTALL_PROGRAM,$(INSTALL_OPTS),$$i,$2) ; \
-		    $(STRIP_CMD) $2/$$i ;; \
+		    $(STRIP_CMD) $2/`basename $$i` ;; \
 		  *.so) \
 		    $(call INSTALL_SHLIB,$(INSTALL_OPTS),$$i,$2) ;; \
 		  *.dylib) \
@@ -1043,6 +1044,7 @@ unix-binary-dist-prep:
 	echo "BUILD_DOCBOOK_PDF  = $(BUILD_DOCBOOK_PDF)"  >> $(BIN_DIST_MK)
 	echo "BUILD_MAN          = $(BUILD_MAN)"          >> $(BIN_DIST_MK)
 	echo "GHC_CABAL_INPLACE  = utils/ghc-cabal/dist-install/build/tmp/ghc-cabal-bindist" >> $(BIN_DIST_MK)
+	echo "UseSystemLibFFI    = $(UseSystemLibFFI)"    >> $(BIN_DIST_MK)
 	cd $(BIN_DIST_PREP_DIR) && autoreconf
 	$(call removeFiles,$(BIN_DIST_PREP_TAR))
 # h means "follow symlinks", e.g. if aclocal.m4 is a symlink to a source
@@ -1294,6 +1296,7 @@ distclean : clean
 	$(call removeFiles,libraries/unix/include/HsUnixConfig.h)
 	$(call removeFiles,libraries/old-time/include/HsTimeConfig.h)
 	$(call removeTrees,utils/ghc-pwd/dist-boot)
+	$(call removeTrees,includes/dist-derivedconstants)
 	$(call removeTrees,inplace)
 	$(call removeTrees,$(patsubst %, libraries/%/autom4te.cache, $(PACKAGES_STAGE1) $(PACKAGES_STAGE2)))
 

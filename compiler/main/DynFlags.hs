@@ -1248,7 +1248,7 @@ defaultDynFlags mySettings =
       }
 
 defaultWays :: Settings -> [Way]
-defaultWays settings = if pc_dYNAMIC_BY_DEFAULT (sPlatformConstants settings)
+defaultWays settings = if pc_DYNAMIC_BY_DEFAULT (sPlatformConstants settings)
                        then [WayDyn]
                        else []
 
@@ -1573,7 +1573,7 @@ parseDynLibLoaderMode f d =
  case splitAt 8 f of
    ("deploy", "")       -> d{ dynLibLoader = Deployable }
    ("sysdep", "")       -> d{ dynLibLoader = SystemDependent }
-   _                    -> ghcError (CmdLineError ("Unknown dynlib loader: " ++ f))
+   _                    -> throwGhcException (CmdLineError ("Unknown dynlib loader: " ++ f))
 
 setDumpPrefixForce f d = d { dumpPrefixForce = f}
 
@@ -1728,7 +1728,7 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
 
   let ((leftover, errs, warns), dflags1)
           = runCmdLine (processArgs activeFlags args') dflags0
-  when (not (null errs)) $ ghcError $ errorsToGhcException errs
+  when (not (null errs)) $ throwGhcException $ errorsToGhcException errs
 
   -- check for disabled flags in safe haskell
   let (dflags2, sh_warns) = safeFlagCheck cmdline dflags1
@@ -1742,7 +1742,7 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
                 }
 
   unless (allowed_combination theWays) $
-      ghcError (CmdLineError ("combination not supported: "  ++
+      throwGhcException (CmdLineError ("combination not supported: "  ++
                               intercalate "/" (map wayDesc theWays)))
 
   let (dflags4, consistency_warnings) = makeDynFlagsConsistent dflags3
@@ -2571,7 +2571,7 @@ defaultFlags settings
 
     ++ default_PIC platform
 
-    ++ (if pc_dYNAMIC_BY_DEFAULT (sPlatformConstants settings)
+    ++ (if pc_DYNAMIC_BY_DEFAULT (sPlatformConstants settings)
         then wayGeneralFlags platform WayDyn
         else [Opt_Static])
 
@@ -3273,7 +3273,7 @@ makeDynFlagsConsistent dflags
       then let dflags' = dflags { hscTarget = HscAsm }
                warn = "Using native code generator rather than LLVM, as LLVM is incompatible with -fPIC and -dynamic on this platform"
            in loop dflags' warn
-      else ghcError $ CmdLineError "Can't use -fPIC or -dynamic on this platform"
+      else throwGhcException $ CmdLineError "Can't use -fPIC or -dynamic on this platform"
  | os == OSDarwin &&
    arch == ArchX86_64 &&
    not (gopt Opt_PIC dflags)

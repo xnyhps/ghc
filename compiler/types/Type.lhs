@@ -160,14 +160,8 @@ import Class
 import TyCon
 import TysPrim
 import {-# SOURCE #-} TysWiredIn ( eqTyCon, mkBoxedTupleTy )
-import PrelNames( eqTyConKey, ipClassNameKey
-                , typeNatAddTyFamName
-                , typeNatMulTyFamName
-                , typeNatExpTyFamName
-                , typeNatLeqTyFamName
-                )
-
-
+import PrelNames ( eqTyConKey, ipClassNameKey, 
+                   constraintKindTyConKey, liftedTypeKindTyConKey )
 
 -- others
 import Name             ( Name )
@@ -823,6 +817,8 @@ applyTys :: Type -> [KindOrType] -> Type
 -- This term should have type (Int -> Int), but notice that
 -- there are more type args than foralls in 'undefined's type.
 
+-- If you edit this function, you may need to update the GHC formalism
+-- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
 applyTys ty args = applyTysD empty ty args
 
 applyTysD :: SDoc -> Type -> [Type] -> Type	-- Debug version
@@ -863,7 +859,7 @@ noParenPred p = not (isIPPred p) && isClassPred p || isEqPred p
 isPredTy :: Type -> Bool
 isPredTy ty
   | isSuperKind ty = False
-  | otherwise = typeKind ty `eqKind` constraintKind
+  | otherwise = isConstraintKind (typeKind ty)
 
 isKindTy :: Type -> Bool
 isKindTy = isSuperKind . typeKind
@@ -1251,7 +1247,7 @@ cmpTypeX env (ForAllTy tv1 t1)   (ForAllTy tv2 t2)   = cmpTypeX env (tyVarKind t
                                                        `thenCmp` cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
 cmpTypeX env (AppTy s1 t1)       (AppTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
 cmpTypeX env (FunTy s1 t1)       (FunTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
-cmpTypeX env (TyConApp tc1 tys1) (TyConApp tc2 tys2) = (tc1 `compare` tc2) `thenCmp` cmpTypesX env tys1 tys2
+cmpTypeX env (TyConApp tc1 tys1) (TyConApp tc2 tys2) = (tc1 `cmpTc` tc2) `thenCmp` cmpTypesX env tys1 tys2
 cmpTypeX _   (LitTy l1)          (LitTy l2)          = compare l1 l2
 
     -- Deal with the rest: TyVarTy < AppTy < FunTy < LitTy < TyConApp < ForAllTy < PredTy
@@ -1283,6 +1279,17 @@ cmpTypesX _   []        []        = EQ
 cmpTypesX env (t1:tys1) (t2:tys2) = cmpTypeX env t1 t2 `thenCmp` cmpTypesX env tys1 tys2
 cmpTypesX _   []        _         = LT
 cmpTypesX _   _         []        = GT
+
+-------------
+cmpTc :: TyCon -> TyCon -> Ordering
+-- Here we treat * and Constraint as equal
+-- See Note [Kind Constraint and kind *] in Kinds.lhs
+cmpTc tc1 tc2 = nu1 `compare` nu2
+  where
+    u1  = tyConUnique tc1
+    nu1 = if u1==constraintKindTyConKey then liftedTypeKindTyConKey else u1
+    u2  = tyConUnique tc2
+    nu2 = if u2==constraintKindTyConKey then liftedTypeKindTyConKey else u2
 \end{code}
 
 Note [cmpTypeX]

@@ -430,7 +430,7 @@ compileFile :: HscEnv -> Phase -> (FilePath, Maybe Phase) -> IO FilePath
 compileFile hsc_env stop_phase (src, mb_phase) = do
    exists <- doesFileExist src
    when (not exists) $
-        ghcError (CmdLineError ("does not exist: " ++ src))
+        throwGhcException (CmdLineError ("does not exist: " ++ src))
 
    let
         dflags = hsc_dflags hsc_env
@@ -526,7 +526,7 @@ runPipeline stop_phase hsc_env0 (input_fn, mb_phase)
   -- before B in a normal compilation pipeline.
 
   when (not (start_phase `happensBefore` stop_phase)) $
-        ghcError (UsageError
+        throwGhcException (UsageError
                     ("cannot compile this file to desired target: "
                        ++ input_fn))
 
@@ -1813,7 +1813,7 @@ linkBinary dflags o_files dep_packages = do
     -- parallel only: move binary to another dir -- HWL
     success <- runPhase_MoveBinary dflags output_fn
     if success then return ()
-               else ghcError (InstallationError ("cannot move binary"))
+               else throwGhcException (InstallationError ("cannot move binary"))
 
 
 exeFileName :: DynFlags -> FilePath
@@ -1955,6 +1955,7 @@ hsSourceCppOpts =
 joinObjectFiles :: DynFlags -> [FilePath] -> FilePath -> IO ()
 joinObjectFiles dflags o_files output_fn = do
   let mySettings = settings dflags
+      ldIsGnuLd = sLdIsGnuLd mySettings
       ld_r args = SysTools.runLink dflags ([
                             SysTools.Option "-nostdlib",
                             SysTools.Option "-nodefaultlibs",
@@ -1964,6 +1965,7 @@ joinObjectFiles dflags o_files output_fn = do
                             -- -r and --relax are incompatible for ld, so
                             -- disable --relax explicitly.
                          ++ (if platformArch (targetPlatform dflags) == ArchSPARC
+                             && ldIsGnuLd
                                 then [SysTools.Option "-Wl,-no-relax"]
                                 else [])
                          ++ map SysTools.Option ld_build_id
@@ -1977,7 +1979,7 @@ joinObjectFiles dflags o_files output_fn = do
       ld_build_id | sLdSupportsBuildId mySettings = ["-Wl,--build-id=none"]
                   | otherwise                     = []
 
-  if sLdIsGnuLd mySettings
+  if ldIsGnuLd
      then do
           script <- newTempName dflags "ldscript"
           writeFile script $ "INPUT(" ++ unwords o_files ++ ")"

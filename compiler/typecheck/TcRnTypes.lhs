@@ -1,5 +1,5 @@
 
-% (c) The University of Glasgow 2006
+% (c) The University of Glasgow 2006-2012
 % (c) The GRASP Project, Glasgow University, 1992-2002
 %
 
@@ -233,14 +233,9 @@ data TcGblEnv
           -- things bound in this module. Also store Safe Haskell info
           -- here about transative trusted packaage requirements.
 
-        tcg_dus :: DefUses,
-          -- ^ What is defined in this module and what is used.
-          -- The latter is used to generate
-          --
-          --  (a) version tracking; no need to recompile if these things have
-          --      not changed version stamp
-          --
-          --  (b) unused-import info
+        tcg_dus :: DefUses,   -- ^ What is defined in this module and what is used.
+        tcg_used_rdrnames :: TcRef (Set RdrName),
+          -- See Note [Tracking unused binding and imports]
 
         tcg_keep :: TcRef NameSet,
           -- ^ Locally-defined top-level names to keep alive.
@@ -286,10 +281,6 @@ data TcGblEnv
         tcg_rn_imports :: [LImportDecl Name],
                 -- Keep the renamed imports regardless.  They are not
                 -- voluminous and are needed if you want to report unused imports
-
-        tcg_used_rdrnames :: TcRef (Set RdrName),
-                -- The set of used *imported* (not locally-defined) RdrNames
-                -- Used only to report unused import declarations
 
         tcg_rn_decls :: Maybe (HsGroup Name),
           -- ^ Renamed decls, maybe.  @Nothing@ <=> Don't retain renamed
@@ -338,6 +329,29 @@ data RecFieldEnv
         -- module.  For imported modules, we get the same info from the
         -- TypeEnv
 \end{code}
+
+Note [Tracking unused binding and imports]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We gather two sorts of usage information
+ * tcg_dus (defs/uses)
+      Records *defined* Names (local, top-level)
+          and *used*    Names (local or imported)
+
+      Used (a) to report "defined but not used"
+               (see RnNames.reportUnusedNames)
+           (b) to generate version-tracking usage info in interface
+               files (see MkIface.mkUsedNames)
+   This usage info is mainly gathered by the renamer's 
+   gathering of free-variables
+
+ * tcg_used_rdrnames
+      Records used *imported* (not locally-defined) RdrNames
+      Used only to report unused import declarations
+      Notice that they are RdrNames, not Names, so we can
+      tell whether the reference was qualified or unqualified, which
+      is esssential in deciding whether a particular import decl 
+      is unnecessary.  This info isn't present in Names.
+
 
 %************************************************************************
 %*                                                                      *
@@ -591,6 +605,7 @@ data PromotionErr
 
   | RecDataConPE     -- Data constructor in a reuursive loop
                      -- See Note [ARecDataCon: recusion and promoting data constructors] in TcTyClsDecls
+  | NoDataKinds      -- -XDataKinds not enabled
 
 instance Outputable TcTyThing where     -- Debugging only
    ppr (AGlobal g)      = pprTyThing g
@@ -608,6 +623,7 @@ instance Outputable PromotionErr where
   ppr TyConPE      = text "TyConPE"
   ppr FamDataConPE = text "FamDataConPE"
   ppr RecDataConPE = text "RecDataConPE"
+  ppr NoDataKinds  = text "NoDataKinds"
 
 pprTcTyThingCategory :: TcTyThing -> SDoc
 pprTcTyThingCategory (AGlobal thing)    = pprTyThingCategory thing
@@ -621,6 +637,7 @@ pprPECategory ClassPE      = ptext (sLit "Class")
 pprPECategory TyConPE      = ptext (sLit "Type constructor")
 pprPECategory FamDataConPE = ptext (sLit "Data constructor")
 pprPECategory RecDataConPE = ptext (sLit "Data constructor")
+pprPECategory NoDataKinds  = ptext (sLit "Data constructor")
 \end{code}
 
 
@@ -781,7 +798,7 @@ emptyImportAvails = ImportAvails { imp_mods          = emptyModuleEnv,
 -- | Union two ImportAvails
 --
 -- This function is a key part of Import handling, basically
--- for each import we create a seperate ImportAvails structure
+-- for each import we create a separate ImportAvails structure
 -- and then union them all together with this function.
 plusImportAvails ::  ImportAvails ->  ImportAvails ->  ImportAvails
 plusImportAvails

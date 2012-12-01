@@ -28,6 +28,16 @@ ifneq "$(BINDIST)" "YES"
 compiler/stage1/package-data.mk : compiler/stage1/build/Config.hs
 compiler/stage2/package-data.mk : compiler/stage2/build/Config.hs
 compiler/stage3/package-data.mk : compiler/stage3/build/Config.hs
+
+compiler/stage1/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_TYPE)
+compiler/stage2/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_TYPE)
+compiler/stage3/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_TYPE)
+compiler/stage1/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_EXPORTS)
+compiler/stage2/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_EXPORTS)
+compiler/stage3/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_EXPORTS)
+compiler/stage1/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_WRAPPERS)
+compiler/stage2/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_WRAPPERS)
+compiler/stage3/build/DynFlags.o: $(includes_GHCCONSTANTS_HASKELL_WRAPPERS)
 endif
 
 compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
@@ -230,6 +240,7 @@ PRIMOP_BITS_NAMES = primop-data-decl.hs-incl        \
                     primop-code-size.hs-incl        \
                     primop-can-fail.hs-incl         \
                     primop-strictness.hs-incl       \
+                    primop-fixity.hs-incl       \
                     primop-primop-info.hs-incl
 
 PRIMOP_BITS_STAGE1 = $(addprefix compiler/stage1/build/,$(PRIMOP_BITS_NAMES))
@@ -266,6 +277,8 @@ compiler/stage$1/build/primop-can-fail.hs-incl: compiler/stage$1/build/primops.t
 	"$$(GENPRIMOP_INPLACE)" --can-fail           < $$< > $$@
 compiler/stage$1/build/primop-strictness.hs-incl: compiler/stage$1/build/primops.txt $$(GENPRIMOP_INPLACE)
 	"$$(GENPRIMOP_INPLACE)" --strictness         < $$< > $$@
+compiler/stage$1/build/primop-fixity.hs-incl: compiler/stage$1/build/primops.txt $$(GENPRIMOP_INPLACE)
+	"$$(GENPRIMOP_INPLACE)" --fixity             < $$< > $$@
 compiler/stage$1/build/primop-primop-info.hs-incl: compiler/stage$1/build/primops.txt $$(GENPRIMOP_INPLACE)
 	"$$(GENPRIMOP_INPLACE)" --primop-primop-info < $$< > $$@
 
@@ -487,7 +500,10 @@ $(foreach way,$$(compiler_stage3_WAYS),\
 compiler/prelude/PrimOp_HC_OPTS  += -fforce-recomp
 
 # LibFFI.hs #includes ffi.h
+ifneq "$(UseSystemLibFFI)" "YES"
 compiler/stage2/build/LibFFI.hs : $(libffi_HEADERS)
+endif
+
 # On Windows it seems we also need to link directly to libffi
 ifeq "$(HostOS_CPP)" "mingw32"
 define windowsDynLinkToFfi

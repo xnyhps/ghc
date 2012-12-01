@@ -38,6 +38,7 @@ import TcRnMonad
 import Constants
 import PrelNames
 import PrelInfo
+import PrimOp   ( allThePrimOps, primOpFixity, primOpOcc )
 import MkId     ( seqId )
 import Rules
 import Annotations
@@ -165,7 +166,7 @@ loadInterfaceWithException doc mod_name where_from
   = do  { mb_iface <- loadInterface doc mod_name where_from
         ; dflags <- getDynFlags
         ; case mb_iface of 
-            Failed err      -> ghcError (ProgramError (showSDoc dflags err))
+            Failed err      -> throwGhcException (ProgramError (showSDoc dflags err))
             Succeeded iface -> return iface }
 
 ------------------
@@ -604,8 +605,9 @@ ghcPrimIface
         mi_fix_fn  = mkIfaceFixCache fixities
     }           
   where
-    fixities = [(getOccName seqId, Fixity 0 InfixR)]
-                        -- seq is infixr 0
+    fixities = (getOccName seqId, Fixity 0 InfixR)  -- seq is infixr 0
+             : mapMaybe mkFixity allThePrimOps
+    mkFixity op = (,) (primOpOcc op) <$> primOpFixity op
 \end{code}
 
 %*********************************************************
