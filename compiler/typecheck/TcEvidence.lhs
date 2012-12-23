@@ -22,7 +22,7 @@ module TcEvidence (
   -- TcCoercion
   TcCoercion(..), LeftOrRight(..), pickLR,
   mkTcReflCo, mkTcTyConAppCo, mkTcAppCo, mkTcAppCos, mkTcFunCo,
-  mkTcAxInstCo, mkTcForAllCo, mkTcForAllCos, 
+  mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcForAllCo, mkTcForAllCos, 
   mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcLRCo, mkTcInstCos,
   tcCoercionKind, coVarsOfTcCo, isEqVar, mkTcCoVarCo, 
   isTcReflCo, isTcReflCo_maybe, getTcCoVar_maybe,
@@ -36,10 +36,10 @@ import Coercion( LeftOrRight(..), pickLR )
 import PprCore ()   -- Instance OutputableBndr TyVar
 import TypeRep  -- Knows type representation
 import TcType
-import Type( tyConAppArgN, tyConAppTyCon_maybe, getEqPredTys 
-           , co_axr_inst )
+import Type( tyConAppArgN, tyConAppTyCon_maybe, getEqPredTys, coAxNthLHS, co_axr_inst )
 import TysPrim( funTyCon )
 import TyCon
+import CoAxiom
 import PrelNames
 import VarEnv
 import VarSet
@@ -99,7 +99,8 @@ data TcCoercion
   | TcForAllCo TyVar TcCoercion 
   | TcInstCo TcCoercion TcType
   | TcCoVarCo EqVar
-  | TcAxiomInstCo CoAxiom [TcType]
+  | TcAxiomInstCo (CoAxiom Branched) Int [TcType] -- Int specifies branch number
+                                                  -- See [CoAxiom Index] in Coercion.lhs
   | TcSymCo TcCoercion
   | TcTransCo TcCoercion TcCoercion
   | TcNthCo Int TcCoercion
@@ -117,7 +118,7 @@ isEqVar v = case tyConAppTyCon_maybe (varType v) of
 
 isTcReflCo_maybe :: TcCoercion -> Maybe TcType
 isTcReflCo_maybe (TcRefl ty) = Just ty
-isTcReflCo_maybe _             = Nothing
+isTcReflCo_maybe _           = Nothing
 
 isTcReflCo :: TcCoercion -> Bool
 isTcReflCo (TcRefl {}) = True
@@ -141,15 +142,20 @@ mkTcTyConAppCo tc cos   -- No need to expand type synonyms
 
   | otherwise = TcTyConAppCo tc cos
 
-mkTcAxInstCo :: CoAxiom -> [TcType] -> TcCoercion
-mkTcAxInstCo ax tys
-  | arity == n_tys = TcAxiomInstCo ax tys
+mkTcAxInstCo :: CoAxiom br -> Int -> [TcType] -> TcCoercion
+mkTcAxInstCo ax ind tys
+  | arity == n_tys = TcAxiomInstCo ax_br ind tys
   | otherwise      = ASSERT( arity < n_tys )
-                     foldl TcAppCo (TcAxiomInstCo ax (take arity tys))
+                     foldl TcAppCo (TcAxiomInstCo ax_br ind (take arity tys))
                                    (map TcRefl (drop arity tys))
   where
     n_tys = length tys
-    arity = coAxiomArity ax
+    arity = coAxiomArity ax ind
+    ax_br = toBranchedAxiom ax
+
+mkTcUnbranchedAxInstCo :: CoAxiom Unbranched -> [TcType] -> TcCoercion
+mkTcUnbranchedAxInstCo ax tys
+  = mkTcAxInstCo ax 0 tys
 
 mkTcAppCo :: TcCoercion -> TcCoercion -> TcCoercion
 -- No need to deal with TyConApp on the left; see Note [TcCoercions]
@@ -213,8 +219,11 @@ tcCoercionKind co = go co
     go (TcForAllCo tv co)     = mkForAllTy tv <$> go co
     go (TcInstCo co ty)       = go_inst co [ty]
     go (TcCoVarCo cv)         = eqVarKind cv
-    go (TcAxiomInstCo ax tys) = Pair (substTyWith (co_ax_tvs ax) tys (co_ax_lhs ax)) 
-                                     (substTyWith (co_ax_tvs ax) tys (co_ax_rhs ax))
+    go (TcAxiomInstCo ax ind tys)
+      = let branch = coAxiomNthBranch ax ind
+            tvs    = coAxBranchTyVars branch
+        in Pair (substTyWith tvs tys (coAxNthLHS ax ind)) 
+                (substTyWith tvs tys (coAxBranchRHS branch))
     go (TcSymCo co)           = swap (go co)
     go (TcTransCo co1 co2)    = Pair (pFst (go co1)) (pSnd (go co2))
     go (TcNthCo d co)         = tyConAppArgN d <$> go co
@@ -311,7 +320,9 @@ ppr_co p (TcInstCo co ty)        = maybeParen p TyConPrec $
                                    pprParendTcCo co <> ptext (sLit "@") <> pprType ty
                      
 ppr_co _ (TcCoVarCo cv)          = parenSymOcc (getOccName cv) (ppr cv)
-ppr_co p (TcAxiomInstCo con cos) = pprTypeNameApp p ppr_type (getName con) cos
+
+ppr_co p (TcAxiomInstCo con ind cos)
+  = pprPrefixApp p (ppr (getName con) <> brackets (ppr ind)) (map (ppr_type TyConPrec) cos)
 
 ppr_co p (TcTransCo co1 co2) = maybeParen p FunPrec $
                                ppr_co FunPrec co1

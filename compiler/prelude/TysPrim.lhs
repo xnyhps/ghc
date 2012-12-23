@@ -34,7 +34,6 @@ module TysPrim(
         -- Kinds
 	anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, constraintKind,
         mkArrowKind, mkArrowKinds,
-        typeNatKind, typeStringKind,
 
         funTyCon, funTyConName,
         primTyCons,
@@ -74,7 +73,7 @@ module TysPrim(
         eqPrimTyCon,            -- ty1 ~# ty2
 
 	-- * Any
-	anyTy, anyTyCon, anyTypeOfKind,
+	anyTy, anyTyCon, anyTypeOfKind
   ) where
 
 #include "HsVersions.h"
@@ -88,8 +87,6 @@ import SrcLoc
 import Unique		( mkAlphaTyVarUnique )
 import PrelNames
 import FastString
-
-import BasicTypes (RecFlag(..))
 
 import Data.Char
 \end{code}
@@ -345,16 +342,6 @@ liftedTypeKind   = kindTyConType liftedTypeKindTyCon
 unliftedTypeKind = kindTyConType unliftedTypeKindTyCon
 openTypeKind     = kindTyConType openTypeKindTyCon
 constraintKind   = kindTyConType constraintKindTyCon
-
-typeNatKind :: Kind
-typeNatKind = kindTyConType (mkPromotedTyCon alg superKind)
-  where alg = mkAlgTyCon typeNatKindConName openTypeKind [] Nothing []
-                          (AbstractTyCon True) NoParentTyCon NonRecursive False
-
-typeStringKind :: Kind
-typeStringKind = kindTyConType (mkPromotedTyCon alg superKind)
-  where alg = mkAlgTyCon typeStringKindConName openTypeKind [] Nothing []
-                         (AbstractTyCon True) NoParentTyCon NonRecursive False
 
 -- | Given two kinds @k1@ and @k2@, creates the 'Kind' @k1 -> k2@
 mkArrowKind :: Kind -> Kind -> Kind
@@ -742,5 +729,3 @@ anyTyCon = mkSynTyCon anyTyConName kind [kKiVar]
 anyTypeOfKind :: Kind -> Type
 anyTypeOfKind kind = mkNakedTyConApp anyTyCon [kind]
 \end{code}
-
-

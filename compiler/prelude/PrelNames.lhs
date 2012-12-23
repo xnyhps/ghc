@@ -281,8 +281,6 @@ basicKnownKeyNames
         randomClassName, randomGenClassName, monadPlusClassName,
 
         -- Type-level naturals
-        typeNatKindConName,
-        typeStringKindConName,
         singIClassName,
         typeNatLeqTyFamName,
         typeNatAddTyFamName,
@@ -1091,14 +1089,10 @@ randomGenClassName  = clsQual rANDOM (fsLit "RandomGen") randomGenClassKey
 isStringClassName   = clsQual dATA_STRING (fsLit "IsString") isStringClassKey
 
 -- Type-level naturals
-typeNatKindConName, typeStringKindConName,
-  singIClassName, typeNatLeqTyFamName,
+singIClassName, typeNatLeqTyFamName,
   typeNatAddTyFamName, typeNatMulTyFamName, typeNatExpTyFamName,
   typeNatSubTyFamName
   :: Name
-typeNatKindConName    = tcQual gHC_TYPELITS (fsLit "Nat")  typeNatKindConNameKey
-typeStringKindConName = tcQual gHC_TYPELITS (fsLit "Symbol")
-                                                        typeStringKindConNameKey
 singIClassName      = clsQual gHC_TYPELITS (fsLit "SingI") singIClassNameKey
 typeNatLeqTyFamName = clsQual gHC_TYPELITS (fsLit "<=?") typeNatLeqTyFamNameKey
 typeNatAddTyFamName = tcQual  gHC_TYPELITS (fsLit "+")   typeNatAddTyFamNameKey

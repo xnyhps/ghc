@@ -76,6 +76,7 @@ module TcType (
   -- Misc type manipulators
   deNoteType, occurCheckExpand, OccCheckResult(..),
   orphNamesOfType, orphNamesOfDFunHead, orphNamesOfCo,
+  orphNamesOfCoCon,
   getDFunTyKey,
   evVarPred_maybe, evVarPred,
 
@@ -173,6 +174,7 @@ import VarSet
 import Coercion
 import Type
 import TyCon
+import CoAxiom
 
 -- others:
 import DynFlags
@@ -447,6 +449,7 @@ uf will get unified *once more* to (F Int).
 
 \begin{code}
 newtype Untouchables = Untouchables Int
+  -- See Note [Untouchable type variables] for what this Int is
 
 noUntouchables :: Untouchables
 noUntouchables = Untouchables 0   -- 0 = outermost level
@@ -647,8 +650,8 @@ tidyCo env@(_, subst) co
     go (CoVarCo cv)          = case lookupVarEnv subst cv of
                                  Nothing  -> CoVarCo cv
                                  Just cv' -> CoVarCo cv'
-    go (AxiomInstCo con cos) = let args = tidyCos env cos
-                               in  args `seqList` AxiomInstCo con args
+    go (AxiomInstCo con ind cos) = let args = tidyCos env cos
+                               in  args `seqList` AxiomInstCo con ind args
     go (UnsafeCo ty1 ty2)    = (UnsafeCo $! tidyType env ty1) $! tidyType env ty2
     go (SymCo co)            = SymCo $! go co
     go (TransCo co1 co2)     = (TransCo $! go co1) $! go co2
@@ -904,10 +907,11 @@ mkTcEqPred ty1 ty2
 isTauTy :: Type -> Bool
 isTauTy ty | Just ty' <- tcView ty = isTauTy ty'
 isTauTy (TyVarTy _)	  = True
+isTauTy (LitTy {})        = True
 isTauTy (TyConApp tc tys) = all isTauTy tys && isTauTyCon tc
 isTauTy (AppTy a b)	  = isTauTy a && isTauTy b
 isTauTy (FunTy a b)	  = isTauTy a && isTauTy b
-isTauTy _    		  = False
+isTauTy (ForAllTy {})     = False
 
 isTauTyCon :: TyCon -> Bool
 -- Returns False for type synonyms whose expansion is a polytype
@@ -1465,8 +1469,11 @@ orphNamesOfType (FunTy arg res)	    = orphNamesOfType arg `unionNameSets` orphNa
 orphNamesOfType (AppTy fun arg)	    = orphNamesOfType fun `unionNameSets` orphNamesOfType arg
 orphNamesOfType (ForAllTy _ ty)	    = orphNamesOfType ty
 
+orphNamesOfThings :: (a -> NameSet) -> [a] -> NameSet
+orphNamesOfThings f = foldr (unionNameSets . f) emptyNameSet
+
 orphNamesOfTypes :: [Type] -> NameSet
-orphNamesOfTypes tys = foldr (unionNameSets . orphNamesOfType) emptyNameSet tys
+orphNamesOfTypes = orphNamesOfThings orphNamesOfType
 
 orphNamesOfDFunHead :: Type -> NameSet
 -- Find the free type constructors and classes 
@@ -1485,7 +1492,7 @@ orphNamesOfCo (TyConAppCo tc cos)   = unitNameSet (getName tc) `unionNameSets` o
 orphNamesOfCo (AppCo co1 co2)       = orphNamesOfCo co1 `unionNameSets` orphNamesOfCo co2
 orphNamesOfCo (ForAllCo _ co)       = orphNamesOfCo co
 orphNamesOfCo (CoVarCo _)           = emptyNameSet
-orphNamesOfCo (AxiomInstCo con cos) = orphNamesOfCoCon con `unionNameSets` orphNamesOfCos cos
+orphNamesOfCo (AxiomInstCo con _ cos) = orphNamesOfCoCon con `unionNameSets` orphNamesOfCos cos
 orphNamesOfCo (UnsafeCo ty1 ty2)    = orphNamesOfType ty1 `unionNameSets` orphNamesOfType ty2
 orphNamesOfCo (SymCo co)            = orphNamesOfCo co
 orphNamesOfCo (TransCo co1 co2)     = orphNamesOfCo co1 `unionNameSets` orphNamesOfCo co2
@@ -1496,11 +1503,18 @@ orphNamesOfCo (TypeNatCo _ ts cs)   = orphNamesOfTypes ts `unionNameSets`
                                       orphNamesOfCos cs
 
 orphNamesOfCos :: [Coercion] -> NameSet
-orphNamesOfCos = foldr (unionNameSets . orphNamesOfCo) emptyNameSet
+orphNamesOfCos = orphNamesOfThings orphNamesOfCo
 
-orphNamesOfCoCon :: CoAxiom -> NameSet
-orphNamesOfCoCon (CoAxiom { co_ax_lhs = ty1, co_ax_rhs = ty2 })
-  = orphNamesOfType ty1 `unionNameSets` orphNamesOfType ty2
+orphNamesOfCoCon :: CoAxiom br -> NameSet
+orphNamesOfCoCon (CoAxiom { co_ax_tc = tc, co_ax_branches = branches })
+  = orphNamesOfTyCon tc `unionNameSets` orphNamesOfCoAxBranches branches
+
+orphNamesOfCoAxBranches :: BranchList CoAxBranch br -> NameSet
+orphNamesOfCoAxBranches = brListFoldr (unionNameSets . orphNamesOfCoAxBranch) emptyNameSet
+
+orphNamesOfCoAxBranch :: CoAxBranch -> NameSet
+orphNamesOfCoAxBranch (CoAxBranch { cab_lhs = lhs, cab_rhs = rhs })
+  = orphNamesOfTypes lhs `unionNameSets` orphNamesOfType rhs
 \end{code}
 
 

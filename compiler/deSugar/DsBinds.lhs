@@ -776,7 +776,7 @@ dsEvTerm (EvSuperClass d n)
 dsEvTerm (EvDelayedError ty msg) = return $ Var errorId `mkTyApps` [ty] `mkApps` [litMsg]
   where 
     errorId = rUNTIME_ERROR_ID
-    litMsg  = Lit (MachStr (fastStringToFastBytes msg))
+    litMsg  = Lit (MachStr (fastStringToByteString msg))
 
 dsEvTerm (EvLit l) =
   case l of
@@ -830,7 +830,8 @@ ds_tc_coercion subst tc_co
     go (TcForAllCo tv co)     = mkForAllCo tv' (ds_tc_coercion subst' co)
                               where
                                 (subst', tv') = Coercion.substTyVarBndr subst tv
-    go (TcAxiomInstCo ax tys) = mkAxInstCo ax (map (Coercion.substTy subst) tys)
+    go (TcAxiomInstCo ax ind tys)
+                              = mkAxInstCo ax ind (map (Coercion.substTy subst) tys)
     go (TcSymCo co)           = mkSymCo (go co)
     go (TcTransCo co1 co2)    = mkTransCo (go co1) (go co2)
     go (TcNthCo n co)         = mkNthCo n (go co)

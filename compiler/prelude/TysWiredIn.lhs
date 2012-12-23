@@ -64,6 +64,9 @@ module TysWiredIn (
         -- * Unit
 	unitTy,
 
+        -- * Kinds
+	typeNatKindCon, typeNatKind, typeStringKindCon, typeStringKind,
+
         -- * Parallel arrays
 	mkPArrTy,
 	parrTyCon, parrFakeCon, isPArrTyCon, isPArrFakeCon,
@@ -91,7 +94,7 @@ module TysWiredIn (
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-} MkId( mkDataConIds )
+import {-# SOURCE #-} MkId( mkDataConWorkId )
 
 -- friends:
 import PrelNames
@@ -163,6 +166,8 @@ wiredInTyCons = [ unitTyCon	-- Not treated like other tuples, because
     	      , listTyCon
 	      , parrTyCon
               , eqTyCon
+              , typeNatKindCon
+              , typeStringKindCon
               , nat1TyCon
     	      ]
            ++ (case cIntegerLibraryType of
@@ -208,6 +213,11 @@ floatTyConName	   = mkWiredInTyConName   UserSyntax gHC_TYPES (fsLit "Float") fl
 floatDataConName   = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "F#") floatDataConKey floatDataCon
 doubleTyConName    = mkWiredInTyConName   UserSyntax gHC_TYPES (fsLit "Double") doubleTyConKey doubleTyCon
 doubleDataConName  = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "D#") doubleDataConKey doubleDataCon
+
+-- Kinds
+typeNatKindConName, typeStringKindConName :: Name
+typeNatKindConName    = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "Nat")    typeNatKindConNameKey    typeNatKindCon
+typeStringKindConName = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "Symbol") typeStringKindConNameKey typeStringKindCon 
 
 -- For integer-gmp only:
 integerRealTyConName :: Name
@@ -293,16 +303,33 @@ pcDataConWithFixity' declared_infix dc_name wrk_key tyvars arg_tys tycon
 		arg_tys (mkTyConApp tycon (mkTyVarTys tyvars)) 
 		tycon
 		[]	-- No stupid theta
-		(mkDataConIds bogus_wrap_name wrk_name data_con)
-		
+                (mkDataConWorkId wrk_name data_con)
+		NoDataConRep	-- Wired-in types are too simple to need wrappers
 
     modu     = ASSERT( isExternalName dc_name ) 
 	       nameModule dc_name
     wrk_occ  = mkDataConWorkerOcc (nameOccName dc_name)
     wrk_name = mkWiredInName modu wrk_occ wrk_key
 			     (AnId (dataConWorkId data_con)) UserSyntax
-    bogus_wrap_name = pprPanic "Wired-in data wrapper id" (ppr dc_name)
-	-- Wired-in types are too simple to need wrappers
+\end{code}
+
+
+%************************************************************************
+%*									*
+      Kinds
+%*									*
+%************************************************************************
+
+\begin{code}
+typeNatKindCon, typeStringKindCon :: TyCon 
+-- data Nat
+-- data Symbol
+typeNatKindCon    = pcNonRecDataTyCon typeNatKindConName    Nothing [] []
+typeStringKindCon = pcNonRecDataTyCon typeStringKindConName Nothing [] []
+
+typeNatKind, typeStringKind :: Kind
+typeNatKind    = TyConApp (promoteTyCon typeNatKindCon)    []
+typeStringKind = TyConApp (promoteTyCon typeStringKindCon) []
 \end{code}
 
 

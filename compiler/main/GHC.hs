@@ -181,7 +181,7 @@ module GHC (
         ClsInst, 
         instanceDFunId, 
         pprInstance, pprInstanceHdr,
-        pprFamInst, pprFamInstHdr,
+        pprFamInst,
 
         -- ** Types and Kinds
         Type, splitForAllTys, funResultTy, 
@@ -498,6 +498,7 @@ setSessionDynFlags dflags = do
   (dflags', preload) <- liftIO $ initPackages dflags
   modifySession $ \h -> h{ hsc_dflags = dflags'
                          , hsc_IC = (hsc_IC h){ ic_dflags = dflags' } }
+  invalidateModSummaryCache
   return preload
 
 -- | Sets the program 'DynFlags'.
@@ -505,7 +506,33 @@ setProgramDynFlags :: GhcMonad m => DynFlags -> m [PackageId]
 setProgramDynFlags dflags = do
   (dflags', preload) <- liftIO $ initPackages dflags
   modifySession $ \h -> h{ hsc_dflags = dflags' }
+  invalidateModSummaryCache
   return preload
+
+-- When changing the DynFlags, we want the changes to apply to future
+-- loads, but without completely discarding the program.  But the
+-- DynFlags are cached in each ModSummary in the hsc_mod_graph, so
+-- after a change to DynFlags, the changes would apply to new modules
+-- but not existing modules; this seems undesirable.
+--
+-- Furthermore, the GHC API client might expect that changing
+-- log_action would affect future compilation messages, but for those
+-- modules we have cached ModSummaries for, we'll continue to use the
+-- old log_action.  This is definitely wrong (#7478).
+--
+-- Hence, we invalidate the ModSummary cache after changing the
+-- DynFlags.  We do this by tweaking the date on each ModSummary, so
+-- that the next downsweep will think that all the files have changed
+-- and preprocess them again.  This won't necessarily cause everything
+-- to be recompiled, because by the time we check whether we need to
+-- recopmile a module, we'll have re-summarised the module and have a
+-- correct ModSummary.
+--
+invalidateModSummaryCache :: GhcMonad m => m ()
+invalidateModSummaryCache =
+  modifySession $ \h -> h { hsc_mod_graph = map inval (hsc_mod_graph h) }
+ where
+  inval ms = ms { ms_hs_date = addUTCTime (-1) (ms_hs_date ms) }
 
 -- | Returns the program 'DynFlags'.
 getProgramDynFlags :: GhcMonad m => m DynFlags
@@ -977,7 +1004,7 @@ getBindings = withSession $ \hsc_env ->
     return $ icInScopeTTs $ hsc_IC hsc_env
 
 -- | Return the instances for the current interactive session.
-getInsts :: GhcMonad m => m ([ClsInst], [FamInst])
+getInsts :: GhcMonad m => m ([ClsInst], [FamInst Branched])
 getInsts = withSession $ \hsc_env ->
     return $ ic_instances (hsc_IC hsc_env)
 

@@ -7,9 +7,7 @@ import Type     ( Type,  mkTyVarTy, mkNumLitTy, mkTyConApp
                 , TyThing(ACoAxiomRule)
                 )
 import PrelNames ( gHC_PRIM )
-import TysPrim  ( tyVarList
-                , typeNatKind
-                )
+import TysPrim  ( tyVarList)
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
                   , typeNatExpTyCon
@@ -18,6 +16,7 @@ import TysWiredIn ( typeNatAddTyCon
                   , boolKind, trueTy, falseTy
                   , nat1Kind, zeroTy
                   , fromNat1TyCon
+                  , typeNatKind
                   )
 
 import Name     ( Name, mkWiredInName, BuiltInSyntax(..) )
