@@ -180,7 +180,16 @@ simply get solved by it, but also to new given and derived constraints.
 Given and dervied constraints that can be solved in this way are ignored
 because they would not be contributing any new information. -}
 solve :: Ct -> Maybe EvTerm
-solve ct = msum $ solveWithAxiom ct : map (`solveWithRule` ct) bRules
+solve (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
+  do ([],ev) <- byBasic (TPOther (mkTyConApp tc ts), TPOther t)
+     return ev
+solve _ = Nothing
+
+
+solveLeq :: LeqFacts -> Ct -> Maybe EvTerm
+solveLeq m ct =
+  do (t1,t2) <- isLeqCt ct
+     isLeq m t1 t2
 
 solveWanted :: [Ct] -> Ct -> Maybe EvTerm
 solveWanted asmps0 ct = msum [ solve ct
@@ -351,6 +360,81 @@ matchTypes (x : xs) (y : ys)  =
      return (su1 ++ su2)
 matchTypes _ _                = Nothing
 
+{-| The function `matchTypePat` checks to see if we can make two
+type patterns the same by instantiating them to concrete types.
+It is similar to unification, but we only bind variables to concrete
+terms and not other pattren variables.  Also, the variables in the left
+and right patterns are considered to be distinct, even if they have the
+same name.  This is why we return a left and aright substitution.
+The use case for this function is when we want to instantiate a
+rule to solve a local goal in an active rule.
+Example (using capital letters for variables):
+
+rule:        forall A. A + 0 ~ A
+active rule: forall Z. (x + 0 ~ y, x + 0 ~ Z) => (y ~ Z)
+
+Now, when we match the rule against the second argument of the active
+rule we get:
+
+{ A ~ x } and { Z ~ x }
+
+This allows the active rule to complete firing and construct the
+proof of `y ~ x`.
+
+An alternative (and more traditional) implementation would be to generate
+fresh variables for the rule and unify the terms.  For now we don't do this
+because it would requires monadification of most of the solver.
+-}
+
+matchTypePats :: [TypePat] -> [TypePat] -> Maybe (SimpleSubst,SimpleSubst)
+matchTypePats p1 p2 =
+  case doMatchTypePats p1 p2 of
+    Yes suL suR -> Just (suL, suR)
+    _           -> Nothing
+
+
+data MatchResult = Yes SimpleSubst SimpleSubst
+                 | No                         -- Type patterns did not match
+                 | Maybe [TypePat] [TypePat]  -- Don't know (var vs. pattern)
+
+doMatchTypePat :: TypePat -> TypePat -> MatchResult
+doMatchTypePat p (TPOther t)  = maybe No (`Yes` []) (matchType p t)
+doMatchTypePat (TPOther t) p  = maybe No ([] `Yes`) (matchType p t)
+doMatchTypePat (TPCon c1 ts1) (TPCon c2 ts2)
+  | c1 == c2                  = doMatchTypePats ts1 ts2
+  | otherwise                 = No
+doMatchTypePat p1 p2          = Maybe [p1] [p2]
+
+doMatchTypePats :: [TypePat] -> [TypePat] -> MatchResult
+doMatchTypePats = attempt False [] []
+  where
+
+  -- Done!
+  attempt _     []  []  [] [] = Yes [] []
+
+  -- We have delayed work, but we learned something, so try again.
+  attempt True  ds1 ds2 [] [] = attempt False [] [] ds1 ds2
+
+  -- We have delayed work, and we learned nothing, so we are done for now.
+  attempt False ds1 ds2 [] [] = Maybe ds1 ds2
+
+  -- We have normal work.
+  attempt ch    ds1 ds2 (t1:ts1) (t2:ts2) =
+    case doMatchTypePat t1 t2 of
+      No            -> No
+      Maybe ps1 ps2 -> attempt ch (ps1++ds1) (ps2++ds2) ts1 ts2
+      Yes suL1 suR1 ->
+        case attempt True (apSimpSubst suL1 ds1) (apSimpSubst suR1 ds2)
+                          (apSimpSubst suL1 ts1) (apSimpSubst suR1 ts2) of
+          No            -> No
+          Maybe xs1 xs2 -> Maybe xs1 xs2
+          Yes suL2 suR2 -> Yes (suL1 ++ suL2) (suR1 ++ suR2)
+
+  -- The number of arguments did not match.  This should not really happen
+  -- because kinds should have been checked, but `No` is a safe answer.
+  attempt _ _ _ [] (_:_)  = No
+  attempt _ _ _ (_:_) []  = No
+
 
 --------------------------------------------------------------------------------
 
@@ -369,6 +453,14 @@ byAsmp ct (lhs,rhs) =
      su <- matchTypes [lhs,rhs] [t1,t2]
      return (su, ev)
 
+
+-- Tries to solve the equation using one of the basic rules.
+byBRule :: CoAxiomRule -> (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
+byBRule r (lhs,rhs) =
+  do (vs,[],(a,b)) <- co_axr_is_rule r
+     (suL,suR) <- matchTypePats [toTypePat vs a, toTypePat vs b] [lhs,rhs]
+     tys <- mapM (`lookup` suL) vs
+     return (suR, useRule r tys [])
 
 -- Check if we can solve the equation using one of the family of axioms.
 byAxiom :: (TypePat, TypePat) -> Maybe (SimpleSubst, EvTerm)
@@ -432,32 +524,17 @@ byAxiom (TPOther ty, TPOther tp3)
 byAxiom _ = Nothing
 
 
+-- Solve a goal either using an axiom or a basic rule.
+byBasic :: (TypePat,TypePat) -> Maybe (SimpleSubst, EvTerm)
+byBasic eq = msum (byAxiom eq : map (`byBRule` eq) bRules)
+
+
 -- Construct evidence using a specific axiom rule.
 useRule :: CoAxiomRule -> [Type] -> [EvTerm] -> EvTerm
 useRule ax ts ps = EvCoercion $ mk ax ts (map evTermCoercion ps)
   where mk = TcTypeNatCo
 
 
-
-solveWithRule :: CoAxiomRule -> Ct -> Maybe EvTerm
-solveWithRule r ct =
-  do (vs,[],(a,b)) <- co_axr_is_rule r -- Currently we just use simple axioms.
-     let lhs = toTypePat vs a
-         rhs = toTypePat vs b
-     (su,_) <- byAsmp ct (lhs,rhs)    -- Just for the instantiation
-     tys <- mapM (`lookup` su) vs
-     return (useRule r tys [])
-
-solveWithAxiom :: Ct -> Maybe EvTerm
-solveWithAxiom (CFunEqCan { cc_fun = tc, cc_tyargs = ts, cc_rhs = t }) =
-  do ([],ev) <- byAxiom (TPOther (mkTyConApp tc ts), TPOther t)
-     return ev
-solveWithAxiom _ = Nothing
-
-solveLeq :: LeqFacts -> Ct -> Maybe EvTerm
-solveLeq m ct =
-  do (t1,t2) <- isLeqCt ct
-     isLeq m t1 t2
 
 --------------------------------------------------------------------------------
 
@@ -721,16 +798,17 @@ setArg n (su,ev) r =
 
   inst xs = [ (x,apSimpSubst su y) | (x,y) <- xs ]
 
--- Try to solve one of the assumptions by axiom.
-applyAxiom1 :: ActiveRule -> Maybe ActiveRule
-applyAxiom1 r = msum $ map attempt $ todoArgs r
+-- Try to solve one of the assumptions by axiom or a basic rule.
+applyBasic1 :: ActiveRule -> Maybe ActiveRule
+applyBasic1 r = msum $ map attempt $ todoArgs r
   where
-  attempt (n,eq) = do (su,ev) <- byAxiom eq
+  attempt (n,eq) = do (su,ev) <- byBasic eq
                       return (setArg n (su, ev) r)
 
--- Try to satisfy some of the rule's assumptions by axiom.
-applyAxiom :: ActiveRule -> ActiveRule
-applyAxiom r = maybe r applyAxiom (applyAxiom1 r)
+-- Try to satisfy some of the rule's assumptions by axiom or a basic rule.
+-- We repeat the process until there no changes occur.
+applyBasic :: ActiveRule -> ActiveRule
+applyBasic r = maybe r applyBasic (applyBasic1 r)
 
 {- The various ways in which an assumption fits the arguments of a rule.
 Note: currently, we use an assumption at most once per rule.
@@ -753,10 +831,10 @@ applyAsmp r ct =
 existing facts with a set of rules. -}
 interactActiveRules :: LeqFacts -> [ActiveRule] -> [Ct] -> [RuleResult]
 interactActiveRules leq rs0 cs0 =
-  loop (map applyAxiom rs0) cs0
+  loop (map applyBasic rs0) cs0
   where
   loop rs []       = mapMaybe (fireRule leq) rs
-  loop rs (c : cs) = let new = map applyAxiom (concatMap (`applyAsmp` c) rs)
+  loop rs (c : cs) = let new = map applyBasic (concatMap (`applyAsmp` c) rs)
                      in loop (new ++ rs) cs
 
 {- A (possibly over-compliacted) example illustrating how the
