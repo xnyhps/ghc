@@ -106,8 +106,6 @@ axLeqDef = mkDef 3 "LeqDef" $ \a b ->
              mkLeq (mkNumLitTy a) (mkNumLitTy b) === mkBoolLiTy (a <= b)
 
 
--- XXX: We should be able to cope with some assumptions in backward
--- reasoning too.
 bRules :: [CoAxiomRule]
 bRules =
   [ bRule 10 "Add0L" (mkAdd n0 a === a)
@@ -118,7 +116,7 @@ bRules =
   , bRule 14 "Mul1L" (mkMul n1 a === a)
   , bRule 15 "Mul1R" (mkMul a n1 === a)
 
-  -- TnExp0L:  (1 <= n) => 0 ^ n ~ 0
+  -- TnExp0L:  see iffRules
   , bRule 17 "TnExp0R" (mkExp a n0 === n1)
   , bRule 18 "TnExp1L" (mkExp n1 a === n1)
   , bRule 19 "TnExp1R" (mkExp a n1 === a)
@@ -254,11 +252,13 @@ widenRules =
 
 iffRules :: [CoAxiomRule]
 iffRules =
-  [ mkAx 65 "SubI" (take 3 natVars) [ mkAdd a b === c ] (mkSub c b === a)
+  [ mkAx 65 "SubI"    (take 3 natVars) [ mkAdd a b === c ] (mkSub c b === a)
+  , mkAx 67 "TnExp0L" (take 1 natVars) [ n1 <== a        ] (mkExp n0 a === n0)
   ]
   where
   a : b : c : _ = map mkTyVarTy natVars
-
+  n0 = mkNumLitTy 0
+  n1 = mkNumLitTy 1
 
 
 
