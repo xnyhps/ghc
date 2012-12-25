@@ -219,6 +219,7 @@ widenRules =
       [ n2 <== a, mkExp a b === c ] (b <== c))
 
 
+  -- Improvements related to `FromNat1`
   , (True, mkAx 60 "FromNat1_inj" (take 2 nat1Vars ++ take 1 (drop 2 natVars))
       [ mkFromNat1 a1 === c, mkFromNat1 b1 === c] (a1 === b1))
 
@@ -239,6 +240,10 @@ widenRules =
     Currently this is implemented with some hand-written code in TcTypeNats.hs
   -}
 
+  -- Desugaring rules for `iff` rules, forward direction.
+  , (True, mkAx 66 "SubE" (take 3 natVars)
+      [ mkSub c b === a ] (mkAdd a b === c))
+
   ]
   where
   a  : b  : c : x : y : z : _ = map mkTyVarTy natVars
@@ -249,7 +254,7 @@ widenRules =
 
 iffRules :: [CoAxiomRule]
 iffRules =
-  [ mkAx 65 "SubDef" (take 3 natVars) [ mkAdd a b === c ] (mkSub c b === a)
+  [ mkAx 65 "SubI" (take 3 natVars) [ mkAdd a b === c ] (mkSub c b === a)
   ]
   where
   a : b : c : _ = map mkTyVarTy natVars
