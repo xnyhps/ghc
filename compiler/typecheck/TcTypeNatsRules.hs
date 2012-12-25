@@ -24,13 +24,15 @@ import OccName  ( mkOccName, tcName )
 import Unique   ( mkAxiomRuleUnique )
 
 
-
 typeNatRuleThings :: [TyThing]
 typeNatRuleThings = map ACoAxiomRule $
   [ axAddDef, axMulDef, axExpDef, axLeqDef ]
+    ++ [ leq0, leqRefl, leqTrans, leqAsym ]
     ++ bRules
     ++ map snd impRules
     ++ map snd widenRules
+    ++ iffRules
+
 
 
 --------------------------------------------------------------------------------
