@@ -982,7 +982,7 @@ computeNewGivenWork :: Ct -> TcS [Ct]
 computeNewGivenWork ct =
   do (bad,good) <- interactCt True ct =<< getFacts
 
-     when (null bad) $
+     when (null bad && not (null good)) $
        do natTrace "New givens:" (vcat $ map ppr good)
           updWorkListTcS (extendWorkListCts good)
 
@@ -995,9 +995,10 @@ Returns any obvious contradictions that we found. -}
 -- XXX: We should probably be using the deived constraints here too
 computeNewDerivedWork :: Ct -> TcS [Ct]
 computeNewDerivedWork ct =
-  do (bad,good) <- interactCt False ct =<< getEvCt
+  do asmps <- getEvCt
+     (bad,good) <- interactCt False ct asmps -- =<< getEvCt
 
-     when (null bad) $
+     when (null bad && not (null good)) $
        do natTrace "New derived:" (vcat $ map ppr good)
           updWorkListTcS (extendWorkListCts good)
 
