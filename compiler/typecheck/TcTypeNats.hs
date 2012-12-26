@@ -71,7 +71,7 @@ import TcSMonad ( TcS, emitInsoluble, setEvBind
 
 -- From base libraries
 import Data.Maybe ( isNothing, mapMaybe )
-import Data.List  ( sortBy, partition, find )
+import Data.List  ( sortBy, partition, find, nub )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard, when, liftM2 )
 import qualified Data.Set as S
@@ -658,7 +658,6 @@ funRule tc = AR
            | otherwise = natVars
 
 
-
 {- We get these when a rule fires.  Later, they are converted to
 givens or derived, depending on what we are doing. -}
 data RuleResult = RuleResult
@@ -666,13 +665,19 @@ data RuleResult = RuleResult
   , evidence         :: EvTerm  -- proof, given evidence for derived
   }
 
+instance Eq RuleResult where
+  r1 == r2  = eqType s1 t1 && eqType s2 t2
+    where (s1,s2) = conclusion r1
+          (t1,t2) = conclusion r2
+
 
 {- Check if the `ActiveRule` is completely instantiated and, if so,
 compute the resulting equation and the evidence for it.
 
-If some of the parameters for the equation were matched by
-`Derived` constraints, then the evidence for the term will be parmatereized
-by proofs for them.
+We also do some last effort solving: we check the ordering model to see
+if any ordering side-conditions are solvable now.  These never produe a
+new substitution (i.e., they have a yes/no answer) so we can just do
+them while attempting to fire the rule.
 -}
 fireRule :: LeqFacts -> ActiveRule -> Maybe RuleResult
 fireRule leq r =
@@ -799,16 +804,16 @@ setArg n (su,ev) r =
   inst xs = [ (x,apSimpSubst su y) | (x,y) <- xs ]
 
 -- Try to solve one of the assumptions by axiom or a basic rule.
-applyBasic1 :: ActiveRule -> Maybe ActiveRule
-applyBasic1 r = msum $ map attempt $ todoArgs r
+applyAxiom1 :: ActiveRule -> Maybe ActiveRule
+applyAxiom1 r = msum $ map attempt $ todoArgs r
   where
-  attempt (n,eq) = do (su,ev) <- byBasic eq
+  attempt (n,eq) = do (su,ev) <- byAxiom eq
                       return (setArg n (su, ev) r)
 
 -- Try to satisfy some of the rule's assumptions by axiom or a basic rule.
 -- We repeat the process until there no changes occur.
-applyBasic :: ActiveRule -> ActiveRule
-applyBasic r = maybe r applyBasic (applyBasic1 r)
+applyAxiom :: ActiveRule -> ActiveRule
+applyAxiom r = maybe r applyAxiom (applyAxiom1 r)
 
 {- The various ways in which an assumption fits the arguments of a rule.
 Note: currently, we use an assumption at most once per rule.
@@ -827,14 +832,33 @@ applyAsmp r ct =
            | otherwise  = id
 
 
+
+{- | Attempts to solve any remaining assumptions using bRules.
+Generally, interacting with `bRules` leads to trivially true facts,
+which is why we only do this once at the end.  The reason we do it
+at all is that it improves inferred types when comined with `funRule`s,
+resulting in improvements like this: (a + 0 ~ b) => (a ~ b)
+-}
+applyBRules :: ActiveRule -> ActiveRule
+applyBRules = attempt []
+  where
+  attempt tried r =
+    case filter ((`notElem` tried) . fst) (todoArgs r) of
+      [] -> r
+      (n,eq) : _ ->
+        case msum (map (`byBRule` eq) bRules) of
+          Just ok -> attempt tried (setArg n ok r)
+          Nothing -> attempt (n:tried) r
+
+
 {- Does forward reasoning:  compute new facts by interacting
 existing facts with a set of rules. -}
 interactActiveRules :: LeqFacts -> [ActiveRule] -> [Ct] -> [RuleResult]
 interactActiveRules leq rs0 cs0 =
-  loop (map applyBasic rs0) cs0
+  loop (map applyAxiom rs0) cs0
   where
-  loop rs []       = mapMaybe (fireRule leq) rs
-  loop rs (c : cs) = let new = map applyBasic (concatMap (`applyAsmp` c) rs)
+  loop rs []       = nub $ mapMaybe (fireRule leq . applyBRules) rs
+  loop rs (c : cs) = let new = map applyAxiom (concatMap (`applyAsmp` c) rs)
                      in loop (new ++ rs) cs
 
 {- A (possibly over-compliacted) example illustrating how the
@@ -953,25 +977,27 @@ customNat1Improvement leq ct
 -- Given a set of facts, apply forward reasoning using the "difficult"
 -- rules to derive some additional facts.
 widenAsmps :: [Ct] -> [Ct]
-widenAsmps asmps = step given wanted []
+widenAsmps asmps = step given wanted
 
   where
+  -- givens are already "widened", so we don't need to redo that part.
   (given, wanted) = partition isGivenCt asmps
 
   known c cs  = any (sameCt c) cs
 
-  step done [] [] = reverse done
-  step done [] cs = step done (reverse cs) []
-  step done (c : cs) ds
-    | known c done  = step done cs ds
+  step done [] = done
+  step done (c : cs)
+    | known c done  = step done cs
     | otherwise
       = let active = concatMap (`applyAsmp` c) $ map activate widenRules
             new = filter nonTrivial $
                   map (ruleResultToGiven (cc_loc c))
                       $ interactActiveRules leq active done
-        in step (c : done) cs (new ++ ds)
+        in step (c : done) (new ++ cs)
 
   -- For the moment, widedning rules have no ordering side conditions.
+  -- XXX: Actually, they do, the derived ordering rules have side conditions
+  -- so we should construct a model.
   leq = noLeqFacts
 
   nonTrivial ct = impossible ct || not (isEmptyUniqSet (tyVarsOfCt ct))
