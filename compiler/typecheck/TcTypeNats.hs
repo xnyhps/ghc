@@ -66,7 +66,6 @@ import TcSMonad ( TcS, emitInsoluble, setEvBind
                 , newFlexiTcSTy
                 , tyVarsOfCt
                 , newWantedEvVarNC
-                -- , getDynFlags
                 )
 
 -- From base libraries
@@ -80,14 +79,14 @@ import qualified Data.Map as M
 {-
 -- Just fore debugging
 import Debug.Trace
--- import DynFlags ( tracingDynFlags )
-import Outputable (showSDoc)
+import StaticFlags( unsafeGlobalDynFlags )
+import Outputable (showSDoc, nest)
 
 pureTrace :: String -> a -> a
 pureTrace x a = if True then trace x a else a
 
 ppsh :: SDoc -> String
-ppsh = showSDoc tracingDynFlags   -- tracingDynFlags is gone..
+ppsh = showSDoc unsafeGlobalDynFlags
 -}
 
 
