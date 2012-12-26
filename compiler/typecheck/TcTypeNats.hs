@@ -66,6 +66,7 @@ import TcSMonad ( TcS, emitInsoluble, setEvBind
                 , newFlexiTcSTy
                 , tyVarsOfCt
                 , newWantedEvVarNC
+                , foldFamHeadMap
                 )
 
 -- From base libraries
@@ -873,6 +874,11 @@ getEvCt =
      return $ bagToList $ fst $ partCtFamHeadMap hasEv
                               $ inert_funeqs $ inert_cans is
   where hasEv c = isGivenCt c || isWantedCt c
+
+getAllCt :: TcS [Ct]
+getAllCt =
+  do is <- getTcSInerts
+     return $ foldFamHeadMap (:) [] $ inert_funeqs $ inert_cans is
 
 sameCt :: Ct -> Ct -> Bool
 sameCt c1 c2 = eqType (ctPred c1) (ctPred c2)
