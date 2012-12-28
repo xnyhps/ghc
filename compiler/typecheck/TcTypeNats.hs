@@ -12,15 +12,17 @@ import Outputable ( ppr, pprWithCommas
                   , Outputable
                   , SDoc
                   , (<>), (<+>), text, vcat, parens
-                  , hsep
+                  , hsep, nest
                   )
 import Var      ( TyVar )
+import VarSet   ( elemVarSet )
 import TyCon    ( TyCon, tyConName )
 import Type     ( Type, isNumLitTy, getTyVar_maybe, isTyVarTy, mkNumLitTy
                 , mkTyConApp
                 , splitTyConApp_maybe
                 , eqType, cmpType
                 , CoAxiomRule, Eqn, co_axr_inst, co_axr_is_rule
+                , tyVarsOfType
                 )
 import TysWiredIn ( typeNatAddTyCon
                   , typeNatMulTyCon
@@ -54,6 +56,7 @@ import TcEvidence ( EvTerm(..)
                   , evTermCoercion
                   , TcCoercion(TcTypeNatCo)
                   , mkTcSymCo, mkTcTransCo
+                  , mkTcReflCo, mkTcTyConAppCo
                   , tcCoercionKind
                   )
 import TcSMonad ( TcS, emitInsoluble, setEvBind
@@ -70,8 +73,8 @@ import TcSMonad ( TcS, emitInsoluble, setEvBind
                 )
 
 -- From base libraries
-import Data.Maybe ( isNothing, mapMaybe )
-import Data.List  ( sortBy, partition, find, nub )
+import Data.Maybe ( isNothing, mapMaybe, catMaybes )
+import Data.List  ( sortBy, partition, find, nub, nubBy )
 import Data.Ord   ( comparing )
 import Control.Monad ( msum, guard, when, liftM2 )
 import qualified Data.Set as S
@@ -81,7 +84,7 @@ import qualified Data.Map as M
 -- Just fore debugging
 import Debug.Trace
 import StaticFlags( unsafeGlobalDynFlags )
-import Outputable (showSDoc, nest)
+import Outputable (showSDoc)
 
 pureTrace :: String -> a -> a
 pureTrace x a = if True then trace x a else a
@@ -89,7 +92,6 @@ pureTrace x a = if True then trace x a else a
 ppsh :: SDoc -> String
 ppsh = showSDoc unsafeGlobalDynFlags
 -}
-
 
 --------------------------------------------------------------------------------
 
@@ -122,9 +124,25 @@ typeNatStage ct
              Just c  -> do natTrace "solved wanted: " (ppr ct)
                            setEvBind (ctEvId ev) c
                            return Stop
-             Nothing -> do natTrace "failed to solve wanted: " (ppr ct)
-                           reExamineWanteds asmps ct
-                           checkBad =<< computeNewDerivedWork ct
+             Nothing ->
+              do (bad,good0) <- interactCt False ct asmps
+                 let good = nubBy sameCt good0
+                 if not (null bad)
+                   then reportContradictions bad
+                   else
+                     -- XXX: Currently `good` contains only one step of
+                     -- reasoning.  It may be useful to go deeper.
+                     do improved <- tryImprovement ct good
+                        if improved
+                         then return Stop
+                         else
+                           do natTrace "failed to solve wanted: " (ppr ct)
+                              reExamineWanteds asmps ct
+                              when (not (null good)) $
+                                do natTrace "New derived:" (vcat $ map ppr good)
+                                   updWorkListTcS (extendWorkListCts good)
+                              return $ ContinueWith ct
+
   | otherwise =
     case solve ct of
       Just _  -> return Stop
@@ -135,9 +153,106 @@ typeNatStage ct
   ev = ctEvidence ct
   checkBad bad
     | null bad  = return (ContinueWith ct)
-    | otherwise = do natTrace "Contradictions:" (vcat $ map ppr bad)
-                     emitInsoluble ct
-                     return Stop
+    | otherwise = reportContradictions bad
+
+  reportContradictions bad = do natTrace "Contradictions:" (vcat $ map ppr bad)
+                                emitInsoluble ct
+                                return Stop
+
+
+{- | Try to improve the given constraint using the provided derived constraints.
+Returns `True` if improvement happened.
+
+The idea behind improvement is as follows: say we need to solve `P`
+from assumptions `QS`, but we can't do it directly in a singe step.
+
+Now, suppose that `(P,QS) => (x ~ t)` where `x` is a variable mentioned in `P`
+(i.e., we know that if `P` holds in context `QS`, then `x` must be `t`).
+Then, we have a good strategy for solving `P`:
+  1. solve A: `x ~ t`
+  2. sovle B: `P[t/x]
+Now we can construct a proof of `P` in terms of `A` and `B` and, furthermore,
+they are both "simpler" then the original goal.  We refer to `P[t/x]` as
+an _improved_ version of `P`.
+
+The most common use of improvement is to perform evaluation, for
+example when we see `3 + 5 ~ x`, we solve this in terms of two
+subgoals: (x ~ 8, 3 + 5 ~ 8).
+
+XXX: Make sure that it is not possible to get stuck in a loop where
+[P a/b] -> P [b/a] -> P [a/b] ...
+-}
+
+tryImprovement :: Ct -> [Ct] -> TcS Bool
+tryImprovement
+ (CFunEqCan
+   { cc_ev = CtWanted { ctev_pred = p, ctev_evar = w }
+   , cc_fun = tc, cc_tyargs = ts, cc_rhs = t, cc_loc = loc
+   }) implied =
+
+  do impSubst <- catMaybes `fmap` mapM improves implied
+     if null impSubst
+       then return False
+       else do natTrace "improving subst: " $ nest 2 $ vcat $ map ppr impSubst
+               let (argEvs, argTs) = unzip $ map (impTy impSubst) ts
+                   (resEv,  resT)  = impTy impSubst t
+               newGoal <- improvedGoal argTs resT
+               setEvBind w (mkProof (getCo newGoal) argEvs resEv)
+               updWorkListTcS (extendWorkListCts (newGoal : map snd impSubst))
+               return True
+  where
+  {- The improving constraints form a substitution
+     (the _improving substitution_), and here we apply it.
+     Note that we assume that we are working with simple kinds,
+     where all the terms are either a variable or a constant---this is the
+     case for kinds `Nat` and `Bool`---which is why we just check if the
+     term is a variable. -}
+
+  impTy cts ty =
+    case getTyVar_maybe ty of
+      Just x | Just ct1 <- lookup x cts -> (getCo ct1, cc_rhs ct1)
+      _                                 -> (mkTcReflCo ty, ty)
+
+
+
+  {- A constrinat of the form `x ~ t` improves the current goal if `x`
+  appears in the variables of the goal.  These are always simpler then
+  original goal, because the original goal is of the form: `F as ~ b`,
+  and `as`, `b`, and `t` are all normalized (they do not mention functions) -}
+  improves ct1@CTyEqCan { cc_tyvar = x, cc_ev = CtDerived { ctev_pred = asmp }}
+    | x `elemVarSet` tyVarsOfType p =
+      do w <- newWantedEvVarNC asmp
+         return $ Just (x, ct1 { cc_ev = w })
+
+  improves _ = return Nothing
+
+  -- Proof of the original goal in terms of the improved goal
+  -- and the improving equations: F argEvs ; newGoal ; sym resEv
+  mkProof newGoal argEvs resEv =
+    EvCoercion $
+    mkTcTransCo (mkTcTyConAppCo tc argEvs) $
+    mkTcTransCo newGoal (mkTcSymCo resEv)
+
+  -- This is the improved goal that we'll try to solve next.
+  improvedGoal ts1 t1 =
+    do let p = mkTcEqPred (mkTyConApp tc ts1) t1
+       w <- newWantedEvVarNC p
+       return CFunEqCan
+                { cc_ev  = w
+                , cc_fun = tc, cc_tyargs = ts1, cc_rhs = t1, cc_loc = loc
+                }
+
+  -- Turn a constraint into a coercion
+  getCo = evTermCoercion . ctEvTerm . cc_ev
+
+
+
+tryImprovement _ _ = return False
+
+
+
+
+
 
 
 {- We do this before adding a new wanted to the inert set.
@@ -863,7 +978,7 @@ interactActiveRules leq rs0 cs0 =
 
 {- A (possibly over-compliacted) example illustrating how the
 order in which we do the matching for the assumptions makes a difference
-to the conlusion of the rule.  I am not sure that at present we have rules
+to the conclusion of the rule.  I am not sure that at present we have rules
 that are as complex.
 
 
@@ -990,7 +1105,8 @@ widenAsmps asmps = step given wanted
     | known c done  = step done cs
     | otherwise
       = let active = concatMap (`applyAsmp` c) $ map activate widenRules
-            new = filter nonTrivial $
+            new = filter (not . (`known` done)) $
+                  filter nonTrivial $
                   map (ruleResultToGiven (cc_loc c))
                       $ interactActiveRules leq active done
         in step (c : done) (new ++ cs)
