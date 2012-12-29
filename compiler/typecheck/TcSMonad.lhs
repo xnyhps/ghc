@@ -85,6 +85,7 @@ module TcSMonad (
     compatKind, mkKindErrorCtxtTcS,
 
     Untouchables, isTouchableMetaTyVarTcS, isFilledMetaTyVar_maybe,
+    zonkTyVarsAndFV,
 
     getDefaultInfo, getDynFlags,
 
@@ -1306,6 +1307,9 @@ isFilledMetaTyVar_maybe tv
                   Indirect ty -> return (Just ty)
                   Flexi       -> return Nothing }
      _ -> return Nothing 
+
+zonkTyVarsAndFV :: TcTyVarSet -> TcS TcTyVarSet
+zonkTyVarsAndFV tvs = wrapTcS (TcM.zonkTyVarsAndFV tvs)
 \end{code}
 
 Note [Do not add duplicate derived insolubles]
