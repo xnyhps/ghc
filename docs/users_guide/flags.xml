@@ -638,7 +638,7 @@
           </row>
           <row>
             <entry><option>-no-auto-link-packages</option></entry>
-            <entry>Don't automatically link in the haskell98 package.</entry>
+            <entry>Don't automatically link in the base and rts packages.</entry>
             <entry>dynamic</entry>
             <entry>-</entry>
           </row>
@@ -1233,6 +1233,13 @@
             <entry>warn about uses of commandline flags that are deprecated</entry>
             <entry>dynamic</entry>
             <entry><option>-fno-warn-deprecated-flags</option></entry>
+          </row>
+
+          <row>
+            <entry><option>-fwarn-duplicate-constraints</option></entry>
+            <entry>warn when a constraint appears duplicated in a type signature</entry>
+            <entry>dynamic</entry>
+            <entry><option>-fno-warn-duplicate-constraints</option></entry>
           </row>
 
           <row>

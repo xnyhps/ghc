@@ -32,11 +32,11 @@
 # 	    exit 1; \
 # 	fi
 #
-# This version adds a useful sanity check; but it is also expensive on
-# Windows where spawning a shell takes a while (about 0.3s).  We'd
-# like to avoid the shell if necessary.  This also hides the message
-# "nothing to be done for 'all'", since make thinks it has actually done
-# something.
+# This version adds a useful sanity check, and is a good solution on
+# platforms other than Windows. But on Windows it is expensive, as
+# spawning a shell takes a while (about 0.3s).  We'd like to avoid the
+# shell if necessary.  This also hides the message "nothing to be done
+# for 'all'", since make thinks it has actually done something.
 #
 # %.hi : %.o
 #
@@ -62,11 +62,32 @@
 # documentation).  An empty command is enough to get GNU make to think
 # it has updated %.hi, but without actually spawning a shell to do so.
 
-define hi-rule # $1 = way
+define hi-rule # $1 = source directory, $2 = object directory, $3 = way
 
-%.$$($1_hisuf) : %.$$($1_osuf) ;
+$(call hi-rule-helper,$2/%.$$($3_hisuf) : $2/%.$$($3_osuf) $1/%.hs)
+$(call hi-rule-helper,$2/%.$$($3_hisuf) : $2/%.$$($3_osuf) $1/%.lhs)
 
-%.$$($1_way_)hi-boot : %.$$($1_way_)o-boot ;
+$(call hi-rule-helper,$2/%.$$($3_way_)hi-boot : $2/%.$$($3_way_)o-boot $1/%.hs)
+$(call hi-rule-helper,$2/%.$$($3_way_)hi-boot : $2/%.$$($3_way_)o-boot $1/%.lhs)
 
 endef
+
+ifeq "$(TargetOS_CPP)" "mingw32"
+
+define hi-rule-helper # $1 = rule header
+$1 ;
+endef
+
+else
+
+define hi-rule-helper # $1 = rule header
+$1
+	@if [ ! -f $$@ ] ; then \
+	    echo "Panic! $$< exists, but $$@ does not."; \
+	    exit 1; \
+	fi
+
+endef
+
+endif
 

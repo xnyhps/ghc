@@ -202,6 +202,7 @@ data DumpFlag
    | Opt_D_dump_inlinings
    | Opt_D_dump_rule_firings
    | Opt_D_dump_rule_rewrites
+   | Opt_D_dump_simpl_trace
    | Opt_D_dump_occur_anal
    | Opt_D_dump_parsed
    | Opt_D_dump_rn
@@ -384,6 +385,7 @@ data GeneralFlag
 
 data WarningFlag =
      Opt_WarnDuplicateExports
+   | Opt_WarnDuplicateConstraints
    | Opt_WarnHiShadows
    | Opt_WarnImplicitPrelude
    | Opt_WarnIncompletePatterns
@@ -466,6 +468,7 @@ data ExtensionFlag
    | Opt_ImplicitParams
    | Opt_ImplicitPrelude
    | Opt_ScopedTypeVariables
+   | Opt_AllowAmbiguousTypes
    | Opt_UnboxedTuples
    | Opt_BangPatterns
    | Opt_TypeFamilies
@@ -527,6 +530,7 @@ data ExtensionFlag
    | Opt_LambdaCase
    | Opt_MultiWayIf
    | Opt_TypeHoles
+   | Opt_EmptyCase
    deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'GeneralFlag's but also a plethora of
@@ -699,7 +703,7 @@ data DynFlags = DynFlags {
 
   interactivePrint      :: Maybe String,
 
-  llvmVersion           :: IORef (Int),
+  llvmVersion           :: IORef Int,
 
   nextWrapperNum        :: IORef Int
  }
@@ -1428,6 +1432,7 @@ dopt f dflags = (fromEnum f `IntSet.member` dumpFlags dflags)
           enableIfVerbose Opt_D_dump_splices                = False
           enableIfVerbose Opt_D_dump_rule_firings           = False
           enableIfVerbose Opt_D_dump_rule_rewrites          = False
+          enableIfVerbose Opt_D_dump_simpl_trace            = False
           enableIfVerbose Opt_D_dump_rtti                   = False
           enableIfVerbose Opt_D_dump_inlinings              = False
           enableIfVerbose Opt_D_dump_core_stats             = False
@@ -2091,6 +2096,7 @@ dynamic_flags = [
   , Flag "ddump-inlinings"         (setDumpFlag Opt_D_dump_inlinings)
   , Flag "ddump-rule-firings"      (setDumpFlag Opt_D_dump_rule_firings)
   , Flag "ddump-rule-rewrites"     (setDumpFlag Opt_D_dump_rule_rewrites)
+  , Flag "ddump-simpl-trace"       (setDumpFlag Opt_D_dump_simpl_trace)
   , Flag "ddump-occur-anal"        (setDumpFlag Opt_D_dump_occur_anal)
   , Flag "ddump-parsed"            (setDumpFlag Opt_D_dump_parsed)
   , Flag "ddump-rn"                (setDumpFlag Opt_D_dump_rn)
@@ -2324,6 +2330,7 @@ fWarningFlags = [
   ( "warn-dodgy-exports",               Opt_WarnDodgyExports, nop ),
   ( "warn-dodgy-imports",               Opt_WarnDodgyImports, nop ),
   ( "warn-duplicate-exports",           Opt_WarnDuplicateExports, nop ),
+  ( "warn-duplicate-constraints",       Opt_WarnDuplicateConstraints, nop ),
   ( "warn-hi-shadowing",                Opt_WarnHiShadows, nop ),
   ( "warn-implicit-prelude",            Opt_WarnImplicitPrelude, nop ),
   ( "warn-incomplete-patterns",         Opt_WarnIncompletePatterns, nop ),
@@ -2580,6 +2587,7 @@ xFlags = [
   ( "ExtendedDefaultRules",             Opt_ExtendedDefaultRules, nop ),
   ( "ImplicitParams",                   Opt_ImplicitParams, nop ),
   ( "ScopedTypeVariables",              Opt_ScopedTypeVariables, nop ),
+  ( "AllowAmbiguousTypes",              Opt_AllowAmbiguousTypes, nop),
 
   ( "PatternSignatures",                Opt_ScopedTypeVariables,
     deprecatedForExtension "ScopedTypeVariables" ),
@@ -2603,7 +2611,8 @@ xFlags = [
   ( "UndecidableInstances",             Opt_UndecidableInstances, nop ),
   ( "IncoherentInstances",              Opt_IncoherentInstances, nop ),
   ( "PackageImports",                   Opt_PackageImports, nop ),
-  ( "TypeHoles",                        Opt_TypeHoles, nop )
+  ( "TypeHoles",                        Opt_TypeHoles, nop ),
+  ( "EmptyCase",                        Opt_EmptyCase, nop )
   ]
 
 defaultFlags :: Settings -> [GeneralFlag]
@@ -2740,7 +2749,8 @@ standardWarnings
         Opt_WarnAlternativeLayoutRuleTransitional,
         Opt_WarnPointlessPragmas,
         Opt_WarnUnsupportedCallingConventions,
-        Opt_WarnInlineRuleShadowing
+        Opt_WarnInlineRuleShadowing,
+        Opt_WarnDuplicateConstraints
       ]
 
 minusWOpts :: [WarningFlag]
