@@ -29,7 +29,7 @@ import Id
 import IdInfo
 import InstEnv
 import FamInstEnv
-import Demand
+import Demand           ( appIsBottom, isTopSig, isBottomingSig )
 import BasicTypes
 import Name hiding (varName)
 import NameSet
@@ -136,7 +136,7 @@ mkBootModDetailsTc hsc_env
   = do  { let dflags = hsc_dflags hsc_env
         ; showPass dflags CoreTidy
 
-        ; let { insts'     = tidyInstances globaliseAndTidyId insts
+        ; let { insts'     = map (tidyClsInstDFun globaliseAndTidyId) insts
               ; dfun_ids   = map instanceDFunId insts'
               ; type_env1  = mkBootTypeEnv (availsToNameSet exports)
                                 (typeEnvIds type_env) tcs fam_insts
@@ -153,9 +153,9 @@ mkBootModDetailsTc hsc_env
         }
   where
 
-mkBootTypeEnv :: NameSet -> [Id] -> [TyCon] -> [FamInst] -> TypeEnv
+mkBootTypeEnv :: NameSet -> [Id] -> [TyCon] -> [FamInst Branched] -> TypeEnv
 mkBootTypeEnv exports ids tcs fam_insts
-  = tidyTypeEnv True False exports $
+  = tidyTypeEnv True $
        typeEnvFromEntities final_ids tcs fam_insts
   where
         -- Find the LocalIds in the type env that are exported
@@ -309,10 +309,6 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
   = do  { let { dflags     = hsc_dflags hsc_env
               ; omit_prags = gopt Opt_OmitInterfacePragmas dflags
               ; expose_all = gopt Opt_ExposeAllUnfoldings  dflags
-              ; th         = xopt Opt_TemplateHaskell      dflags
-              ; data_kinds = xopt Opt_DataKinds            dflags
-              ; no_trim_types = th || data_kinds
-                                -- See Note [When we can't trim types]
               }
         ; showPass dflags CoreTidy
 
@@ -334,14 +330,13 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
         ; (tidy_env, tidy_binds)
                  <- tidyTopBinds hsc_env unfold_env tidy_occ_env binds
 
-        ; let { export_set = availsToNameSet exports
-              ; final_ids  = [ id | id <- bindersOfBinds tidy_binds,
+        ; let { final_ids  = [ id | id <- bindersOfBinds tidy_binds,
                                     isExternalName (idName id)]
 
-              ; tidy_type_env = tidyTypeEnv omit_prags no_trim_types export_set
+              ; tidy_type_env = tidyTypeEnv omit_prags
                                       (extendTypeEnvWithIds type_env final_ids)
 
-              ; tidy_insts    = tidyInstances (lookup_dfun tidy_type_env) insts
+              ; tidy_insts    = map (tidyClsInstDFun (lookup_dfun tidy_type_env)) insts
                 -- A DFunId will have a binding in tidy_binds, and so
                 -- will now be in final_env, replete with IdInfo
                 -- Its name will be unchanged since it was born, but
@@ -414,8 +409,7 @@ lookup_dfun type_env dfun_id
 
 --------------------------
 tidyTypeEnv :: Bool       -- Compiling without -O, so omit prags
-            -> Bool       -- Type-trimming flag
-            -> NameSet -> TypeEnv -> TypeEnv
+            -> TypeEnv -> TypeEnv
 
 -- The competed type environment is gotten from
 --      a) the types and classes defined here (plus implicit things)
@@ -426,117 +420,28 @@ tidyTypeEnv :: Bool       -- Compiling without -O, so omit prags
 --          the externally-accessible ones
 -- This truncates the type environment to include only the
 -- exported Ids and things needed from them, which saves space
+--
+-- See Note [Don't attempt to trim data types]
 
-tidyTypeEnv omit_prags no_trim_types exports type_env
+tidyTypeEnv omit_prags type_env
  = let
         type_env1 = filterNameEnv (not . isWiredInName . getName) type_env
           -- (1) remove wired-in things
-        type_env2 | omit_prags = mapNameEnv (trimThing no_trim_types exports) type_env1
+        type_env2 | omit_prags = mapNameEnv trimThing type_env1
                   | otherwise  = type_env1
           -- (2) trimmed if necessary
     in
     type_env2
 
 --------------------------
-trimThing :: Bool -> NameSet -> TyThing -> TyThing
+trimThing :: TyThing -> TyThing
 -- Trim off inessentials, for boot files and no -O
-trimThing no_trim_types exports (ATyCon tc)
-   | not (mustExposeTyCon no_trim_types exports tc)
-   = ATyCon (makeTyConAbstract tc)      -- Note [When we can't trim types]
-
-trimThing _th _exports (AnId id)
+trimThing (AnId id)
    | not (isImplicitId id)
    = AnId (id `setIdInfo` vanillaIdInfo)
 
-trimThing _th _exports other_thing
+trimThing other_thing
   = other_thing
-
-
-{- Note [When we can't trim types]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The basic idea of type trimming is to export algebraic data types
-abstractly (without their data constructors) when compiling without
--O, unless of course they are explicitly exported by the user.
-
-We always export synonyms, because they can be mentioned in the type
-of an exported Id.  We could do a full dependency analysis starting
-from the explicit exports, but that's quite painful, and not done for
-now.
-
-But there are some times we can't do that, indicated by the 'no_trim_types' flag.
-
-First, Template Haskell.  Consider (Trac #2386) this
-        module M(T, makeOne) where
-          data T = Yay String
-          makeOne = [| Yay "Yep" |]
-Notice that T is exported abstractly, but makeOne effectively exports it too!
-A module that splices in $(makeOne) will then look for a declartion of Yay,
-so it'd better be there.  Hence, brutally but simply, we switch off type
-constructor trimming if TH is enabled in this module.
-
-Second, data kinds.  Consider (Trac #5912)
-     {-# LANGUAGE DataKinds #-}
-     module M() where
-     data UnaryTypeC a = UnaryDataC a
-     type Bug = 'UnaryDataC
-We always export synonyms, so Bug is exposed, and that means that
-UnaryTypeC must be too, even though it's not explicitly exported.  In
-effect, DataKinds means that we'd need to do a full dependency analysis
-to see what data constructors are mentioned.  But we don't do that yet.
-
-In these two cases we just switch off type trimming altogether.
- -}
-
-mustExposeTyCon :: Bool         -- Type-trimming flag
-                -> NameSet      -- Exports
-                -> TyCon        -- The tycon
-                -> Bool         -- Can its rep be hidden?
--- We are compiling without -O, and thus trying to write as little as
--- possible into the interface file.  But we must expose the details of
--- any data types whose constructors or fields are exported
-mustExposeTyCon no_trim_types exports tc
-  | no_trim_types               -- See Note [When we can't trim types]
-  = True
-
-  | not (isAlgTyCon tc)         -- Always expose synonyms (otherwise we'd have to
-                                -- figure out whether it was mentioned in the type
-                                -- of any other exported thing)
-  = True
-
-  | isEnumerationTyCon tc       -- For an enumeration, exposing the constructors
-  = True                        -- won't lead to the need for further exposure
-
-  | isFamilyTyCon tc            -- Open type family
-  = True
-
-  -- Below here we just have data/newtype decls or family instances
-
-  | null data_cons              -- Ditto if there are no data constructors
-  = True                        -- (NB: empty data types do not count as enumerations
-                                -- see Note [Enumeration types] in TyCon
-
-  | any exported_con data_cons  -- Expose rep if any datacon or field is exported
-  = True
-
-  | isNewTyCon tc && isFFITy (snd (newTyConRhs tc))
-  = True   -- Expose the rep for newtypes if the rep is an FFI type.
-           -- For a very annoying reason.  'Foreign import' is meant to
-           -- be able to look through newtypes transparently, but it
-           -- can only do that if it can "see" the newtype representation
-
-  | otherwise
-  = False
-  where
-    data_cons = tyConDataCons tc
-    exported_con con = any (`elemNameSet` exports)
-                           (dataConName con : dataConFieldLabels con)
-
-tidyInstances :: (DFunId -> DFunId) -> [ClsInst] -> [ClsInst]
-tidyInstances tidy_dfun ispecs
-  = map tidy ispecs
-  where
-    tidy ispec = setInstanceDFunId ispec $
-                 tidy_dfun (instanceDFunId ispec)
 \end{code}
 
 \begin{code}
@@ -566,6 +471,33 @@ tidyVectInfo (_, var_env) info@(VectInfo { vectInfoVar          = vars
     lookup_var var = lookupWithDefaultVarEnv var_env var var
 \end{code}
 
+Note [Don't attempt to trim data types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For some time GHC tried to avoid exporting the data constructors
+of a data type if it wasn't strictly necessary to do so; see Trac #835.
+But "strictly necessary" accumulated a longer and longer list 
+of execeptions, and finally I gave up the battle:
+
+    commit 9a20e540754fc2af74c2e7392f2786a81d8d5f11
+    Author: Simon Peyton Jones <simonpj@microsoft.com>
+    Date:   Thu Dec 6 16:03:16 2012 +0000
+
+    Stop attempting to "trim" data types in interface files
+    
+    Without -O, we previously tried to make interface files smaller
+    by not including the data constructors of data types.  But
+    there are a lot of exceptions, notably when Template Haskell is
+    involved or, more recently, DataKinds.
+    
+    However Trac #7445 shows that even without TemplateHaskell, using
+    the Data class and invoking Language.Haskell.TH.Quote.dataToExpQ
+    is enough to require us to expose the data constructors.
+    
+    So I've given up on this "optimisation" -- it's probably not
+    important anyway.  Now I'm simply not attempting to trim off
+    the data constructors.  The gain in simplicity is worth the
+    modest cost in interface file growth, which is limited to the
+    bits reqd to describe those data constructors.
 
 %************************************************************************
 %*                                                                      *
@@ -760,7 +692,7 @@ addExternal expose_all id = (new_needed_ids, show_unfold)
     show_unfold    = show_unfolding (unfoldingInfo idinfo)
     never_active   = isNeverActive (inlinePragmaActivation (inlinePragInfo idinfo))
     loop_breaker   = isStrongLoopBreaker (occInfo idinfo)
-    bottoming_fn   = isBottomingSig (strictnessInfo idinfo `orElse` topSig)
+    bottoming_fn   = isBottomingSig (strictnessInfo idinfo)
 
         -- Stuff to do with the Id's unfolding
         -- We leave the unfolding there even if there is a worker
@@ -1166,27 +1098,25 @@ tidyTopIdInfo dflags rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_
     -- when we are doing -fexpose-all-unfoldings
 
     --------- Strictness ------------
-    final_sig | Just sig <- strictnessInfo idinfo
-              = WARN( _bottom_hidden sig, ppr name ) Just sig
-              | Just (_, sig) <- mb_bot_str = Just sig
-              | otherwise                   = Nothing
-
-    -- If the cheap-and-cheerful bottom analyser can see that
-    -- the RHS is bottom, it should jolly well be exposed
-    _bottom_hidden id_sig = case mb_bot_str of
-                               Nothing         -> False
-                               Just (arity, _) -> not (appIsBottom id_sig arity)
-
     mb_bot_str = exprBotStrictness_maybe orig_rhs
+
+    sig = strictnessInfo idinfo
+    final_sig | not $ isTopSig sig 
+                 = WARN( _bottom_hidden sig , ppr name ) sig 
+                 -- try a cheap-and-cheerful bottom analyser
+                 | Just (_, nsig) <- mb_bot_str = nsig
+                 | otherwise                    = sig
+
+    _bottom_hidden id_sig = case mb_bot_str of
+                                  Nothing         -> False
+                                  Just (arity, _) -> not (appIsBottom id_sig arity)
 
     --------- Unfolding ------------
     unf_info = unfoldingInfo idinfo
     unfold_info | show_unfold = tidyUnfolding rhs_tidy_env unf_info unf_from_rhs
                 | otherwise   = noUnfolding
     unf_from_rhs = mkTopUnfolding dflags is_bot tidy_rhs
-    is_bot = case final_sig of
-                Just sig -> isBottomingSig sig
-                Nothing  -> False
+    is_bot = isBottomingSig final_sig
     -- NB: do *not* expose the worker if show_unfold is off,
     --     because that means this thing is a loop breaker or
     --     marked NOINLINE or something like that
@@ -1282,3 +1212,103 @@ fastOr :: FastBool -> (a -> FastBool) -> a -> FastBool
 -- hack for lazy-or over FastBool.
 fastOr a f x = fastBool (isFastTrue a || isFastTrue (f x))
 \end{code}
+
+
+------------------------------------------------------------------------------
+--               Old, dead, type-trimming code
+-------------------------------------------------------------------------------
+
+We used to try to "trim off" the constructors of data types that are
+not exported, to reduce the size of interface files, at least without
+-O.  But that is not always possible: see the old Note [When we can't
+trim types] below for exceptions.
+
+Then (Trac #7445) I realised that the TH problem arises for any data type
+that we have deriving( Data ), because we can invoke
+   Language.Haskell.TH.Quote.dataToExpQ
+to get a TH Exp representation of a value built from that data type.
+You don't even need {-# LANGUAGE TemplateHaskell #-}.
+
+At this point I give up. The pain of trimming constructors just
+doesn't seem worth the gain.  So I've dumped all the code, and am just
+leaving it here at the end of the module in case something like this
+is ever resurrected.
+
+
+Note [When we can't trim types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The basic idea of type trimming is to export algebraic data types
+abstractly (without their data constructors) when compiling without
+-O, unless of course they are explicitly exported by the user.
+
+We always export synonyms, because they can be mentioned in the type
+of an exported Id.  We could do a full dependency analysis starting
+from the explicit exports, but that's quite painful, and not done for
+now.
+
+But there are some times we can't do that, indicated by the 'no_trim_types' flag.
+
+First, Template Haskell.  Consider (Trac #2386) this
+        module M(T, makeOne) where
+          data T = Yay String
+          makeOne = [| Yay "Yep" |]
+Notice that T is exported abstractly, but makeOne effectively exports it too!
+A module that splices in $(makeOne) will then look for a declartion of Yay,
+so it'd better be there.  Hence, brutally but simply, we switch off type
+constructor trimming if TH is enabled in this module.
+
+Second, data kinds.  Consider (Trac #5912)
+     {-# LANGUAGE DataKinds #-}
+     module M() where
+     data UnaryTypeC a = UnaryDataC a
+     type Bug = 'UnaryDataC
+We always export synonyms, so Bug is exposed, and that means that
+UnaryTypeC must be too, even though it's not explicitly exported.  In
+effect, DataKinds means that we'd need to do a full dependency analysis
+to see what data constructors are mentioned.  But we don't do that yet.
+
+In these two cases we just switch off type trimming altogether.
+
+mustExposeTyCon :: Bool         -- Type-trimming flag
+                -> NameSet      -- Exports
+                -> TyCon        -- The tycon
+                -> Bool         -- Can its rep be hidden?
+-- We are compiling without -O, and thus trying to write as little as
+-- possible into the interface file.  But we must expose the details of
+-- any data types whose constructors or fields are exported
+mustExposeTyCon no_trim_types exports tc
+  | no_trim_types               -- See Note [When we can't trim types]
+  = True
+
+  | not (isAlgTyCon tc)         -- Always expose synonyms (otherwise we'd have to
+                                -- figure out whether it was mentioned in the type
+                                -- of any other exported thing)
+  = True
+
+  | isEnumerationTyCon tc       -- For an enumeration, exposing the constructors
+  = True                        -- won't lead to the need for further exposure
+
+  | isFamilyTyCon tc            -- Open type family
+  = True
+
+  -- Below here we just have data/newtype decls or family instances
+
+  | null data_cons              -- Ditto if there are no data constructors
+  = True                        -- (NB: empty data types do not count as enumerations
+                                -- see Note [Enumeration types] in TyCon
+
+  | any exported_con data_cons  -- Expose rep if any datacon or field is exported
+  = True
+
+  | isNewTyCon tc && isFFITy (snd (newTyConRhs tc))
+  = True   -- Expose the rep for newtypes if the rep is an FFI type.
+           -- For a very annoying reason.  'Foreign import' is meant to
+           -- be able to look through newtypes transparently, but it
+           -- can only do that if it can "see" the newtype representation
+
+  | otherwise
+  = False
+  where
+    data_cons = tyConDataCons tc
+    exported_con con = any (`elemNameSet` exports)
+                           (dataConName con : dataConFieldLabels con)

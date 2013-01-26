@@ -31,13 +31,14 @@ import CoreSyn
 import CoreUtils
 import CoreUnfold
 import CoreLint
-import WorkWrap
-import MkCore( castBottomExpr )
+import WorkWrap                     ( mkWrapper )
+import MkCore                       ( castBottomExpr )
 import Id
 import MkId
 import IdInfo
 import Class
 import TyCon
+import CoAxiom
 import DataCon
 import PrelNames
 import TysWiredIn
@@ -436,7 +437,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
                           ifTyVars = tv_bndrs, 
                           ifCtxt = ctxt, ifGadtSyntax = gadt_syn,
                           ifCons = rdr_cons, 
-                          ifRec = is_rec, 
+                          ifRec = is_rec, ifPromotable = is_prom, 
                           ifAxiom = mb_axiom_name })
   = bindIfaceTyVars_AT tv_bndrs $ \ tyvars -> do
     { tc_name <- lookupIfaceTop occ_name
@@ -445,7 +446,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
             ; parent' <- tc_parent tyvars mb_axiom_name
             ; cons <- tcIfaceDataCons tc_name tycon tyvars rdr_cons
             ; return (buildAlgTyCon tc_name tyvars cType stupid_theta 
-                                    cons is_rec gadt_syn parent') }
+                                    cons is_rec is_prom gadt_syn parent') }
     ; traceIf (text "tcIfaceDecl4" <+> ppr tycon)
     ; return (ATyCon tycon) }
   where
@@ -454,13 +455,18 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
     tc_parent tyvars (Just ax_name)
       = ASSERT( isNoParent parent )
         do { ax <- tcIfaceCoAxiom ax_name
-           ; let (fam_tc, fam_tys) = coAxiomSplitLHS ax
-                 subst = zipTopTvSubst (coAxiomTyVars ax) (mkTyVarTys tyvars)
+           ; let fam_tc = coAxiomTyCon ax
+                 ax_unbr = toUnbranchedAxiom ax
+                 -- data families don't have branches:
+                 branch = coAxiomSingleBranch ax_unbr
+                 ax_tvs = coAxBranchTyVars branch
+                 ax_lhs = coAxBranchLHS branch
+                 subst = zipTopTvSubst ax_tvs (mkTyVarTys tyvars)
                             -- The subst matches the tyvar of the TyCon
                             -- with those from the CoAxiom.  They aren't
                             -- necessarily the same, since the two may be
                             -- gotten from separate interface-file declarations
-           ; return (FamInstTyCon ax fam_tc (substTys subst fam_tys)) }
+           ; return (FamInstTyCon ax_unbr fam_tc (substTys subst ax_lhs)) }
 
 tc_iface_decl parent _ (IfaceSyn {ifName = occ_name, ifTyVars = tv_bndrs, 
                                   ifSynRhs = mb_rhs_ty,
@@ -538,19 +544,26 @@ tc_iface_decl _ _ (IfaceForeign {ifName = rdr_name, ifExtName = ext_name})
         ; return (ATyCon (mkForeignTyCon name ext_name 
                                          liftedTypeKind 0)) }
 
-tc_iface_decl _ _ (IfaceAxiom {ifName = tc_occ, ifTyVars = tv_bndrs,
-                               ifLHS = lhs, ifRHS = rhs })
-  = bindIfaceTyVars tv_bndrs $ \ tvs -> do
-    { tc_name <- lookupIfaceTop tc_occ
-    ; tc_lhs  <- tcIfaceType lhs
-    ; tc_rhs  <- tcIfaceType rhs
-    ; let axiom = CoAxiom { co_ax_unique   = nameUnique tc_name
-                          , co_ax_name     = tc_name
-                          , co_ax_implicit = False
-                          , co_ax_tvs      = tvs
-                          , co_ax_lhs      = tc_lhs
-                          , co_ax_rhs      = tc_rhs }
-    ; return (ACoAxiom axiom) }
+tc_iface_decl _ _ (IfaceAxiom {ifName = ax_occ, ifTyCon = tc, ifAxBranches = branches})
+  = do { tc_name     <- lookupIfaceTop ax_occ
+       ; tc_tycon    <- tcIfaceTyCon tc
+       ; tc_branches <- mapM tc_branch branches
+       ; let axiom = CoAxiom { co_ax_unique   = nameUnique tc_name
+                             , co_ax_name     = tc_name
+                             , co_ax_tc       = tc_tycon
+                             , co_ax_branches = toBranchList tc_branches
+                             , co_ax_implicit = False }
+       ; return (ACoAxiom axiom) }
+  where tc_branch :: IfaceAxBranch -> IfL CoAxBranch
+        tc_branch (IfaceAxBranch { ifaxbTyVars = tv_bndrs, ifaxbLHS = lhs, ifaxbRHS = rhs })
+          = bindIfaceTyVars tv_bndrs $ \ tvs -> do
+            { tc_lhs <- mapM tcIfaceType lhs
+            ; tc_rhs <- tcIfaceType rhs
+            ; let branch = CoAxBranch { cab_loc = noSrcSpan
+                                      , cab_tvs = tvs
+                                      , cab_lhs = tc_lhs
+                                      , cab_rhs = tc_rhs }
+            ; return branch }
 
 tcIfaceDataCons :: Name -> TyCon -> [TyVar] -> IfaceConDecls -> IfL AlgTyConRhs
 tcIfaceDataCons tycon_name tycon _ if_cons
@@ -566,7 +579,7 @@ tcIfaceDataCons tycon_name tycon _ if_cons
                          ifConUnivTvs = univ_tvs, ifConExTvs = ex_tvs,
                          ifConOcc = occ, ifConCtxt = ctxt, ifConEqSpec = spec,
                          ifConArgTys = args, ifConFields = field_lbls,
-                         ifConStricts = stricts})
+                         ifConStricts = if_stricts})
      = bindIfaceTyVars univ_tvs $ \ univ_tyvars -> do
        bindIfaceTyVars ex_tvs    $ \ ex_tyvars -> do
         { name  <- lookupIfaceTop occ
@@ -583,17 +596,26 @@ tcIfaceDataCons tycon_name tycon _ if_cons
                 ; return (eq_spec, theta, arg_tys) }
         ; lbl_names <- mapM lookupIfaceTop field_lbls
 
+        ; stricts <- mapM tc_strict if_stricts
+
         -- Remember, tycon is the representation tycon
         ; let orig_res_ty = mkFamilyTyConApp tycon 
                                 (substTyVars (mkTopTvSubst eq_spec) univ_tyvars)
 
-        ; buildDataCon name is_infix
+        ; buildDataCon (pprPanic "tcIfaceDataCons: FamInstEnvs" (ppr name))
+                       name is_infix
                        stricts lbl_names
                        univ_tyvars ex_tyvars 
                        eq_spec theta 
                        arg_tys orig_res_ty tycon
         }
     mk_doc con_name = ptext (sLit "Constructor") <+> ppr con_name
+
+    tc_strict IfNoBang = return HsNoBang
+    tc_strict IfStrict = return HsStrict
+    tc_strict IfUnpack = return (HsUnpack Nothing)
+    tc_strict (IfUnpackCo if_co) = do { co <- tcIfaceCo if_co
+                                      ; return (HsUnpack (Just co)) }
 
 tcIfaceEqSpec :: [(OccName, IfaceType)] -> IfL [(TyVar, Type)]
 tcIfaceEqSpec spec
@@ -632,18 +654,18 @@ look at it.
 tcIfaceInst :: IfaceClsInst -> IfL ClsInst
 tcIfaceInst (IfaceClsInst { ifDFun = dfun_occ, ifOFlag = oflag
                           , ifInstCls = cls, ifInstTys = mb_tcs })
-  = do { dfun    <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
-                     tcIfaceExtId dfun_occ
+  = do { dfun <- forkM (ptext (sLit "Dict fun") <+> ppr dfun_occ) $
+                 tcIfaceExtId dfun_occ
        ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
        ; return (mkImportedInstance cls mb_tcs' dfun oflag) }
 
-tcIfaceFamInst :: IfaceFamInst -> IfL FamInst
-tcIfaceFamInst (IfaceFamInst { ifFamInstFam = fam, ifFamInstTys = mb_tcs
-                             , ifFamInstAxiom = axiom_name } )
+tcIfaceFamInst :: IfaceFamInst -> IfL (FamInst Branched)
+tcIfaceFamInst (IfaceFamInst { ifFamInstFam = fam, ifFamInstTys = mb_tcss
+                             , ifFamInstGroup = group, ifFamInstAxiom = axiom_name } )
     = do { axiom' <- forkM (ptext (sLit "Axiom") <+> ppr axiom_name) $
                      tcIfaceCoAxiom axiom_name
-         ; let mb_tcs' = map (fmap ifaceTyConName) mb_tcs
-         ; return (mkImportedFamInst fam mb_tcs' axiom') }
+         ; let mb_tcss' = map (map (fmap ifaceTyConName)) mb_tcss
+         ; return (mkImportedFamInst fam group mb_tcss' axiom') }
 \end{code}
 
 
@@ -953,7 +975,9 @@ tcIfaceCo (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' ->
 
 tcIfaceCoApp :: IfaceCoCon -> [IfaceType] -> IfL Coercion
 tcIfaceCoApp IfaceReflCo      [t]     = Refl         <$> tcIfaceType t
-tcIfaceCoApp (IfaceCoAx n)    ts      = AxiomInstCo  <$> tcIfaceCoAxiom n <*> mapM tcIfaceCo ts
+tcIfaceCoApp (IfaceCoAx n i)  ts      = AxiomInstCo  <$> tcIfaceCoAxiom n
+                                                     <*> pure i
+                                                     <*> mapM tcIfaceCo ts
 tcIfaceCoApp IfaceUnsafeCo    [t1,t2] = UnsafeCo     <$> tcIfaceType t1 <*> tcIfaceType t2
 tcIfaceCoApp IfaceSymCo       [t]     = SymCo        <$> tcIfaceCo t
 tcIfaceCoApp IfaceTransCo     [t1,t2] = TransCo      <$> tcIfaceCo t1 <*> tcIfaceCo t2
@@ -1181,7 +1205,7 @@ tcIdInfo ignore_prags name ty info
     tcPrag :: IdInfo -> IfaceInfoItem -> IfL IdInfo
     tcPrag info HsNoCafRefs        = return (info `setCafInfo`   NoCafRefs)
     tcPrag info (HsArity arity)    = return (info `setArityInfo` arity)
-    tcPrag info (HsStrictness str) = return (info `setStrictnessInfo` Just str)
+    tcPrag info (HsStrictness str) = return (info `setStrictnessInfo` str)
     tcPrag info (HsInline prag)    = return (info `setInlinePragInfo` prag)
 
         -- The next two are lazy, so they don't transitively suck stuff in
@@ -1202,12 +1226,11 @@ tcUnfolding name _ info (IfCoreUnfold stable if_expr)
                     Nothing   -> NoUnfolding
                     Just expr -> mkUnfolding dflags unf_src
                                              True {- Top level -} 
-                                             is_bottoming expr) }
+                                             is_bottoming
+                                             expr) }
   where
      -- Strictness should occur before unfolding!
-    is_bottoming = case strictnessInfo info of
-                     Just sig -> isBottomingSig sig
-                     Nothing  -> False
+    is_bottoming = isBottomingSig $ strictnessInfo info              
 
 tcUnfolding name _ _ (IfCompulsory if_expr)
   = do  { mb_expr <- tcPragExpr name if_expr
@@ -1254,12 +1277,9 @@ tcIfaceWrapper name ty info arity get_worker
         = mkWwInlineRule wkr_id
                          (initUs_ us (mkWrapper dflags ty strict_sig) wkr_id) 
                          arity
-
-        -- Again we rely here on strictness info always appearing 
-        -- before unfolding
-    strict_sig = case strictnessInfo info of
-                   Just sig -> sig
-                   Nothing  -> pprPanic "Worker info but no strictness for" (ppr name)
+        -- Again we rely here on strictness info 
+        -- always appearing before unfolding
+    strict_sig = strictnessInfo info
 \end{code}
 
 For unfoldings we try to do the job lazily, so that we never type check
@@ -1373,12 +1393,14 @@ tcIfaceKindCon (IfaceTc name)
        ; case thing of    -- A "type constructor" here is a promoted type constructor
                           --           c.f. Trac #5881
            ATyCon tc 
-             | isSuperKind (tyConKind tc) -> return tc   -- Mainly just '*' or 'AnyK'
-             | otherwise                  -> return (promoteTyCon tc)
+             | isSuperKind (tyConKind tc) 
+             -> return tc   -- Mainly just '*' or 'AnyK'
+             | Just prom_tc <- promotableTyCon_maybe tc
+             -> return prom_tc
 
            _ -> pprPanic "tcIfaceKindCon" (ppr name $$ ppr thing) }
 
-tcIfaceCoAxiom :: Name -> IfL CoAxiom
+tcIfaceCoAxiom :: Name -> IfL (CoAxiom Branched)
 tcIfaceCoAxiom name = do { thing <- tcIfaceGlobal name
                          ; return (tyThingCoAxiom thing) }
 

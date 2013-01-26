@@ -50,6 +50,7 @@ import TcRnMonad
 import TcEvidence( HsWrapper )
 import TcEnv
 import TcMType
+import TcValidity
 import TcUnify
 import TcIface
 import TcType
@@ -67,6 +68,7 @@ import NameEnv
 import TysWiredIn
 import BasicTypes
 import SrcLoc
+import ErrUtils ( isEmptyMessages )
 import DynFlags ( ExtensionFlag( Opt_DataKinds ), getDynFlags )
 import Unique
 import UniqSupply
@@ -403,15 +405,26 @@ tc_hs_type hs_ty@(HsTupleTy HsBoxedOrConstraintTuple tys) exp_kind@(EK exp_k _ct
   | isLiftedTypeKind exp_k = tc_tuple hs_ty HsBoxedTuple      tys exp_kind
   | otherwise
   = do { k <- newMetaKindVar
-       ; tau_tys <- tc_hs_arg_tys (ptext (sLit "a tuple")) tys (repeat k)
-       ; k' <- zonkTcKind k
-       ; if isConstraintKind k' then
-            finish_tuple hs_ty HsConstraintTuple tau_tys exp_kind
-         else if isLiftedTypeKind k' then
-            finish_tuple hs_ty HsBoxedTuple tau_tys exp_kind
-         else
-            tc_tuple hs_ty HsBoxedTuple tys exp_kind }
-         -- It's not clear what the kind is, so assume *, and
+       ; (msgs, mb_tau_tys) <- tryTc (tc_hs_arg_tys (ptext (sLit "a tuple")) tys (repeat k))
+       ; k <- zonkTcKind k
+           -- Do the experiment inside a 'tryTc' because errors can be
+           -- confusing.  Eg Trac #7410 (Either Int, Int), we do not want to get
+           -- an error saying "the second argument of a tuple should have kind *->*"
+
+       ; case mb_tau_tys of
+           Just tau_tys 
+             | not (isEmptyMessages msgs) -> try_again k
+             | isConstraintKind k         -> go_for HsConstraintTuple tau_tys
+             | isLiftedTypeKind k         -> go_for HsBoxedTuple      tau_tys
+             | otherwise                  -> try_again k
+           Nothing                        -> try_again k }
+   where
+     go_for sort tau_tys = finish_tuple hs_ty sort tau_tys exp_kind
+
+     try_again k
+       | isConstraintKind k = tc_tuple hs_ty HsConstraintTuple tys exp_kind
+       | otherwise          = tc_tuple hs_ty HsBoxedTuple      tys exp_kind
+         -- It's not clear what the kind is, so make best guess and
          -- check the arguments again to give good error messages
          -- in eg. `(Maybe, Maybe)`
 
@@ -492,12 +505,15 @@ tc_hs_type ty@(HsSpliceTy {}) _exp_kind
 tc_hs_type (HsWrapTy {}) _exp_kind 
   = panic "tc_hs_type HsWrapTy"  -- We kind checked something twice
 
-tc_hs_type hs_ty@(HsTyLit tl) exp_kind = do
-  let (ty,k) = case tl of
-                 HsNumTy n -> (mkNumLitTy n, typeNatKind)
-                 HsStrTy s -> (mkStrLitTy s,  typeStringKind)
-  checkExpectedKind hs_ty k exp_kind
-  return ty
+tc_hs_type hs_ty@(HsTyLit (HsNumTy n)) exp_kind 
+  = do { checkExpectedKind hs_ty typeNatKind exp_kind
+       ; checkWiredInTyCon typeNatKindCon
+       ; return (mkNumLitTy n) }
+
+tc_hs_type hs_ty@(HsTyLit (HsStrTy s)) exp_kind 
+  = do { checkExpectedKind hs_ty typeSymbolKind exp_kind
+       ; checkWiredInTyCon typeSymbolKindCon
+       ; return (mkStrLitTy s) }
 
 ---------------------------
 tc_tuple :: HsType Name -> HsTupleSort -> [LHsType Name] -> ExpKind -> TcM TcType
@@ -607,9 +623,12 @@ tcTyVar name         -- Could be a tyvar, a tycon, or a datacon
 
            AGlobal (ADataCon dc)
              | Just tc <- promoteDataCon_maybe dc
-             -> inst_tycon (mkTyConApp tc) (tyConKind tc)
-             | otherwise -> failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
-                            <+> quotes (ppr (dataConUserType dc)) <+> ptext (sLit "is not promotable"))
+             -> do { data_kinds <- xoptM Opt_DataKinds
+                   ; unless data_kinds $ promotionErr name NoDataKinds
+                   ; inst_tycon (mkTyConApp tc) (tyConKind tc) }
+             | otherwise -> failWithTc (ptext (sLit "Data constructor") <+> quotes (ppr dc)
+                                        <+> ptext (sLit "comes from an un-promotable type") 
+                                        <+> quotes (ppr (dataConTyCon dc)))
 
            APromotionErr err -> promotionErr name err
 
@@ -1467,9 +1486,9 @@ tc_kind_var_app name arg_kis
   	   AGlobal (ATyCon tc)
   	     -> do { data_kinds <- xoptM Opt_DataKinds
   	           ; unless data_kinds $ addErr (dataKindsErr name)
-  	     	   ; case isPromotableTyCon tc of
-  	     	       Just n | n == length arg_kis ->
-  	     	         return (mkTyConApp (promoteTyCon tc) arg_kis)
+  	     	   ; case promotableTyCon_maybe tc of
+  	     	       Just prom_tc | arg_kis `lengthIs` tyConArity prom_tc
+  	     	               -> return (mkTyConApp prom_tc arg_kis)
   	     	       Just _  -> tycon_err tc "is not fully applied"
   	     	       Nothing -> tycon_err tc "is not promotable" }
 
@@ -1516,6 +1535,7 @@ promotionErr name err
   where
     reason = case err of
                FamDataConPE -> ptext (sLit "it comes from a data family instance")
+               NoDataKinds  -> ptext (sLit "Perhaps you intended to use -XDataKinds")
                _ -> ptext (sLit "it is defined and used in the same recursive group")
 \end{code}
 

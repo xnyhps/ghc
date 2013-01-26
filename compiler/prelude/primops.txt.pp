@@ -45,8 +45,8 @@ defaults
    can_fail         = False   -- See Note Note [PrimOp can_fail and has_side_effects] in PrimOp
    commutable       = False
    code_size        = { primOpCodeSizeDefault }
-   strictness       = { \ arity -> mkStrictSig (mkTopDmdType (replicate arity lazyDmd) TopRes) }
-
+   strictness       = { \ arity -> mkStrictSig (mkTopDmdType (replicate arity topDmd) topRes) }
+   fixity           = Nothing
 
 -- Currently, documentation is produced using latex, so contents of
 -- description fields should be legal latex. Descriptions can contain
@@ -166,13 +166,16 @@ primtype Int#
 primop   IntAddOp    "+#"    Dyadic
    Int# -> Int# -> Int#
    with commutable = True
+        fixity = infixl 6
 
 primop   IntSubOp    "-#"    Dyadic   Int# -> Int# -> Int#
+   with fixity = infixl 6
 
 primop   IntMulOp    "*#" 
    Dyadic   Int# -> Int# -> Int#
    {Low word of signed integer multiply.}
    with commutable = True
+        fixity = infixl 7
 
 primop   IntMulMayOfloOp  "mulIntMayOflo#" 
    Dyadic   Int# -> Int# -> Int#
@@ -225,18 +228,26 @@ primop   IntSubCOp   "subIntC#"    GenPrimOp   Int# -> Int# -> (# Int#, Int# #)
    with code_size = 2
 
 primop   IntGtOp  ">#"   Compare   Int# -> Int# -> Bool
+   with fixity = infix 4
+
 primop   IntGeOp  ">=#"   Compare   Int# -> Int# -> Bool
+   with fixity = infix 4
 
 primop   IntEqOp  "==#"   Compare
    Int# -> Int# -> Bool
    with commutable = True
+        fixity = infix 4
 
 primop   IntNeOp  "/=#"   Compare
    Int# -> Int# -> Bool
    with commutable = True
+        fixity = infix 4
 
 primop   IntLtOp  "<#"   Compare   Int# -> Int# -> Bool
+   with fixity = infix 4
+
 primop   IntLeOp  "<=#"   Compare   Int# -> Int# -> Bool
+   with fixity = infix 4
 
 primop   ChrOp   "chr#"   GenPrimOp   Int# -> Char#
    with code_size = 0
@@ -246,6 +257,9 @@ primop   Int2WordOp "int2Word#" GenPrimOp Int# -> Word#
 
 primop   Int2FloatOp   "int2Float#"      GenPrimOp  Int# -> Float#
 primop   Int2DoubleOp   "int2Double#"          GenPrimOp  Int# -> Double#
+
+primop   Word2FloatOp   "word2Float#"      GenPrimOp  Word# -> Float#
+primop   Word2DoubleOp   "word2Double#"          GenPrimOp  Word# -> Double#
 
 primop   ISllOp   "uncheckedIShiftL#" GenPrimOp  Int# -> Int# -> Int#
 	 {Shift left.  Result undefined if shift amount is not
@@ -401,32 +415,44 @@ section "Double#"
 primtype Double#
 
 primop   DoubleGtOp ">##"   Compare   Double# -> Double# -> Bool
+   with fixity = infix 4
+
 primop   DoubleGeOp ">=##"   Compare   Double# -> Double# -> Bool
+   with fixity = infix 4
 
 primop DoubleEqOp "==##"   Compare
    Double# -> Double# -> Bool
    with commutable = True
+        fixity = infix 4
 
 primop DoubleNeOp "/=##"   Compare
    Double# -> Double# -> Bool
    with commutable = True
+        fixity = infix 4
 
 primop   DoubleLtOp "<##"   Compare   Double# -> Double# -> Bool
+   with fixity = infix 4
+
 primop   DoubleLeOp "<=##"   Compare   Double# -> Double# -> Bool
+   with fixity = infix 4
 
 primop   DoubleAddOp   "+##"   Dyadic
    Double# -> Double# -> Double#
    with commutable = True
+        fixity = infixl 6
 
 primop   DoubleSubOp   "-##"   Dyadic   Double# -> Double# -> Double#
+   with fixity = infixl 6
 
 primop   DoubleMulOp   "*##"   Dyadic
    Double# -> Double# -> Double#
    with commutable = True
+        fixity = infixl 7
 
 primop   DoubleDivOp   "/##"   Dyadic
    Double# -> Double# -> Double#
    with can_fail = True
+        fixity = infixl 7
 
 primop   DoubleNegOp   "negateDouble#"  Monadic   Double# -> Double#
 
@@ -1503,7 +1529,7 @@ primop  CatchOp "catch#" GenPrimOp
 primop  RaiseOp "raise#" GenPrimOp
    a -> b
    with
-   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [lazyDmd] BotRes) }
+   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [topDmd] botRes) }
       -- NB: result is bottom
    out_of_line = True
 
@@ -1520,7 +1546,7 @@ primop  RaiseOp "raise#" GenPrimOp
 primop  RaiseIOOp "raiseIO#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, b #)
    with
-   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [lazyDmd,lazyDmd] BotRes) }
+   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [topDmd, topDmd] botRes) }
    out_of_line = True
    has_side_effects = True
 
@@ -2001,7 +2027,8 @@ section "Tag to enum stuff"
 primop  DataToTagOp "dataToTag#" GenPrimOp
    a -> Int#
    with
-   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [seqDmd] TopRes) }
+   strictness  = { \ _arity -> mkStrictSig (mkTopDmdType [evalDmd] topRes) }
+
 	-- dataToTag# must have an evaluated argument
 
 primop  TagToEnumOp "tagToEnum#" GenPrimOp     

@@ -229,6 +229,10 @@ void storageAddCapabilities (nat from, nat to)
         }
     }
 
+#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR)
+    newThreadLocalKey(&gctKey);
+#endif
+
     initGcThreads(from, to);
 }
 
@@ -249,6 +253,9 @@ freeStorage (rtsBool free_heap)
     closeMutex(&sm_mutex);
 #endif
     stgFree(nurseries);
+#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR)
+    freeThreadLocalKey(&gctKey);
+#endif
     freeGcThreads();
 }
 
@@ -842,6 +849,15 @@ dirty_MUT_VAR(StgRegTable *reg, StgClosure *p)
     if (p->header.info == &stg_MUT_VAR_CLEAN_info) {
         p->header.info = &stg_MUT_VAR_DIRTY_info;
         recordClosureMutated(cap,p);
+    }
+}
+
+void
+dirty_TVAR(Capability *cap, StgTVar *p)
+{
+    if (p->header.info == &stg_TVAR_CLEAN_info) {
+        p->header.info = &stg_TVAR_DIRTY_info;
+        recordClosureMutated(cap,(StgClosure*)p);
     }
 }
 

@@ -1,5 +1,5 @@
 
-% (c) The University of Glasgow 2006
+% (c) The University of Glasgow 2006-2012
 % (c) The GRASP Project, Glasgow University, 1992-2002
 %
 
@@ -181,6 +181,8 @@ data Env gbl lcl
 
 instance ContainsDynFlags (Env gbl lcl) where
     extractDynFlags env = hsc_dflags (env_top env)
+    replaceDynFlags env dflags
+        = env {env_top = replaceDynFlags (env_top env) dflags}
 
 instance ContainsModule gbl => ContainsModule (Env gbl lcl) where
     extractModule env = extractModule (env_gbl env)
@@ -233,14 +235,9 @@ data TcGblEnv
           -- things bound in this module. Also store Safe Haskell info
           -- here about transative trusted packaage requirements.
 
-        tcg_dus :: DefUses,
-          -- ^ What is defined in this module and what is used.
-          -- The latter is used to generate
-          --
-          --  (a) version tracking; no need to recompile if these things have
-          --      not changed version stamp
-          --
-          --  (b) unused-import info
+        tcg_dus :: DefUses,   -- ^ What is defined in this module and what is used.
+        tcg_used_rdrnames :: TcRef (Set RdrName),
+          -- See Note [Tracking unused binding and imports]
 
         tcg_keep :: TcRef NameSet,
           -- ^ Locally-defined top-level names to keep alive.
@@ -287,10 +284,6 @@ data TcGblEnv
                 -- Keep the renamed imports regardless.  They are not
                 -- voluminous and are needed if you want to report unused imports
 
-        tcg_used_rdrnames :: TcRef (Set RdrName),
-                -- The set of used *imported* (not locally-defined) RdrNames
-                -- Used only to report unused import declarations
-
         tcg_rn_decls :: Maybe (HsGroup Name),
           -- ^ Renamed decls, maybe.  @Nothing@ <=> Don't retain renamed
           -- decls.
@@ -305,7 +298,7 @@ data TcGblEnv
         tcg_anns      :: [Annotation],      -- ...Annotations
         tcg_tcs       :: [TyCon],           -- ...TyCons and Classes
         tcg_insts     :: [ClsInst],         -- ...Instances
-        tcg_fam_insts :: [FamInst],         -- ...Family instances
+        tcg_fam_insts :: [FamInst Branched],-- ...Family instances
         tcg_rules     :: [LRuleDecl Id],    -- ...Rules
         tcg_fords     :: [LForeignDecl Id], -- ...Foreign import & exports
         tcg_vects     :: [LVectDecl Id],    -- ...Vectorisation declarations
@@ -338,6 +331,29 @@ data RecFieldEnv
         -- module.  For imported modules, we get the same info from the
         -- TypeEnv
 \end{code}
+
+Note [Tracking unused binding and imports]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We gather two sorts of usage information
+ * tcg_dus (defs/uses)
+      Records *defined* Names (local, top-level)
+          and *used*    Names (local or imported)
+
+      Used (a) to report "defined but not used"
+               (see RnNames.reportUnusedNames)
+           (b) to generate version-tracking usage info in interface
+               files (see MkIface.mkUsedNames)
+   This usage info is mainly gathered by the renamer's 
+   gathering of free-variables
+
+ * tcg_used_rdrnames
+      Records used *imported* (not locally-defined) RdrNames
+      Used only to report unused import declarations
+      Notice that they are RdrNames, not Names, so we can
+      tell whether the reference was qualified or unqualified, which
+      is esssential in deciding whether a particular import decl 
+      is unnecessary.  This info isn't present in Names.
+
 
 %************************************************************************
 %*                                                                      *
@@ -591,6 +607,7 @@ data PromotionErr
 
   | RecDataConPE     -- Data constructor in a reuursive loop
                      -- See Note [ARecDataCon: recusion and promoting data constructors] in TcTyClsDecls
+  | NoDataKinds      -- -XDataKinds not enabled
 
 instance Outputable TcTyThing where     -- Debugging only
    ppr (AGlobal g)      = pprTyThing g
@@ -608,6 +625,7 @@ instance Outputable PromotionErr where
   ppr TyConPE      = text "TyConPE"
   ppr FamDataConPE = text "FamDataConPE"
   ppr RecDataConPE = text "RecDataConPE"
+  ppr NoDataKinds  = text "NoDataKinds"
 
 pprTcTyThingCategory :: TcTyThing -> SDoc
 pprTcTyThingCategory (AGlobal thing)    = pprTyThingCategory thing
@@ -621,6 +639,7 @@ pprPECategory ClassPE      = ptext (sLit "Class")
 pprPECategory TyConPE      = ptext (sLit "Type constructor")
 pprPECategory FamDataConPE = ptext (sLit "Data constructor")
 pprPECategory RecDataConPE = ptext (sLit "Data constructor")
+pprPECategory NoDataKinds  = ptext (sLit "Data constructor")
 \end{code}
 
 
@@ -781,7 +800,7 @@ emptyImportAvails = ImportAvails { imp_mods          = emptyModuleEnv,
 -- | Union two ImportAvails
 --
 -- This function is a key part of Import handling, basically
--- for each import we create a seperate ImportAvails structure
+-- for each import we create a separate ImportAvails structure
 -- and then union them all together with this function.
 plusImportAvails ::  ImportAvails ->  ImportAvails ->  ImportAvails
 plusImportAvails
@@ -819,11 +838,14 @@ The @WhereFrom@ type controls where the renamer looks for an interface file
 data WhereFrom
   = ImportByUser IsBootInterface        -- Ordinary user import (perhaps {-# SOURCE #-})
   | ImportBySystem                      -- Non user import.
+  | ImportByPlugin                      -- Importing a plugin; 
+                                        -- See Note [Care with plugin imports] in LoadIface
 
 instance Outputable WhereFrom where
   ppr (ImportByUser is_boot) | is_boot     = ptext (sLit "{- SOURCE -}")
                              | otherwise   = empty
   ppr ImportBySystem                       = ptext (sLit "{- SYSTEM -}")
+  ppr ImportByPlugin                       = ptext (sLit "{- PLUGIN -}")
 \end{code}
 
 %************************************************************************
@@ -1501,7 +1523,7 @@ data CtOrigin
   | PArrSeqOrigin  (ArithSeqInfo Name) -- [:x..y:] and [:x,y..z:]
   | SectionOrigin
   | TupleOrigin                        -- (..,..)
-  | AmbigOrigin Name    -- f :: ty
+  | AmbigOrigin UserTypeCtxt    -- Will be FunSigCtxt, InstDeclCtxt, or SpecInstCtxt
   | ExprSigOrigin       -- e :: ty
   | PatSigOrigin        -- p :: ty
   | PatOrigin           -- Instantiating a polytyped pattern at a constructor
@@ -1528,7 +1550,11 @@ pprO AppOrigin             = ptext (sLit "an application")
 pprO (SpecPragOrigin name) = hsep [ptext (sLit "a specialisation pragma for"), quotes (ppr name)]
 pprO (IPOccOrigin name)    = hsep [ptext (sLit "a use of implicit parameter"), quotes (ppr name)]
 pprO RecordUpdOrigin       = ptext (sLit "a record update")
-pprO (AmbigOrigin name)    = ptext (sLit "the ambiguity check for") <+> quotes (ppr name)
+pprO (AmbigOrigin ctxt)    = ptext (sLit "the ambiguity check for") 
+                             <+> case ctxt of 
+                                    FunSigCtxt name -> quotes (ppr name)
+                                    InfSigCtxt name -> quotes (ppr name)
+                                    _               -> pprUserTypeCtxt ctxt
 pprO ExprSigOrigin         = ptext (sLit "an expression type signature")
 pprO PatSigOrigin          = ptext (sLit "a pattern type signature")
 pprO PatOrigin             = ptext (sLit "a pattern")

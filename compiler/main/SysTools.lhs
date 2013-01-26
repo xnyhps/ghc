@@ -353,7 +353,7 @@ findTopDir Nothing
          maybe_exec_dir <- getBaseDir
          case maybe_exec_dir of
              -- "Just" on Windows, "Nothing" on unix
-             Nothing  -> ghcError (InstallationError "missing -B<dir> option")
+             Nothing  -> throwGhcException (InstallationError "missing -B<dir> option")
              Just dir -> return dir
 \end{code}
 
@@ -527,12 +527,19 @@ runClang :: DynFlags -> [Option] -> IO ()
 runClang dflags args = do
   -- we simply assume its available on the PATH
   let clang = "clang"
+      -- be careful what options we call clang with
+      -- see #5903 and #7617 for bugs caused by this.
+      (_,args0) = pgm_a dflags
+      args1 = args0 ++ args
+  mb_env <- getGccEnv args1
   Exception.catch (do
-        runSomething dflags "Clang (Assembler)" clang args
+        runSomethingFiltered dflags id "Clang (Assembler)" clang args1 mb_env
     )
     (\(err :: SomeException) -> do
-        errorMsg dflags $ text $ "Error running clang! you need clang installed"
-                              ++ " to use the LLVM backend"
+        errorMsg dflags $
+            text ("Error running clang! you need clang installed to use the" ++
+                "LLVM backend") $+$
+            text "(or GHC tried to execute clang incorrectly)"
         throw err
     )
 
@@ -830,14 +837,14 @@ handleProc pgm phase_name proc = do
         -- the case of a missing program there will otherwise be no output
         -- at all.
        | n == 127  -> does_not_exist
-       | otherwise -> ghcError (PhaseFailed phase_name rc)
+       | otherwise -> throwGhcException (PhaseFailed phase_name rc)
   where
     handler err =
        if IO.isDoesNotExistError err
           then does_not_exist
           else IO.ioError err
 
-    does_not_exist = ghcError (InstallationError ("could not execute: " ++ pgm))
+    does_not_exist = throwGhcException (InstallationError ("could not execute: " ++ pgm))
 
 
 builderMainLoop :: DynFlags -> (String -> String) -> FilePath
@@ -969,7 +976,7 @@ traceCmd dflags phase_name cmd_line action
   where
     handle_exn _verb exn = do { debugTraceMsg dflags 2 (char '\n')
                               ; debugTraceMsg dflags 2 (ptext (sLit "Failed:") <+> text cmd_line <+> text (show exn))
-                              ; ghcError (PhaseFailed phase_name (ExitFailure 1)) }
+                              ; throwGhcException (PhaseFailed phase_name (ExitFailure 1)) }
 \end{code}
 
 %************************************************************************

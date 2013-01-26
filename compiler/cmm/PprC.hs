@@ -102,7 +102,7 @@ pprTop (CmmProc infos clbl _ graph) =
            rbrace ]
     )
   where
-        blocks = toBlockList graph
+        blocks = toBlockListEntryFirst graph
         (temp_decls, extern_decls) = pprTempAndExternDecls blocks
 
 
@@ -230,6 +230,8 @@ pprStmt stmt =
                     pprCall cast_fn cconv hresults hargs <> semi)
                         -- for a dynamic call, no declaration is necessary.
 
+    CmmUnsafeForeignCall (PrimTarget MO_Touch) _results _args -> empty
+
     CmmUnsafeForeignCall target@(PrimTarget op) results args ->
         proto $$ fn_call
       where
@@ -295,8 +297,8 @@ pprBranch ident = ptext (sLit "goto") <+> pprBlockId ident <> semi
 pprCondBranch :: CmmExpr -> BlockId -> BlockId -> SDoc
 pprCondBranch expr yes no
         = hsep [ ptext (sLit "if") , parens(pprExpr expr) ,
-                        ptext (sLit "goto"), pprBlockId yes,
-                        ptext (sLit "else"), pprBlockId no <> semi ]
+                        ptext (sLit "goto"), pprBlockId yes <> semi,
+                        ptext (sLit "else goto"), pprBlockId no <> semi ]
 
 -- ---------------------------------------------------------------------
 -- a local table branch
@@ -679,6 +681,7 @@ pprCallishMachOp_for_C mop
         MO_Memset       -> ptext (sLit "memset")
         MO_Memmove      -> ptext (sLit "memmove")
         (MO_PopCnt w)   -> ptext (sLit $ popCntLabel w)
+        (MO_UF_Conv w)  -> ptext (sLit $ word2FloatLabel w)
 
         MO_S_QuotRem  {} -> unsupported
         MO_U_QuotRem  {} -> unsupported
@@ -999,6 +1002,9 @@ cLoad expr rep
           bewareLoadStoreAlignment ArchMipseb   = True
           bewareLoadStoreAlignment ArchMipsel   = True
           bewareLoadStoreAlignment (ArchARM {}) = True
+          -- Pessimistically assume that they will also cause problems
+          -- on unknown arches
+          bewareLoadStoreAlignment ArchUnknown  = True
           bewareLoadStoreAlignment _            = False
 
 isCmmWordType :: DynFlags -> CmmType -> Bool

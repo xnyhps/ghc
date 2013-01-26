@@ -333,9 +333,10 @@ traceRunStatus expr bindings final_ids
              status <-
                  withBreakAction True (hsc_dflags hsc_env)
                                       breakMVar statusMVar $ do
-                   liftIO $ withInterruptsSentTo tid $ do
+                   liftIO $ mask_ $ do
                        putMVar breakMVar ()  -- awaken the stopped thread
-                       takeMVar statusMVar   -- and wait for the result
+                       redirectInterrupts tid $
+                         takeMVar statusMVar   -- and wait for the result
              traceRunStatus expr bindings final_ids
                             breakMVar statusMVar status history'
      _other ->
@@ -385,13 +386,38 @@ sandboxIO dflags statusMVar thing =
      in if gopt Opt_GhciSandbox dflags
         then do tid <- forkIO $ do res <- runIt
                                    putMVar statusMVar res -- empty: can't block
-                withInterruptsSentTo tid $ takeMVar statusMVar
+                redirectInterrupts tid $
+                  takeMVar statusMVar
+
         else -- GLUT on OS X needs to run on the main thread. If you
              -- try to use it from another thread then you just get a
              -- white rectangle rendered. For this, or anything else
              -- with such restrictions, you can turn the GHCi sandbox off
              -- and things will be run in the main thread.
+             --
+             -- BUT, note that the debugging features (breakpoints,
+             -- tracing, etc.) need the expression to be running in a
+             -- separate thread, so debugging is only enabled when
+             -- using the sandbox.
              runIt
+
+--
+-- While we're waiting for the sandbox thread to return a result, if
+-- the current thread receives an asynchronous exception we re-throw
+-- it at the sandbox thread and continue to wait.
+--
+-- This is for two reasons:
+--
+--  * So that ^C interrupts runStmt (e.g. in GHCi), allowing the
+--    computation to run its exception handlers before returning the
+--    exception result to the caller of runStmt.
+--
+--  * clients of the GHC API can terminate a runStmt in progress
+--    without knowing the ThreadId of the sandbox thread (#1381)
+--
+redirectInterrupts :: ThreadId -> IO a -> IO a
+redirectInterrupts target wait
+  = wait `catch` \e -> do throwTo target (e :: SomeException); wait
 
 -- We want to turn ^C into a break when -fbreak-on-exception is on,
 -- but it's an async exception and we only break for sync exceptions.
@@ -416,12 +442,6 @@ rethrow dflags io = Exception.catch io $ \se -> do
                          _ -> poke exceptionFlag 0
 
                 Exception.throwIO se
-
-withInterruptsSentTo :: ThreadId -> IO r -> IO r
-withInterruptsSentTo thread get_result = do
-  bracket (pushInterruptTargetThread thread)
-          (\_ -> popInterruptTargetThread)
-          (\_ -> get_result)
 
 -- This function sets up the interpreter for catching breakpoints, and
 -- resets everything when the computation has stopped running.  This
@@ -468,7 +488,7 @@ resume canLogSpan step
        resume = ic_resume ic
 
    case resume of
-     [] -> ghcError (ProgramError "not stopped at a breakpoint")
+     [] -> throwGhcException (ProgramError "not stopped at a breakpoint")
      (r:rs) -> do
         -- unbind the temporary locals by restoring the TypeEnv from
         -- before the breakpoint, and drop this Resume from the
@@ -495,10 +515,11 @@ resume canLogSpan step
                withVirtualCWD $ do
                 withBreakAction (isStep step) (hsc_dflags hsc_env)
                                         breakMVar statusMVar $ do
-                status <- liftIO $ withInterruptsSentTo tid $ do
+                status <- liftIO $ mask_ $ do
                              putMVar breakMVar ()
                                       -- this awakens the stopped thread...
-                             takeMVar statusMVar
+                             redirectInterrupts tid $
+                               takeMVar statusMVar
                                       -- and wait for the result
                 let prevHistoryLst = fromListBL 50 hist
                     hist' = case info of
@@ -525,16 +546,16 @@ moveHist :: GhcMonad m => (Int -> Int) -> m ([Name], Int, SrcSpan)
 moveHist fn = do
   hsc_env <- getSession
   case ic_resume (hsc_IC hsc_env) of
-     [] -> ghcError (ProgramError "not stopped at a breakpoint")
+     [] -> throwGhcException (ProgramError "not stopped at a breakpoint")
      (r:rs) -> do
         let ix = resumeHistoryIx r
             history = resumeHistory r
             new_ix = fn ix
         --
         when (new_ix > length history) $
-           ghcError (ProgramError "no more logged breakpoints")
+           throwGhcException (ProgramError "no more logged breakpoints")
         when (new_ix < 0) $
-           ghcError (ProgramError "already at the beginning of the history")
+           throwGhcException (ProgramError "already at the beginning of the history")
 
         let
           update_ic apStack mb_info = do
@@ -816,7 +837,7 @@ setContext imports
        ; let dflags = hsc_dflags hsc_env
        ; all_env_err <- liftIO $ findGlobalRdrEnv hsc_env imports
        ; case all_env_err of
-           Left (mod, err) -> ghcError (formatError dflags mod err)
+           Left (mod, err) -> throwGhcException (formatError dflags mod err)
            Right all_env -> do {
        ; let old_ic        = hsc_IC hsc_env
              final_rdr_env = ic_tythings old_ic `icPlusGblRdrEnv` all_env
@@ -890,8 +911,8 @@ moduleIsInterpreted modl = withSession $ \h ->
 -- are in scope (qualified or otherwise).  Otherwise we list a whole lot too many!
 -- The exact choice of which ones to show, and which to hide, is a judgement call.
 --      (see Trac #1581)
-getInfo :: GhcMonad m => Name -> m (Maybe (TyThing,Fixity,[ClsInst]))
-getInfo name
+getInfo :: GhcMonad m => Bool -> Name -> m (Maybe (TyThing,Fixity,[ClsInst]))
+getInfo allInfo name
   = withSession $ \hsc_env ->
     do mb_stuff <- liftIO $ hscTcRnGetInfo hsc_env name
        case mb_stuff of
@@ -900,8 +921,10 @@ getInfo name
            let rdr_env = ic_rn_gbl_env (hsc_IC hsc_env)
            return (Just (thing, fixity, filter (plausible rdr_env) ispecs))
   where
-    plausible rdr_env ispec     -- Dfun involving only names that are in ic_rn_glb_env
-        = all ok $ nameSetToList $ orphNamesOfType $ idType $ instanceDFunId ispec
+    plausible rdr_env ispec
+          -- Dfun involving only names that are in ic_rn_glb_env
+        = allInfo
+       || all ok (nameSetToList $ orphNamesOfType $ idType $ instanceDFunId ispec)
         where   -- A name is ok if it's in the rdr_env,
                 -- whether qualified or not
           ok n | n == name         = True       -- The one we looked for in the first place!
@@ -949,6 +972,7 @@ parseName str = withSession $ \hsc_env -> do
 -- Getting the type of an expression
 
 -- | Get the type of an expression
+-- Returns its most general type
 exprType :: GhcMonad m => String -> m Type
 exprType expr = withSession $ \hsc_env -> do
    ty <- liftIO $ hscTcExpr hsc_env expr
