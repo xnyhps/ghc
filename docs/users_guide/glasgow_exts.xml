@@ -7114,7 +7114,7 @@ Multiple type holes can be used to find common type variables between expression
 sum :: [Int] -> Int
 sum x = foldr _ _ _
 </programlisting>
-Shows:
+shows:
 <programlisting>
 holes.hs:2:15:
     Found hole `_' with type a0 -> Int -> Int
@@ -7144,6 +7144,76 @@ with <literal>-fdefer-type-errors</literal>, the error from a hole is also defer
 typecheck just like <literal>undefined</literal>, but with the added benefit that it will show its warning message
 if it gets evaluated. This way, other parts of the code can still be executed and tested.
 </para>
+
+<sect3 id="type-holes-unbound-identifier">
+<title>Unbound Identifiers and Holes</title>
+
+<para>
+It is also possible to turn unbound identifiers into holes. When <literal>-XTypeHoles</literal> is on, any unresolved
+identifier that starts with <literal>_</literal> is treated as a hole, similar to how
+<literal>-fwarn-unused-matches</literal> allows variables to be unused when they start with a <literal>_</literal>.
+</para>
+
+<para>
+For example:
+<programlisting>
+sum :: [Int] -> Int
+sum xs = foldr _f _c xs
+</programlisting>
+will show the following errors:
+<programlisting>
+unbound.hs:2:16:
+    Found hole with type: `Int -> Int -> Int'
+    Arising from: an undeclared identifier `_f' at unbound.hs:2:16-17
+    In the first argument of `foldr', namely `_f'
+    In the expression: foldr _f _c xs
+    In an equation for `sum': sum xs = foldr _f _c xs
+
+unbound.hs:2:19:
+    Found hole with type: `Int'
+    Arising from: an undeclared identifier `_c' at unbound.hs:2:19-20
+    In the second argument of `foldr', namely `_c'
+    In the expression: foldr _f _c xs
+    In an equation for `sum': sum xs = foldr _f _c xs
+Failed, modules loaded: none.
+</programlisting>
+</para>
+
+<para>
+Unbound identifiers with the same name are never unified, even within the same function, but always printed individually.
+For example:
+<programlisting>
+cons = _x : _x
+</programlisting>
+results in the following errors:
+<programlisting>
+unbound.hs:1:8:
+    Found hole with type: `a'
+    Arising from: an undeclared identifier `_x' at unbound.hs:1:8-9
+    Where: `a' is a rigid type variable bound by
+               the inferred type of cons :: [a] at unbound.hs:1:1
+    Relevant bindings include cons :: [a] (bound at unbound.hs:1:1)
+    In the first argument of `(:)', namely `_x'
+    In the expression: _x : _x
+    In an equation for `cons': cons = _x : _x
+
+unbound.hs:1:13:
+    Found hole with type: `[a]'
+    Arising from: an undeclared identifier `_x' at unbound.hs:1:13-14
+    Where: `a' is a rigid type variable bound by
+               the inferred type of cons :: [a] at unbound.hs:1:1
+    Relevant bindings include cons :: [a] (bound at unbound.hs:1:1)
+    In the second argument of `(:)', namely `_x'
+    In the expression: _x : _x
+    In an equation for `cons': cons = _x : _x
+Failed, modules loaded: none.
+</programlisting>
+This ensures that an unbound identifier is never reported with a too polymorphic type, like
+<literal>forall a. a</literal>, when used multiple times for types that can not be unified.
+</para>
+
+</sect3>
+
 </sect2>
 </sect1>
 <!-- ==================== End of type system extensions =================  -->
