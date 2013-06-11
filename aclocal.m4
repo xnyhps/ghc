@@ -693,8 +693,6 @@ AC_ARG_WITH($2,
 # Figure out how to do context diffs. Sets the output variable ContextDiffCmd.
 #
 # Note: NeXTStep thinks diff'ing a file against itself is "trouble".
-#
-# Used by ghc, glafp-utils/ltx, and glafp-utils/runstdtest.
 AC_DEFUN([FP_PROG_CONTEXT_DIFF],
 [AC_CACHE_CHECK([for a working context diff], [fp_cv_context_diff],
 [echo foo > conftest1
@@ -1553,6 +1551,15 @@ if test "$RELEASE" = "NO"; then
         AC_MSG_RESULT(given $PACKAGE_VERSION)
     else
         AC_MSG_WARN([cannot determine snapshot version: no .git directory and no VERSION file])
+        dnl We'd really rather this case didn't happenm but it might
+        dnl do (in particular, people using lndir trees may find that
+        dnl the build system can't find any other date). If it does
+        dnl happen, then we use the current date.
+        dnl This way we get some idea about how recent a build is.
+        dnl It also means that packages built for 2 different builds
+        dnl will probably use different version numbers, so things are
+        dnl less likely to go wrong.
+        PACKAGE_VERSION=${PACKAGE_VERSION}.`date +%Y%m%d`
     fi
 fi
 

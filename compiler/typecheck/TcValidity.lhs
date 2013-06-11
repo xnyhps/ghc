@@ -61,6 +61,12 @@ import Data.List        ( (\\) )
 \begin{code}
 checkAmbiguity :: UserTypeCtxt -> Type -> TcM ()
 checkAmbiguity ctxt ty
+  | GhciCtxt <- ctxt    -- Allow ambiguous types in GHCi's :kind command
+  = return ()           -- E.g.   type family T a :: *  -- T :: forall k. k -> *
+                        -- Then :k T should work in GHCi, not complain that
+                        -- (T k) is ambiguous!
+
+  | otherwise
   = do { allow_ambiguous <- xoptM Opt_AllowAmbiguousTypes
        ; unless allow_ambiguous $ 
     do {(subst, _tvs) <- tcInstSkolTyVars (varSetElems (tyVarsOfType ty))
@@ -301,7 +307,7 @@ check_syn_tc_app ctxt rank ty tc tys
         ; liberal <- xoptM Opt_LiberalTypeSynonyms
         ; if not liberal || isSynFamilyTyCon tc then
                 -- For H98 and synonym families, do check the type args
-                mapM_ (check_mono_type ctxt synArgMonoType) tys
+                mapM_ check_arg tys
 
           else  -- In the liberal case (only for closed syns), expand then check
           case tcView ty of   
@@ -310,13 +316,15 @@ check_syn_tc_app ctxt rank ty tc tys
 
   | GhciCtxt <- ctxt  -- Accept under-saturated type synonyms in 
                       -- GHCi :kind commands; see Trac #7586
-  = mapM_ (check_mono_type ctxt synArgMonoType) tys
+  = mapM_ check_arg tys
 
   | otherwise
   = failWithTc (arityErr "Type synonym" (tyConName tc) tc_arity n_args)
   where
     n_args = length tys
     tc_arity  = tyConArity tc
+    check_arg | isSynFamilyTyCon tc = check_arg_type  ctxt rank
+              | otherwise           = check_mono_type ctxt synArgMonoType
          
 ----------------------------------------
 check_ubx_tuple :: UserTypeCtxt -> KindOrType 
