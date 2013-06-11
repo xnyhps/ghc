@@ -907,6 +907,7 @@ checkTauTvUpdate dflags tv ty
     defer_me (FunTy arg res)   = defer_me arg || defer_me res
     defer_me (AppTy fun arg)   = defer_me fun || defer_me arg
     defer_me (ForAllTy _ ty)   = not impredicative || defer_me ty
+    defer_me (BigLambda _ ty)  = defer_me ty
 \end{code}
 
 Note [OpenTypeKind accepts foralls]

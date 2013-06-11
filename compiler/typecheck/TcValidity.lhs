@@ -282,6 +282,8 @@ check_type ctxt rank ty@(TyConApp tc tys)
 
 check_type _ _ (LitTy {}) = return ()
 
+check_type ctxt rank (BigLambda tv ty) = check_type ctxt rank ty
+
 check_type _ _ ty = pprPanic "check_type" (ppr ty)
 
 ----------------------------------------

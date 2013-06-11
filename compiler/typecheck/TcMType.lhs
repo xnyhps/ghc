@@ -954,6 +954,10 @@ zonkTcType ty
     go (ForAllTy tv ty) = do { tv' <- zonkTcTyVarBndr tv
                              ; ty' <- go ty
                              ; return (ForAllTy tv' ty') }
+    go (BigLambda tv ty) = do { tv' <- zonkTcTyVarBndr tv
+                              ; traceTc "zonk BigLambda" ((ppr tv) <+> (text "::") <+> (ppr $ tyVarKind tv) <+> (text "->") <+> (ppr tv') <+> (text "::") <+> (ppr $ tyVarKind tv'))
+                              ; ty' <- go ty
+                              ; return (BigLambda tv' ty') }
 
 zonkTcTyVarBndr :: TcTyVar -> TcM TcTyVar
 -- A tyvar binder is never a unification variable (MetaTv),

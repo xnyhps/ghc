@@ -298,6 +298,11 @@ rnHsTyKi isType doc ty@(HsExplicitTupleTy kis tys)
        ; (tys', fvs) <- rnLHsTypes doc tys
        ; return (HsExplicitTupleTy kis tys', fvs) }
 
+rnHsTyKi isType doc (HsBigLambda tvs ty)
+  = bindHsTyVars doc Nothing (fst $ extractHsTyRdrTyVars ty) tvs $ \tvs' ->
+    do { (new_ty, fvs) <- rnLHsType doc ty
+       ; return (HsBigLambda tvs' new_ty, fvs) }
+
 --------------
 rnTyVar :: Bool -> RdrName -> RnM Name
 rnTyVar is_type rdr_name
@@ -387,27 +392,27 @@ bindHsTyVars doc mb_assoc kv_bndrs tv_bndrs thing_inside
        ; bindLocalNamesFV kv_names $ 
     do { let tv_names_w_loc = hsLTyVarLocNames tv_bndrs
 
-    	     rn_tv_bndr :: LHsTyVarBndr RdrName -> RnM (LHsTyVarBndr Name, FreeVars)
-    	     rn_tv_bndr (L loc (UserTyVar rdr)) 
-    	       = do { nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
-    	            ; return (L loc (UserTyVar nm), emptyFVs) }
-    	     rn_tv_bndr (L loc (KindedTyVar rdr kind)) 
-    	       = do { sig_ok <- xoptM Opt_KindSignatures
-                    ; unless sig_ok (badSigErr False doc kind)
-                    ; nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
-    	            ; (kind', fvs) <- rnLHsKind doc kind
-    	            ; return (L loc (KindedTyVar nm kind'), fvs) }
-
        -- Check for duplicate or shadowed tyvar bindrs
        ; checkDupRdrNames tv_names_w_loc
        ; when (isNothing mb_assoc) (checkShadowedRdrNames tv_names_w_loc)
 
-       ; (tv_bndrs', fvs1) <- mapFvRn rn_tv_bndr tvs
+       ; (tv_bndrs', fvs1) <- mapFvRn (rnTvBndr mb_assoc rdr_env doc) tvs
        ; (res, fvs2) <- bindLocalNamesFV (map hsLTyVarName tv_bndrs') $
                         do { env <- getLocalRdrEnv
                            ; traceRn (text "bhtv" <+> (ppr tvs $$ ppr all_kvs $$ ppr env))
                            ; thing_inside (HsQTvs { hsq_tvs = tv_bndrs', hsq_kvs = kv_names }) }
        ; return (res, fvs1 `plusFV` fvs2) } }
+
+rnTvBndr :: Maybe a -> LocalRdrEnv -> HsDocContext -> LHsTyVarBndr RdrName -> RnM (LHsTyVarBndr Name, FreeVars)
+rnTvBndr mb_assoc rdr_env doc (L loc (UserTyVar rdr))
+ = do { nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
+      ; return (L loc (UserTyVar nm), emptyFVs) }
+rnTvBndr mb_assoc rdr_env doc (L loc (KindedTyVar rdr kind)) 
+ = do { sig_ok <- xoptM Opt_KindSignatures
+      ; unless sig_ok (badSigErr False doc kind)
+      ; nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
+      ; (kind', fvs) <- rnLHsKind doc kind
+      ; return (L loc (KindedTyVar nm kind'), fvs) }
 
 newTyVarNameRn :: Maybe a -> LocalRdrEnv -> SrcSpan -> RdrName -> RnM Name
 newTyVarNameRn mb_assoc rdr_env loc rdr
@@ -1020,6 +1025,8 @@ extract_lty (L _ ty) acc
       HsForAllTy _ tvs cx ty    -> extract_hs_tv_bndrs tvs acc $
                                    extract_lctxt cx   $
                                    extract_lty ty ([],[])
+      HsBigLambda tvs ty        -> extract_hs_tv_bndrs tvs acc $
+                                   extract_lty ty ([], [])
 
 extract_hs_tv_bndrs :: LHsTyVarBndrs RdrName -> FreeKiTyVars
                     -> FreeKiTyVars -> FreeKiTyVars

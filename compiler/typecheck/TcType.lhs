@@ -528,6 +528,7 @@ tcTyFamInsts (LitTy {})         = []
 tcTyFamInsts (FunTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (AppTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (ForAllTy _ ty)    = tcTyFamInsts ty
+tcTyFamInsts (BigLambda tv ty)  = tcTyFamInsts ty
 \end{code}
 
 %************************************************************************
@@ -775,6 +776,7 @@ getDFunTyKey (LitTy x)       = getDFunTyLitKey x
 getDFunTyKey (AppTy fun _)   = getDFunTyKey fun
 getDFunTyKey (FunTy _ _)     = getOccName funTyCon
 getDFunTyKey (ForAllTy _ t)  = getDFunTyKey t
+getDFunTyKey (BigLambda _ t) = getDFunTyKey t
 
 getDFunTyLitKey :: TyLit -> OccName
 getDFunTyLitKey (NumTyLit n) = mkOccName Name.varName (show n)
@@ -1311,6 +1313,7 @@ orphNamesOfType (LitTy {})          = emptyNameSet
 orphNamesOfType (FunTy arg res)	    = orphNamesOfType arg `unionNameSets` orphNamesOfType res
 orphNamesOfType (AppTy fun arg)	    = orphNamesOfType fun `unionNameSets` orphNamesOfType arg
 orphNamesOfType (ForAllTy _ ty)	    = orphNamesOfType ty
+orphNamesOfType (BigLambda _ ty)    = orphNamesOfType ty
 
 orphNamesOfThings :: (a -> NameSet) -> [a] -> NameSet
 orphNamesOfThings f = foldr (unionNameSets . f) emptyNameSet

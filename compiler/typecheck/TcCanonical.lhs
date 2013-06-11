@@ -576,6 +576,10 @@ flatten loc _f ctxt ty@(ForAllTy {})
                          -- Substitute only under a forall
                          -- See Note [Flattening under a forall]
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
+flatten loc f ctxt (BigLambda tv ty)
+  = do { (ty', co) <- flatten loc FMSubstOnly ctxt ty
+       ; pprTrace "flatten BigLambda" ((ppr tv) <+> (ppr co)) $ return ()
+       ; return (BigLambda tv ty', co) }
 \end{code}
 
 Note [Flattening under a forall]

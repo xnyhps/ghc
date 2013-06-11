@@ -141,6 +141,9 @@ data Type
 	Type	        -- ^ A polymorphic type
 
   | LitTy TyLit     -- ^ Type literals are simillar to type constructors.
+  | BigLambda
+        Var
+        Type
 
   deriving (Data.Data, Data.Typeable)
 
@@ -332,6 +335,8 @@ tyVarsOfType (FunTy arg res)     = tyVarsOfType arg `unionVarSet` tyVarsOfType r
 tyVarsOfType (AppTy fun arg)     = tyVarsOfType fun `unionVarSet` tyVarsOfType arg
 tyVarsOfType (ForAllTy tyvar ty) = delVarSet (tyVarsOfType ty) tyvar
                                    `unionVarSet` tyVarsOfType (tyVarKind tyvar)
+tyVarsOfType (BigLambda tyvar ty) = delVarSet (tyVarsOfType ty) tyvar
+                                    `unionVarSet` tyVarsOfType (tyVarKind tyvar)
 
 tyVarsOfTypes :: [Type] -> TyVarSet
 tyVarsOfTypes tys = foldr (unionVarSet . tyVarsOfType) emptyVarSet tys
@@ -595,6 +600,7 @@ ppr_type p fun_ty@(FunTy ty1 ty2)
       | not (isPredTy ty1) = ppr_type FunPrec ty1 : ppr_fun_tail ty2
     ppr_fun_tail other_ty = [ppr_type TopPrec other_ty]
 
+ppr_type p (BigLambda tv ty)  = maybeParen p FunPrec $ ptext (sLit "/\\") <+> ppr_tvar tv <+> char '.' <+> ppr_type TopPrec ty
 
 ppr_forall_type :: Prec -> Type -> SDoc
 ppr_forall_type p ty
@@ -821,6 +827,10 @@ tidyType env (FunTy fun arg)	  = (FunTy $! (tidyType env fun)) $! (tidyType env 
 tidyType env (ForAllTy tv ty)	  = ForAllTy tvp $! (tidyType envp ty)
 			          where
 			            (envp, tvp) = tidyTyVarBndr env tv
+
+tidyType env (BigLambda tv ty)    = BigLambda tvp $! (tidyType envp ty)
+                      where
+                        (envp, tvp) = tidyTyVarBndr env tv
 
 ---------------
 -- | Grabs the free type variables, tidies them
