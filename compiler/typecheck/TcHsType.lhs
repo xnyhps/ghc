@@ -54,9 +54,8 @@ import TcUnify
 import TcIface
 import TcType
 import Type
-import TypeRep( Type(..) )  -- For the mkNakedXXX stuff
 import Kind
-import TypeRep( mkNakedTyConApp, Type(..) )
+import TypeRep( Type(..) )
 import Var
 import VarSet
 import TyCon
@@ -781,6 +780,9 @@ zonkSigType ty
     go (ForAllTy tv ty) = do { tv' <- zonkTcTyVarBndr tv
                              ; ty' <- go ty
                              ; return (ForAllTy tv' ty') }
+    go (BigLambda tv ty) = do { tv' <- zonkTcTyVarBndr tv
+                              ; ty' <- go ty
+                              ; return (BigLambda tv' ty') }
 \end{code}
 
 Note [Body kind of a forall]
