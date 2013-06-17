@@ -178,9 +178,10 @@ canonicalize (CDictCan { cc_loc  = d
 canonicalize (CTyEqCan { cc_loc  = d
                        , cc_ev = ev
                        , cc_tyvar  = tv
-                       , cc_rhs    = xi })
+                       , cc_rhs    = xi
+                       , cc_tyargs = xis })
   = {-# SCC "canEqLeafTyVarEq" #-}
-    canEqLeafTyVarEq d ev tv xi
+    canEqLeafTyVarEq d ev tv xi xis
 
 canonicalize (CFunEqCan { cc_loc = d
                         , cc_ev = ev
@@ -715,10 +716,13 @@ canEqNC :: CtLoc -> CtEvidence -> Type -> Type -> TcS StopOrContinue
 canEqNC _loc ev ty1 ty2
   | eqType ty1 ty2	-- Dealing with equality here avoids
     	     	 	-- later spurious occurs checks for a~a
-  = if isWanted ev then
-      setEvBind (ctev_evar ev) (EvCoercion (mkTcReflCo ty1)) >> return Stop
-    else
-      return Stop
+  = do {
+    ; traceTcS "canEqNC: eqType" (ppr ty1 <+> ppr ty2)
+    ; if isWanted ev then
+        setEvBind (ctev_evar ev) (EvCoercion (mkTcReflCo ty1)) >> return Stop
+      else
+        return Stop
+    }
 
 -- If one side is a variable, orient and flatten,
 -- WITHOUT expanding type synonyms, so that we tend to 
@@ -730,8 +734,12 @@ canEqNC loc ev ty1 ty2@(TyVarTy {})
 
 -- See Note [Naked given applications]
 canEqNC loc ev ty1 ty2
-  | Just ty1' <- tcView ty1 = canEqNC loc ev ty1' ty2
-  | Just ty2' <- tcView ty2 = canEqNC loc ev ty1  ty2'
+  | Just ty1' <- tcView ty1 = do
+    traceTcS "canEqNC1" (ppr ty1 <+> ppr ty1')
+    canEqNC loc ev ty1' ty2
+  | Just ty2' <- tcView ty2 = do
+    traceTcS "canEqNC2" (ppr ty2 <+> ppr ty2')
+    canEqNC loc ev ty1  ty2'
 
 canEqNC loc ev ty1@(TyConApp fn tys) ty2
   | isSynFamilyTyCon fn, length tys == tyConArity fn
@@ -744,13 +752,16 @@ canEqNC loc ev ty1 ty2
   | Just (tc1,tys1) <- tcSplitTyConApp_maybe ty1
   , Just (tc2,tys2) <- tcSplitTyConApp_maybe ty2
   , isDecomposableTyCon tc1 && isDecomposableTyCon tc2
-  = canDecomposableTyConApp loc ev tc1 tys1 tc2 tys2 
+  = do
+    traceTcS "canEqNC->canDecomposableTyConApp" (ppr ty1 <+> ppr ty2)
+    canDecomposableTyConApp loc ev tc1 tys1 tc2 tys2 
 
 canEqNC loc ev s1@(ForAllTy {}) s2@(ForAllTy {})
  | tcIsForAllTy s1, tcIsForAllTy s2
  , CtWanted { ctev_evar = orig_ev } <- ev 
  = do { let (tvs1,body1) = tcSplitForAllTys s1
             (tvs2,body2) = tcSplitForAllTys s2
+      ; traceTcS "canEqNC ForAllTys" (ppr s1 <+> ppr s2)
       ; if not (equalLength tvs1 tvs2) then 
           canEqFailure loc ev s1 s2
         else
@@ -768,6 +779,7 @@ canEqNC loc ev s1@(ForAllTy {}) s2@(ForAllTy {})
 --     Note [Care with type applications] in TcUnify
 canEqNC loc ev ty1 ty2 
  =  do { let flav = ctEvFlavour ev
+       ; traceTcS "canEqNC last_chance" (ppr ty1 <+> ppr ty2)
        ; (s1, co1) <- flatten loc FMSubstOnly flav ty1
        ; (s2, co2) <- flatten loc FMSubstOnly flav ty2
        ; mb_ct <- rewriteCtFlavor ev (mkTcEqPred s1 s2) (mkHdEqPred s2 co1 co2)
@@ -783,12 +795,15 @@ canEqNC loc ev ty1 ty2
     
       | Just (s1,t1) <- tcSplitAppTy_maybe ty1
       , Just (s2,t2) <- tcSplitAppTy_maybe ty2
-      = do { let xevcomp [x,y] = EvCoercion (mkTcAppCo (evTermCoercion x) (evTermCoercion y))
+      = do { let xevcomp [x] = EvCoercion (evTermCoercion x)
              	 xevcomp _ = error "canEqAppTy: can't happen" -- Can't happen
              	 xevdecomp x = let xco = evTermCoercion x 
        	                       in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
-       	   ; ctevs <- xCtFlavor ev [mkTcEqPred s1 s2, mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
-       	   ; canEvVarsCreated loc ctevs }
+           ; traceTcS "canEqNC last_chance" (ppr (s1, t1, s2, t2))
+       	   ; ctevs <- xCtFlavor ev [mkTcEqPred (mkAppTy s1 t1) (mkAppTy s2 t2)] (XEvTerm xevcomp xevdecomp)
+       	   ; x <- canEvVarsCreated loc ctevs
+           ; traceTcS "last_chance" (ppr ctevs)
+           ; return x }
 
       | otherwise
       = do { emitInsoluble (CNonCanonical { cc_ev = ev, cc_loc = loc })
@@ -807,6 +822,7 @@ canDecomposableTyConApp loc ev tc1 tys1 tc2 tys2
   = do { let xcomp xs  = EvCoercion (mkTcTyConAppCo tc1 (map evTermCoercion xs))
              xdecomp x = zipWith (\_ i -> EvCoercion $ mkTcNthCo i (evTermCoercion x)) tys1 [0..]
              xev = XEvTerm xcomp xdecomp
+       ; traceTcS "canDecomposableTyConApp" (ppr tc1 <+> ppr tys1 <+> ppr tc2 <+> ppr tys2)
        ; ctevs <- xCtFlavor ev (zipWith mkTcEqPred tys1 tys2) xev
        ; canEvVarsCreated loc ctevs }
 
@@ -1067,7 +1083,7 @@ canEqLeafOriented :: CtLoc -> CtEvidence
 -- Precondition: the LHS and RHS have `compatKind` kinds
 --               so we can safely generate a CTyEqCan or CFunEqCan
 canEqLeafOriented loc ev (FunCls fn tys1) s2 = canEqLeafFunEq loc ev fn tys1 s2
-canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVarEq loc ev tv s2
+canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVarEq loc ev tv s2 []
 canEqLeafOriented _   ev (OtherCls {})    _  = pprPanic "canEqLeafOriented" (ppr (ctEvPred ev))
 
 canEqLeafFunEq :: CtLoc -> CtEvidence
@@ -1095,11 +1111,11 @@ canEqLeafFunEq loc ev fn tys1 ty2  -- ev :: F tys1 ~ ty2
                                  , cc_fun = fn, cc_tyargs = xis1, cc_rhs = xi2 }) }
 
 canEqLeafTyVarEq :: CtLoc -> CtEvidence
-                   -> TcTyVar -> TcType -> TcS StopOrContinue
+                   -> TcTyVar -> TcType -> [TcType] -> TcS StopOrContinue
 -- Precondition: LHS and RHS have compatible kinds 
 --               (guaranteed by canEqLeaf0
-canEqLeafTyVarEq loc ev tv s2              -- ev :: tv ~ s2
-  = do { traceTcS "canEqLeafTyVarEq" $ pprEq (mkTyVarTy tv) s2
+canEqLeafTyVarEq loc ev tv s2 tys              -- ev :: tv ~ s2
+  = do { traceTcS "canEqLeafTyVarEq" $ pprEq (mkAppTys (mkTyVarTy tv) tys) s2
        ; let flav = ctEvFlavour ev
        ; (xi1,co1) <- flattenTyVar loc FMFullFlatten flav tv -- co1 :: xi1 ~ tv
        ; (xi2,co2) <- flatten      loc FMFullFlatten flav s2 -- co2 :: xi2 ~ s2 
@@ -1130,7 +1146,7 @@ canEqLeafTyVarEq loc ev tv s2              -- ev :: tv ~ s2
                          -- by the occurCheckExpand
                          checkKind loc ev xi1 xi2' co $ \new_ev -> 
                          continueWith (CTyEqCan { cc_ev = new_ev, cc_loc = loc
-                                                , cc_tyvar  = tv1, cc_rhs = xi2' })
+                                                , cc_tyvar  = tv1, cc_rhs = xi2', cc_tyargs = tys })
 
            _bad ->  -- Occurs check error
                     do { mb <- rewriteCtFlavor ev (mkTcEqPred xi1 xi2) co

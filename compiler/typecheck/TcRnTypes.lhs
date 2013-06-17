@@ -898,6 +898,7 @@ data Ct
        --   * We prefer unification variables on the left *JUST* for efficiency
       cc_ev :: CtEvidence,    -- See Note [Ct/evidence invariant]
       cc_tyvar  :: TcTyVar,
+      cc_tyargs :: [Xi],
       cc_rhs    :: Xi,
       cc_loc    :: CtLoc
     }

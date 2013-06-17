@@ -855,9 +855,9 @@ extractRelevantInerts wi
             in (cts, is { inert_cans = ics' }) 
             
         extract_ics_relevants :: Ct -> InertCans -> (Cts, InertCans)
-        extract_ics_relevants (CDictCan {cc_class = cl}) ics = 
+        extract_ics_relevants (CDictCan {cc_class = cl, cc_tyargs = tys}) ics = 
             let (cts,dict_map) = getRelevantCts cl (inert_dicts ics) 
-            in (cts, ics { inert_dicts = dict_map })
+            in pprTrace "extract_ics_relevants" ((ppr tys) <+> (ppr (filterBag isCNonCanonical $ inert_insols ics))) $ (cts, ics { inert_dicts = dict_map })
 
         extract_ics_relevants ct@(CFunEqCan {}) ics@(IC { inert_funeqs = funeq_map })
             | Just ct <- lookupFamHead funeq_map fam_head
