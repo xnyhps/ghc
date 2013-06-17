@@ -363,15 +363,6 @@ primop   PopCnt64Op   "popCnt64#"   GenPrimOp   WORD64 -> Word#
 primop   PopCntOp   "popCnt#"   Monadic   Word# -> Word#
     {Count the number of set bits in a word.}
 
-primop   BSwap16Op   "byteSwap16#"   Monadic   Word# -> Word#
-    {Swap bytes in the lower 16 bits of a word. The higher bytes are undefined. }
-primop   BSwap32Op   "byteSwap32#"   Monadic   Word# -> Word#
-    {Swap bytes in the lower 32 bits of a word. The higher bytes are undefined. }
-primop   BSwap64Op   "byteSwap64#"   GenPrimOp WORD64 -> WORD64
-    {Swap bytes in a 64 bits of a word.}
-primop   BSwapOp     "byteSwap#"     Monadic   Word# -> Word#
-    {Swap bytes in a word.}
-
 ------------------------------------------------------------------------
 section "Narrowings" 
 	{Explicit narrowing of native-sized ints or words.}
@@ -1880,8 +1871,15 @@ primop  MkWeakNoFinalizerOp "mkWeakNoFinalizer#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-primop  MkWeakForeignEnvOp "mkWeakForeignEnv#" GenPrimOp
-   o -> b -> Addr# -> Addr# -> Int# -> Addr# -> State# RealWorld -> (# State# RealWorld, Weak# b #)
+primop  AddCFinalizerToWeakOp "addCFinalizerToWeak#" GenPrimOp
+   Addr# -> Addr# -> Int# -> Addr# -> Weak# b
+          -> State# RealWorld -> (# State# RealWorld, Int# #)
+   { {\tt addCFinalizerToWeak# fptr ptr flag eptr w} attaches a C
+     function pointer {\tt fptr} to a weak pointer {\tt w} as a finalizer. If
+     {\tt flag} is zero, {\tt fptr} will be called with one argument,
+     {\tt ptr}. Otherwise, it will be called with two arguments,
+     {\tt eptr} and {\tt ptr}. {\tt addCFinalizerToWeak#} returns
+     1 on success, or 0 if {\tt w} is already dead. }
    with
    has_side_effects = True
    out_of_line      = True

@@ -553,8 +553,6 @@ dnl ** look to see if we have a C compiler using an llvm back end.
 dnl
 FP_CC_LLVM_BACKEND
 
-FP_PROG_LD_HashSize31
-FP_PROG_LD_ReduceMemoryOverheads
 FP_PROG_LD_IS_GNU
 FP_PROG_LD_BUILD_ID
 FP_PROG_LD_NO_COMPACT_UNWIND
@@ -902,7 +900,6 @@ if grep '	' compiler/ghc.cabal.in 2>&1 >/dev/null; then
 fi
 
 AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal settings docs/users_guide/ug-book.xml docs/users_guide/ug-ent.xml docs/index.html libraries/prologue.txt distrib/configure.ac])
-AC_CONFIG_COMMANDS([mk/stamp-h],[echo timestamp > mk/stamp-h])
 AC_OUTPUT
 
 # We got caught by
