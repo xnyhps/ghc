@@ -181,7 +181,7 @@ canonicalize (CTyEqCan { cc_loc  = d
                        , cc_rhs    = xi
                        , cc_tyargs = xis })
   = {-# SCC "canEqLeafTyVarEq" #-}
-    canEqLeafTyVar d ev tv xi
+    canEqLeafTyVar d ev tv xi xis
 
 canonicalize (CFunEqCan { cc_loc = d
                         , cc_ev = ev
@@ -1089,7 +1089,7 @@ canEqLeafOriented :: CtLoc -> CtEvidence
                   -> TypeClassifier -> TcType -> TcS StopOrContinue
 -- By now s1 will either be a variable or a type family application
 canEqLeafOriented loc ev (FunCls fn tys1) s2 = canEqLeafFun loc ev fn tys1 s2
-canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVar loc ev tv s2
+canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVar loc ev tv s2 []
 canEqLeafOriented _   ev (OtherCls {})    _  = pprPanic "canEqLeafOriented" (ppr (ctEvPred ev))
 
 canEqLeafFun :: CtLoc -> CtEvidence
@@ -1121,8 +1121,8 @@ canEqLeafFun loc ev fn tys1 ty2  -- ev :: F tys1 ~ ty2
                         -> checkKind loc new_ev fam_head xi2 }
 
 canEqLeafTyVar :: CtLoc -> CtEvidence
-               -> TcTyVar -> TcType -> TcS StopOrContinue
-canEqLeafTyVar loc ev tv s2              -- ev :: tv ~ s2
+               -> TcTyVar -> TcType -> [TcType] -> TcS StopOrContinue
+canEqLeafTyVar loc ev tv s2 tys              -- ev :: tv tys ~ s2
   = do { traceTcS "canEqLeafTyVar 1" $ pprEq (mkTyVarTy tv) s2
        ; let flav = ctEvFlavour ev
        ; (xi1,co1) <- flattenTyVar loc FMFullFlatten flav tv -- co1 :: xi1 ~ tv
@@ -1158,6 +1158,7 @@ canEqLeafTyVar2 dflags loc ev tv1 xi2 co
                 -- Ensure that the new goal has enough type synonyms 
                 -- expanded by the occurCheckExpand; hence using xi2' here
 
+       ; traceTcS "canEqLeafTyVar2" (ppr tv1 <+> ppr xi2)
        ; case mb of 
             Nothing     -> return Stop 
             Just new_ev | typeKind xi2' `isSubKind` tyVarKind tv1
