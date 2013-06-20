@@ -699,6 +699,11 @@ doInteractWithInert ii@(CFunEqCan { cc_ev = ev1, cc_fun = tc1
     w_solves_i = fl2 `canSolve` fl1 
     
 
+doInteractWithInert ii@(CDictCan {}) wi@(CTyAppEqCan {}) =
+    do { traceTcS "interact with inerts: TyApp/Dict" (ppr ii <+> ppr wi)
+       ; return (IRKeepGoing "?")
+       }
+
 doInteractWithInert _ _ = return (IRKeepGoing "NOP")
 \end{code}
 

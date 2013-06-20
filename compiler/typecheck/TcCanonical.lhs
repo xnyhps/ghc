@@ -178,10 +178,9 @@ canonicalize (CDictCan { cc_loc  = d
 canonicalize (CTyEqCan { cc_loc  = d
                        , cc_ev = ev
                        , cc_tyvar  = tv
-                       , cc_rhs    = xi
-                       , cc_tyargs = xis })
+                       , cc_rhs    = xi })
   = {-# SCC "canEqLeafTyVarEq" #-}
-    canEqLeafTyVar d ev tv xi xis
+    canEqLeafTyVar d ev tv xi
 
 canonicalize (CFunEqCan { cc_loc = d
                         , cc_ev = ev
@@ -796,17 +795,11 @@ canEqNC loc ev ty1 ty2
       , isDecomposableTyCon tc1 && isDecomposableTyCon tc2
       = canDecomposableTyConApp loc ev tc1 tys1 tc2 tys2
     
-      | Just (s1,t1) <- tcSplitAppTy_maybe ty1
-      , Just (s2,t2) <- tcSplitAppTy_maybe ty2
-      = do { let xevcomp [x] = EvCoercion (evTermCoercion x)
-             	 xevcomp _ = error "canEqAppTy: can't happen" -- Can't happen
-             	 xevdecomp x = let xco = evTermCoercion x 
-       	                       in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
-           ; traceTcS "canEqNC last_chance" (ppr (s1, t1, s2, t2))
-       	   ; ctevs <- xCtFlavor ev [mkTcEqPred (mkAppTy s1 t1) (mkAppTy s2 t2)] (XEvTerm xevcomp xevdecomp)
-       	   ; x <- canEvVarsCreated loc ctevs
-           ; traceTcS "last_chance" (ppr ctevs)
-           ; return x }
+      | (t1,s1) <- tcSplitAppTys ty1
+      , (t2,s2) <- tcSplitAppTys ty2
+      , Just tv1 <- tcGetTyVar_maybe t1
+      , Just tv2 <- tcGetTyVar_maybe t2
+      = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = error "cc_loc" })
 
       | otherwise
       = do { emitInsoluble (CNonCanonical { cc_ev = ev, cc_loc = loc })
@@ -1089,7 +1082,7 @@ canEqLeafOriented :: CtLoc -> CtEvidence
                   -> TypeClassifier -> TcType -> TcS StopOrContinue
 -- By now s1 will either be a variable or a type family application
 canEqLeafOriented loc ev (FunCls fn tys1) s2 = canEqLeafFun loc ev fn tys1 s2
-canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVar loc ev tv s2 []
+canEqLeafOriented loc ev (VarCls tv)      s2 = canEqLeafTyVar loc ev tv s2
 canEqLeafOriented _   ev (OtherCls {})    _  = pprPanic "canEqLeafOriented" (ppr (ctEvPred ev))
 
 canEqLeafFun :: CtLoc -> CtEvidence
@@ -1121,8 +1114,8 @@ canEqLeafFun loc ev fn tys1 ty2  -- ev :: F tys1 ~ ty2
                         -> checkKind loc new_ev fam_head xi2 }
 
 canEqLeafTyVar :: CtLoc -> CtEvidence
-               -> TcTyVar -> TcType -> [TcType] -> TcS StopOrContinue
-canEqLeafTyVar loc ev tv s2 tys              -- ev :: tv tys ~ s2
+               -> TcTyVar -> TcType -> TcS StopOrContinue
+canEqLeafTyVar loc ev tv s2              -- ev :: tv tys ~ s2
   = do { traceTcS "canEqLeafTyVar 1" $ pprEq (mkTyVarTy tv) s2
        ; let flav = ctEvFlavour ev
        ; (xi1,co1) <- flattenTyVar loc FMFullFlatten flav tv -- co1 :: xi1 ~ tv

@@ -658,6 +658,8 @@ insertInertItem item is
             in ics { inert_funeqs = FamHeadMap 
                                       (alterTM fam_head upd_funeqs $ 
                                          (unFamHeadMap $ inert_funeqs ics)) }
+          | isCTyAppEqCan item
+          = ics -- { inert_eqs = extendVarEnv_C undefined (inert_eqs ics) (cc_tyvar item) item }
           | otherwise
           = pprPanic "upd_inert set: can't happen! Inserting " $ 
             ppr item   -- Can't be CNonCanonical, CHoleCan, 
@@ -858,6 +860,8 @@ extractRelevantInerts wi
         extract_ics_relevants (CIrredEvCan { }) ics = 
             let cts = inert_irreds ics 
             in (cts, ics { inert_irreds = emptyCts })
+
+        extract_ics_relevants ct@(CTyAppEqCan {}) ics = (cCanMapToBag $ inert_dicts ics, ics { inert_dicts = emptyCCanMap })
 
         extract_ics_relevants _ ics = (emptyCts,ics)
         

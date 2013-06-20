@@ -534,6 +534,7 @@ tyVarsOfCt (CDictCan { cc_tyargs = tys }) 	        = tyVarsOfTypes tys
 tyVarsOfCt (CIrredEvCan { cc_ev = ev })                 = tyVarsOfType (ctEvPred ev)
 tyVarsOfCt (CHoleCan { cc_ev = ev })                    = tyVarsOfType (ctEvPred ev)
 tyVarsOfCt (CNonCanonical { cc_ev = ev })               = tyVarsOfType (ctEvPred ev)
+tyVarsOfCt (CTyAppEqCan { cc_tyvar = tv, cc_tyargs = tys, cc_rhs = xi }) = unionVarSet (tyVarsOfTypes tys) (extendVarSet (tyVarsOfType xi) tv)
 
 tyVarsOfCts :: Cts -> TcTyVarSet
 tyVarsOfCts = foldrBag (unionVarSet . tyVarsOfCt) emptyVarSet

@@ -44,7 +44,7 @@ module TcRnTypes(
         -- Canonical constraints
         Xi, Ct(..), Cts, emptyCts, andCts, andManyCts, dropDerivedWC,
         singleCt, extendCts, isEmptyCts, isCTyEqCan, isCFunEqCan,
-        isCDictCan_Maybe, isCFunEqCan_Maybe,
+        isCDictCan_Maybe, isCFunEqCan_Maybe, isCTyAppEqCan,
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt,
         isGivenCt, isHoleCt,
         ctEvidence,
@@ -899,7 +899,6 @@ data Ct
        --   * We prefer unification variables on the left *JUST* for efficiency
       cc_ev :: CtEvidence,    -- See Note [Ct/evidence invariant]
       cc_tyvar  :: TcTyVar,
-      cc_tyargs :: [Xi],
       cc_rhs    :: Xi,
       cc_loc    :: CtLoc
     }
@@ -926,6 +925,13 @@ data Ct
       cc_ev  :: CtEvidence,
       cc_loc :: CtLoc,
       cc_occ :: OccName    -- The name of this hole
+    }
+  | CTyAppEqCan { -- tv xis ~ xi
+      cc_ev     :: CtEvidence,
+      cc_tyvar :: TcTyVar,
+      cc_tyargs :: [Xi],
+      cc_rhs    :: Xi,
+      cc_loc    :: CtLoc
     }
 \end{code}
 
@@ -1074,6 +1080,10 @@ isCIrredEvCan :: Ct -> Bool
 isCIrredEvCan (CIrredEvCan {}) = True
 isCIrredEvCan _                = False
 
+isCTyAppEqCan :: Ct -> Bool
+isCTyAppEqCan (CTyAppEqCan {}) = True
+isCTyAppEqCan _ = False
+
 isCFunEqCan_Maybe :: Ct -> Maybe TyCon
 isCFunEqCan_Maybe (CFunEqCan { cc_fun = tc }) = Just tc
 isCFunEqCan_Maybe _ = Nothing
@@ -1102,6 +1112,7 @@ instance Outputable Ct where
                            CDictCan {}      -> "CDictCan"
                            CIrredEvCan {}   -> "CIrredEvCan"
                            CHoleCan {}      -> "CHoleCan"
+                           CTyAppEqCan {}   -> "CTyAppEqCan"
 \end{code}
 
 \begin{code}
