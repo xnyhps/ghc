@@ -559,7 +559,8 @@ interactWithInertsStage :: WorkItem -> TcS StopOrContinue
 -- Precondition: if the workitem is a CTyEqCan then it will not be able to 
 -- react with anything at this stage. 
 interactWithInertsStage wi 
-  = do { traceTcS "interactWithInerts" $ text "workitem = " <+> ppr wi
+  = do { inerts <- getTcSInerts 
+       ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
        ; rels <- extractRelevantInerts wi 
        ; traceTcS "relevant inerts are:" $ ppr rels
        ; foldlBagM interact_next (ContinueWith wi) rels }

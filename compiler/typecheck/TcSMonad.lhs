@@ -252,6 +252,7 @@ extendWorkListNonEq ct wl
 extendWorkListCt :: Ct -> WorkList -> WorkList
 -- Agnostic
 extendWorkListCt ct wl
+ | isCTyAppEqCan ct = extendWorkListNonEq ct wl
  | isEqPred (ctPred ct) = extendWorkListEq ct wl
  | otherwise = extendWorkListNonEq ct wl
 
@@ -280,7 +281,7 @@ workListFromCt ct | isEqPred (ctPred ct) = workListFromEq ct
 
 selectWorkItem :: WorkList -> (Maybe Ct, WorkList)
 selectWorkItem wl@(WorkList { wl_eqs = eqs, wl_funeqs = feqs, wl_rest = rest })
-  = case (eqs,feqs,rest) of
+  = pprTrace "selectWorkItem" (ppr wl) $ case (eqs,feqs,rest) of
       (ct:cts,_,_)     -> (Just ct, wl { wl_eqs    = cts })
       (_,fun_eqs,_)    | Just (fun_eqs', ct) <- extractDeque fun_eqs
                        -> (Just ct, wl { wl_funeqs = fun_eqs' })
@@ -555,6 +556,7 @@ data InertCans
 
        , inert_insols :: Cts       
               -- Frozen errors (as non-canonicals)
+       , inert_appeqs :: Cts
        }
     
                      
@@ -606,6 +608,8 @@ instance Outputable InertCans where
                    <+> vcat (map ppr (Bag.bagToList $ inert_irreds ics))
                  , text "Insolubles =" <+> -- Clearly print frozen errors
                     braces (vcat (map ppr (Bag.bagToList $ inert_insols ics)))
+                 , ptext (sLit "Application equalities:")
+                   <+> braces (vcat (map ppr (Bag.bagToList $ inert_appeqs ics)))
                  ]
             
 instance Outputable InertSet where 
@@ -619,7 +623,8 @@ emptyInert
                          , inert_dicts  = emptyCCanMap
                          , inert_funeqs = emptyFamHeadMap
                          , inert_irreds = emptyCts
-                         , inert_insols = emptyCts }
+                         , inert_insols = emptyCts
+                         , inert_appeqs = emptyCts }
        , inert_fsks          = []
        , inert_flat_cache    = emptyFamHeadMap
        , inert_solved_dicts  = PredMap emptyTM 
@@ -660,7 +665,7 @@ insertInertItem item is
                                       (alterTM fam_head upd_funeqs $ 
                                          (unFamHeadMap $ inert_funeqs ics)) }
           | isCTyAppEqCan item
-          = ics -- { inert_eqs = extendVarEnv_C undefined (inert_eqs ics) (cc_tyvar item) item }
+          = ics { inert_appeqs = inert_appeqs ics `Bag.snocBag` item }
           | otherwise
           = pprPanic "upd_inert set: can't happen! Inserting " $ 
             ppr item   -- Can't be CNonCanonical, CHoleCan, 
@@ -730,7 +735,8 @@ prepareInertsForImplications is
            , inert_funeqs = FamHeadMap (mapTM given_from_wanted funeqs)
            , inert_irreds = Bag.filterBag isGivenCt irreds
            , inert_dicts  = keepGivenCMap dicts
-           , inert_insols = emptyCts }
+           , inert_insols = emptyCts
+           , inert_appeqs = emptyCts }
 
     given_from_wanted funeq   -- This is where the magic processing happens 
       | isGiven ev = funeq    -- for type-function equalities
