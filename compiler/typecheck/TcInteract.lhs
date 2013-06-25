@@ -304,7 +304,8 @@ kickOutRewritable new_flav new_tv
                      , inert_dicts  = dictmap
                      , inert_funeqs = funeqmap
                      , inert_irreds = irreds
-                     , inert_insols = insols } }))
+                     , inert_insols = insols
+                     , inert_appeqs = appeqs } }))
        = (kicked_out, is { inert_cans = inert_cans_in })
                 -- NB: Notice that don't rewrite 
                 -- inert_solved_dicts, and inert_solved_funeqs
@@ -315,7 +316,8 @@ kickOutRewritable new_flav new_tv
                             , inert_dicts = dicts_in
                             , inert_funeqs = feqs_in
                             , inert_irreds = irs_in
-                            , inert_insols = insols_in }
+                            , inert_insols = insols_in
+                            , inert_appeqs = appeqs_in }
 
          kicked_out = WorkList { wl_eqs    = varEnvElts tv_eqs_out
                                , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
@@ -327,6 +329,7 @@ kickOutRewritable new_flav new_tv
          (dicts_out,  dicts_in)   = partitionCCanMap kick_out_ct dictmap
          (irs_out,    irs_in)     = partitionBag     kick_out_ct irreds
          (insols_out, insols_in)  = partitionBag     kick_out_ct insols
+         (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct appeqs
            -- Kick out even insolubles; see Note [Kick out insolubles]
 
     kick_out_ct inert_ct = new_flav `canRewrite` (ctFlavour inert_ct) &&
@@ -555,13 +558,32 @@ data InteractResult
     | IRInertConsumed    { ir_fire :: String }    -- Inert item consumed, keep going with work item 
     | IRKeepGoing        { ir_fire :: String }    -- Inert item remains, keep going with work item
 
+findSolvableApplication :: WorkItem -> InertSet -> TcS ()
+findSolvableApplication wi inerts
+  = do { traceTcS "findSolvableApplication" (ppr wi <+> (ppr $ inert_appeqs $ inert_cans inerts))
+       ; case wi of
+            CDictCan { cc_tyargs = [xi] } | Just tyvar <- tcGetTyVar_maybe xi
+              -> do { traceTcS "findSolvableApplication: " (ppr tyvar)
+                      ; let relevant_inerts = filterBag (\ct -> cc_tyvar ct == tyvar) $ filterBag isCTyAppEqCan $ inert_appeqs $ inert_cans inerts
+                      ; traceTcS "findSolvableApplication: relevants = " (ppr relevant_inerts)
+                      ; mapBagM_ find_other_dict relevant_inerts
+                      }
+            _ -> traceTcS "findSolvableApplication: fail" empty
+       }
+  where find_other_dict ct
+          | Just (ty, tys) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
+            = do { traceTcS "findSolvableApplication: looking for " ((ppr $ cc_class wi) <+> (ppr tyvar))
+                 }
+          | otherwise = pprPanic "findSolvableApplication: impossible?" (ppr ct)
+
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue 
 -- Precondition: if the workitem is a CTyEqCan then it will not be able to 
 -- react with anything at this stage. 
 interactWithInertsStage wi 
   = do { inerts <- getTcSInerts 
        ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
-       ; rels <- extractRelevantInerts wi 
+       ; rels <- extractRelevantInerts wi
+       ; findSolvableApplication wi inerts
        ; traceTcS "relevant inerts are:" $ ppr rels
        ; foldlBagM interact_next (ContinueWith wi) rels }
 
