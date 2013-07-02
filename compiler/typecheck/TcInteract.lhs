@@ -558,23 +558,28 @@ data InteractResult
     | IRInertConsumed    { ir_fire :: String }    -- Inert item consumed, keep going with work item 
     | IRKeepGoing        { ir_fire :: String }    -- Inert item remains, keep going with work item
 
-findSolvableApplication :: WorkItem -> InertSet -> TcS ()
-findSolvableApplication wi inerts
-  = do { traceTcS "findSolvableApplication" (ppr wi <+> (ppr $ inert_appeqs $ inert_cans inerts))
-       ; case wi of
-            CDictCan { cc_tyargs = [xi] } | Just tyvar <- tcGetTyVar_maybe xi
-              -> do { traceTcS "findSolvableApplication: " (ppr tyvar)
-                      ; let relevant_inerts = filterBag (\ct -> cc_tyvar ct == tyvar) $ filterBag isCTyAppEqCan $ inert_appeqs $ inert_cans inerts
-                      ; traceTcS "findSolvableApplication: relevants = " (ppr relevant_inerts)
-                      ; mapBagM_ find_other_dict relevant_inerts
-                      }
-            _ -> traceTcS "findSolvableApplication: fail" empty
-       }
-  where find_other_dict ct
-          | Just (ty, tys) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
-            = do { traceTcS "findSolvableApplication: looking for " ((ppr $ cc_class wi) <+> (ppr tyvar))
-                 }
-          | otherwise = pprPanic "findSolvableApplication: impossible?" (ppr ct)
+findSolvableApplication :: WorkItem -> InertSet -> (Cts, InertSet)
+findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) inerts
+ | Just tyvar <- tcGetTyVar_maybe xi
+              = let
+                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && cc_tyvar ct == tyvar && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
+                  emitted = concatBag $ mapBag split remove
+                in pprTrace "findSolvableApplication: emitted" (ppr emitted) (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+  where
+        has_other_dict :: Ct -> Bool
+        has_other_dict ct
+          | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
+            = let dicts = concatMap bagToList ((eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts) ++ (eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts))
+              in not $ null $ filter (match (cc_class wi) tyvar) dicts
+          | otherwise = False
+        match :: Class -> TcTyVar -> Ct -> Bool
+        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] }) | cl == cl2, Just tyvar == tcGetTyVar_maybe ty = True
+        match _ _ _ = False
+        split ct = let (ty2, tys) = splitAppTys (cc_rhs ct)
+                   in listToBag $ (mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) (ctev_evar $ cc_ev ct))) :
+                        zipWith (\t1 t2 -> mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred t1 t2) (ctev_evar $ cc_ev ct))) (cc_tyargs ct) tys
+
+findSolvableApplication _ inerts = (emptyCts, inerts)
 
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue 
 -- Precondition: if the workitem is a CTyEqCan then it will not be able to 
@@ -582,8 +587,9 @@ interactWithInertsStage :: WorkItem -> TcS StopOrContinue
 interactWithInertsStage wi 
   = do { inerts <- getTcSInerts 
        ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
+       ; split_cts <- modifyInertTcS (findSolvableApplication wi)
+       ; mapBagM_ (updWorkListTcS . extendWorkListCt) split_cts
        ; rels <- extractRelevantInerts wi
-       ; findSolvableApplication wi inerts
        ; traceTcS "relevant inerts are:" $ ppr rels
        ; foldlBagM interact_next (ContinueWith wi) rels }
 
@@ -721,10 +727,18 @@ doInteractWithInert ii@(CFunEqCan { cc_ev = ev1, cc_fun = tc1
     w_solves_i = fl2 `canSolve` fl1 
     
 
+{-
 doInteractWithInert ii@(CDictCan {}) wi@(CTyAppEqCan {}) =
     do { traceTcS "interact with inerts: TyApp/Dict" (ppr ii <+> ppr wi)
        ; return (IRKeepGoing "?")
        }
+-}
+
+doInteractWithInert ii@(CTyEqCan {}) wi@(CTyAppEqCan {})
+    | cc_tyvar ii == cc_tyvar wi
+    = do { traceTcS "interact with inerts: TyEq/TyAppEq" (ppr ii <+> ppr wi)
+         ; return (IRKeepGoing "??")
+         }
 
 doInteractWithInert _ _ = return (IRKeepGoing "NOP")
 \end{code}

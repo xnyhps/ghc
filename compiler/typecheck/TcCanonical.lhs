@@ -799,11 +799,11 @@ canEqNC loc ev ty1 ty2
       , (t2,s2) <- tcSplitAppTys ty2
       , Just tv1 <- tcGetTyVar_maybe t1
       -- , Just tv2 <- tcGetTyVar_maybe t2
-      = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = error "cc_loc" })
+      = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc })
       | (t1,s1) <- tcSplitAppTys ty1
       , (t2,s2) <- tcSplitAppTys ty2
       , Just tv2 <- tcGetTyVar_maybe t2
-      = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv2, cc_tyargs = s2, cc_rhs = ty1, cc_loc = error "cc_loc" })
+      = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv2, cc_tyargs = s2, cc_rhs = ty1, cc_loc = loc })
 
       | otherwise
       = do { emitInsoluble (CNonCanonical { cc_ev = ev, cc_loc = loc })
