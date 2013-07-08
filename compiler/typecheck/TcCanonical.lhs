@@ -196,6 +196,8 @@ canonicalize (CIrredEvCan { cc_ev = ev
 canonicalize (CHoleCan { cc_ev = ev, cc_loc = d, cc_occ = occ })
   = canHole d ev occ
 
+canonicalize ct@(CTyAppEqCan {}) = return $ ContinueWith ct
+
 canEvNC :: CtLoc -> CtEvidence -> TcS StopOrContinue
 -- Called only for non-canonical EvVars 
 canEvNC d ev 
@@ -794,7 +796,27 @@ canEqNC loc ev ty1 ty2
       , Just (tc2,tys2) <- tcSplitTyConApp_maybe ty2
       , isDecomposableTyCon tc1 && isDecomposableTyCon tc2
       = canDecomposableTyConApp loc ev tc1 tys1 tc2 tys2
-    
+   
+      | Just (s1,t1) <- tcSplitAppTy_maybe ty1
+      , Just (s2,[t2]) <- tcSplitTyConApp_maybe ty2
+      = do { let xevcomp [x,y] = EvCoercion (mkTcAppCo (evTermCoercion x) (evTermCoercion y))
+                 xevcomp _ = error "canEqAppTy: can't happen" -- Can't happen
+                 xevdecomp x = let xco = evTermCoercion x 
+                               in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
+           ; ctevs <- xCtFlavor ev [mkTcEqPred s1 (mkTyConApp s2 []), mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
+           ; canEvVarsCreated loc ctevs }
+      
+      {-
+      | Just (s1,[t1]) <- tcSplitTyConApp_maybe ty1
+      , Just (s2,t2) <- tcSplitAppTy_maybe ty2
+      = do { let xevcomp [x,y] = EvCoercion (mkTcAppCo (evTermCoercion x) (evTermCoercion y))
+                 xevcomp _ = error "canEqAppTy: can't happen" -- Can't happen
+                 xevdecomp x = let xco = evTermCoercion x 
+                               in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
+           ; ctevs <- xCtFlavor ev [mkTcEqPred (mkTyConApp s1 []) s2, mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
+           ; canEvVarsCreated loc ctevs }
+      -}
+
       | (t1,s1) <- tcSplitAppTys ty1
       , (t2,s2) <- tcSplitAppTys ty2
       , Just tv1 <- tcGetTyVar_maybe t1

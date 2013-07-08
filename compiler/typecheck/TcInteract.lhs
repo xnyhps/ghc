@@ -319,7 +319,7 @@ kickOutRewritable new_flav new_tv
                             , inert_insols = insols_in
                             , inert_appeqs = appeqs_in }
 
-         kicked_out = WorkList { wl_eqs    = varEnvElts tv_eqs_out
+         kicked_out = WorkList { wl_eqs    = (varEnvElts tv_eqs_out) ++ (bagToList appeqs_out)
                                , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
                                , wl_rest   = bagToList (dicts_out `andCts` irs_out 
                                                         `andCts` insols_out) }
@@ -558,28 +558,32 @@ data InteractResult
     | IRInertConsumed    { ir_fire :: String }    -- Inert item consumed, keep going with work item 
     | IRKeepGoing        { ir_fire :: String }    -- Inert item remains, keep going with work item
 
-findSolvableApplication :: WorkItem -> InertSet -> (Cts, InertSet)
-findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) inerts
+findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet -> (Cts, InertSet)
+findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe xi
               = let
-                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && cc_tyvar ct == tyvar && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
+                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct)) == (zonk $ tyvar) && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
                   emitted = concatBag $ mapBag split remove
-                in pprTrace "findSolvableApplication: emitted" (ppr emitted) (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+                in pprTrace "findSolvableApplication: emitted" (ppr emitted <+> ppr ty_env) (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
   where
+        zonk :: TyVar -> TyVar
+        zonk tv = maybe tv id $ do { (_,ty) <- lookupVarEnv ty_env tv
+                     ; getTyVar_maybe ty
+                     }
         has_other_dict :: Ct -> Bool
         has_other_dict ct
           | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
             = let dicts = concatMap bagToList ((eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts) ++ (eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts))
-              in not $ null $ filter (match (cc_class wi) tyvar) dicts
+              in not $ null $ filter (match (cc_class wi) $ zonk tyvar) dicts
           | otherwise = False
         match :: Class -> TcTyVar -> Ct -> Bool
-        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] }) | cl == cl2, Just tyvar == tcGetTyVar_maybe ty = True
+        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] }) | cl == cl2, (Just $ zonk tyvar) == (fmap zonk $ tcGetTyVar_maybe ty) = True
         match _ _ _ = False
         split ct = let (ty2, tys) = splitAppTys (cc_rhs ct)
                    in listToBag $ (mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) (ctev_evar $ cc_ev ct))) :
                         zipWith (\t1 t2 -> mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred t1 t2) (ctev_evar $ cc_ev ct))) (cc_tyargs ct) tys
 
-findSolvableApplication _ inerts = (emptyCts, inerts)
+findSolvableApplication _ _ inerts = (emptyCts, inerts)
 
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue 
 -- Precondition: if the workitem is a CTyEqCan then it will not be able to 
@@ -587,7 +591,8 @@ interactWithInertsStage :: WorkItem -> TcS StopOrContinue
 interactWithInertsStage wi 
   = do { inerts <- getTcSInerts 
        ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
-       ; split_cts <- modifyInertTcS (findSolvableApplication wi)
+       ; ty_map <- getTcSTyBindsMap
+       ; split_cts <- modifyInertTcS (findSolvableApplication wi ty_map)
        ; mapBagM_ (updWorkListTcS . extendWorkListCt) split_cts
        ; rels <- extractRelevantInerts wi
        ; traceTcS "relevant inerts are:" $ ppr rels
