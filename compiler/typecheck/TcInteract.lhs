@@ -562,7 +562,7 @@ findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet 
 findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe xi
               = let
-                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct)) == (zonk $ tyvar) && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
+                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
                   emitted = concatBag $ mapBag split remove
                 in pprTrace "findSolvableApplication: emitted" (ppr emitted <+> ppr ty_env) (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
   where
