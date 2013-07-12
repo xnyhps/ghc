@@ -563,26 +563,39 @@ findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet 
 findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe xi
               = let
-                  (remove, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && has_other_dict ct) $ inert_appeqs $ inert_cans inerts
-                  emitted = concatBag $ mapBag split remove
-                in pprTrace "findSolvableApplication: emitted" (ppr emitted <+> ppr ty_env) (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+                  appeqs = inert_appeqs $ inert_cans inerts
+                  (removed, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && has_other_dict ct) appeqs
+                  emitted = concatBag $ mapBag split removed
+                in pprTrace "findSolvableApplication: emitted" (ppr emitted <+> ppr ty_env)
+                   (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
   where
         zonk :: TyVar -> TyVar
-        zonk tv = maybe tv id $ do { (_,ty) <- lookupVarEnv ty_env tv
-                     ; getTyVar_maybe ty
-                     }
+        zonk tv = case do { (_,ty) <- lookupVarEnv ty_env tv ; getTyVar_maybe ty } of
+            Nothing -> tv
+            Just tv' -> tv'
         has_other_dict :: Ct -> Bool
         has_other_dict ct
           | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
-            = let dicts = concatMap bagToList ((eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts) ++ (eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts))
+            = let
+                 dicts = concatMap bagToList (given ++ wanted)
+                 given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
+                 wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
               in not $ null $ filter (match (cc_class wi) $ zonk tyvar) dicts
           | otherwise = False
+
         match :: Class -> TcTyVar -> Ct -> Bool
-        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] }) | cl == cl2, (Just $ zonk tyvar) == (fmap zonk $ tcGetTyVar_maybe ty) = True
+        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] })
+          | Just tyvar2 <- tcGetTyVar_maybe ty
+            = cl == cl2 && zonk tyvar == zonk tyvar2
         match _ _ _ = False
+
+        split :: Ct -> Cts
         split ct = let (ty2, tys) = splitAppTys (cc_rhs ct)
-                   in listToBag $ (mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) (ctev_evar $ cc_ev ct))) :
-                        zipWith (\t1 t2 -> mkNonCanonical (cc_loc ct) (CtWanted (mkTcEqPred t1 t2) (ctev_evar $ cc_ev ct))) (cc_tyargs ct) tys
+                       ev = ctev_evar (cc_ev ct)
+                       loc = cc_loc ct
+                       head = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) ev)
+                       arguments = zipWith (\t1 t2 -> mkNonCanonical loc (CtWanted (mkTcEqPred t1 t2) ev)) (cc_tyargs ct) tys
+                   in listToBag (head : arguments)
 
 findSolvableApplication _ _ inerts = (emptyCts, inerts)
 
