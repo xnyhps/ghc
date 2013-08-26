@@ -393,7 +393,7 @@ bindHsTyVars doc mb_assoc kv_bndrs tv_bndrs thing_inside
        ; checkDupRdrNames tv_names_w_loc
        ; when (isNothing mb_assoc) (checkShadowedRdrNames tv_names_w_loc)
 
-       ; (tv_bndrs', fvs1) <- mapFvRn (rnTvBndr mb_assoc rdr_env doc) tvs
+       ; (tv_bndrs', fvs1) <- mapFvRn (rn_tv_bndr mb_assoc rdr_env doc) tvs
        ; (res, fvs2) <- bindLocalNamesFV (map hsLTyVarName tv_bndrs') $
                         do { env <- getLocalRdrEnv
                            ; traceRn (text "bhtv" <+> (ppr tvs $$ ppr all_kvs $$ ppr env))
