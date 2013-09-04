@@ -532,15 +532,15 @@ lookupInstEnv' ie cls tys
       = find ms us rest
 
       | Just subst <- tcMatchTys tpl_tv_set tpl_tys tys
-      = find ((item, map (lookup_tv subst) tpl_tvs) : ms) us rest
+      = pprTrace "lookupInstEnv 0" (ppr subst) $ find ((item, map (lookup_tv subst) tpl_tvs) : ms) us rest
 
         -- Does not match, so next check whether the things unify
         -- See Note [Overlapping instances] above
       | Incoherent _ <- oflag
-      = find ms us rest
+      = pprTrace "lookupInstEnv 1" (ppr tpl_tys <+> ppr tys) $ find ms us rest
 
       | otherwise
-      = ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tv_set,
+      = pprTrace "lookupInstEnv 2" (ppr tpl_tys <+> ppr tys) $ ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tv_set,
                  (ppr cls <+> ppr tys <+> ppr all_tvs) $$
                  (ppr tpl_tvs <+> ppr tpl_tys)
                 )

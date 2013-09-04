@@ -39,6 +39,8 @@ import Type
 import TyCon
 import TypeRep
 import Util
+
+import Outputable
 \end{code}
 
 
@@ -162,20 +164,20 @@ match menv subst (TyVarTy tv1) ty2
   | Just ty1' <- lookupVarEnv subst tv1'	-- tv1' is already bound
   = if eqTypeX (nukeRnEnvL rn_env) ty1' ty2
 	-- ty1 has no locally-bound variables, hence nukeRnEnvL
-    then Just subst
-    else Nothing	-- ty2 doesn't match
+    then trace "TyVarTy 1" $ Just subst
+    else trace "TyVarTy 2" $ Nothing	-- ty2 doesn't match
 
   | tv1' `elemVarSet` me_tmpls menv
   = if any (inRnEnvR rn_env) (varSetElems (tyVarsOfType ty2))
-    then Nothing	-- Occurs check
-    else do { subst1 <- match_kind menv subst (tyVarKind tv1) (typeKind ty2)
+    then trace "TyVarTy 3" $ Nothing	-- Occurs check
+    else trace "TyVarTy 4" $ do { subst1 <- match_kind menv subst (tyVarKind tv1) (typeKind ty2)
 			-- Note [Matching kinds]
 	    ; return (extendVarEnv subst1 tv1' ty2) }
 
    | otherwise	-- tv1 is not a template tyvar
    = case ty2 of
-	TyVarTy tv2 | tv1' == rnOccR rn_env tv2 -> Just subst
-	_                                       -> Nothing
+	TyVarTy tv2 | tv1' == rnOccR rn_env tv2 -> trace "TyVarTy 5" $ Just subst
+	_                                       -> pprTrace "TyVarTy 6" (ppr ty2) $ Nothing
   where
     rn_env = me_env menv
     tv1' = rnOccL rn_env tv1
@@ -187,7 +189,7 @@ match menv subst (ForAllTy tv1 ty1) (ForAllTy tv2 ty2)
     menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
 
 match menv subst (TyConApp tc1 tys1) (TyConApp tc2 tys2) 
-  | tc1 == tc2 = match_tys menv subst tys1 tys2
+  | tc1 == tc2 = pprTrace "match TyConApp" (ppr $ match_tys menv subst tys1 tys2) $ match_tys menv subst tys1 tys2
 match menv subst (FunTy ty1a ty1b) (FunTy ty2a ty2b) 
   = do { subst' <- match menv subst ty1a ty2a
        ; match menv subst' ty1b ty2b }
@@ -198,6 +200,16 @@ match menv subst (AppTy ty1a ty1b) ty2
        ; match menv subst' ty1b ty2b }
 
 match _ subst (LitTy x) (LitTy y) | x == y  = return subst
+
+
+match menv subst (BigLambda tv1 ty1) (BigLambda tv2 ty2)
+  = do { subst' <- match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)
+       ; res <- pprTrace "match BigLambda" (ppr (ty1, ty2)) $ match menv' subst' ty1 ty2
+       ; pprTrace "match BigLambda" (ppr res) $ return res
+       }
+  where
+    menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
+
 
 match _ _ _ _
   = Nothing

@@ -36,6 +36,9 @@ import TcEvidence
 import Outputable
 
 import TcMType ( zonkTcPredType )
+import qualified TcRnMonad as TcM
+import qualified TcMType as TcM
+import FastString ( fsLit )
 
 import TcRnTypes
 import TcErrors
@@ -54,6 +57,8 @@ import UniqFM
 import FastString ( sLit ) 
 import DynFlags
 import Util
+
+import TypeRep
 \end{code}
 **********************************************************************
 *                                                                    * 
@@ -559,29 +564,36 @@ data InteractResult
     | IRInertConsumed    { ir_fire :: String }    -- Inert item consumed, keep going with work item 
     | IRKeepGoing        { ir_fire :: String }    -- Inert item remains, keep going with work item
 
-findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet -> (Cts, InertSet)
-findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) ty_env inerts
+findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet -> TcS (Cts, InertSet)
+findSolvableApplication wi@(CDictCan { cc_tyargs = [xi], cc_class = cls }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe xi
-              = let
-                  appeqs = inert_appeqs $ inert_cans inerts
-                  (removed, stay) = partitionBag (\ct -> isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && has_other_dict ct) appeqs
-                  emitted = concatBag $ mapBag split removed
-                in pprTrace "findSolvableApplication: emitted" (ppr emitted <+> ppr ty_env)
-                   (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+              = do { let appeqs = inert_appeqs $ inert_cans inerts
+                   ; (removed, stay) <- foldrBagM (\ct (r, s) -> do { b <- has_other_dict ct; if isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && b then return (consBag ct r, s) else return (r, extendCts s ct) }) (emptyBag, emptyCts) appeqs
+                   ; let emitted = concatBag $ mapBag split removed
+                   ; traceTcS "findSolvableApplication: candidate" (ppr wi)
+                   ; return (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+                   }
   where
         zonk :: TyVar -> TyVar
         zonk tv = case do { (_,ty) <- lookupVarEnv ty_env tv ; getTyVar_maybe ty } of
             Nothing -> tv
             Just tv' -> tv'
-        has_other_dict :: Ct -> Bool
+        has_other_dict :: Ct -> TcS Bool
         has_other_dict ct
           | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
             = let
                  dicts = concatMap bagToList (given ++ wanted)
                  given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
                  wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
-              in not $ null $ filter (match (cc_class wi) $ zonk tyvar) dicts
-          | otherwise = False
+              in return $ not $ null $ filter (match cls $ zonk tyvar) dicts
+          | ty <- cc_rhs ct
+            = do { uniq <- wrapErrTcS TcM.newUnique
+                 ; let name = TcM.mkTcTyVarName uniq (fsLit "x")
+                 ; result <- matchClassInst inerts cls [BigLambda (mkTcTyVar name liftedTypeKind vanillaSkolemTv) ty] $ cc_loc wi
+                 ; traceTcS "findSolvableApplication: has_other_dict" (ppr result)
+                 ; return False
+                 }
+          | otherwise = return False
 
         match :: Class -> TcTyVar -> Ct -> Bool
         match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] })
@@ -597,7 +609,9 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = [xi] }) ty_env inerts
                        arguments = zipWith (\t1 t2 -> mkNonCanonical loc (CtWanted (mkTcEqPred t1 t2) ev)) (cc_tyargs ct) tys
                    in listToBag (head : arguments)
 
-findSolvableApplication _ _ inerts = (emptyCts, inerts)
+-- findSolvableApplication wi@(CTyAppEqCan {}) _ inerts = pprTrace "findSolvableApplication: otherwise:" ((ppr $ cc_tyvar wi) <+> (ppr $ cc_rhs wi)) (emptyCts, inerts)
+
+findSolvableApplication _ _ inerts = return (emptyCts, inerts)
 
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue 
 -- Precondition: if the workitem is a CTyEqCan then it will not be able to 
@@ -606,7 +620,9 @@ interactWithInertsStage wi
   = do { inerts <- getTcSInerts 
        ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
        ; ty_map <- getTcSTyBindsMap
-       ; split_cts <- modifyInertTcS (findSolvableApplication wi ty_map)
+       ; curr_inert <- getTcSInerts
+       ; (split_cts, new_inert) <- findSolvableApplication wi ty_map curr_inert
+       ; modifyInertTcS (const ((), new_inert))
        ; mapBagM_ (updWorkListTcS . extendWorkListCt) split_cts
        ; rels <- extractRelevantInerts wi
        ; traceTcS "relevant inerts are:" $ ppr rels
@@ -1025,7 +1041,7 @@ are really setting
 which is FINE because the use of d3 is protected by the instance function 
 applications. 
 
-So, our strategy is to try to put solved wanted dictionaries into the
+So, our strategy is to try to put solved wanted 
 inert set along with their superclasses (when this is meaningful,
 i.e. when new wanted goals are generated) but solve a wanted dictionary
 from a given only in the case where the evidence variable of the
@@ -1743,6 +1759,10 @@ data LookupInstResult
   = NoInstance
   | GenInst [CtEvidence] EvTerm 
 
+instance Outputable LookupInstResult where
+    ppr NoInstance = text "NoInstance"
+    ppr (GenInst cv ev) = text "GenInst" <+> ppr cv <+> ppr ev
+
 matchClassInst :: InertSet -> Class -> [Type] -> CtLoc -> TcS LookupInstResult
 
 matchClassInst _ clas [ k, ty ] _
@@ -1797,7 +1817,7 @@ matchClassInst inerts clas tys loc
         ; case lookupInstEnv instEnvs clas tys of
             ([], _, _)               -- Nothing matches  
                 -> do { traceTcS "matchClass not matching" $ 
-                        vcat [ text "dict" <+> ppr pred ]
+                        vcat [ text "dict" <+> ppr pred, text "instEnvs" <+> ppr instEnvs ]
                       ; return NoInstance }
 
 	    ([(ispec, inst_tys)], [], _) -- A single match 
