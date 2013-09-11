@@ -575,7 +575,6 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = [xi], cc_class = cls }) ty_en
                                 (Just (var, lambda), True) -> return (split2 ct var lambda `unionBags` cts, consBag ct r, s)
                                 _ -> return (cts, r, extendCts s ct)
                            }) (emptyBag, emptyBag, emptyCts) appeqs
-                   --; let emitted = concatBag $ mapBag split removed
                    ; traceTcS "findSolvableApplication: emitted" (ppr (new_constraints, removed))
                    ; return (new_constraints, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
                    }
@@ -586,28 +585,35 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = [xi], cc_class = cls }) ty_en
             Just tv' -> tv'
         has_other_dict :: Ct -> TcS (Maybe (TcType, TcType))
         has_other_dict ct
-          | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
+          | Just (ty, tyarg) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
             = let
                  dicts = concatMap bagToList (given ++ wanted)
                  given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
                  wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
-              in return Nothing -- $ not $ null $ filter (match cls $ zonk tyvar) dicts
+              in do { traceTcS "findSolvableApplication: has_other_dict 0" (ppr (ct, (tyarg, ty)))
+                    ; case filter (match cls $ zonk tyvar) dicts of
+                        (_:_) -> return (Just (tyarg, ty))
+                        [] -> return Nothing
+                    }
           | Just (ty@(tycon, tyargs)) <- tcSplitTyConApp_maybe $ cc_rhs ct
             = do { uniq <- wrapErrTcS TcM.newUnique
-                 ; let name = TcM.mkTcTyVarName uniq (fsLit "x")
-                 ; let insert_everywhere :: a -> [a] -> [(a, [a])]
+                 ; let
+                       name = TcM.mkTcTyVarName uniq (fsLit "x")
+
+                       insert_everywhere :: a -> [a] -> [(a, [a])]
                        insert_everywhere a (x : xs) = (x, a : xs) : (map (\(p,q) -> (p,x:q)) $ insert_everywhere a xs)
-                       --insert_everywhere a [x] = [(x, [a])]
                        insert_everywhere a [] = []
-                 ; let fresh_tyvar = mkTcTyVar name liftedTypeKind vanillaSkolemTv
-                 ; let options = insert_everywhere (mkTyVarTy fresh_tyvar) tyargs
-                 ; traceTcS "findSolvableApplication: has_other_dict 1" (ppr (options))
-                 ; let isGenInstance (GenInst {}) = True
+
+                       fresh_tyvar = mkTcTyVar name liftedTypeKind vanillaSkolemTv
+                       eta_reduced = (\(a,b) -> (b, a)) . tcSplitAppTy $ cc_rhs ct
+                       options = eta_reduced : (map (\(var, largs) -> (var, BigLambda fresh_tyvar (mkTyConApp tycon largs))) $ insert_everywhere (mkTyVarTy fresh_tyvar) tyargs)
+                       
+                       isGenInstance (GenInst {}) = True
                        isGenInstance _ = False
-                 ; result <- filterM (\opt -> fmap isGenInstance (matchClassInst inerts cls [snd opt] $ cc_loc wi)) $ map (\(var, largs) -> (var, BigLambda fresh_tyvar (mkTyConApp tycon largs))) options
+                 ; result <- filterM (\opt -> fmap isGenInstance (matchClassInst inerts cls [snd opt] $ cc_loc wi)) options
                  ; traceTcS "findSolvableApplication: has_other_dict 2" (ppr result)
                  ; case result of
-                    [x] -> return $ return x
+                    [x] -> return (Just x)
                     [] -> return Nothing
                     _ -> error "More than one instance for lambda"
                  }
