@@ -460,7 +460,13 @@ data TcLclEnv           -- Changes as we move inside an expression
     }
 
 type TcTypeEnv = NameEnv TcTyThing
-data TcIdBinder = TcIdBndr TcId TopLevelFlag
+
+data TcIdBinder 
+  = TcIdBndr 
+       TcId 
+       TopLevelFlag    -- Tells whether the bindind is syntactically top-level
+                       -- (The monomorphic Ids for a recursive group count
+                       --  as not-top-level for this purpose.)
 
 {- Note [Given Insts]
    ~~~~~~~~~~~~~~~~~~
@@ -916,12 +922,13 @@ data Ct
       cc_loc  :: CtLoc
     }
 
-  | CNonCanonical { -- See Note [NonCanonical Semantics]
+  | CNonCanonical {        -- See Note [NonCanonical Semantics]
       cc_ev  :: CtEvidence,
       cc_loc :: CtLoc
     }
 
-  | CHoleCan {
+  | CHoleCan {             -- Treated as an "insoluble" constraint
+                           -- See Note [Insoluble constraints]
       cc_ev  :: CtEvidence,
       cc_loc :: CtLoc,
       cc_occ :: OccName    -- The name of this hole

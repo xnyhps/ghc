@@ -25,7 +25,7 @@ AC_DEFUN([GHC_SELECT_FILE_EXTENSIONS],
     x86_64-apple-darwin)
         $3='.dylib'
         ;;
-    arm-apple-darwin10)
+    arm-apple-darwin10|i386-apple-darwin11)
         $2='.a'
         $3='.dylib'
         ;;
@@ -103,7 +103,7 @@ AC_DEFUN([FPTOOLS_SET_PLATFORM_VARS],
                 echo "Can't work out target platform"
                 exit 1
             fi
-    
+
             TargetArch=`echo "$target" | sed 's/-.*//'`
             TargetVendor=`echo "$target" | sed -e 's/.*-\(.*\)-.*/\1/'`
             TargetOS=`echo "$target" | sed 's/.*-//'`
@@ -464,6 +464,7 @@ AC_DEFUN([FP_SETTINGS],
         SettingsPerlCommand="$PerlCmd"
         SettingsDllWrapCommand="/bin/false"
         SettingsWindresCommand="/bin/false"
+        SettingsLibtoolCommand="libtool"
         SettingsTouchCommand='touch'
         if test -z "$LlcCmd"
         then
@@ -490,6 +491,7 @@ AC_DEFUN([FP_SETTINGS],
     AC_SUBST(SettingsPerlCommand)
     AC_SUBST(SettingsDllWrapCommand)
     AC_SUBST(SettingsWindresCommand)
+    AC_SUBST(SettingsLibtoolCommand)
     AC_SUBST(SettingsTouchCommand)
     AC_SUBST(SettingsLlcCommand)
     AC_SUBST(SettingsOptCommand)
@@ -1182,6 +1184,7 @@ AC_SUBST(GccLT46)
 
 dnl Check to see if the C compiler is clang or llvm-gcc
 dnl
+GccIsClang=NO
 AC_DEFUN([FP_CC_LLVM_BACKEND],
 [AC_REQUIRE([AC_PROG_CC])
 AC_MSG_CHECKING([whether C compiler is clang])
@@ -1189,6 +1192,7 @@ $CC -x c /dev/null -dM -E > conftest.txt 2>&1
 if grep "__clang__" conftest.txt >/dev/null 2>&1; then
   AC_SUBST([CC_CLANG_BACKEND], [1])
   AC_SUBST([CC_LLVM_BACKEND], [1])
+  GccIsClang=YES
   AC_MSG_RESULT([yes])
 else
   AC_MSG_RESULT([no])
@@ -1203,6 +1207,7 @@ else
     AC_MSG_RESULT([no])
   fi
 fi
+AC_SUBST(GccIsClang)
 
 rm -f conftest.txt
 ])
@@ -1602,7 +1607,7 @@ then
     # optimistiaclly assume that it actually works properly.
     AC_DEFINE([USE_TIMER_CREATE], 1,  [Define to 1 if we can use timer_create(CLOCK_PROCESS_CPUTIME_ID,...)])
   else
-  AC_CACHE_CHECK([for a working timer_create(CLOCK_REALTIME)], 
+  AC_CACHE_CHECK([for a working timer_create(CLOCK_REALTIME)],
     [fptools_cv_timer_create_works],
     [AC_TRY_RUN([
 #include <stdio.h>
@@ -1722,7 +1727,7 @@ out:
      [fptools_cv_timer_create_works=no])
   ])
 case $fptools_cv_timer_create_works in
-    yes) AC_DEFINE([USE_TIMER_CREATE], 1, 
+    yes) AC_DEFINE([USE_TIMER_CREATE], 1,
                    [Define to 1 if we can use timer_create(CLOCK_PROCESS_CPUTIME_ID,...)]);;
 esac
   fi
@@ -1918,7 +1923,7 @@ AC_DEFUN([GHC_CONVERT_VENDOR],[
 # converts os from gnu to ghc naming, and assigns the result to $target_var
 AC_DEFUN([GHC_CONVERT_OS],[
 case "$1-$2" in
-  darwin10-arm)
+  darwin10-arm|darwin11-i386)
     $3="ios"
     ;;
   *)
@@ -2047,7 +2052,16 @@ AC_DEFUN([FIND_GCC],[
     then
         $1="$CC"
     else
-        FP_ARG_WITH_PATH_GNU_PROG([$1], [$2], [$3])
+        FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([$1], [$2], [$3])
+        # From Xcode 5 on, OS X command line tools do not include gcc anymore. Use clang.
+        if test -z "$$1"
+        then
+            FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([$1], [clang], [clang])
+        fi
+        if test -z "$$1"
+        then
+            AC_MSG_ERROR([cannot find $3 nor clang in your PATH])
+        fi
     fi
     AC_SUBST($1)
 ])

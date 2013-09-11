@@ -16,32 +16,6 @@
 --     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#Warnings
 -- for details
 
-{-# OPTIONS_GHC -O0 -fno-ignore-interface-pragmas #-}
-{-
-Careful optimisation of the parser: we don't want to throw everything
-at it, because that takes too long and doesn't buy much, but we do want
-to inline certain key external functions, so we instruct GHC not to
-throw away inlinings as it would normally do in -O0 mode.
--}
-
--- CPP tricks because we want the directives in the output of the
--- first CPP pass.
---
--- Clang note, 6/17/2013 by aseipp: It is *extremely* important (for
--- some reason) that there be a line of whitespace between the two
--- definitions here, and the subsequent use of __IF_GHC_77__ - this
--- seems to be a bug in clang or something, where having the line of
--- whitespace will make the preprocessor correctly format the rendered
--- lines in the 'two step' CPP pass. No, this is not a joke.
-#define __IF_GHC_77__ #if __GLASGOW_HASKELL__ >= 707
-#define __ENDIF__ #endif
-
-__IF_GHC_77__
--- Required on x86 to avoid the register allocator running out of
--- stack slots when compiling this module with -fPIC -dynamic.
-{-# OPTIONS_GHC -fcmm-sink #-}
-__ENDIF__
-
 module Parser ( parseModule, parseStmt, parseIdentifier, parseType,
                 parseHeader ) where
 
@@ -269,6 +243,7 @@ incorrect.
  'ccall'        { L _ ITccallconv }
  'capi'         { L _ ITcapiconv }
  'prim'         { L _ ITprimcallconv }
+ 'javascript'   { L _ ITjavascriptcallconv }
  'proc'         { L _ ITproc }          -- for arrow notation extension
  'rec'          { L _ ITrec }           -- for arrow notation extension
  'group'    { L _ ITgroup }     -- for list transform extension
@@ -996,6 +971,7 @@ callconv :: { CCallConv }
           | 'ccall'                     { CCallConv   }
           | 'capi'                      { CApiConv    }
           | 'prim'                      { PrimCallConv}
+          | 'javascript'                { JavaScriptCallConv }
 
 safety :: { Safety }
         : 'unsafe'                      { PlayRisky }
@@ -2068,6 +2044,7 @@ special_id
         | 'ccall'               { L1 (fsLit "ccall") }
         | 'capi'                { L1 (fsLit "capi") }
         | 'prim'                { L1 (fsLit "prim") }
+        | 'javascript'          { L1 (fsLit "javascript") }
         | 'group'               { L1 (fsLit "group") }
 
 special_sym :: { Located FastString }
@@ -2252,8 +2229,8 @@ hintExplicitForall span = do
     forall      <- extension explicitForallEnabled
     rulePrag    <- extension inRulePrag
     unless (forall || rulePrag) $ parseErrorSDoc span $ vcat
-      [ text "Illegal symbol '∀' in type"
+      [ text "Illegal symbol '\x2200' in type" -- U+2200 FOR ALL
       , text "Perhaps you intended -XRankNTypes or similar flag"
-      , text "to enable explicit-forall syntax: ∀ <tvs>. <type>"
+      , text "to enable explicit-forall syntax: \x2200 <tvs>. <type>"
       ]
 }

@@ -15,7 +15,7 @@ module SysTools (
         runUnlit, runCpp, runCc, -- [Option] -> IO ()
         runPp,                   -- [Option] -> IO ()
         runSplit,                -- [Option] -> IO ()
-        runAs, runLink,          -- [Option] -> IO ()
+        runAs, runLink, runLibtool, -- [Option] -> IO ()
         runMkDLL,
         runWindres,
         runLlvmOpt,
@@ -261,6 +261,7 @@ initSysTools mbMinusB
            split_script  = installed cGHC_SPLIT_PGM
 
        windres_path <- getSetting "windres command"
+       libtool_path <- getSetting "libtool command"
 
        tmpdir <- getTemporaryDirectory
 
@@ -331,6 +332,7 @@ initSysTools mbMinusB
                     sPgm_T   = touch_path,
                     sPgm_sysman  = top_dir ++ "/ghc/rts/parallel/SysMan",
                     sPgm_windres = windres_path,
+                    sPgm_libtool = libtool_path,
                     sPgm_lo  = (lo_prog,[]),
                     sPgm_lc  = (lc_prog,[]),
                     -- Hans: this isn't right in general, but you can
@@ -679,6 +681,9 @@ getLinkerInfo' dflags = do
                  -- that doesn't support --version. We can just assume that's
                  -- what we're using.
                  return $ DarwinLD []
+               OSiOS -> 
+                 -- Ditto for iOS
+                 return $ DarwinLD []
                OSMinGW32 ->
                  -- GHC doesn't support anything but GNU ld on Windows anyway.
                  -- Process creation is also fairly expensive on win32, so
@@ -716,6 +721,15 @@ runLink dflags args = do
       args2     = args0 ++ args1 ++ args ++ linkargs
   mb_env <- getGccEnv args2
   runSomethingFiltered dflags id "Linker" p args2 mb_env
+
+runLibtool :: DynFlags -> [Option] -> IO ()
+runLibtool dflags args = do
+  linkargs <- neededLinkArgs `fmap` getLinkerInfo dflags
+  let args1      = map Option (getOpts dflags opt_l)
+      args2      = [Option "-static"] ++ args1 ++ args ++ linkargs
+      libtool    = pgm_libtool dflags    
+  mb_env <- getGccEnv args2
+  runSomethingFiltered dflags id "Linker" libtool args2 mb_env
 
 runMkDLL :: DynFlags -> [Option] -> IO ()
 runMkDLL dflags args = do
@@ -811,75 +825,98 @@ readElfSection _dflags section exe = do
 cleanTempDirs :: DynFlags -> IO ()
 cleanTempDirs dflags
    = unless (gopt Opt_KeepTmpFiles dflags)
+   $ mask_
    $ do let ref = dirsToClean dflags
-        ds <- readIORef ref
+        ds <- atomicModifyIORef ref $ \ds -> (Map.empty, ds)
         removeTmpDirs dflags (Map.elems ds)
-        writeIORef ref Map.empty
 
 cleanTempFiles :: DynFlags -> IO ()
 cleanTempFiles dflags
    = unless (gopt Opt_KeepTmpFiles dflags)
+   $ mask_
    $ do let ref = filesToClean dflags
-        fs <- readIORef ref
+        fs <- atomicModifyIORef ref $ \fs -> ([],fs)
         removeTmpFiles dflags fs
-        writeIORef ref []
 
 cleanTempFilesExcept :: DynFlags -> [FilePath] -> IO ()
 cleanTempFilesExcept dflags dont_delete
    = unless (gopt Opt_KeepTmpFiles dflags)
+   $ mask_
    $ do let ref = filesToClean dflags
-        files <- readIORef ref
-        let (to_keep, to_delete) = partition (`elem` dont_delete) files
-        writeIORef ref to_keep
+        to_delete <- atomicModifyIORef ref $ \files ->
+            let (to_keep,to_delete) = partition (`elem` dont_delete) files
+            in  (to_keep,to_delete)
         removeTmpFiles dflags to_delete
 
 
--- find a temporary name that doesn't already exist.
+-- Return a unique numeric temp file suffix
+newTempSuffix :: DynFlags -> IO Int
+newTempSuffix dflags = atomicModifyIORef (nextTempSuffix dflags) $ \n -> (n+1,n)
+
+-- Find a temporary name that doesn't already exist.
 newTempName :: DynFlags -> Suffix -> IO FilePath
 newTempName dflags extn
   = do d <- getTempDir dflags
        x <- getProcessID
-       findTempName (d </> "ghc" ++ show x ++ "_") 0
+       findTempName (d </> "ghc" ++ show x ++ "_")
   where
-    findTempName :: FilePath -> Integer -> IO FilePath
-    findTempName prefix x
-      = do let filename = (prefix ++ show x) <.> extn
-           b  <- doesFileExist filename
-           if b then findTempName prefix (x+1)
+    findTempName :: FilePath -> IO FilePath
+    findTempName prefix
+      = do n <- newTempSuffix dflags
+           let filename = prefix ++ show n <.> extn
+           b <- doesFileExist filename
+           if b then findTempName prefix
                 else do -- clean it up later
                         consIORef (filesToClean dflags) filename
                         return filename
 
--- return our temporary directory within tmp_dir, creating one if we
--- don't have one yet
+-- Return our temporary directory within tmp_dir, creating one if we
+-- don't have one yet.
 getTempDir :: DynFlags -> IO FilePath
-getTempDir dflags
-  = do let ref = dirsToClean dflags
-           tmp_dir = tmpDir dflags
-       mapping <- readIORef ref
-       case Map.lookup tmp_dir mapping of
-           Nothing ->
-               do x <- getProcessID
-                  let prefix = tmp_dir </> "ghc" ++ show x ++ "_"
-                  let
-                      mkTempDir :: Integer -> IO FilePath
-                      mkTempDir x
-                       = let dirname = prefix ++ show x
-                         in do createDirectory dirname
-                               let mapping' = Map.insert tmp_dir dirname mapping
-                               writeIORef ref mapping'
-                               debugTraceMsg dflags 2 (ptext (sLit "Created temporary directory:") <+> text dirname)
-                               return dirname
-                            `catchIO` \e ->
-                                    if isAlreadyExistsError e
-                                    then mkTempDir (x+1)
-                                    else ioError e
-                  mkTempDir 0
-           Just d -> return d
+getTempDir dflags = do
+    mapping <- readIORef dir_ref
+    case Map.lookup tmp_dir mapping of
+        Nothing -> do
+            pid <- getProcessID
+            let prefix = tmp_dir </> "ghc" ++ show pid ++ "_"
+            mask_ $ mkTempDir prefix
+        Just dir -> return dir
+  where
+    tmp_dir = tmpDir dflags
+    dir_ref = dirsToClean dflags
+
+    mkTempDir :: FilePath -> IO FilePath
+    mkTempDir prefix = do
+        n <- newTempSuffix dflags
+        let our_dir = prefix ++ show n
+
+        -- 1. Speculatively create our new directory.
+        createDirectory our_dir
+
+        -- 2. Update the dirsToClean mapping unless an entry already exists
+        -- (i.e. unless another thread beat us to it).
+        their_dir <- atomicModifyIORef dir_ref $ \mapping ->
+            case Map.lookup tmp_dir mapping of
+                Just dir -> (mapping, Just dir)
+                Nothing  -> (Map.insert tmp_dir our_dir mapping, Nothing)
+
+        -- 3. If there was an existing entry, return it and delete the
+        -- directory we created.  Otherwise return the directory we created.
+        case their_dir of
+            Nothing  -> do
+                debugTraceMsg dflags 2 $
+                    text "Created temporary directory:" <+> text our_dir
+                return our_dir
+            Just dir -> do
+                removeDirectory our_dir
+                return dir
+      `catchIO` \e -> if isAlreadyExistsError e || isDoesNotExistError e
+                      then mkTempDir prefix else ioError e
 
 addFilesToClean :: DynFlags -> [FilePath] -> IO ()
 -- May include wildcards [used by DriverPipeline.run_phase SplitMangle]
-addFilesToClean dflags files = mapM_ (consIORef (filesToClean dflags)) files
+addFilesToClean dflags new_files
+    = atomicModifyIORef (filesToClean dflags) $ \files -> (new_files++files, ())
 
 removeTmpDirs :: DynFlags -> [FilePath] -> IO ()
 removeTmpDirs dflags ds
@@ -1220,7 +1257,8 @@ linkDynLib dflags0 o_files dep_packages
                           pkgs
                       _ ->
                           filter ((/= rtsPackageId) . packageConfigId) pkgs
-    let pkg_link_opts = collectLinkOpts dflags pkgs_no_rts
+    let pkg_link_opts = let (package_hs_libs, extra_libs, other_flags) = collectLinkOpts dflags pkgs_no_rts
+                        in  package_hs_libs ++ extra_libs ++ other_flags
 
         -- probably _stub.o files
     let extra_ld_inputs = ldInputs dflags
@@ -1315,6 +1353,7 @@ linkDynLib dflags0 o_files dep_packages
                  ++ map Option pkg_lib_path_opts
                  ++ map Option pkg_link_opts
               )
+        OSiOS -> throwGhcExceptionIO (ProgramError "dynamic libraries are not supported on iOS target")
         _ -> do
             -------------------------------------------------------------------
             -- Making a DSO

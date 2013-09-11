@@ -247,8 +247,8 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
               -- constraint.
 
        ; ev_binds_var <- newTcEvBinds
-       ; wanted_transformed <- solveWantedsTcMWithEvBinds ev_binds_var wanteds $
-                               solve_wanteds_and_drop
+       ; wanted_transformed_incl_derivs 
+               <- solveWantedsTcMWithEvBinds ev_binds_var wanteds solve_wanteds
                                -- Post: wanted_transformed are zonked
 
               -- Step 4) Candidates for quantification are an approximation of wanted_transformed
@@ -263,9 +263,11 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
 
        ; tc_lcl_env <- TcRnMonad.getLclEnv
        ; let untch = tcl_untch tc_lcl_env
+             wanted_transformed = dropDerivedWC wanted_transformed_incl_derivs
        ; quant_pred_candidates   -- Fully zonked
-           <- if insolubleWC wanted_transformed 
+           <- if insolubleWC wanted_transformed_incl_derivs
               then return []   -- See Note [Quantification with errors]
+                               -- NB: must include derived errors
               else do { gbl_tvs <- tcGetGlobalTyVars
                       ; let quant_cand = approximateWC wanted_transformed
                             meta_tvs   = filter isMetaTyVar (varSetElems (tyVarsOfCts quant_cand)) 
@@ -391,7 +393,11 @@ over, and instead make the function fully-polymorphic in whatever
 type we have found.  For two reasons
   a) Minimise downstream errors
   b) Avoid spurious errors from this function
-   
+
+But NB that we must include *derived* errors in the check. Example:   
+    (a::*) ~ Int#
+We get an insoluble derived error *~#, and we don't want to discard
+it before doing the isInsolubleWC test!  (Trac #8262)
 
 Note [Default while Inferring]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -607,7 +613,7 @@ solveWantedsTcM wanted
 
 solve_wanteds_and_drop :: WantedConstraints -> TcS (WantedConstraints)
 -- Since solve_wanteds returns the residual WantedConstraints,
--- it should alway be called within a runTcS or something similar,
+-- it should always be called within a runTcS or something similar,
 solve_wanteds_and_drop wanted = do { wc <- solve_wanteds wanted 
                                    ; return (dropDerivedWC wc) }
 
@@ -816,29 +822,34 @@ defaultTyVar the_tv
 
 approximateWC :: WantedConstraints -> Cts
 -- Postcondition: Wanted or Derived Cts 
+-- See Note [ApproximateWC]
 approximateWC wc 
   = float_wc emptyVarSet wc
   where 
     float_wc :: TcTyVarSet -> WantedConstraints -> Cts
-    float_wc skols (WC { wc_flat = flats, wc_impl = implics }) 
-      = do_bag (float_flat skols)   flats  `unionBags` 
-        do_bag (float_implic skols) implics
-                                 
+    float_wc trapping_tvs (WC { wc_flat = flats, wc_impl = implics }) 
+      = filterBag is_floatable flats `unionBags` 
+        do_bag (float_implic new_trapping_tvs) implics
+      where
+        new_trapping_tvs = fixVarSet grow trapping_tvs
+        is_floatable ct = tyVarsOfCt ct `disjointVarSet` new_trapping_tvs
+
+        grow tvs = foldrBag grow_one tvs flats
+        grow_one ct tvs | ct_tvs `intersectsVarSet` tvs = tvs `unionVarSet` ct_tvs
+                        | otherwise                     = tvs
+                        where
+                          ct_tvs = tyVarsOfCt ct
+
     float_implic :: TcTyVarSet -> Implication -> Cts
-    float_implic skols imp
+    float_implic trapping_tvs imp
       | hasEqualities (ic_given imp)  -- Don't float out of equalities
       = emptyCts                      -- cf floatEqualities
-      | otherwise                     -- See Note [approximateWC]
-      = float_wc skols' (ic_wanted imp)
+      | otherwise                     -- See Note [ApproximateWC]
+      = float_wc new_trapping_tvs (ic_wanted imp)
       where
-        skols' = skols `extendVarSetList` ic_skols imp `extendVarSetList` ic_fsks imp
+        new_trapping_tvs = trapping_tvs `extendVarSetList` ic_skols imp 
+                                        `extendVarSetList` ic_fsks imp
             
-    float_flat :: TcTyVarSet -> Ct -> Cts
-    float_flat skols ct
-      | tyVarsOfCt ct `disjointVarSet` skols 
-      = singleCt ct
-      | otherwise = emptyCts
-        
     do_bag :: (a -> Bag c) -> Bag a -> Bag c
     do_bag f = foldrBag (unionBags.f) emptyBag
 \end{code}
@@ -849,23 +860,43 @@ approximateWC takes a constraint, typically arising from the RHS of a
 let-binding whose type we are *inferring*, and extracts from it some
 *flat* constraints that we might plausibly abstract over.  Of course
 the top-level flat constraints are plausible, but we also float constraints
-out from inside, if the are not captured by skolems.
+out from inside, if they are not captured by skolems.
 
-However we do *not* float anything out if the implication binds equality
-constriants, because that defeats the OutsideIn story.  Consider
-   data T a where
-     TInt :: T Int
-     MkT :: T a
+The same function is used when doing type-class defaulting (see the call
+to applyDefaultingRules) to extract constraints that that might be defaulted.
 
-   f TInt = 3::Int
+There are two caveats:
 
-We get the implication (a ~ Int => res ~ Int), where so far we've decided 
-  f :: T a -> res
-We don't want to float (res~Int) out because then we'll infer  
-  f :: T a -> Int
-which is only on of the possible types. (GHC 7.6 accidentally *did*
-float out of such implications, which meant it would happily infer
-non-principal types.)
+1.  We do *not* float anything out if the implication binds equality
+    constraints, because that defeats the OutsideIn story.  Consider
+       data T a where
+         TInt :: T Int
+         MkT :: T a
+
+       f TInt = 3::Int
+
+    We get the implication (a ~ Int => res ~ Int), where so far we've decided 
+      f :: T a -> res
+    We don't want to float (res~Int) out because then we'll infer  
+      f :: T a -> Int
+    which is only on of the possible types. (GHC 7.6 accidentally *did*
+    float out of such implications, which meant it would happily infer
+    non-principal types.)
+
+2. We do not float out an inner constraint that shares a type variable
+   (transitively) with one that is trapped by a skolem.  Eg
+       forall a.  F a ~ beta, Integral beta
+   We don't want to float out (Integral beta).  Doing so would be bad
+   when defaulting, because then we'll default beta:=Integer, and that
+   makes the error message much worse; we'd get 
+       Can't solve  F a ~ Integer
+   rather than
+       Can't solve  Integral (F a)
+   
+   Moreover, floating out these "contaminated" constraints doesn't help
+   when generalising either. If we generalise over (Integral b), we still
+   can't solve the retained implication (forall a. F a ~ b).  Indeed,
+   arguably that too would be a harder error to understand.
 
 Note [DefaultTyVar]
 ~~~~~~~~~~~~~~~~~~~

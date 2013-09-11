@@ -58,7 +58,7 @@ import qualified ErrUtils as Err
 import Control.Monad
 import Data.Function
 import Data.List        ( sortBy )
-import Data.IORef       ( readIORef, writeIORef )
+import Data.IORef       ( atomicModifyIORef )
 \end{code}
 
 
@@ -363,7 +363,7 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
               ; alg_tycons = filter isAlgTyCon (typeEnvTyCons type_env)
               }
 
-        ; endPass dflags CoreTidy all_tidy_binds tidy_rules
+        ; endPass hsc_env CoreTidy all_tidy_binds tidy_rules
 
           -- If the endPass didn't print the rules, but ddump-rules is
           -- on, print now
@@ -815,12 +815,7 @@ dffvLetBndr vanilla_unfold id
        = case src of
            InlineRhs | vanilla_unfold -> dffvExpr rhs
                      | otherwise      -> return ()
-           InlineWrapper v            -> insert v
            _                          -> dffvExpr rhs
-            -- For a wrapper, externalise the wrapper id rather than the
-            -- fvs of the rhs.  The two usually come down to the same thing
-            -- but I've seen cases where we had a wrapper id $w but a
-            -- rhs where $w had been inlined; see Trac #3922
 
     go_unf (DFunUnfolding { df_bndrs = bndrs, df_args = args }) 
              = extendScopeList bndrs $ mapM_ dffvExpr args
@@ -857,9 +852,7 @@ tidyTopName mod nc_var maybe_ref occ_env id
   -- Now we get to the real reason that all this is in the IO Monad:
   -- we have to update the name cache in a nice atomic fashion
 
-  | local  && internal = do { nc <- readIORef nc_var
-                            ; let (nc', new_local_name) = mk_new_local nc
-                            ; writeIORef nc_var nc'
+  | local  && internal = do { new_local_name <- atomicModifyIORef nc_var mk_new_local
                             ; return (occ_env', new_local_name) }
         -- Even local, internal names must get a unique occurrence, because
         -- if we do -split-objs we externalise the name later, in the code generator
@@ -867,9 +860,7 @@ tidyTopName mod nc_var maybe_ref occ_env id
         -- Similarly, we must make sure it has a system-wide Unique, because
         -- the byte-code generator builds a system-wide Name->BCO symbol table
 
-  | local  && external = do { nc <- readIORef nc_var
-                            ; let (nc', new_external_name) = mk_new_external nc
-                            ; writeIORef nc_var nc'
+  | local  && external = do { new_external_name <- atomicModifyIORef nc_var mk_new_external
                             ; return (occ_env', new_external_name) }
 
   | otherwise = panic "tidyTopName"

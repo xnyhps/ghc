@@ -511,11 +511,9 @@ quantifyTyVars :: TcTyVarSet -> TcTyVarSet -> TcM [TcTyVar]
 quantifyTyVars gbl_tvs tkvs
   = do { tkvs    <- zonkTyVarsAndFV tkvs
        ; gbl_tvs <- zonkTyVarsAndFV gbl_tvs
-       ; let (kvs1, tvs) = partitionVarSet isKindVar (tkvs `minusVarSet` gbl_tvs)
-             kvs2 = varSetElems (foldVarSet add_kvs kvs1 tvs
-                                 `minusVarSet` gbl_tvs )
-             add_kvs tv kvs = tyVarsOfType (tyVarKind tv) `unionVarSet` kvs 
+       ; let (kvs, tvs) = partitionVarSet isKindVar (closeOverKinds tkvs `minusVarSet` gbl_tvs)
                               -- NB kinds of tvs are zonked by zonkTyVarsAndFV
+             kvs2 = varSetElems kvs
              qtvs = varSetElems tvs                       
 
              -- In the non-PolyKinds case, default the kind variables
@@ -807,7 +805,7 @@ zonkFlats binds_var untch cts
         isTouchableMetaTyVar untch tv
       , not (isSigTyVar tv) || isTyVarTy ty_lhs     -- Never unify a SigTyVar with a non-tyvar
       , typeKind ty_lhs `tcIsSubKind` tyVarKind tv  -- c.f. TcInteract.trySpontaneousEqOneWay
-      , not (tv `elemVarSet` tyVarsOfType ty_lhs)
+      , not (tv `elemVarSet` tyVarsOfType ty_lhs)   -- Do not construct an infinite type
       = ASSERT2( isWantedCt orig_ct, ppr orig_ct )
         ASSERT2( case tcSplitTyConApp_maybe ty_lhs of { Just (tc,_) -> isSynFamilyTyCon tc; _ -> False }, ppr orig_ct )
         do { writeMetaTyVar tv ty_lhs
@@ -838,7 +836,7 @@ constraint solving, cannot produce any more interactions in the
 constraint solver so it is safe to do it as the very very last step.
 
 We choose therefore to do it during zonking, in the function
-zonkFlats. This is in analgoy to the zonking of given flatten skolems
+zonkFlats. This is in analogy to the zonking of given "flatten skolems"
 which are eliminated in favor of the underlying type that they are
 equal to.
 

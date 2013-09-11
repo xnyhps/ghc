@@ -246,7 +246,8 @@ defFullHelpText =
   "   :info[!] [<name> ...]       display information about the given names\n" ++
   "                               (!: do not filter instances)\n" ++
   "   :issafe [<mod>]             display safe haskell information of module <mod>\n" ++
-  "   :kind <type>                show the kind of <type>\n" ++
+  "   :kind[!] <type>             show the kind of <type>\n" ++
+  "                               (!: also print the normalised type)\n" ++
   "   :load [*]<module> ...       load module(s) and their dependents\n" ++
   "   :main [<arguments> ...]     run the main function with the given arguments\n" ++
   "   :module [+/-] [*]<mod> ...  set the context for expression evaluation\n" ++
@@ -315,6 +316,7 @@ defFullHelpText =
   "   :show linker                show current linker state\n" ++
   "   :show modules               show the currently loaded modules\n" ++
   "   :show packages              show the currently active package flags\n" ++
+  "   :show paths                 show the currently active search paths\n" ++
   "   :show language              show the currently active language flags\n" ++
   "   :show <setting>             show value of <setting>, which is one of\n" ++
   "                                  [args, prog, prompt, editor, stop]\n" ++
@@ -388,6 +390,7 @@ interactiveUI config srcs maybe_exprs = do
         -- We don't want the cmd line to buffer any input that might be
         -- intended for the program, so unbuffer stdin.
         hSetBuffering stdin NoBuffering
+        hSetBuffering stderr NoBuffering
 #if defined(mingw32_HOST_OS)
         -- On Unix, stdin will use the locale encoding.  The IO library
         -- doesn't do this on Windows (yet), so for now we use UTF-8,
@@ -714,7 +717,7 @@ runOneCommand eh gCmd = do
                             (\c -> case removeSpaces c of
                                      ""   -> noSpace q
                                      ":{" -> multiLineCmd q
-                                     c'   -> return (Just c') )
+                                     _    -> return (Just c) )
     multiLineCmd q = do
       st <- lift getGHCiState
       let p = prompt st
@@ -733,7 +736,7 @@ runOneCommand eh gCmd = do
     collectCommand q c = q >>=
       maybe (liftIO (ioError collectError))
             (\l->if removeSpaces l == ":}"
-                 then return (Just $ removeSpaces c)
+                 then return (Just c)
                  else collectCommand q (c ++ "\n" ++ map normSpace l))
       where normSpace '\r' = ' '
             normSpace   x  = x
@@ -744,7 +747,7 @@ runOneCommand eh gCmd = do
     doCommand :: String -> InputT GHCi (Maybe Bool)
 
     -- command
-    doCommand (':' : cmd) = do
+    doCommand stmt | (':' : cmd) <- removeSpaces stmt = do
       result <- specialCommand cmd
       case result of
         True -> return Nothing
@@ -752,18 +755,45 @@ runOneCommand eh gCmd = do
 
     -- haskell
     doCommand stmt = do
+      -- if 'stmt' was entered via ':{' it will contain '\n's
+      let stmt_nl_cnt = length [ () | '\n' <- stmt ]
       ml <- lift $ isOptionSet Multiline
-      if ml
+      if ml && stmt_nl_cnt == 0 -- don't trigger automatic multi-line mode for ':{'-multiline input
         then do
+          fst_line_num <- lift (line_number <$> getGHCiState)
           mb_stmt <- checkInputForLayout stmt gCmd
           case mb_stmt of
             Nothing      -> return $ Just True
             Just ml_stmt -> do
-              result <- timeIt $ lift $ runStmt ml_stmt GHC.RunToCompletion
+              -- temporarily compensate line-number for multi-line input
+              result <- timeIt $ lift $ runStmtWithLineNum fst_line_num ml_stmt GHC.RunToCompletion
               return $ Just result
-        else do
-          result <- timeIt $ lift $ runStmt stmt GHC.RunToCompletion
+        else do -- single line input and :{-multiline input
+          last_line_num <- lift (line_number <$> getGHCiState)
+          -- reconstruct first line num from last line num and stmt
+          let fst_line_num | stmt_nl_cnt > 0 = last_line_num - (stmt_nl_cnt2 + 1)
+                           | otherwise = last_line_num -- single line input
+              stmt_nl_cnt2 = length [ () | '\n' <- stmt' ]
+              stmt' = dropLeadingWhiteLines stmt -- runStmt doesn't like leading empty lines
+          -- temporarily compensate line-number for multi-line input
+          result <- timeIt $ lift $ runStmtWithLineNum fst_line_num stmt' GHC.RunToCompletion
           return $ Just result
+
+    -- runStmt wrapper for temporarily overridden line-number
+    runStmtWithLineNum :: Int -> String -> SingleStep -> GHCi Bool
+    runStmtWithLineNum lnum stmt step = do
+        st0 <- getGHCiState
+        setGHCiState st0 { line_number = lnum }
+        result <- runStmt stmt step
+        -- restore original line_number
+        getGHCiState >>= \st -> setGHCiState st { line_number = line_number st0 }
+        return result
+
+    -- note: this is subtly different from 'unlines . dropWhile (all isSpace) . lines'
+    dropLeadingWhiteLines s | (l0,'\n':r) <- break (=='\n') s
+                            , all isSpace l0 = dropLeadingWhiteLines r
+                            | otherwise = s
+
 
 -- #4316
 -- lex the input.  If there is an unclosed layout context, request input
@@ -958,7 +988,7 @@ lookupCommand' str' = do
   ghci_cmds <- ghci_commands `fmap` getGHCiState
   let{ (str, cmds) = case str' of
       ':' : rest -> (rest, ghci_cmds) -- "::" selects a builtin command
-      _ -> (str', ghci_cmds ++ macros) } -- otherwise prefer macros
+      _ -> (str', macros ++ ghci_cmds) } -- otherwise prefer macros
   -- look for exact match first, then the first prefix match
   return $ case [ c | c <- cmds, str == cmdName c ] of
            c:_ -> Just c
@@ -1314,9 +1344,18 @@ doLoad retain_context howmuch = do
   -- turn off breakpoints before we load: we can't turn them off later, because
   -- the ModBreaks will have gone away.
   lift discardActiveBreakPoints
-  ok <- trySuccess $ GHC.load howmuch
-  afterLoad ok retain_context
-  return ok
+
+  -- Enable buffering stdout and stderr as we're compiling. Keeping these
+  -- handles unbuffered will just slow the compilation down, especially when
+  -- compiling in parallel.
+  gbracket (liftIO $ do hSetBuffering stdout LineBuffering
+                        hSetBuffering stderr LineBuffering)
+           (\_ ->
+            liftIO $ do hSetBuffering stdout NoBuffering
+                        hSetBuffering stderr NoBuffering) $ \_ -> do
+      ok <- trySuccess $ GHC.load howmuch
+      afterLoad ok retain_context
+      return ok
 
 
 afterLoad :: SuccessFlag
@@ -2156,6 +2195,7 @@ showCmd str = do
         ["breaks"]   -> showBkptTable
         ["context"]  -> showContext
         ["packages"]  -> showPackages
+        ["paths"]     -> showPaths
         ["languages"] -> showLanguages -- backwards compat
         ["language"]  -> showLanguages
         ["lang"]      -> showLanguages -- useful abbreviation
@@ -2262,6 +2302,19 @@ showPackages = do
         showFlag (ExposePackageId p) = text $ "  -package-id " ++ p
         showFlag (TrustPackage    p) = text $ "  -trust " ++ p
         showFlag (DistrustPackage p) = text $ "  -distrust " ++ p
+
+showPaths :: GHCi ()
+showPaths = do
+  dflags <- getDynFlags
+  liftIO $ do
+    cwd <- getCurrentDirectory
+    putStrLn $ showSDoc dflags $
+      text "current working directory: " $$
+        nest 2 (text cwd)
+    let ipaths = importPaths dflags
+    putStrLn $ showSDoc dflags $
+      text ("module import search paths:"++if null ipaths then " none" else "") $$
+        nest 2 (vcat (map text ipaths))
 
 showLanguages :: GHCi ()
 showLanguages = getDynFlags >>= liftIO . showLanguages' False
@@ -2423,7 +2476,7 @@ completeShowOptions = wrapCompleter flagWordBreakChars $ \w -> do
   return (filter (w `isPrefixOf`) opts)
     where opts = ["args", "prog", "prompt", "prompt2", "editor", "stop",
                      "modules", "bindings", "linker", "breaks",
-                     "context", "packages", "language", "imports"]
+                     "context", "packages", "paths", "language", "imports"]
 
 completeShowiOptions = wrapCompleter flagWordBreakChars $ \w -> do
   return (filter (w `isPrefixOf`) ["language"])
