@@ -615,6 +615,7 @@ data TypeMap a
        , tm_tc_app :: NameEnv (ListMap TypeMap a)
        , tm_forall :: TypeMap (BndrMap a)
        , tm_tylit  :: TyLitMap a
+       , tm_biglambda :: TypeMap (BndrMap a)
        }
 
 
@@ -639,7 +640,8 @@ wrapEmptyTypeMap = TM { tm_var  = emptyTM
                       , tm_fun  = EmptyTM
                       , tm_tc_app = emptyNameEnv
                       , tm_forall = EmptyTM
-                      , tm_tylit  = emptyTyLitMap }
+                      , tm_tylit  = emptyTyLitMap
+                      , tm_biglambda = EmptyTM }
 
 instance TrieMap TypeMap where
    type Key TypeMap = Type
@@ -652,13 +654,14 @@ instance TrieMap TypeMap where
 mapT :: (a->b) -> TypeMap a -> TypeMap b
 mapT _ EmptyTM = EmptyTM
 mapT f (TM { tm_var  = tvar, tm_app = tapp, tm_fun = tfun
-           , tm_tc_app = ttcapp, tm_forall = tforall, tm_tylit = tlit })
+           , tm_tc_app = ttcapp, tm_forall = tforall, tm_tylit = tlit, tm_biglambda = tbiglambda })
   = TM { tm_var    = mapTM f tvar
        , tm_app    = mapTM (mapTM f) tapp
        , tm_fun    = mapTM (mapTM f) tfun
        , tm_tc_app = mapNameEnv (mapTM f) ttcapp
        , tm_forall = mapTM (mapTM f) tforall
-       , tm_tylit  = mapTM f tlit }
+       , tm_tylit  = mapTM f tlit
+       , tm_biglambda = mapTM (mapTM f) tbiglambda }
 
 -----------------
 lkT :: CmEnv -> Type -> TypeMap a -> Maybe a
@@ -673,6 +676,7 @@ lkT env ty m
     go (TyConApp tc tys) = tm_tc_app >.> lkNamed tc >=> lkList (lkT env) tys
     go (LitTy l)         = tm_tylit  >.> lkTyLit l
     go (ForAllTy tv ty)  = tm_forall >.> lkT (extendCME env tv) ty >=> lkBndr env tv
+    go (BigLambda tv ty) = tm_biglambda >.> lkT (extendCME env tv) ty >=> lkBndr env tv
 
 
 -----------------
@@ -689,6 +693,8 @@ xtT env (ForAllTy tv ty)  f  m = m { tm_forall = tm_forall m |> xtT (extendCME e
 xtT env (TyConApp tc tys) f  m = m { tm_tc_app = tm_tc_app m |> xtNamed tc 
                                                  |>> xtList (xtT env) tys f }
 xtT _   (LitTy l)         f  m = m { tm_tylit  = tm_tylit m |> xtTyLit l f }
+xtT env (BigLambda tv ty) f  m = m { tm_biglambda = tm_biglambda m |> xtT (extendCME env tv) ty
+                                                    |>> xtBndr env tv f }
 
 fdT :: (a -> b -> b) -> TypeMap a -> b -> b
 fdT _ EmptyTM = \z -> z
@@ -698,6 +704,7 @@ fdT k m = foldTM k (tm_var m)
         . foldTM (foldTM k) (tm_tc_app m)
         . foldTM (foldTM k) (tm_forall m)
         . foldTyLit k (tm_tylit m)
+        . foldTM (foldTM k) (tm_biglambda m)
 
 
 

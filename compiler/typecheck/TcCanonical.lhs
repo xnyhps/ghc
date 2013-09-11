@@ -1154,16 +1154,17 @@ canEqLeafTyVar loc ev tv s2              -- ev :: tv tys ~ s2
            (Nothing,  _) -> -- Rewriting the LHS did not yield a type variable
                             -- so go around again to canEq
                             do { mb <- rewriteCtFlavor ev (mkTcEqPred xi1 xi2) co
+                               ; traceTcS "canEqLeafTyVar 3" (ppr xi1)
                                ; case mb of
                                    Nothing     -> return Stop
                                    Just new_ev -> canEqNC loc new_ev xi1 xi2 }
 
            (Just tv1, Just tv2) | tv1 == tv2
-              -> do { when (isWanted ev) $
+              -> do { traceTcS "canEqLeafTyVar 4" (ppr xi1) ; when (isWanted ev) $
                       setEvBind (ctev_evar ev) (mkEvCast (EvCoercion (mkTcReflCo xi1)) co)
                    ; return Stop } 
 
-           (Just tv1, _) -> do { dflags <- getDynFlags
+           (Just tv1, _) -> do { traceTcS "canEqLeafTyVar 5" (ppr xi1) ; dflags <- getDynFlags
                                ; canEqLeafTyVar2 dflags loc ev tv1 xi2 co } }
 
 canEqLeafTyVar2 :: DynFlags -> CtLoc -> CtEvidence

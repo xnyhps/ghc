@@ -1104,6 +1104,9 @@ occurCheckExpand dflags tv ty
     fast_check (ForAllTy tv' ty) = impredicative 
                                 && fast_check (tyVarKind tv')
                                 && (tv == tv' || fast_check ty)
+    fast_check (BigLambda tv' ty) = impredicative
+                                && fast_check (tyVarKind tv')
+                                && (tv == tv' || fast_check ty)
 
     go t@(TyVarTy tv') | tv == tv' = OC_Occurs
                        | otherwise = return t
@@ -1125,6 +1128,11 @@ occurCheckExpand dflags tv ty
        | tv == tv' = return ty
        | otherwise = do { body' <- go body_ty
                         ; return (ForAllTy tv' body') }
+
+    go ty@(BigLambda tv' body_ty)
+       | tv == tv' = return ty
+       | otherwise = do { body' <- go body_ty
+                        ; return (BigLambda tv' body') }
 
     -- For a type constructor application, first try expanding away the
     -- offending variable from the arguments.  If that doesn't work, next

@@ -1,4 +1,5 @@
 \begin{code}
+{-# LANGUAGE TypeHoles #-}
 {-# OPTIONS -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
@@ -50,7 +51,7 @@ import Control.Monad ( foldM )
 
 import VarEnv
 
-import Control.Monad( when, unless )
+import Control.Monad( when, unless, filterM )
 import Pair ()
 import Unique( hasKey )
 import UniqFM
@@ -568,32 +569,49 @@ findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet 
 findSolvableApplication wi@(CDictCan { cc_tyargs = [xi], cc_class = cls }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe xi
               = do { let appeqs = inert_appeqs $ inert_cans inerts
-                   ; (removed, stay) <- foldrBagM (\ct (r, s) -> do { b <- has_other_dict ct; if isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar) && b then return (consBag ct r, s) else return (r, extendCts s ct) }) (emptyBag, emptyCts) appeqs
-                   ; let emitted = concatBag $ mapBag split removed
-                   ; traceTcS "findSolvableApplication: candidate" (ppr wi)
-                   ; return (emitted, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+                   ; (new_constraints, removed, stay) <- foldrBagM (\ct (cts, r, s) ->
+                        do { ml <- has_other_dict ct
+                           ; case (ml, isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar)) of
+                                (Just (var, lambda), True) -> return (split2 ct var lambda `unionBags` cts, consBag ct r, s)
+                                _ -> return (cts, r, extendCts s ct)
+                           }) (emptyBag, emptyBag, emptyCts) appeqs
+                   --; let emitted = concatBag $ mapBag split removed
+                   ; traceTcS "findSolvableApplication: emitted" (ppr (new_constraints, removed))
+                   ; return (new_constraints, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
                    }
   where
         zonk :: TyVar -> TyVar
         zonk tv = case do { (_,ty) <- lookupVarEnv ty_env tv ; getTyVar_maybe ty } of
             Nothing -> tv
             Just tv' -> tv'
-        has_other_dict :: Ct -> TcS Bool
+        has_other_dict :: Ct -> TcS (Maybe (TcType, TcType))
         has_other_dict ct
           | Just (ty, _) <- splitAppTy_maybe $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
             = let
                  dicts = concatMap bagToList (given ++ wanted)
                  given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
                  wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
-              in return $ not $ null $ filter (match cls $ zonk tyvar) dicts
-          | ty <- cc_rhs ct
+              in return Nothing -- $ not $ null $ filter (match cls $ zonk tyvar) dicts
+          | Just (ty@(tycon, tyargs)) <- tcSplitTyConApp_maybe $ cc_rhs ct
             = do { uniq <- wrapErrTcS TcM.newUnique
                  ; let name = TcM.mkTcTyVarName uniq (fsLit "x")
-                 ; result <- matchClassInst inerts cls [BigLambda (mkTcTyVar name liftedTypeKind vanillaSkolemTv) ty] $ cc_loc wi
-                 ; traceTcS "findSolvableApplication: has_other_dict" (ppr result)
-                 ; return False
+                 ; let insert_everywhere :: a -> [a] -> [(a, [a])]
+                       insert_everywhere a (x : xs) = (x, a : xs) : (map (\(p,q) -> (p,x:q)) $ insert_everywhere a xs)
+                       --insert_everywhere a [x] = [(x, [a])]
+                       insert_everywhere a [] = []
+                 ; let fresh_tyvar = mkTcTyVar name liftedTypeKind vanillaSkolemTv
+                 ; let options = insert_everywhere (mkTyVarTy fresh_tyvar) tyargs
+                 ; traceTcS "findSolvableApplication: has_other_dict 1" (ppr (options))
+                 ; let isGenInstance (GenInst {}) = True
+                       isGenInstance _ = False
+                 ; result <- filterM (\opt -> fmap isGenInstance (matchClassInst inerts cls [snd opt] $ cc_loc wi)) $ map (\(var, largs) -> (var, BigLambda fresh_tyvar (mkTyConApp tycon largs))) options
+                 ; traceTcS "findSolvableApplication: has_other_dict 2" (ppr result)
+                 ; case result of
+                    [x] -> return $ return x
+                    [] -> return Nothing
+                    _ -> error "More than one instance for lambda"
                  }
-          | otherwise = return False
+          | otherwise = return Nothing
 
         match :: Class -> TcTyVar -> Ct -> Bool
         match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] })
@@ -601,13 +619,21 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = [xi], cc_class = cls }) ty_en
             = cl == cl2 && zonk tyvar == zonk tyvar2
         match _ _ _ = False
 
+        split2 :: Ct -> TcType -> TcType -> Cts
+        split2 ct var lambda = let
+                                  ev = ctev_evar (cc_ev ct)
+                                  loc = cc_loc ct
+                                  lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) lambda) ev)
+                                  vct = mkNonCanonical loc (CtWanted (mkTcEqPred (head $ cc_tyargs ct) var) ev)
+                               in listToBag [lct, vct]
+
         split :: Ct -> Cts
         split ct = let (ty2, tys) = splitAppTys (cc_rhs ct)
                        ev = ctev_evar (cc_ev ct)
                        loc = cc_loc ct
                        head = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) ev)
                        arguments = zipWith (\t1 t2 -> mkNonCanonical loc (CtWanted (mkTcEqPred t1 t2) ev)) (cc_tyargs ct) tys
-                   in listToBag (head : arguments)
+                   in pprTrace "split: " (ppr (ct, head : arguments)) listToBag (head : arguments)
 
 -- findSolvableApplication wi@(CTyAppEqCan {}) _ inerts = pprTrace "findSolvableApplication: otherwise:" ((ppr $ cc_tyvar wi) <+> (ppr $ cc_rhs wi)) (emptyCts, inerts)
 
