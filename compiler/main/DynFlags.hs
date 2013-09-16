@@ -197,7 +197,7 @@ data DumpFlag
    | Opt_D_dump_cmm_cfg
    | Opt_D_dump_cmm_cbe
    | Opt_D_dump_cmm_proc
-   | Opt_D_dump_cmm_rewrite
+   | Opt_D_dump_cmm_sink
    | Opt_D_dump_cmm_sp
    | Opt_D_dump_cmm_procmap
    | Opt_D_dump_cmm_split
@@ -433,6 +433,7 @@ data WarningFlag =
    | Opt_WarnUnusedMatches
    | Opt_WarnWarningsDeprecations
    | Opt_WarnDeprecatedFlags
+   | Opt_WarnAMP
    | Opt_WarnDodgyExports
    | Opt_WarnDodgyImports
    | Opt_WarnOrphans
@@ -2219,7 +2220,7 @@ dynamic_flags = [
   , Flag "ddump-cmm-cfg"           (setDumpFlag Opt_D_dump_cmm_cfg)
   , Flag "ddump-cmm-cbe"           (setDumpFlag Opt_D_dump_cmm_cbe)
   , Flag "ddump-cmm-proc"          (setDumpFlag Opt_D_dump_cmm_proc)
-  , Flag "ddump-cmm-rewrite"       (setDumpFlag Opt_D_dump_cmm_rewrite)
+  , Flag "ddump-cmm-sink"          (setDumpFlag Opt_D_dump_cmm_sink)
   , Flag "ddump-cmm-sp"            (setDumpFlag Opt_D_dump_cmm_sp)
   , Flag "ddump-cmm-procmap"       (setDumpFlag Opt_D_dump_cmm_procmap)
   , Flag "ddump-cmm-split"         (setDumpFlag Opt_D_dump_cmm_split)
@@ -2503,6 +2504,7 @@ fWarningFlags = [
   ( "warn-warnings-deprecations",       Opt_WarnWarningsDeprecations, nop ),
   ( "warn-deprecations",                Opt_WarnWarningsDeprecations, nop ),
   ( "warn-deprecated-flags",            Opt_WarnDeprecatedFlags, nop ),
+  ( "warn-amp",                         Opt_WarnAMP, nop ),
   ( "warn-orphans",                     Opt_WarnOrphans, nop ),
   ( "warn-identities",                  Opt_WarnIdentities, nop ),
   ( "warn-auto-orphans",                Opt_WarnAutoOrphans, nop ),
@@ -2916,6 +2918,7 @@ standardWarnings
     = [ Opt_WarnOverlappingPatterns,
         Opt_WarnWarningsDeprecations,
         Opt_WarnDeprecatedFlags,
+        Opt_WarnAMP,
         Opt_WarnUnrecognisedPragmas,
         Opt_WarnPointlessPragmas,
         Opt_WarnDuplicateConstraints,

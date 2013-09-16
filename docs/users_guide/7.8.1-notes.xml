@@ -30,6 +30,26 @@
 
         <listitem>
             <para>
+                GHC can now perform simple evaluation of type-level
+                natural numbers, when using the
+                <literal>TypeNats</literal> extension. For example,
+                given a type-level constraint such as <literal>(x + 3)
+                ~ 5</literal>, GHC is able to infer that
+                <literal>x</literal> is 2. Similarly, GHC can now
+                understand type-level identities such as <literal>x +
+                0 ~ x</literal>.
+           </para>
+
+            <para>
+                Note that the solving of these equations is only used
+                to resolve unification variables - it does not
+                generate new facts in the type checker. This is
+                similar to how functional dependencies work.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
                 It is now possible to declare a 'closed' <literal>type
                 family</literal> when using the
                 <literal>TypeFamilies</literal> extension. A closed
@@ -185,6 +205,31 @@
                 <replaceable>N</replaceable> modules in parallel.
            </para>
        </listitem>
+
+        <listitem>
+            <para>
+                GHC now generates warnings when definitions conflict with the
+                Applicative-Monad Proposal (AMP).
+
+                TODO FIXME: reference.
+           </para>
+
+            <para>
+                A warning is emitted if a type is an instance of
+                <literal>Monad</literal> but not of
+                <literal>Applicative</literal>,
+                <literal>MonadPlus</literal> but not
+                <literal>Alternative</literal>, and when a local
+                function named <literal>join</literal>,
+                <literal>&lt;*&gt;</literal> or <literal>pure</literal> is
+                defined.
+           </para>
+
+            <para>
+                The warnings are enabled by default, and can be controlled
+                using the new flag <literal>-f[no-]warn-amp</literal>.
+           </para>
+       </listitem>
    </itemizedlist>
   </sect2>
 
@@ -243,6 +288,27 @@
                      Now, <literal>IncoherentInstances</literal> will
                      always pick an arbitrary matching instance, if
                      multiple ones exist.
+               </para>
+           </listitem>
+       </itemizedlist>
+
+        <itemizedlist>
+            <listitem>
+                <para>
+                     A new built-in function <literal>coerce</literal> is
+                     provided that allows to safely coerce values between types
+                     that have the same run-time-presentation, such as
+                     newtypes, but also newtypes inside containers. See the
+                     haddock documentation of
+                     <ulink url="&libraryBaseLocation;/GHC-Exts.html#v%3Acoerce">coerce</ulink>
+                     and of the class
+                     <ulink url="&libraryBaseLocation;/GHC-Exts.html#t%3ACoercible">Coercible</ulink>
+                     for more details.
+               </para>
+                <para>
+                     This feature is included in this release as a technology
+                     preview, and may change its syntax and/or semantics in the
+                     next release.
                </para>
            </listitem>
        </itemizedlist>
@@ -459,6 +525,11 @@
                </para>
            </listitem>
             <listitem>
+                <para>
+                    There is now a <literal>Data</literal> instance for <literal>Data.Version</literal>
+               </para>
+           </listitem>
+             <listitem>
                 <para>
                     <literal>Control.Concurrent.MVar</literal> has a new
                     implementation of <literal>readMVar</literal>, which

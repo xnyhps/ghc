@@ -32,6 +32,7 @@ import DynFlags
 import FastString
 import Exception
 
+import Control.Applicative (Applicative(..))
 import Control.Monad
 import qualified Data.ByteString as BS
 import Data.Char
@@ -55,6 +56,14 @@ data CoreState = CoreState {
                      cs_dflags :: DynFlags,
                      cs_module :: Module
                  }
+
+instance Functor CoreM where
+    fmap = liftM
+
+instance Applicative CoreM where
+    pure = return
+    (<*>) = ap
+
 instance Monad CoreM where
   (CoreM m) >>= f = CoreM (\ s -> case m s of
                                     (s',r) -> case f r of
@@ -323,6 +332,8 @@ make_co dflags (NthCo d co)          = C.NthCoercion d (make_co dflags co)
 make_co dflags (LRCo lr co)          = C.LRCoercion (make_lr lr) (make_co dflags co)
 make_co dflags (InstCo co ty)        = C.InstCoercion (make_co dflags co) (make_ty dflags ty)
 make_co dflags (SubCo co)            = C.SubCoercion (make_co dflags co)
+make_co _ (AxiomRuleCo {})           = panic "make_co AxiomRuleCo: not yet implemented"
+
 
 make_lr :: LeftOrRight -> C.LeftOrRight
 make_lr CLeft  = C.CLeft

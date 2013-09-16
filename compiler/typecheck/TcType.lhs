@@ -182,6 +182,8 @@ import Outputable
 import FastString
 
 import Data.IORef
+import Control.Monad (liftM, ap)
+import Control.Applicative (Applicative(..))
 \end{code}
 
 %************************************************************************
@@ -1050,6 +1052,13 @@ data OccCheckResult a
   | OC_NonTyVar
   | OC_Occurs
 
+instance Functor OccCheckResult where
+      fmap = liftM
+
+instance Applicative OccCheckResult where
+      pure = return
+      (<*>) = ap
+
 instance Monad OccCheckResult where
   return x = OC_OK x
   OC_OK x     >>= k = k x
@@ -1354,6 +1363,8 @@ orphNamesOfCo (NthCo _ co)          = orphNamesOfCo co
 orphNamesOfCo (LRCo  _ co)          = orphNamesOfCo co
 orphNamesOfCo (InstCo co ty)        = orphNamesOfCo co `unionNameSets` orphNamesOfType ty
 orphNamesOfCo (SubCo co)            = orphNamesOfCo co
+orphNamesOfCo (AxiomRuleCo _ ts cs) = orphNamesOfTypes ts `unionNameSets`
+                                      orphNamesOfCos cs
 
 orphNamesOfCos :: [Coercion] -> NameSet
 orphNamesOfCos = orphNamesOfThings orphNamesOfCo

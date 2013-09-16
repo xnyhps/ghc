@@ -3488,7 +3488,7 @@ GHC extends this list with several more classes that may be automatically derive
 <itemizedlist>
 <listitem><para> With <option>-XDeriveDataTypeable</option>, you can derive instances of the classes
 <literal>Typeable</literal>, and <literal>Data</literal>, defined in the library
-modules <literal>Data.Typeable</literal> and <literal>Data.Generics</literal> respectively.
+modules <literal>Data.Typeable</literal> and <literal>Data.Data</literal> respectively.
 </para>
 <para>Since GHC 7.8.1, <literal>Typeable</literal> is kind-polymorphic (see
 <xref linkend="kind-polymorphism"/>) and can be derived for any datatype and
@@ -9080,7 +9080,7 @@ Assertion failures can be caught, see the documentation for the
 
       <para>Every language extension can also be turned into a command-line flag
 	by prefixing it with "<literal>-X</literal>"; for example <option>-XForeignFunctionInterface</option>.
-	(Similarly, all "<literal>-X</literal>" flags can be written as <literal>LANGUAGE</literal> pragmas.
+	(Similarly, all "<literal>-X</literal>" flags can be written as <literal>LANGUAGE</literal> pragmas.)
       </para>
 
       <para>A list of all supported language extensions can be obtained by invoking
@@ -10539,11 +10539,11 @@ r) ->
 In particular:
 <itemizedlist>
 <listitem><para>
-<ulink url="&libraryGhcPrimLocation;/GHC-Exts.html#v%3Ainline"><literal>inline</literal></ulink>
+<ulink url="&libraryBaseLocation;/GHC-Exts.html#v%3Ainline"><literal>inline</literal></ulink>
 allows control over inlining on a per-call-site basis.
 </para></listitem>
 <listitem><para>
-<ulink url="&libraryGhcPrimLocation;/GHC-Exts.html#v%3Alazy"><literal>lazy</literal></ulink>
+<ulink url="&libraryBaseLocation;/GHC-Exts.html#v%3Alazy"><literal>lazy</literal></ulink>
 restrains the strictness analyser.
 </para></listitem>
 </itemizedlist>

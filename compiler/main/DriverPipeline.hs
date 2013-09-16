@@ -669,6 +669,13 @@ newtype CompPipeline a = P { unP :: PipeEnv -> PipeState -> IO (PipeState, a) }
 evalP :: CompPipeline a -> PipeEnv -> PipeState -> IO a
 evalP f env st = liftM snd $ unP f env st
 
+instance Functor CompPipeline where
+    fmap = liftM
+
+instance Applicative CompPipeline where
+    pure = return
+    (<*>) = ap
+
 instance Monad CompPipeline where
   return a = P $ \_env state -> return (state, a)
   P m >>= k = P $ \env state -> do (state',a) <- m env state
@@ -1627,6 +1634,7 @@ mkExtraObjToLinkIntoBinary dflags = do
                 Nothing   -> empty
                 Just opts -> ptext (sLit "    __conf.rts_opts= ") <>
                                text (show opts) <> semi,
+             ptext (sLit "    __conf.rts_hs_main = rtsTrue;"),
              ptext (sLit "    return hs_main(argc, argv, &ZCMain_main_closure,__conf);"),
              char '}',
              char '\n' -- final newline, to keep gcc happy

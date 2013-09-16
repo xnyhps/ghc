@@ -21,16 +21,20 @@ import VarSet
 import Type
 import Unify
 import FamInstEnv
+import FamInst(TcBuiltInSynFamily(..))
 import InstEnv( lookupInstEnv, instanceDFunId )
 
 import Var
 import TcType
 import PrelNames (singIClassName, ipClassNameKey )
+import TysWiredIn ( coercibleClass )
 import Id( idType )
 import Class
 import TyCon
+import DataCon
 import Name
-
+import RdrName ( GlobalRdrEnv, lookupGRE_Name, mkRdrQual, is_as,
+                 is_decl, Provenance(Imported), gre_prov )
 import FunDeps
 
 import TcEvidence
@@ -48,11 +52,12 @@ import Maybes( orElse )
 import Bag
 
 import Control.Monad ( foldM )
+import Data.Maybe ( catMaybes, mapMaybe )
 
 import VarEnv
 
 import Control.Monad( when, unless, filterM )
-import Pair ()
+import Pair (Pair(..))
 import Unique( hasKey )
 import UniqFM
 import FastString ( sLit ) 
@@ -658,6 +663,7 @@ interactWithInertsStage wi
        ; mapBagM_ (updWorkListTcS . extendWorkListCt) split_cts
        ; rels <- extractRelevantInerts wi
        ; traceTcS "relevant inerts are:" $ ppr rels
+       ; builtInInteractions
        ; foldlBagM interact_next (ContinueWith wi) rels }
 
   where interact_next Stop atomic_inert 
@@ -686,6 +692,31 @@ interactWithInertsStage wi
                        -> do { insertInertItemTcS atomic_inert
                              ; return (ContinueWith wi) }
                }
+
+        -- See if we can compute some new derived work for built-ins.
+        builtInInteractions
+          | CFunEqCan { cc_fun = tc, cc_tyargs = args, cc_rhs = xi } <- wi
+          , Just ops <- isBuiltInSynFamTyCon_maybe tc =
+            do is <- getInertsFunEqTyCon tc
+               traceTcS "builtInCandidates: " $ ppr is
+               let interact = sfInteractInert ops args xi
+               impMbs <- sequence
+                 [ do mb <- newDerived (mkTcEqPred lhs rhs)
+                      case mb of
+                        Just x -> return $ Just $ mkNonCanonical d x
+                        Nothing -> return Nothing
+                 | CFunEqCan { cc_tyargs = iargs
+                             , cc_rhs = ixi
+                             , cc_loc = d } <- is
+                 , Pair lhs rhs <- interact iargs ixi
+                 ]
+               let imps = catMaybes impMbs
+               unless (null imps) $ updWorkListTcS (extendWorkListEqs imps)
+          | otherwise = return ()
+
+
+
+
 \end{code}
 
 \begin{code}
@@ -1535,10 +1566,10 @@ doTopReactFunEq _ct fl fun_tc args xi loc
                 succeed_with "Fun/Cache" (evTermCoercion (ctEvTerm ctev)) rhs_ty ;
            _other -> 
 
-    -- Look up in top-level instances
+    -- Look up in top-level instances, or built-in axiom
     do { match_res <- matchFam fun_tc args   -- See Note [MATCHING-SYNONYMS]
        ; case match_res of {
-           Nothing -> return NoTopInt ;
+           Nothing -> try_improve_and_return ;
            Just (co, ty) ->
 
     -- Found a top-level instance
@@ -1548,6 +1579,19 @@ doTopReactFunEq _ct fl fun_tc args xi loc
        ; succeed_with "Fun/Top" co ty } } } } }
   where
     fam_ty = mkTyConApp fun_tc args
+
+    try_improve_and_return =
+      do { case isBuiltInSynFamTyCon_maybe fun_tc of
+             Just ops ->
+               do { let eqns = sfInteractTop ops args xi
+                  ; impsMb <- mapM (\(Pair x y) -> newDerived (mkTcEqPred x y))
+                                   eqns
+                  ; let work = map (mkNonCanonical loc) (catMaybes impsMb)
+                  ; unless (null work) (updWorkListTcS (extendWorkListEqs work))
+                  }
+             _ -> return ()
+         ; return NoTopInt
+         }
 
     succeed_with :: String -> TcCoercion -> TcType -> TcS TopInteractResult
     succeed_with str co rhs_ty    -- co :: fun_tc args ~ rhs_ty
@@ -1792,8 +1836,8 @@ data LookupInstResult
   | GenInst [CtEvidence] EvTerm 
 
 instance Outputable LookupInstResult where
-    ppr NoInstance = text "NoInstance"
-    ppr (GenInst cv ev) = text "GenInst" <+> ppr cv <+> ppr ev
+  ppr NoInstance = text "NoInstance"
+  ppr (GenInst ev t) = text "GenInst" <+> ppr ev <+> ppr t
 
 matchClassInst :: InertSet -> Class -> [Type] -> CtLoc -> TcS LookupInstResult
 
@@ -1838,6 +1882,15 @@ matchClassInst _ clas [ k, ty ] _
       _ -> unexpected
 
   unexpected = panicTcS (text "Unexpected evidence for SingI")
+
+matchClassInst _ clas [ ty1, ty2 ] _
+  | clas == coercibleClass =  do
+      traceTcS "matchClassInst for" $ ppr clas <+> ppr ty1 <+> ppr ty2
+      rdr_env <- getGlobalRdrEnvTcS
+      safeMode <- safeLanguageOn `fmap` getDynFlags
+      ev <- getCoericbleInst safeMode rdr_env ty1 ty2
+      traceTcS "matchClassInst returned" $ ppr ev
+      return ev
 
 matchClassInst inerts clas tys loc
    = do { dflags <- getDynFlags
@@ -1919,7 +1972,116 @@ matchClassInst inerts clas tys loc
        | otherwise = False -- No overlap with a solved, already been taken care of 
                            -- by the overlap check with the instance environment.
      matchable _tys ct = pprPanic "Expecting dictionary!" (ppr ct)
+
+-- See Note [Coercible Instances]
+-- Changes to this logic should likely be reflected in coercible_msg in TcErrors.
+getCoericbleInst :: Bool -> GlobalRdrEnv -> TcType -> TcType -> TcS LookupInstResult
+getCoericbleInst safeMode rdr_env ty1 ty2
+  | ty1 `eqType` ty2
+  = do return $ GenInst []
+              $ EvCoercible (EvCoercibleRefl ty1)
+
+  | Just (tc1,tyArgs1) <- splitTyConApp_maybe ty1,
+    Just (tc2,tyArgs2) <- splitTyConApp_maybe ty2,
+    tc1 == tc2,
+    nominalArgsAgree tc1 tyArgs1 tyArgs2,
+    not safeMode || all (dataConsInScope rdr_env) (tyConsOfTyCon tc1)
+  = do -- Mark all used data constructors as used
+       when safeMode $ mapM_ (markDataConsAsUsed rdr_env) (tyConsOfTyCon tc1)
+       -- We want evidence for all type arguments of role R
+       arg_evs <- flip mapM (zip3 (tyConRoles tc1) tyArgs1 tyArgs2) $ \(r,ta1,ta2) ->
+         case r of Nominal -> return (Nothing, EvCoercibleArgN ta1 {- == ta2, due to nominalArgsAgree -})
+                   Representational -> do
+                        ct_ev <- requestCoercible ta1 ta2
+                        return (freshGoal ct_ev, EvCoercibleArgR (getEvTerm ct_ev))
+                   Phantom -> do
+                        return (Nothing, EvCoercibleArgP ta1 ta2)
+       return $ GenInst (mapMaybe fst arg_evs)
+              $ EvCoercible (EvCoercibleTyCon tc1 (map snd arg_evs))
+
+  | Just (tc,tyArgs) <- splitTyConApp_maybe ty1,
+    Just (_, _, _) <- unwrapNewTyCon_maybe tc,
+    not (isRecursiveTyCon tc),
+    dataConsInScope rdr_env tc -- Do noot look at all tyConsOfTyCon
+  = do markDataConsAsUsed rdr_env tc
+       let concTy = newTyConInstRhs tc tyArgs 
+       ct_ev <- requestCoercible concTy ty2
+       return $ GenInst (freshGoals [ct_ev])
+              $ EvCoercible (EvCoercibleNewType CLeft tc tyArgs (getEvTerm ct_ev))
+
+  | Just (tc,tyArgs) <- splitTyConApp_maybe ty2,
+    Just (_, _, _) <- unwrapNewTyCon_maybe tc,
+    not (isRecursiveTyCon tc),
+    dataConsInScope rdr_env tc -- Do noot look at all tyConsOfTyCon
+  = do markDataConsAsUsed rdr_env tc
+       let concTy = newTyConInstRhs tc tyArgs 
+       ct_ev <- requestCoercible ty1 concTy
+       return $ GenInst (freshGoals [ct_ev])
+              $ EvCoercible (EvCoercibleNewType CRight tc tyArgs (getEvTerm ct_ev))
+
+  | otherwise
+  = return NoInstance
+
+
+nominalArgsAgree :: TyCon -> [Type] -> [Type] -> Bool
+nominalArgsAgree tc tys1 tys2 = all ok $ zip3 (tyConRoles tc) tys1 tys2
+  where ok (r,t1,t2) = r /= Nominal || t1 `eqType` t2
+
+dataConsInScope :: GlobalRdrEnv -> TyCon -> Bool
+dataConsInScope rdr_env tc = not hidden_data_cons
+  where
+    data_con_names = map dataConName (tyConDataCons tc)
+    hidden_data_cons = not (isWiredInName (tyConName tc)) &&
+                       (isAbstractTyCon tc || any not_in_scope data_con_names)
+    not_in_scope dc  = null (lookupGRE_Name rdr_env dc)
+
+markDataConsAsUsed :: GlobalRdrEnv -> TyCon -> TcS ()
+markDataConsAsUsed rdr_env tc = addUsedRdrNamesTcS
+  [ mkRdrQual (is_as (is_decl imp_spec)) occ
+  | dc <- tyConDataCons tc
+  , let dc_name = dataConName dc
+        occ  = nameOccName dc_name
+        gres = lookupGRE_Name rdr_env dc_name
+  , not (null gres)
+  , Imported (imp_spec:_) <- [gre_prov (head gres)] ]
+
+requestCoercible :: TcType -> TcType -> TcS MaybeNew
+requestCoercible ty1 ty2 = newWantedEvVar (coercibleClass `mkClassPred` [ty1, ty2]) 
+
 \end{code}
+
+Note [Coercible Instances]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+The class Coercible is special: There are no regular instances, and the user
+cannot even define them. Instead, the type checker will create instances and
+their evidence out of thin air, in getCoericbleInst. The following “instances”
+are present:
+
+ 1. instance Coercible a a
+    for any type a.
+ 2. instance (Coercible t1_r t1'_r, Coercible t2_r t2_r',...) =>
+       Coercible (C t1_r  t2_r  ... t1_p  t2_p  ... t1_n t2_n ...)
+                 (C t1_r' t2_r' ... t1_p' t2_p' ... t1_n t2_n ...)
+    for a type constructor C where
+     * the nominal type arguments are not changed,
+     * the phantom type arguments may change arbitrarily
+     * the representational type arguments are again Coercible
+    Furthermore in Safe Haskell code, we check that
+     * the data constructors of C are in scope and
+     * the data constructors of all type constructors used in the definition of C are in scope.
+       This is required as otherwise the previous check can be circumvented by
+       just adding a local data type around C.
+ 3. instance Coercible r b => Coercible (NT t1 t2 ...) b
+    instance Coercible a r => Coercible a (NT t1 t2 ...)
+    for a newtype constructor NT where
+     * NT is not recursive
+     * r is the concrete type of NT, instantiated with the arguments t1 t2 ... 
+     * the data constructors of NT are in scope.
+     
+These three shapes of instances correspond to the three constructors of
+EvCoercible (defined in EvEvidence). They are assembled here and turned to Core
+by dsEvTerm in DsBinds.
+
 
 Note [Instance and Given overlap]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

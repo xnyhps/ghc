@@ -38,12 +38,15 @@ module TcSMonad (
 
     -- Getting and setting the flattening cache
     addSolvedDict, addSolvedFunEq, getFlattenSkols,
+
+    -- Marking stuff as used
+    addUsedRdrNamesTcS,
     
     deferTcSForAllEq, 
     
     setEvBind,
     XEvTerm(..),
-    MaybeNew (..), isFresh, freshGoals, getEvTerms,
+    MaybeNew (..), isFresh, freshGoal, freshGoals, getEvTerm, getEvTerms,
 
     xCtFlavor,        -- Transform a CtEvidence during a step 
     rewriteCtFlavor,  -- Specialized version of xCtFlavor for coercions
@@ -72,6 +75,7 @@ module TcSMonad (
     modifyInertTcS,
     insertInertItemTcS, partitionCCanMap, partitionEqMap,
     getRelevantCts, extractRelevantInerts,
+    getInertsFunEqTyCon,
     CCanMap(..), CtTypeMap, CtFamHeadMap, CtPredMap,
     PredMap, FamHeadMap,
     partCtFamHeadMap, lookupFamHead, lookupSolvedDict,
@@ -84,7 +88,7 @@ module TcSMonad (
     Untouchables, isTouchableMetaTyVarTcS, isFilledMetaTyVar_maybe,
     zonkTyVarsAndFV,
 
-    getDefaultInfo, getDynFlags,
+    getDefaultInfo, getDynFlags, getGlobalRdrEnvTcS,
 
     matchFam, matchOpenFam, 
     checkWellStagedDFun, 
@@ -118,6 +122,8 @@ import Class
 import TyCon
 
 import Name
+import RdrName (RdrName, GlobalRdrEnv)
+import RnEnv (addUsedRdrNames)
 import Var
 import VarEnv
 import Outputable
@@ -835,6 +841,18 @@ checkAllSolved
                      || unsolved_dicts || unsolved_funeqs
                      || not (isEmptyBag (inert_insols icans)))) }
 
+
+{- Get inert function equation constraints that have the given tycon
+in their head.  Not that the constraints remain in the inert set.
+We use this to check for derived interactions with built-in type-function
+constructors. -}
+getInertsFunEqTyCon :: TyCon -> TcS [Ct]
+getInertsFunEqTyCon tc =
+  do is <- getTcSInerts
+     let mp = unFamHeadMap $ inert_funeqs $ inert_cans is
+     return $ lookupTypeMapTyCon mp tc
+
+
 extractRelevantInerts :: Ct -> TcS Cts
 -- Returns the constraints from the inert set that are 'relevant' to react with 
 -- this constraint. The monad is left with the 'thinner' inerts. 
@@ -1008,6 +1026,9 @@ traceTcS herald doc = wrapTcS (TcM.traceTc herald doc)
 
 instance HasDynFlags TcS where
     getDynFlags = wrapTcS getDynFlags
+
+getGlobalRdrEnvTcS :: TcS GlobalRdrEnv
+getGlobalRdrEnvTcS = wrapTcS TcM.getGlobalRdrEnv
 
 bumpStepCountTcS :: TcS ()
 bumpStepCountTcS = TcS $ \env -> do { let ref = tcs_count env
@@ -1272,6 +1293,12 @@ getTopEnv = wrapTcS $ TcM.getTopEnv
 getGblEnv :: TcS TcGblEnv 
 getGblEnv = wrapTcS $ TcM.getGblEnv 
 
+-- Setting names as used (used in the deriving of Coercible evidence)
+-- Too hackish to expose it to TcS? In that case somehow extract the used
+-- constructors from the result of solveInteract
+addUsedRdrNamesTcS :: [RdrName] -> TcS ()
+addUsedRdrNamesTcS names = wrapTcS  $ addUsedRdrNames names
+
 -- Various smaller utilities [TODO, maybe will be absorbed in the instance matcher]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1471,6 +1498,10 @@ getEvTerm (Cached tm)  = tm
 getEvTerms :: [MaybeNew] -> [EvTerm]
 getEvTerms = map getEvTerm
 
+freshGoal :: MaybeNew -> Maybe CtEvidence
+freshGoal (Fresh ctev) = Just ctev
+freshGoal _ = Nothing
+
 freshGoals :: [MaybeNew] -> [CtEvidence]
 freshGoals mns = [ ctev | Fresh ctev <- mns ]
 
@@ -1666,6 +1697,8 @@ matchFam tycon args
   = let co = mkTcAxInstCo ax ind inst_tys
         ty = pSnd (tcCoercionKind co)
     in return $ Just (co, ty)
+
+  | Just ops <- isBuiltInSynFamTyCon_maybe tycon = return (sfMatchFam ops args)
 
   | otherwise
   = return Nothing
