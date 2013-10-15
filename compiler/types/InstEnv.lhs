@@ -540,7 +540,7 @@ lookupInstEnv' ie cls tys
       = pprTrace "lookupInstEnv 1" (ppr tpl_tys <+> ppr tys) $ find ms us rest
 
       | otherwise
-      = pprTrace "lookupInstEnv 2" (ppr tpl_tys <+> ppr tys) $ ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tv_set,
+      = pprTrace "lookupInstEnv 2" (vcat [ppr tpl_tv_set, ppr tpl_tys, ppr tys, ppr $ tcMatchTys tpl_tv_set tpl_tys tys]) $ ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tv_set,
                  (ppr cls <+> ppr tys <+> ppr all_tvs) $$
                  (ppr tpl_tvs <+> ppr tpl_tys)
                 )

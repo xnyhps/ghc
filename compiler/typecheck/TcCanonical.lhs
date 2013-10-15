@@ -196,7 +196,16 @@ canonicalize (CIrredEvCan { cc_ev = ev
 canonicalize (CHoleCan { cc_ev = ev, cc_loc = d, cc_occ = occ })
   = canHole d ev occ
 
-canonicalize ct@(CTyAppEqCan {}) = return $ ContinueWith ct
+canonicalize ct@(CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc }) = do
+  { (xi1, co1) <- flattenTyVar loc FMFullFlatten (ctEvFlavour ev) tv1
+  ; (xi2, co2) <- flatten loc FMFullFlatten (ctEvFlavour ev) ty2
+  ; (xis3, co3) <- flattenMany loc FMFullFlatten (ctEvFlavour ev) s1
+  ; mb <- rewriteCtFlavor ev (mkTcEqPred (mkAppTys xi1 xis3) xi2) (mkTcAppCo (mkTcAppCos co1 co3) co2)
+  ; traceTcS "canonicalize CTyAppEqCan" ((ppr tv1) <+> (ppr (xi1, co1)) <+> (ppr ty2) <+> (ppr (xi2, co2)) <+> (ppr s1) <+> (ppr (xis3, co3)))
+  ; case (getTyVar_maybe xi1, mb) of
+      (_, Nothing) -> return Stop
+      (Just new_tv, Just new_ev) -> continueWith $ CTyAppEqCan { cc_ev = new_ev, cc_tyvar = new_tv, cc_tyargs = s1, cc_rhs = xi2, cc_loc = loc }
+  }
 
 canEvNC :: CtLoc -> CtEvidence -> TcS StopOrContinue
 -- Called only for non-canonical EvVars 

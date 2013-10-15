@@ -159,8 +159,8 @@ match :: MatchEnv	-- For the most part this is pushed downwards
       -> Type -> Type	-- Template and target respectively
       -> Maybe TvSubstEnv
 
-match menv subst ty1 ty2 | Just ty1' <- coreView ty1 = match menv subst ty1' ty2
-			 | Just ty2' <- coreView ty2 = match menv subst ty1 ty2'
+match menv subst ty1 ty2 | Just ty1' <- coreView ty1 = pprTrace "match.coreView 1" (ppr ty1') $ match menv subst ty1' ty2
+			 | Just ty2' <- coreView ty2 = pprTrace "match.coreView 1" (ppr ty2') $ match menv subst ty1 ty2'
 
 match menv subst (TyVarTy tv1) ty2
   | Just ty1' <- lookupVarEnv subst tv1'	-- tv1' is already bound
@@ -205,7 +205,8 @@ match _ subst (LitTy x) (LitTy y) | x == y  = return subst
 
 
 match menv subst (BigLambda tv1 ty1) (BigLambda tv2 ty2)
-  = do { subst' <- match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)
+  = do { pprTrace "match BigLambda" (vcat [ppr $ tyVarKind tv1, ppr $ tyVarKind tv2, ppr $ match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)]) $ return ()
+       ; subst' <- match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)
        ; res <- pprTrace "match BigLambda" (ppr (me_tmpls menv, me_tmpls menv')) $ match menv' subst' ty1 ty2
        ; pprTrace "match BigLambda" (ppr res) $ return res
        }
@@ -214,7 +215,7 @@ match menv subst (BigLambda tv1 ty1) (BigLambda tv2 ty2)
 
 
 match _ _ _ _
-  = Nothing
+  = trace "match fail" $ Nothing
 
 --------------
 match_kind :: MatchEnv -> TvSubstEnv -> Kind -> Kind -> Maybe TvSubstEnv
@@ -246,10 +247,10 @@ match_tys :: MatchEnv -> TvSubstEnv -> [Type] -> [Type] -> Maybe TvSubstEnv
 match_tys menv subst tys1 tys2 = matchList (match menv) subst tys1 tys2
 
 --------------
-matchList :: (env -> a -> b -> Maybe env)
+matchList :: (Outputable env, Outputable a, Outputable b) => (env -> a -> b -> Maybe env)
 	   -> env -> [a] -> [b] -> Maybe env
 matchList _  subst []     []     = Just subst
-matchList fn subst (a:as) (b:bs) = do { subst' <- fn subst a b
+matchList fn subst (a:as) (b:bs) = do { subst' <- pprTrace "matchList" (vcat [ppr a, ppr b, ppr $ fn subst a b]) $ fn subst a b
 				      ; matchList fn subst' as bs }
 matchList _  _     _      _      = Nothing
 \end{code}
