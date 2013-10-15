@@ -574,14 +574,21 @@ findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet 
 findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env inerts
  | Just tyvar <- tcGetTyVar_maybe $ head xi
               = do { let appeqs = inert_appeqs $ inert_cans inerts
+                   
                    ; traceTcS "findSolvableApplication: " (ppr tyvar <+> ppr appeqs)
+
                    ; (new_constraints, removed, stay) <- foldrBagM (\ct (cts, r, s) ->
                         do { ml <- has_other_dict ct
                            ; case (ml, isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar)) of
-                                (Just (vars, lambda), True) -> return (split2 ct vars lambda `unionBags` cts, consBag ct r, s)
+
+                                (Just (vars, lambda), True) -> return (split ct vars lambda `unionBags` cts, consBag ct r, s)
+
                                 _ -> return (cts, r, extendCts s ct)
+
                            }) (emptyBag, emptyBag, emptyCts) appeqs
+                   
                    ; traceTcS "findSolvableApplication: emitted" (ppr (new_constraints, removed))
+                   
                    ; return (new_constraints, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
                    }
   where
@@ -601,7 +608,7 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
                         (_:_) -> return (Just (tyargs, ty))
                         [] -> return Nothing
                     }
-          | Just (ty@(tycon, tyargs)) <- tcSplitTyConApp_maybe $ cc_rhs ct
+          | Just (tycon, tyargs) <- tcSplitTyConApp_maybe (cc_rhs ct)
             = do { let
                        args = fst (splitFunTys $ tyVarKind $ head $ classTyVars cls)
                        count = length args
@@ -621,16 +628,26 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
                        insert_everywhere' f (as, bs, ((Left x):xs)) = [(x : as, (f x):bs, (Right $ f x):xs)] ++ (map (\(a,b,c) -> (a, b, (Left x):c)) $ insert_everywhere' f (as, bs, xs))
                        insert_everywhere' f (as, bs, ((Right x):xs)) = map (\(a,b,c) -> (a, b, (Right x):c)) $ insert_everywhere' f (as, bs, xs)
 
-                       fresh_tyvars = map (\name tyarg -> mkTyVarTy $ mkTcTyVar name (typeKind tyarg) vanillaSkolemTv) names
-                       eta_reduced = let (rest, vars) = tcSplitAppTys $ cc_rhs ct
-                                     in (reverse $ take count $ reverse vars, mkAppTys rest $ reverse $ drop count $ reverse vars)
-                       options = eta_reduced : (if count == 0 then [] else map (\(var, largs, args) -> (var, foldr BigLambda (mkTyConApp tycon args) $ map (getTyVar "findSolvableApplication") largs)) $ insert_everywhere fresh_tyvars tyargs)
+                       lambda_options = insert_everywhere (map (\name tyarg -> mkTyVarTy $ mkTcTyVar name (typeKind tyarg) vanillaSkolemTv) names) tyargs
+
+                       eta_reduced = let 
+                                         (rest, vars) = tcSplitAppTys (cc_rhs ct)
+                                         c = length vars
+                                     in (drop (c - count) vars, mkAppTys rest $ take (c - count) vars)
+
+                       options = eta_reduced : (if count == 0
+                                                then []
+                                                else map (\(var, largs, args) -> (var, foldr BigLambda (mkTyConApp tycon args) $ map (getTyVar "findSolvableApplication") largs)) lambda_options)
                        
                        isGenInstance (GenInst {}) = True
                        isGenInstance _ = False
+
                  ; traceTcS "findSolvableApplication: has_other_dict 1" (vcat [ppr options])
+                 
                  ; result <- filterM (\opt -> fmap isGenInstance (matchClassInst inerts cls [snd opt] $ cc_loc wi)) options
+
                  ; traceTcS "findSolvableApplication: has_other_dict 2" (ppr result)
+
                  ; case result of
                     [x] -> return (Just x)
                     [] -> return Nothing
@@ -644,23 +661,13 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
             = cl == cl2 && zonk tyvar == zonk tyvar2
         match _ _ _ = False
 
-        split2 :: Ct -> [TcType] -> TcType -> Cts
-        split2 ct vars lambda = let
+        split :: Ct -> [TcType] -> TcType -> Cts
+        split ct vars lambda = let
                                    ev = ctev_evar (cc_ev ct)
                                    loc = cc_loc ct
                                    lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) lambda) ev)
                                    vcts = zipWith (\v arg -> mkNonCanonical loc (CtWanted (mkTcEqPred arg v) ev)) vars $ cc_tyargs ct
-                                in listToBag (lct:vcts)
-
-        split :: Ct -> Cts
-        split ct = let (ty2, tys) = splitAppTys (cc_rhs ct)
-                       ev = ctev_evar (cc_ev ct)
-                       loc = cc_loc ct
-                       head = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) ty2) ev)
-                       arguments = zipWith (\t1 t2 -> mkNonCanonical loc (CtWanted (mkTcEqPred t1 t2) ev)) (cc_tyargs ct) tys
-                   in pprTrace "split: " (ppr (ct, head : arguments)) listToBag (head : arguments)
-
--- findSolvableApplication wi@(CTyAppEqCan {}) _ inerts = pprTrace "findSolvableApplication: otherwise:" ((ppr $ cc_tyvar wi) <+> (ppr $ cc_rhs wi)) (emptyCts, inerts)
+                               in listToBag (lct:vcts)
 
 findSolvableApplication _ _ inerts = return (emptyCts, inerts)
 
