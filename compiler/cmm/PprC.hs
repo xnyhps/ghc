@@ -55,8 +55,8 @@ import qualified Data.Map as Map
 import Control.Monad (liftM, ap)
 import Control.Applicative (Applicative(..))
 
-import Data.Array.Unsafe ( castSTUArray )
-import Data.Array.ST hiding ( castSTUArray )
+import qualified Data.Array.Unsafe as U ( castSTUArray )
+import Data.Array.ST
 
 -- --------------------------------------------------------------------------
 -- Top level
@@ -221,6 +221,7 @@ pprStmt stmt =
                         -- for a dynamic call, no declaration is necessary.
 
     CmmUnsafeForeignCall (PrimTarget MO_Touch) _results _args -> empty
+    CmmUnsafeForeignCall (PrimTarget (MO_Prefetch_Data _)) _results _args -> empty
 
     CmmUnsafeForeignCall target@(PrimTarget op) results args ->
         fn_call
@@ -651,6 +652,15 @@ pprMachOp_for_C mop = case mop of
                                 (panic $ "PprC.pprMachOp_for_C: MO_VS_Neg"
                                       ++ " should have been handled earlier!")
 
+        MO_VU_Quot {}     -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VU_Quot")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VU_Quot"
+                                      ++ " should have been handled earlier!")
+        MO_VU_Rem {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VU_Rem")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VU_Rem"
+                                      ++ " should have been handled earlier!")
+
         MO_VF_Insert {}   -> pprTrace "offending mop:"
                                 (ptext $ sLit "MO_VF_Insert")
                                 (panic $ "PprC.pprMachOp_for_C: MO_VF_Insert"
@@ -750,7 +760,9 @@ pprCallishMachOp_for_C mop
         MO_Add2       {} -> unsupported
         MO_U_Mul2     {} -> unsupported
         MO_Touch         -> unsupported
-        MO_Prefetch_Data -> unsupported
+        (MO_Prefetch_Data _ ) -> unsupported
+        --- we could support prefetch via "__builtin_prefetch"
+        --- Not adding it for now
     where unsupported = panic ("pprCallishMachOp_for_C: " ++ show mop
                             ++ " not supported!")
 
@@ -1151,10 +1163,10 @@ big_doubles dflags
   | otherwise = panic "big_doubles"
 
 castFloatToIntArray :: STUArray s Int Float -> ST s (STUArray s Int Int)
-castFloatToIntArray = castSTUArray
+castFloatToIntArray = U.castSTUArray
 
 castDoubleToIntArray :: STUArray s Int Double -> ST s (STUArray s Int Int)
-castDoubleToIntArray = castSTUArray
+castDoubleToIntArray = U.castSTUArray
 
 -- floats are always 1 word
 floatToWord :: DynFlags -> Rational -> CmmLit

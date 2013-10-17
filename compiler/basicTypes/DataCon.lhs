@@ -9,7 +9,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module DataCon (
@@ -999,6 +999,9 @@ dataConCannotMatch tys con
 %*									*
 %************************************************************************
 
+buildAlgTyCon is here because it is called from TysWiredIn, which in turn
+depends on DataCon, but not on BuildTyCl.
+
 \begin{code}
 buildAlgTyCon :: Name 
               -> [TyVar]               -- ^ Kind variables and type variables
@@ -1037,7 +1040,7 @@ buildAlgTyCon tc_name ktvs roles cType stupid_theta rhs
 
 These two 'promoted..' functions are here because
  * They belong together
- * 'prmoteDataCon' depends on DataCon stuff
+ * 'promoteDataCon' depends on DataCon stuff
 
 \begin{code}
 promoteDataCon :: DataCon -> TyCon

@@ -272,7 +272,7 @@ defFullHelpText =
   "   :forward                    go forward in the history (after :back)\n" ++
   "   :history [<n>]              after :trace, show the execution history\n" ++
   "   :list                       show the source code around current breakpoint\n" ++
-  "   :list identifier            show the source code for <identifier>\n" ++
+  "   :list <identifier>          show the source code for <identifier>\n" ++
   "   :list [<module>] <line>     show the source code around line number <line>\n" ++
   "   :print [<name> ...]         prints a value without forcing its computation\n" ++
   "   :sprint [<name> ...]        simplifed version of :print\n" ++
@@ -303,7 +303,7 @@ defFullHelpText =
   "    +s            print timing/memory stats after each evaluation\n" ++
   "    +t            print type after evaluation\n" ++
   "    -<flags>      most GHC command line flags can also be set here\n" ++
-  "                         (eg. -v2, -fglasgow-exts, etc.)\n" ++
+  "                         (eg. -v2, -XFlexibleInstances, etc.)\n" ++
   "                    for GHCi-specific flags, see User's Guide,\n"++
   "                    Flag reference, Interactive-mode options\n" ++
   "\n" ++
@@ -1062,12 +1062,10 @@ info allInfo s  = handleSourceError GHC.printException $ do
 
 infoThing :: GHC.GhcMonad m => Bool -> String -> m SDoc
 infoThing allInfo str = do
-    dflags    <- getDynFlags
-    let pefas = gopt Opt_PrintExplicitForalls dflags
     names     <- GHC.parseName str
     mb_stuffs <- mapM (GHC.getInfo allInfo) names
     let filtered = filterOutChildren (\(t,_f,_ci,_fi) -> t) (catMaybes mb_stuffs)
-    return $ vcat (intersperse (text "") $ map (pprInfo pefas) filtered)
+    return $ vcat (intersperse (text "") $ map pprInfo filtered)
 
   -- Filter out names whose parent is also there Good
   -- example is '[]', which is both a type and data
@@ -1081,10 +1079,9 @@ filterOutChildren get_thing xs
                      Just p  -> getName p `elemNameSet` all_names
                      Nothing -> False
 
-pprInfo :: PrintExplicitForalls
-        -> (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
-pprInfo pefas (thing, fixity, cls_insts, fam_insts)
-  =  pprTyThingInContextLoc pefas thing
+pprInfo :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
+pprInfo (thing, fixity, cls_insts, fam_insts)
+  =  pprTyThingInContextLoc thing
   $$ show_fixity
   $$ vcat (map GHC.pprInstance cls_insts)
   $$ vcat (map GHC.pprFamInst  fam_insts)
@@ -1149,7 +1146,7 @@ trySuccess act =
 
 editFile :: String -> InputT GHCi ()
 editFile str =
-  do file <- if null str then lift chooseEditFile else return str
+  do file <- if null str then lift chooseEditFile else expandPath str
      st <- lift getGHCiState
      let cmd = editor st
      when (null cmd)
@@ -1463,9 +1460,7 @@ typeOfExpr str
   = handleSourceError GHC.printException
   $ do
        ty <- GHC.exprType str
-       dflags <- getDynFlags
-       let pefas = gopt Opt_PrintExplicitForalls dflags
-       printForUser $ sep [text str, nest 2 (dcolon <+> pprTypeForUser pefas ty)]
+       printForUser $ sep [text str, nest 2 (dcolon <+> pprTypeForUser ty)]
 
 -----------------------------------------------------------------------------
 -- :kind
@@ -1475,9 +1470,7 @@ kindOfType norm str
   = handleSourceError GHC.printException
   $ do
        (ty, kind) <- GHC.typeKind norm str
-       dflags <- getDynFlags
-       let pefas = gopt Opt_PrintExplicitForalls dflags
-       printForUser $ vcat [ text str <+> dcolon <+> pprTypeForUser pefas kind
+       printForUser $ vcat [ text str <+> dcolon <+> pprTypeForUser kind
                            , ppWhen norm $ equals <+> ppr ty ]
 
 
@@ -1502,7 +1495,8 @@ scriptCmd ws = do
 runScript :: String    -- ^ filename
            -> InputT GHCi ()
 runScript filename = do
-  either_script <- liftIO $ tryIO (openFile filename ReadMode)
+  filename' <- expandPath filename
+  either_script <- liftIO $ tryIO (openFile filename' ReadMode)
   case either_script of
     Left _err    -> throwGhcException (CmdLineError $ "IO error:  \""++filename++"\" "
                       ++(ioeGetErrorString _err))
@@ -1510,7 +1504,7 @@ runScript filename = do
       st <- lift $ getGHCiState
       let prog = progname st
           line = line_number st
-      lift $ setGHCiState st{progname=filename,line_number=0}
+      lift $ setGHCiState st{progname=filename',line_number=0}
       scriptLoop script
       liftIO $ hClose script
       new_st <- lift $ getGHCiState
@@ -1651,8 +1645,7 @@ browseModule bang modl exports_only = do
 
         rdr_env <- GHC.getGRE
 
-        let pefas              = gopt Opt_PrintExplicitForalls dflags
-            things | bang      = catMaybes mb_things
+        let things | bang      = catMaybes mb_things
                    | otherwise = filtered_things
             pretty | bang      = pprTyThing
                    | otherwise = pprTyThingInContext
@@ -1682,7 +1675,7 @@ browseModule bang modl exports_only = do
               where (g,ng) = partition ((==m).fst) mts
 
         let prettyThings, prettyThings' :: [SDoc]
-            prettyThings = map (pretty pefas) things
+            prettyThings = map pretty things
             prettyThings' | bang      = annotate $ zip modNames prettyThings
                           | otherwise = prettyThings
         liftIO $ putStrLn $ showSDocForUser dflags unqual (vcat prettyThings')
@@ -1990,12 +1983,13 @@ showDynFlags show_all dflags = do
 
         (ghciFlags,others)  = partition (\(_, f, _) -> f `elem` flgs)
                                         DynFlags.fFlags
-        flgs = [Opt_PrintExplicitForalls
-                ,Opt_PrintBindResult
-                ,Opt_BreakOnException
-                ,Opt_BreakOnError
-                ,Opt_PrintEvldWithShow
-                ]
+        flgs = [ Opt_PrintExplicitForalls
+               , Opt_PrintExplicitKinds
+               , Opt_PrintBindResult
+               , Opt_BreakOnException
+               , Opt_BreakOnError
+               , Opt_PrintEvldWithShow
+               ]
 
 setArgs, setOptions :: [String] -> GHCi ()
 setProg, setEditor, setStop :: String -> GHCi ()
@@ -2254,15 +2248,12 @@ showBindings = do
   where
     makeDoc (AnId i) = pprTypeAndContents i
     makeDoc tt = do
-        dflags    <- getDynFlags
-        let pefas = gopt Opt_PrintExplicitForalls dflags
         mb_stuff <- GHC.getInfo False (getName tt)
-        return $ maybe (text "") (pprTT pefas) mb_stuff
+        return $ maybe (text "") pprTT mb_stuff
 
-    pprTT :: PrintExplicitForalls
-          -> (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
-    pprTT pefas (thing, fixity, _cls_insts, _fam_insts) =
-        pprTyThing pefas thing
+    pprTT :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
+    pprTT (thing, fixity, _cls_insts, _fam_insts)
+      = pprTyThing thing
         $$ show_fixity
       where
         show_fixity
@@ -2271,9 +2262,7 @@ showBindings = do
 
 
 printTyThing :: TyThing -> GHCi ()
-printTyThing tyth = do dflags <- getDynFlags
-                       let pefas = gopt Opt_PrintExplicitForalls dflags
-                       printForUser (pprTyThing pefas tyth)
+printTyThing tyth = printForUser (pprTyThing tyth)
 
 showBkptTable :: GHCi ()
 showBkptTable = do

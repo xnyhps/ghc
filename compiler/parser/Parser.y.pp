@@ -13,7 +13,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and fix
 -- any warnings in the module. See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#Warnings
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#Warnings
 -- for details
 
 module Parser ( parseModule, parseStmt, parseIdentifier, parseType,
@@ -33,7 +33,6 @@ import Type             ( funTyCon )
 import ForeignCall
 import OccName          ( varName, dataName, tcClsName, tvName )
 import DataCon          ( DataCon, dataConName )
-import CoAxiom          ( Role(..) )
 import SrcLoc
 import Module
 import Kind             ( Kind, liftedTypeKind, unliftedTypeKind, mkArrowKind )
@@ -42,6 +41,7 @@ import BasicTypes
 import DynFlags
 import OrdList
 import HaddockUtils
+import BooleanFormula   ( BooleanFormula, mkAnd, mkOr, mkTrue, mkVar )
 
 import FastString
 import Maybes           ( orElse )
@@ -227,7 +227,6 @@ incorrect.
  'then'         { L _ ITthen }
  'type'         { L _ ITtype }
  'where'        { L _ ITwhere }
- '_scc_'        { L _ ITscc }         -- ToDo: remove
 
  'forall'       { L _ ITforall }                -- GHC extension keywords
  'foreign'      { L _ ITforeign }
@@ -239,6 +238,7 @@ incorrect.
  'unsafe'       { L _ ITunsafe }
  'mdo'          { L _ ITmdo }
  'family'       { L _ ITfamily }
+ 'role'         { L _ ITrole }
  'stdcall'      { L _ ITstdcallconv }
  'ccall'        { L _ ITccallconv }
  'capi'         { L _ ITcapiconv }
@@ -249,9 +249,6 @@ incorrect.
  'group'    { L _ ITgroup }     -- for list transform extension
  'by'       { L _ ITby }        -- for list transform extension
  'using'    { L _ ITusing }     -- for list transform extension
- 'N'        { L _ ITnominal }            -- Nominal role
- 'R'        { L _ ITrepresentational }   -- Representational role
- 'P'        { L _ ITphantom }            -- Phantom role
 
  '{-# INLINE'             { L _ (ITinline_prag _ _) }
  '{-# SPECIALISE'         { L _ ITspec_prag }
@@ -269,6 +266,7 @@ incorrect.
  '{-# VECTORISE'          { L _ ITvect_prag }
  '{-# VECTORISE_SCALAR'   { L _ ITvect_scalar_prag }
  '{-# NOVECTORISE'        { L _ ITnovect_prag }
+ '{-# MINIMAL'            { L _ ITminimal_prag }
  '{-# CTYPE'              { L _ ITctype }
  '#-}'                                          { L _ ITclose_prag }
 
@@ -350,8 +348,12 @@ incorrect.
 '[t|'           { L _ ITopenTypQuote  }
 '[d|'           { L _ ITopenDecQuote  }
 '|]'            { L _ ITcloseQuote    }
+'[||'           { L _ ITopenTExpQuote   }
+'||]'           { L _ ITcloseTExpQuote  }
 TH_ID_SPLICE    { L _ (ITidEscape _)  }     -- $x
 '$('            { L _ ITparenEscape   }     -- $( exp )
+TH_ID_TY_SPLICE { L _ (ITidTyEscape _)  }   -- $$x
+'$$('           { L _ ITparenTyEscape   }   -- $$( exp )
 TH_TY_QUOTE     { L _ ITtyQuote       }      -- ''T
 TH_QUASIQUOTE   { L _ (ITquasiQuote _) }
 TH_QQUASIQUOTE  { L _ (ITqQuasiQuote _) }
@@ -575,6 +577,7 @@ topdecl :: { OrdList (LHsDecl RdrName) }
         | ty_decl                               { unitOL (L1 (TyClD (unLoc $1))) }
         | inst_decl                             { unitOL (L1 (InstD (unLoc $1))) }
         | stand_alone_deriving                  { unitOL (LL (DerivD (unLoc $1))) }
+        | role_annot                            { unitOL (L1 (RoleAnnotD (unLoc $1))) }
         | 'default' '(' comma_types0 ')'        { unitOL (LL $ DefD (DefaultDecl $3)) }
         | 'foreign' fdecl                       { unitOL (LL (unLoc $2)) }
         | '{-# DEPRECATED' deprecations '#-}'   { $2 }
@@ -596,13 +599,13 @@ topdecl :: { OrdList (LHsDecl RdrName) }
                                                     VectD (HsVectTypeIn True $3 (Just $5)) }
         | '{-# VECTORISE' 'class' gtycon '#-}'  { unitOL $ LL $ VectD (HsVectClassIn $3) }
         | annotation { unitOL $1 }
-        | decl                                  { unLoc $1 }
+        | decl_no_th                            { unLoc $1 }
 
         -- Template Haskell Extension
         -- The $(..) form is one possible form of infixexp
         -- but we treat an arbitrary expression just as if
         -- it had a $(..) wrapped around it
-        | infixexp                              { unitOL (LL $ mkTopSpliceDecl $1) }
+        | infixexp                              { unitOL (LL $ mkSpliceDecl $1) }
 
 -- Type classes
 --
@@ -783,6 +786,27 @@ capi_ctype : '{-# CTYPE' STRING STRING '#-}' { Just (CType (Just (Header (getSTR
 -- Glasgow extension: stand-alone deriving declarations
 stand_alone_deriving :: { LDerivDecl RdrName }
         : 'deriving' 'instance' inst_type { LL (DerivDecl $3) }
+
+-----------------------------------------------------------------------------
+-- Role annotations
+
+role_annot :: { LRoleAnnotDecl RdrName }
+role_annot : 'type' 'role' oqtycon maybe_roles
+              {% mkRoleAnnotDecl (comb3 $1 $3 $4) $3 (reverse (unLoc $4)) }
+
+-- Reversed!
+maybe_roles :: { Located [Located (Maybe FastString)] }
+maybe_roles : {- empty -}    { noLoc [] }
+            | roles          { $1 }
+
+roles :: { Located [Located (Maybe FastString)] }
+roles : role             { LL [$1] }
+      | roles role       { LL $ $2 : unLoc $1 }
+
+-- read it in as a varid for better error messages
+role :: { Located (Maybe FastString) }
+role : VARID             { L1 $ Just $ getVARID $1 }
+     | '_'               { L1 Nothing }
 
 -----------------------------------------------------------------------------
 -- Nested declarations
@@ -1112,7 +1136,6 @@ atype :: { LHsType RdrName }
         | '[:' ctype ':]'                { LL $ HsPArrTy  $2 }
         | '(' ctype ')'                  { LL $ HsParTy   $2 }
         | '(' ctype '::' kind ')'        { LL $ HsKindSig $2 $4 }
-        | atype '@' role                 { LL $ HsRoleAnnot $1 (unLoc $3) }
         | quasiquote                     { L1 (HsQuasiQuoteTy (unLoc $1)) }
         | '$(' exp ')'                   { LL $ mkHsSpliceTy $2 }
         | TH_ID_SPLICE                   { LL $ mkHsSpliceTy $ L1 $ HsVar $
@@ -1150,8 +1173,8 @@ tv_bndrs :: { [LHsTyVarBndr RdrName] }
          | {- empty -}                  { [] }
 
 tv_bndr :: { LHsTyVarBndr RdrName }
-        : tyvar                         { L1 (HsTyVarBndr (unLoc $1) Nothing Nothing) }
-        | '(' tyvar '::' kind ')'       { LL (HsTyVarBndr (unLoc $2) (Just $4) Nothing) }
+        : tyvar                         { L1 (UserTyVar (unLoc $1)) }
+        | '(' tyvar '::' kind ')'       { LL (KindedTyVar (unLoc $2) $4) }
 
 fds :: { Located [Located (FunDep RdrName)] }
         : {- empty -}                   { noLoc [] }
@@ -1168,11 +1191,6 @@ fd :: { Located (FunDep RdrName) }
 varids0 :: { Located [RdrName] }
         : {- empty -}                   { noLoc [] }
         | varids0 tyvar                 { LL (unLoc $2 : unLoc $1) }
-
-role :: { Located Role }
-          : 'N'                         { LL Nominal }
-          | 'R'                         { LL Representational }
-          | 'P'                         { LL Phantom }
 
 -----------------------------------------------------------------------------
 -- Kinds
@@ -1351,7 +1369,7 @@ docdecld :: { LDocDecl }
         | docnamed                              { L1 (case (unLoc $1) of (n, doc) -> DocCommentNamed n doc) }
         | docsection                            { L1 (case (unLoc $1) of (n, doc) -> DocGroup n doc) }
 
-decl    :: { Located (OrdList (LHsDecl RdrName)) }
+decl_no_th :: { Located (OrdList (LHsDecl RdrName)) }
         : sigdecl               { $1 }
 
         | '!' aexp rhs          {% do { let { e = LL (SectionR (LL (HsVar bang_RDR)) $2) };
@@ -1366,6 +1384,14 @@ decl    :: { Located (OrdList (LHsDecl RdrName)) }
                                         let { l = comb2 $1 $> };
                                         return $! (sL l (unitOL $! (sL l $ ValD r))) } }
         | docdecl               { LL $ unitOL $1 }
+
+decl    :: { Located (OrdList (LHsDecl RdrName)) }
+        : decl_no_th            { $1 }
+
+        -- Why do we only allow naked declaration splices in top-level
+        -- declarations and not here? Short answer: because readFail009
+        -- fails terribly with a panic in cvBindsAndSigs otherwise.
+        | splice_exp            { LL $ unitOL (LL $ mkSpliceDecl $1) }
 
 rhs     :: { Located (GRHSs RdrName (LHsExpr RdrName)) }
         : '=' exp wherebinds    { sL (comb3 $1 $2 $3) $ GRHSs (unguardedRHS $2) (unLoc $3) }
@@ -1399,6 +1425,9 @@ sigdecl :: { Located (OrdList (LHsDecl RdrName)) }
                             | t <- $5] }
         | '{-# SPECIALISE' 'instance' inst_type '#-}'
                 { LL $ unitOL (LL $ SigD (SpecInstSig $3)) }
+        -- A minimal complete definition
+        | '{-# MINIMAL' name_boolformula_opt '#-}'
+                { LL $ unitOL (LL $ SigD (MinimalSig $2)) }
 
 activation :: { Maybe Activation }
         : {- empty -}                           { Nothing }
@@ -1444,7 +1473,7 @@ exp10 :: { LHsExpr RdrName }
         | 'if' exp optSemi 'then' exp optSemi 'else' exp
                                         {% checkDoAndIfThenElse $2 $3 $5 $6 $8 >>
                                            return (LL $ mkHsIf $2 $5 $8) }
-        | 'if' gdpats                   {% hintMultiWayIf (getLoc $1) >>
+        | 'if' ifgdpats                 {% hintMultiWayIf (getLoc $1) >>
                                            return (LL $ HsMultiIf placeHolderType (reverse $ unLoc $2)) }
         | 'case' exp 'of' altslist              { LL $ HsCase $2 (mkMatchGroup (unLoc $4)) }
         | '-' fexp                              { LL $ NegApp $2 noSyntaxExpr }
@@ -1477,9 +1506,7 @@ optSemi :: { Bool }
         | {- empty -} { False }
 
 scc_annot :: { Located FastString }
-        : '_scc_' STRING                        {% (addWarning Opt_WarnWarningsDeprecations (getLoc $1) (text "_scc_ is deprecated; use an SCC pragma instead")) >>= \_ ->
-                                   ( do scc <- getSCC $2; return $ LL scc ) }
-        | '{-# SCC' STRING '#-}'                {% do scc <- getSCC $2; return $ LL scc }
+        : '{-# SCC' STRING '#-}'                {% do scc <- getSCC $2; return $ LL scc }
         | '{-# SCC' VARID  '#-}'                { LL (getVARID $2) }
 
 hpc_annot :: { Located (FastString,(Int,Int),(Int,Int)) }
@@ -1533,17 +1560,14 @@ aexp2   :: { LHsExpr RdrName }
         | '_'                           { L1 EWildPat }
 
         -- Template Haskell Extension
-        | TH_ID_SPLICE          { L1 $ HsSpliceE (mkHsSplice
-                                        (L1 $ HsVar (mkUnqual varName
-                                                        (getTH_ID_SPLICE $1)))) }
-        | '$(' exp ')'          { LL $ HsSpliceE (mkHsSplice $2) }
-
+        | splice_exp            { $1 }
 
         | SIMPLEQUOTE  qvar     { LL $ HsBracket (VarBr True  (unLoc $2)) }
         | SIMPLEQUOTE  qcon     { LL $ HsBracket (VarBr True  (unLoc $2)) }
         | TH_TY_QUOTE tyvar     { LL $ HsBracket (VarBr False (unLoc $2)) }
         | TH_TY_QUOTE gtycon    { LL $ HsBracket (VarBr False (unLoc $2)) }
         | '[|' exp '|]'         { LL $ HsBracket (ExpBr $2) }
+        | '[||' exp '||]'       { LL $ HsBracket (TExpBr $2) }
         | '[t|' ctype '|]'      { LL $ HsBracket (TypBr $2) }
         | '[p|' infixexp '|]'   {% checkPattern empty $2 >>= \p ->
                                         return (LL $ HsBracket (PatBr p)) }
@@ -1552,6 +1576,16 @@ aexp2   :: { LHsExpr RdrName }
 
         -- arrow notation extension
         | '(|' aexp2 cmdargs '|)'       { LL $ HsArrForm $2 Nothing (reverse $3) }
+
+splice_exp :: { LHsExpr RdrName }
+        : TH_ID_SPLICE          { L1 $ mkHsSpliceE 
+                                        (L1 $ HsVar (mkUnqual varName 
+                                                        (getTH_ID_SPLICE $1))) } 
+        | '$(' exp ')'          { LL $ mkHsSpliceE $2 }               
+        | TH_ID_TY_SPLICE       { L1 $ mkHsSpliceTE 
+                                        (L1 $ HsVar (mkUnqual varName 
+                                                        (getTH_ID_TY_SPLICE $1))) } 
+        | '$$(' exp ')'         { LL $ mkHsSpliceTE $2 }               
 
 cmdargs :: { [LHsCmdTop RdrName] }
         : cmdargs acmd                  { $2 : $1 }
@@ -1739,6 +1773,19 @@ gdpats :: { Located [LGRHS RdrName (LHsExpr RdrName)] }
         : gdpats gdpat                  { LL ($2 : unLoc $1) }
         | gdpat                         { L1 [$1] }
 
+-- optional semi-colons between the guards of a MultiWayIf, because we use
+-- layout here, but we don't need (or want) the semicolon as a separator (#7783).
+gdpatssemi :: { Located [LGRHS RdrName (LHsExpr RdrName)] }
+        : gdpatssemi gdpat optSemi      { sL (comb2 $1 $2) ($2 : unLoc $1) }
+        | gdpat optSemi                 { L1 [$1] }
+
+-- layout for MultiWayIf doesn't begin with an open brace, because it's hard to
+-- generate the open brace in addition to the vertical bar in the lexer, and
+-- we don't need it.
+ifgdpats :: { Located [LGRHS RdrName (LHsExpr RdrName)] }
+         : '{' gdpatssemi '}'              { LL (unLoc $2) }
+         |     gdpatssemi close            { $1 }
+
 gdpat   :: { LGRHS RdrName (LHsExpr RdrName) }
         : '|' guardquals '->' exp               { sL (comb2 $1 $>) $ GRHS (unLoc $2) $4 }
 
@@ -1839,6 +1886,22 @@ ipvar   :: { Located HsIPName }
 -----------------------------------------------------------------------------
 -- Warnings and deprecations
 
+name_boolformula_opt :: { BooleanFormula (Located RdrName) }
+        : name_boolformula          { $1 }
+        | {- empty -}               { mkTrue }
+
+name_boolformula :: { BooleanFormula (Located RdrName) }
+        : name_boolformula_and                      { $1 }
+        | name_boolformula_and '|' name_boolformula { mkOr [$1,$3] }
+
+name_boolformula_and :: { BooleanFormula (Located RdrName) }
+        : name_boolformula_atom                             { $1 }
+        | name_boolformula_atom ',' name_boolformula_and    { mkAnd [$1,$3] }
+
+name_boolformula_atom :: { BooleanFormula (Located RdrName) }
+        : '(' name_boolformula ')'  { $2 }
+        | name_var                  { mkVar $1 }
+
 namelist :: { Located [RdrName] }
 namelist : name_var              { L1 [unLoc $1] }
          | name_var ',' namelist { LL (unLoc $1 : unLoc $3) }
@@ -1915,7 +1978,7 @@ qtycon :: { Located RdrName }   -- Qualified or unqualified
         | tycon                         { $1 }
 
 tycon   :: { Located RdrName }  -- Unqualified
-        : upcase_id                     { L1 $! mkUnqual tcClsName (unLoc $1) }
+        : CONID                         { L1 $! mkUnqual tcClsName (getCONID $1) }
 
 qtyconsym :: { Located RdrName }
         : QCONSYM                       { L1 $! mkQual tcClsName (getQCONSYM $1) }
@@ -1999,6 +2062,9 @@ qvarid :: { Located RdrName }
         | QVARID                { L1 $! mkQual varName (getQVARID $1) }
         | PREFIXQVARSYM         { L1 $! mkQual varName (getPREFIXQVARSYM $1) }
 
+-- Note that 'role' and 'family' get lexed separately regardless of
+-- the use of extensions. However, because they are listed here, this
+-- is OK and they can be used as normal varids.
 varid :: { Located RdrName }
         : VARID                 { L1 $! mkUnqual varName (getVARID $1) }
         | special_id            { L1 $! mkUnqual varName (unLoc $1) }
@@ -2007,6 +2073,7 @@ varid :: { Located RdrName }
         | 'interruptible'       { L1 $! mkUnqual varName (fsLit "interruptible") }
         | 'forall'              { L1 $! mkUnqual varName (fsLit "forall") }
         | 'family'              { L1 $! mkUnqual varName (fsLit "family") }
+        | 'role'                { L1 $! mkUnqual varName (fsLit "role") }
 
 qvarsym :: { Located RdrName }
         : varsym                { $1 }
@@ -2030,8 +2097,8 @@ varsym_no_minus :: { Located RdrName } -- varsym not including '-'
 
 -- These special_ids are treated as keywords in various places,
 -- but as ordinary ids elsewhere.   'special_id' collects all these
--- except 'unsafe', 'interruptible', 'forall', and 'family' whose treatment differs
--- depending on context
+-- except 'unsafe', 'interruptible', 'forall', 'family', and 'role',
+-- whose treatment differs depending on context
 special_id :: { Located FastString }
 special_id
         : 'as'                  { L1 (fsLit "as") }
@@ -2061,7 +2128,7 @@ qconid :: { Located RdrName }   -- Qualified or unqualified
         | PREFIXQCONSYM         { L1 $! mkQual dataName (getPREFIXQCONSYM $1) }
 
 conid   :: { Located RdrName }
-        : upcase_id             { L1 $ mkUnqual dataName (unLoc $1) }
+        : CONID                 { L1 $ mkUnqual dataName (getCONID $1) }
 
 qconsym :: { Located RdrName }  -- Qualified or unqualified
         : consym                { $1 }
@@ -2098,7 +2165,7 @@ close :: { () }
 -- Miscellaneous (mostly renamings)
 
 modid   :: { Located ModuleName }
-        : upcase_id             { L1 $ mkModuleNameFS (unLoc $1) }
+        : CONID                 { L1 $ mkModuleNameFS (getCONID $1) }
         | QCONID                { L1 $ let (mod,c) = getQCONID $1 in
                                   mkModuleNameFS
                                    (mkFastString
@@ -2108,12 +2175,6 @@ modid   :: { Located ModuleName }
 commas :: { Int }   -- One or more commas
         : commas ','                    { $1 + 1 }
         | ','                           { 1 }
-
-upcase_id :: { Located FastString }
-        : CONID                         { L1 $! getCONID $1 }
-        | 'N'                           { L1 (fsLit "N") }
-        | 'R'                           { L1 (fsLit "R") }
-        | 'P'                           { L1 (fsLit "P") }
 
 -----------------------------------------------------------------------------
 -- Documentation comments
@@ -2172,6 +2233,7 @@ getPRIMWORD     (L _ (ITprimword x)) = x
 getPRIMFLOAT    (L _ (ITprimfloat  x)) = x
 getPRIMDOUBLE   (L _ (ITprimdouble x)) = x
 getTH_ID_SPLICE (L _ (ITidEscape x)) = x
+getTH_ID_TY_SPLICE (L _ (ITidTyEscape x)) = x
 getINLINE       (L _ (ITinline_prag inl conl)) = (inl,conl)
 getSPEC_INLINE  (L _ (ITspec_inline_prag True))  = (Inline,  FunLike)
 getSPEC_INLINE  (L _ (ITspec_inline_prag False)) = (NoInline,FunLike)

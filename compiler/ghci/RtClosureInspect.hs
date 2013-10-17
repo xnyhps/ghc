@@ -10,7 +10,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module RtClosureInspect(
@@ -35,8 +35,8 @@ module RtClosureInspect(
 import DebuggerUtils
 import ByteCodeItbls    ( StgInfoTable, peekItbl )
 import qualified ByteCodeItbls as BCI( StgInfoTable(..) )
+import BasicTypes       ( HValue )
 import HscTypes
-import Linker
 
 import DataCon
 import Type
@@ -412,7 +412,7 @@ type CustomTermPrinter m = TermPrinterM m
                          -> [Precedence -> Term -> (m (Maybe SDoc))]
 
 -- | Takes a list of custom printers with a explicit recursion knot and a term, 
--- and returns the output of the first succesful printer, or the default printer
+-- and returns the output of the first successful printer, or the default printer
 cPprTerm :: Monad m => CustomTermPrinter m -> Term -> m SDoc
 cPprTerm printers_ = go 0 where
   printers = printers_ go
@@ -508,6 +508,7 @@ repPrim t = rep where
     | t == stablePtrPrimTyCon        = text "<stablePtr>"
     | t == stableNamePrimTyCon       = text "<stableName>"
     | t == statePrimTyCon            = text "<statethread>"
+    | t == proxyPrimTyCon            = text "<proxy>"
     | t == realWorldTyCon            = text "<realworld>"
     | t == threadIdPrimTyCon         = text "<ThreadId>"
     | t == weakPrimTyCon             = text "<Weak>"

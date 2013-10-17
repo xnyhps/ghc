@@ -117,6 +117,7 @@ module DynFlags (
 -- Only in stage 2 can we be sure that the RTS
 -- exposes the appropriate runtime boolean
         rtsIsProfiled,
+        dynamicGhc,
 #endif
 
 #include "../includes/dist-derivedconstants/header/GHCConstantsHaskellExports.hs"
@@ -128,9 +129,16 @@ module DynFlags (
 
         unsafeGlobalDynFlags, setUnsafeGlobalDynFlags,
 
-        -- * SSE
+        -- * SSE and AVX
+        isSseEnabled,
         isSse2Enabled,
         isSse4_2Enabled,
+        isAvxEnabled,
+        isAvx2Enabled,
+        isAvx512cdEnabled,
+        isAvx512erEnabled,
+        isAvx512fEnabled,
+        isAvx512pfEnabled,
 
         -- * Linker information
         LinkerInfo(..),
@@ -142,6 +150,7 @@ import Platform
 import PlatformConstants
 import Module
 import PackageConfig
+import {-# SOURCE #-} Hooks
 import {-# SOURCE #-} PrelNames ( mAIN )
 import {-# SOURCE #-} Packages (PackageState)
 import DriverPhases     ( Phase(..), phaseInputExt )
@@ -158,6 +167,7 @@ import FastString
 import Outputable
 #ifdef GHCI
 import Foreign.C        ( CInt(..) )
+import System.IO.Unsafe ( unsafeDupablePerformIO )
 #endif
 import {-# SOURCE #-} ErrUtils ( Severity(..), MsgDoc, mkLocMessage )
 
@@ -275,6 +285,7 @@ data GeneralFlag
    | Opt_WarnIsError                    -- -Werror; makes warnings fatal
 
    | Opt_PrintExplicitForalls
+   | Opt_PrintExplicitKinds
 
    -- optimisation opts
    | Opt_Strictness
@@ -302,6 +313,7 @@ data GeneralFlag
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
    | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA (hidden flag)
+   | Opt_LlvmPassVectorsInRegisters     -- Pass SIMD vectors in registers (requires a patched LLVM) (hidden flag)
    | Opt_IrrefutableTuples
    | Opt_CmmSink
    | Opt_CmmElimCommonBlocks
@@ -310,6 +322,7 @@ data GeneralFlag
    | Opt_FunToThunk               -- allow WwLib.mkWorkerArgs to remove all value lambdas
    | Opt_DictsStrict                     -- be strict in argument dictionaries
    | Opt_DmdTxDictSel              -- use a special demand transformer for dictionary selectors
+   | Opt_Loopification                  -- See Note [Self-recursive tail calls]
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -589,6 +602,9 @@ data DynFlags = DynFlags {
                                         --   in --make mode, where Nothing ==> compile as
                                         --   many in parallel as there are CPUs.
 
+  enableTimeStats       :: Bool,        -- ^ Enable RTS timing statistics?
+  ghcHeapSize           :: Maybe Int,   -- ^ The heap size to set.
+
   maxRelevantBinds      :: Maybe Int,   -- ^ Maximum number of bindings from the type envt
                                         --   to show in type error messages
   simplTickFactor       :: Int,         -- ^ Multiplier for simplifier ticks
@@ -669,6 +685,9 @@ data DynFlags = DynFlags {
   -- Plugins
   pluginModNames        :: [ModuleName],
   pluginModNameOpts     :: [(ModuleName,String)],
+
+  -- GHC API hooks
+  hooks                 :: Hooks,
 
   --  For ghc -M
   depMakefile           :: FilePath,
@@ -765,6 +784,12 @@ data DynFlags = DynFlags {
 
   -- | Machine dependant flags (-m<blah> stuff)
   sseVersion            :: Maybe (Int, Int),  -- (major, minor)
+  avx                   :: Bool,
+  avx2                  :: Bool,
+  avx512cd              :: Bool, -- Enable AVX-512 Conflict Detection Instructions.
+  avx512er              :: Bool, -- Enable AVX-512 Exponential and Reciprocal Instructions.
+  avx512f               :: Bool, -- Enable AVX-512 instructions.
+  avx512pf              :: Bool, -- Enable AVX-512 PreFetch Instructions.
 
   -- | Run-time linker information (what options we need, etc.)
   rtldFlags             :: IORef (Maybe LinkerInfo)
@@ -1104,6 +1129,13 @@ wayGeneralFlags _ (WayCustom {}) = []
 wayGeneralFlags _ WayThreaded = []
 wayGeneralFlags _ WayDebug    = []
 wayGeneralFlags _ WayDyn      = [Opt_PIC]
+    -- We could get away without adding -fPIC when compiling the
+    -- modules of a program that is to be linked with -dynamic; the
+    -- program itself does not need to be position-independent, only
+    -- the libraries need to be.  HOWEVER, GHCi links objects into a
+    -- .so before loading the .so using the system linker.  Since only
+    -- PIC objects can be linked into a .so, we have to compile even
+    -- modules of the main program with -fPIC when using -dynamic.
 wayGeneralFlags _ WayProf     = [Opt_SccProfilingOn]
 wayGeneralFlags _ WayEventLog = []
 wayGeneralFlags _ WayPar      = [Opt_Parallel]
@@ -1223,7 +1255,7 @@ dynamicTooMkDynamicDynFlags dflags0
 
 -----------------------------------------------------------------------------
 
--- | Used by 'GHC.newSession' to partially initialize a new 'DynFlags' value
+-- | Used by 'GHC.runGhc' to partially initialize a new 'DynFlags' value
 initDynFlags :: DynFlags -> IO DynFlags
 initDynFlags dflags = do
  let -- We can't build with dynamic-too on Windows, as labels before
@@ -1260,7 +1292,7 @@ initDynFlags dflags = do
         }
 
 -- | The normal 'DynFlags'. Note that they is not suitable for use in this form
--- and must be fully initialized by 'GHC.newSession' first.
+-- and must be fully initialized by 'GHC.runGhc' first.
 defaultDynFlags :: Settings -> DynFlags
 defaultDynFlags mySettings =
      DynFlags {
@@ -1285,6 +1317,9 @@ defaultDynFlags mySettings =
         strictnessBefore        = [],
 
         parMakeCount            = Just 1,
+
+        enableTimeStats         = False,
+        ghcHeapSize             = Nothing,
 
         cmdlineHcIncludes       = [],
         importPaths             = ["."],
@@ -1313,6 +1348,7 @@ defaultDynFlags mySettings =
 
         pluginModNames          = [],
         pluginModNameOpts       = [],
+        hooks                   = emptyHooks,
 
         outputFile              = Nothing,
         dynOutputFile           = Nothing,
@@ -1395,6 +1431,12 @@ defaultDynFlags mySettings =
         interactivePrint = Nothing,
         nextWrapperNum = panic "defaultDynFlags: No nextWrapperNum",
         sseVersion = Nothing,
+        avx = False,
+        avx2 = False,
+        avx512cd = False,
+        avx512er = False,
+        avx512f = False,
+        avx512pf = False,
         rtldFlags = panic "defaultDynFlags: no rtldFlags"
       }
 
@@ -1404,7 +1446,7 @@ defaultWays settings = if pc_DYNAMIC_BY_DEFAULT (sPlatformConstants settings)
                        else []
 
 interpWays :: [Way]
-interpWays = if cDYNAMIC_GHC_PROGRAMS
+interpWays = if dynamicGhc
              then [WayDyn]
              else []
 
@@ -1935,6 +1977,12 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
                         let ss = map (Set.fromList . words) (lines xs)
                         return $ dflags4 { dllSplit = Just ss }
 
+  -- Set timer stats & heap size
+  when (enableTimeStats dflags5) $ liftIO enableTimingStats
+  case (ghcHeapSize dflags5) of
+    Just x -> liftIO (setHeapSize x)
+    _      -> return ()
+
   liftIO $ setUnsafeGlobalDynFlags dflags5
 
   return (dflags5, leftover, consistency_warnings ++ sh_warns ++ warns)
@@ -2046,7 +2094,13 @@ dynamic_flags = [
 
   , Flag "j"        (OptIntSuffix (\n -> upd (\d -> d {parMakeCount = n})))
 
-        ------- ways --------------------------------------------------------
+    -- RTS options -------------------------------------------------------------
+  , Flag "H"           (HasArg (\s -> upd (\d ->
+          d { ghcHeapSize = Just $ fromIntegral (decodeSize s)})))
+
+  , Flag "Rghc-timing" (NoArg (upd (\d -> d { enableTimeStats = True })))
+
+    ------- ways ---------------------------------------------------------------
   , Flag "prof"           (NoArg (addWay WayProf))
   , Flag "eventlog"       (NoArg (addWay WayEventLog))
   , Flag "parallel"       (NoArg (addWay WayPar))
@@ -2299,6 +2353,12 @@ dynamic_flags = [
   , Flag "monly-3-regs" (NoArg (addWarn "The -monly-3-regs flag does nothing; it will be removed in a future GHC release"))
   , Flag "monly-4-regs" (NoArg (addWarn "The -monly-4-regs flag does nothing; it will be removed in a future GHC release"))
   , Flag "msse"         (versionSuffix (\maj min d -> d{ sseVersion = Just (maj, min) }))
+  , Flag "mavx"         (noArg (\d -> d{ avx = True }))
+  , Flag "mavx2"        (noArg (\d -> d{ avx2 = True }))
+  , Flag "mavx512cd"    (noArg (\d -> d{ avx512cd = True }))
+  , Flag "mavx512er"    (noArg (\d -> d{ avx512er = True }))
+  , Flag "mavx512f"     (noArg (\d -> d{ avx512f = True }))
+  , Flag "mavx512pf"    (noArg (\d -> d{ avx512pf = True }))
 
      ------ Warning opts -------------------------------------------------
   , Flag "W"      (NoArg (mapM_ setWarningFlag minusWOpts))
@@ -2510,7 +2570,8 @@ fWarningFlags = [
   ( "warn-auto-orphans",                Opt_WarnAutoOrphans, nop ),
   ( "warn-tabs",                        Opt_WarnTabs, nop ),
   ( "warn-unrecognised-pragmas",        Opt_WarnUnrecognisedPragmas, nop ),
-  ( "warn-lazy-unlifted-bindings",      Opt_WarnLazyUnliftedBindings, nop ),
+  ( "warn-lazy-unlifted-bindings",      Opt_WarnLazyUnliftedBindings,
+    \_ -> deprecate "it has no effect, and will be removed in GHC 7.10" ),
   ( "warn-unused-do-bind",              Opt_WarnUnusedDoBind, nop ),
   ( "warn-wrong-do-bind",               Opt_WarnWrongDoBind, nop ),
   ( "warn-alternative-layout-rule-transitional", Opt_WarnAlternativeLayoutRuleTransitional, nop ),
@@ -2543,6 +2604,7 @@ fFlags :: [FlagSpec GeneralFlag]
 fFlags = [
   ( "error-spans",                      Opt_ErrorSpans, nop ),
   ( "print-explicit-foralls",           Opt_PrintExplicitForalls, nop ),
+  ( "print-explicit-kinds",             Opt_PrintExplicitKinds, nop ),
   ( "strictness",                       Opt_Strictness, nop ),
   ( "late-dmd-anal",                    Opt_LateDmdAnal, nop ),
   ( "specialise",                       Opt_Specialise, nop ),
@@ -2581,6 +2643,7 @@ fFlags = [
   ( "regs-graph",                       Opt_RegsGraph, nop ),
   ( "regs-iterative",                   Opt_RegsIterative, nop ),
   ( "llvm-tbaa",                        Opt_LlvmTBAA, nop), -- hidden flag
+  ( "llvm-pass-vectors-in-regs",        Opt_LlvmPassVectorsInRegisters, nop), -- hidden flag
   ( "irrefutable-tuples",               Opt_IrrefutableTuples, nop ),
   ( "cmm-sink",                         Opt_CmmSink, nop ),
   ( "cmm-elim-common-blocks",           Opt_CmmElimCommonBlocks, nop ),
@@ -2606,7 +2669,8 @@ fFlags = [
   ( "kill-absence",                     Opt_KillAbsence, nop),
   ( "kill-one-shot",                    Opt_KillOneShot, nop),
   ( "dicts-strict",                     Opt_DictsStrict, nop ),
-  ( "dmd-tx-dict-sel",                  Opt_DmdTxDictSel, nop )
+  ( "dmd-tx-dict-sel",                  Opt_DmdTxDictSel, nop ),
+  ( "loopification",                    Opt_Loopification, nop )
   ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
@@ -2927,7 +2991,6 @@ standardWarnings
         Opt_WarnEmptyEnumerations,
         Opt_WarnMissingFields,
         Opt_WarnMissingMethods,
-        Opt_WarnLazyUnliftedBindings,
         Opt_WarnWrongDoBind,
         Opt_WarnUnsupportedCallingConventions,
         Opt_WarnDodgyForeignImports,
@@ -3008,7 +3071,21 @@ glasgowExtsFlags = [
 foreign import ccall unsafe "rts_isProfiled" rtsIsProfiledIO :: IO CInt
 
 rtsIsProfiled :: Bool
-rtsIsProfiled = unsafePerformIO rtsIsProfiledIO /= 0
+rtsIsProfiled = unsafeDupablePerformIO rtsIsProfiledIO /= 0
+#endif
+
+#ifdef GHCI
+-- Consult the RTS to find whether GHC itself has been built with
+-- dynamic linking.  This can't be statically known at compile-time,
+-- because we build both the static and dynamic versions together with
+-- -dynamic-too.
+foreign import ccall unsafe "rts_isDynamic" rtsIsDynamicIO :: IO CInt
+
+dynamicGhc :: Bool
+dynamicGhc = unsafeDupablePerformIO rtsIsDynamicIO /= 0
+#else
+dynamicGhc :: Bool
+dynamicGhc = False
 #endif
 
 setWarnSafe :: Bool -> DynP ()
@@ -3429,7 +3506,7 @@ picCCOpts dflags
       -- otherwise things like stub.c files don't get compiled
       -- correctly.  They need to reference data in the Haskell
       -- objects, but can't without -fPIC.  See
-      -- http://hackage.haskell.org/trac/ghc/wiki/Commentary/PositionIndependentCode
+      -- http://ghc.haskell.org/trac/ghc/wiki/Commentary/PositionIndependentCode
        | gopt Opt_PIC dflags || not (gopt Opt_Static dflags) ->
           ["-fPIC", "-U __PIC__", "-D__PIC__"]
        | otherwise                             -> []
@@ -3474,7 +3551,7 @@ compilerInfo dflags
        ("Support parallel --make",     "YES"),
        ("Dynamic by default",          if dYNAMIC_BY_DEFAULT dflags
                                        then "YES" else "NO"),
-       ("GHC Dynamic",                 if cDYNAMIC_GHC_PROGRAMS
+       ("GHC Dynamic",                 if dynamicGhc
                                        then "YES" else "NO"),
        ("Leading underscore",          cLeadingUnderscore),
        ("Debug on",                    show debugIsOn),
@@ -3578,11 +3655,17 @@ setUnsafeGlobalDynFlags :: DynFlags -> IO ()
 setUnsafeGlobalDynFlags = writeIORef v_unsafeGlobalDynFlags
 
 -- -----------------------------------------------------------------------------
--- SSE
+-- SSE and AVX
 
 -- TODO: Instead of using a separate predicate (i.e. isSse2Enabled) to
 -- check if SSE is enabled, we might have x86-64 imply the -msse2
 -- flag.
+
+isSseEnabled :: DynFlags -> Bool
+isSseEnabled dflags = case platformArch (targetPlatform dflags) of
+    ArchX86_64 -> True
+    ArchX86    -> sseVersion dflags >= Just (1,0)
+    _          -> False
 
 isSse2Enabled :: DynFlags -> Bool
 isSse2Enabled dflags = case platformArch (targetPlatform dflags) of
@@ -3598,6 +3681,24 @@ isSse2Enabled dflags = case platformArch (targetPlatform dflags) of
 isSse4_2Enabled :: DynFlags -> Bool
 isSse4_2Enabled dflags = sseVersion dflags >= Just (4,2)
 
+isAvxEnabled :: DynFlags -> Bool
+isAvxEnabled dflags = avx dflags || avx2 dflags || avx512f dflags
+
+isAvx2Enabled :: DynFlags -> Bool
+isAvx2Enabled dflags = avx2 dflags || avx512f dflags
+
+isAvx512cdEnabled :: DynFlags -> Bool
+isAvx512cdEnabled dflags = avx512cd dflags
+
+isAvx512erEnabled :: DynFlags -> Bool
+isAvx512erEnabled dflags = avx512er dflags
+
+isAvx512fEnabled :: DynFlags -> Bool
+isAvx512fEnabled dflags = avx512f dflags
+
+isAvx512pfEnabled :: DynFlags -> Bool
+isAvx512pfEnabled dflags = avx512pf dflags
+
 -- -----------------------------------------------------------------------------
 -- Linker information
 
@@ -3608,3 +3709,21 @@ data LinkerInfo
   | DarwinLD [Option]
   | UnknownLD
   deriving Eq
+
+-- -----------------------------------------------------------------------------
+-- RTS hooks
+
+-- Convert sizes like "3.5M" into integers
+decodeSize :: String -> Integer
+decodeSize str
+  | c == ""      = truncate n
+  | c == "K" || c == "k" = truncate (n * 1000)
+  | c == "M" || c == "m" = truncate (n * 1000 * 1000)
+  | c == "G" || c == "g" = truncate (n * 1000 * 1000 * 1000)
+  | otherwise            = throwGhcException (CmdLineError ("can't decode size: " ++ str))
+  where (m, c) = span pred str
+        n      = readRational m
+        pred c = isDigit c || c == '.'
+
+foreign import ccall unsafe "setHeapSize"       setHeapSize       :: Int -> IO ()
+foreign import ccall unsafe "enableTimingStats" enableTimingStats :: IO ()

@@ -5,8 +5,8 @@
 # This file is part of the GHC build system.
 #
 # To understand how the build system works and how to modify it, see
-#      http://hackage.haskell.org/trac/ghc/wiki/Building/Architecture
-#      http://hackage.haskell.org/trac/ghc/wiki/Building/Modifying
+#      http://ghc.haskell.org/trac/ghc/wiki/Building/Architecture
+#      http://ghc.haskell.org/trac/ghc/wiki/Building/Modifying
 #
 # -----------------------------------------------------------------------------
 
@@ -139,6 +139,7 @@ ifneq "$$(findstring dyn, $1)" ""
 ifeq "$$(HostOS_CPP)" "mingw32" 
 rts_dist_$1_CC_OPTS += -DCOMPILING_WINDOWS_DLL
 endif
+rts_dist_$1_CC_OPTS += -DDYNAMIC
 endif
 
 ifneq "$$(findstring thr, $1)" ""
@@ -416,7 +417,7 @@ rts/win32/ThrIOManager_CC_OPTS += -w
 # The above warning supression flags are a temporary kludge.
 # While working on this module you are encouraged to remove it and fix
 # any warnings in the module. See
-#     http://hackage.haskell.org/trac/ghc/wiki/WorkingConventions#Warnings
+#     http://ghc.haskell.org/trac/ghc/wiki/WorkingConventions#Warnings
 # for details
 
 # Without this, thread_obj will not be inlined (at least on x86 with GCC 4.1.0)

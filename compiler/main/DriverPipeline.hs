@@ -23,17 +23,26 @@ module DriverPipeline (
    compileOne, compileOne',
    link,
 
+        -- Exports for hooks to override runPhase and link
+   PhasePlus(..), CompPipeline(..), PipeEnv(..), PipeState(..),
+   phaseOutputFilename, getPipeState, getPipeEnv,
+   hscPostBackendPhase, getLocation, setModLocation, setDynFlags,
+   runPhase, exeFileName,
+   mkExtraObjToLinkIntoBinary, mkNoteObjsToLinkIntoBinary,
+   maybeCreateManifest, runPhase_MoveBinary,
+   linkingNeeded, checkLinkInfo
   ) where
 
 #include "HsVersions.h"
 
+import PipelineMonad
 import Packages
 import HeaderInfo
 import DriverPhases
 import SysTools
 import HscMain
 import Finder
-import HscTypes
+import HscTypes hiding ( Hsc )
 import Outputable
 import Module
 import UniqFM           ( eltsUFM )
@@ -52,6 +61,7 @@ import LlvmCodeGen      ( llvmFixupAsm )
 import MonadUtils
 import Platform
 import TcRnTypes
+import Hooks
 
 import Exception
 import Data.IORef       ( readIORef )
@@ -283,23 +293,26 @@ link :: GhcLink                 -- interactive or batch
 -- exports main, i.e., we have good reason to believe that linking
 -- will succeed.
 
-link LinkInMemory _ _ _
-    = if cGhcWithInterpreter == "YES"
-      then -- Not Linking...(demand linker will do the job)
-           return Succeeded
-      else panicBadLink LinkInMemory
+link ghcLink dflags
+  = lookupHook linkHook l dflags ghcLink dflags
+  where
+    l LinkInMemory _ _ _
+      = if cGhcWithInterpreter == "YES"
+        then -- Not Linking...(demand linker will do the job)
+             return Succeeded
+        else panicBadLink LinkInMemory
 
-link NoLink _ _ _
-   = return Succeeded
+    l NoLink _ _ _
+      = return Succeeded
 
-link LinkBinary dflags batch_attempt_linking hpt
-   = link' dflags batch_attempt_linking hpt
+    l LinkBinary dflags batch_attempt_linking hpt
+      = link' dflags batch_attempt_linking hpt
 
-link LinkStaticLib dflags batch_attempt_linking hpt
-   = link' dflags batch_attempt_linking hpt
+    l LinkStaticLib dflags batch_attempt_linking hpt
+      = link' dflags batch_attempt_linking hpt
 
-link LinkDynLib dflags batch_attempt_linking hpt
-   = link' dflags batch_attempt_linking hpt
+    l LinkDynLib dflags batch_attempt_linking hpt
+      = link' dflags batch_attempt_linking hpt
 
 panicBadLink :: GhcLink -> a
 panicBadLink other = panic ("link: GHC not built to link this way: " ++
@@ -499,20 +512,6 @@ doLink dflags stop_phase o_files
 
 -- ---------------------------------------------------------------------------
 
-data PipelineOutput
-  = Temporary
-        -- ^ Output should be to a temporary file: we're going to
-        -- run more compilation steps on this output later.
-  | Persistent
-        -- ^ We want a persistent file, i.e. a file in the current directory
-        -- derived from the input filename, but with the appropriate extension.
-        -- eg. in "ghc -c Foo.hs" the output goes into ./Foo.o.
-  | SpecificFile
-        -- ^ The output must go into the specific outputFile in DynFlags.
-        -- We don't store the filename in the constructor as it changes
-        -- when doing -dynamic-too.
-    deriving Show
-
 -- | Run a compilation pipeline, consisting of multiple phases.
 --
 -- This is the interface to the compilation pipeline, which runs
@@ -615,83 +614,6 @@ runPipeline' start_phase hsc_env env input_fn
 
   evalP (pipeLoop start_phase input_fn) env state
 
--- -----------------------------------------------------------------------------
--- The pipeline uses a monad to carry around various bits of information
-
--- PipeEnv: invariant information passed down
-data PipeEnv = PipeEnv {
-       pe_isHaskellishFile :: Bool,
-       stop_phase   :: Phase,       -- ^ Stop just before this phase
-       src_filename :: String,      -- ^ basename of original input source
-       src_basename :: String,      -- ^ basename of original input source
-       src_suffix   :: String,      -- ^ its extension
-       output_spec  :: PipelineOutput -- ^ says where to put the pipeline output
-  }
-
--- PipeState: information that might change during a pipeline run
-data PipeState = PipeState {
-       hsc_env   :: HscEnv,
-          -- ^ only the DynFlags change in the HscEnv.  The DynFlags change
-          -- at various points, for example when we read the OPTIONS_GHC
-          -- pragmas in the Cpp phase.
-       maybe_loc :: Maybe ModLocation,
-          -- ^ the ModLocation.  This is discovered during compilation,
-          -- in the Hsc phase where we read the module header.
-       maybe_stub_o :: Maybe FilePath
-          -- ^ the stub object.  This is set by the Hsc phase if a stub
-          -- object was created.  The stub object will be joined with
-          -- the main compilation object using "ld -r" at the end.
-  }
-
-getPipeEnv :: CompPipeline PipeEnv
-getPipeEnv = P $ \env state -> return (state, env)
-
-getPipeState :: CompPipeline PipeState
-getPipeState = P $ \_env state -> return (state, state)
-
-instance HasDynFlags CompPipeline where
-    getDynFlags = P $ \_env state -> return (state, hsc_dflags (hsc_env state))
-
-setDynFlags :: DynFlags -> CompPipeline ()
-setDynFlags dflags = P $ \_env state ->
-  return (state{hsc_env= (hsc_env state){ hsc_dflags = dflags }}, ())
-
-setModLocation :: ModLocation -> CompPipeline ()
-setModLocation loc = P $ \_env state ->
-  return (state{ maybe_loc = Just loc }, ())
-
-setStubO :: FilePath -> CompPipeline ()
-setStubO stub_o = P $ \_env state ->
-  return (state{ maybe_stub_o = Just stub_o }, ())
-
-newtype CompPipeline a = P { unP :: PipeEnv -> PipeState -> IO (PipeState, a) }
-
-evalP :: CompPipeline a -> PipeEnv -> PipeState -> IO a
-evalP f env st = liftM snd $ unP f env st
-
-instance Functor CompPipeline where
-    fmap = liftM
-
-instance Applicative CompPipeline where
-    pure = return
-    (<*>) = ap
-
-instance Monad CompPipeline where
-  return a = P $ \_env state -> return (state, a)
-  P m >>= k = P $ \env state -> do (state',a) <- m env state
-                                   unP (k a) env state'
-
-instance MonadIO CompPipeline where
-    liftIO m = P $ \_env state -> do a <- m; return (state, a)
-
-phaseOutputFilename :: Phase{-next phase-} -> CompPipeline FilePath
-phaseOutputFilename next_phase = do
-  PipeEnv{stop_phase, src_basename, output_spec} <- getPipeEnv
-  PipeState{maybe_loc, hsc_env} <- getPipeState
-  let dflags = hsc_dflags hsc_env
-  liftIO $ getOutputFilename stop_phase output_spec
-                             src_basename dflags next_phase maybe_loc
-
 -- ---------------------------------------------------------------------------
 -- outer pipeline loop
 
@@ -735,7 +657,7 @@ pipeLoop phase input_fn = do
    _
      -> do liftIO $ debugTraceMsg dflags 4
                                   (ptext (sLit "Running phase") <+> ppr phase)
-           (next_phase, output_fn) <- runPhase phase input_fn dflags
+           (next_phase, output_fn) <- runHookedPhase phase input_fn dflags
            r <- pipeLoop next_phase output_fn
            case phase of
                HscOut {} ->
@@ -748,10 +670,23 @@ pipeLoop phase input_fn = do
                    return ()
            return r
 
+runHookedPhase :: PhasePlus -> FilePath -> DynFlags
+               -> CompPipeline (PhasePlus, FilePath)
+runHookedPhase pp input dflags =
+  lookupHook runPhaseHook runPhase dflags pp input dflags
+
 -- -----------------------------------------------------------------------------
 -- In each phase, we need to know into what filename to generate the
 -- output.  All the logic about which filenames we generate output
 -- into is embodied in the following function.
+
+phaseOutputFilename :: Phase{-next phase-} -> CompPipeline FilePath
+phaseOutputFilename next_phase = do
+  PipeEnv{stop_phase, src_basename, output_spec} <- getPipeEnv
+  PipeState{maybe_loc, hsc_env} <- getPipeState
+  let dflags = hsc_dflags hsc_env
+  liftIO $ getOutputFilename stop_phase output_spec
+                             src_basename dflags next_phase maybe_loc
 
 getOutputFilename
   :: Phase -> PipelineOutput -> String
@@ -800,13 +735,6 @@ getOutputFilename stop_phase output basename dflags next_phase maybe_location
              | Just loc <- maybe_location = ml_obj_file loc
              | Just d <- odir = d </> persistent
              | otherwise      = persistent
-
-data PhasePlus = RealPhase Phase
-               | HscOut HscSource ModuleName HscStatus
-
-instance Outputable PhasePlus where
-    ppr (RealPhase p) = ppr p
-    ppr (HscOut {}) = text "HscOut"
 
 -- -----------------------------------------------------------------------------
 -- | Each phase in the pipeline returns the next phase to execute, and the
@@ -1452,7 +1380,10 @@ runPhase (RealPhase LlvmLlc) input_fn dflags
                 ++ [SysTools.Option tbaa]
                 ++ map SysTools.Option fpOpts
                 ++ map SysTools.Option abiOpts
-                ++ map SysTools.Option sseOpts)
+                ++ map SysTools.Option sseOpts
+                ++ map SysTools.Option avxOpts
+                ++ map SysTools.Option avx512Opts
+                ++ map SysTools.Option stackAlignOpts)
 
     return (RealPhase next_phase, output_fn)
   where
@@ -1483,7 +1414,23 @@ runPhase (RealPhase LlvmLlc) input_fn dflags
 
         sseOpts | isSse4_2Enabled dflags = ["-mattr=+sse42"]
                 | isSse2Enabled dflags   = ["-mattr=+sse2"]
+                | isSseEnabled dflags    = ["-mattr=+sse"]
                 | otherwise              = []
+
+        avxOpts | isAvx512fEnabled dflags = ["-mattr=+avx512f"]
+                | isAvx2Enabled dflags    = ["-mattr=+avx2"]
+                | isAvxEnabled dflags     = ["-mattr=+avx"]
+                | otherwise               = []
+
+        avx512Opts =
+          [ "-mattr=+avx512cd" | isAvx512cdEnabled dflags ] ++
+          [ "-mattr=+avx512er" | isAvx512erEnabled dflags ] ++
+          [ "-mattr=+avx512pf" | isAvx512pfEnabled dflags ]
+
+        stackAlignOpts =
+            case platformArch (targetPlatform dflags) of
+              ArchX86_64 | isAvxEnabled dflags -> ["-stack-alignment=32"]
+              _                                -> []
 
 -----------------------------------------------------------------------------
 -- LlvmMangle phase
@@ -2087,12 +2034,18 @@ doCpp dflags raw input_fn output_fn = do
         -- remember, in code we *compile*, the HOST is the same our TARGET,
         -- and BUILD is the same as our HOST.
 
-    let sse2 = isSse2Enabled dflags
-        sse4_2 = isSse4_2Enabled dflags
-        sse_defs =
-          [ "-D__SSE__=1" | sse2 || sse4_2 ] ++
-          [ "-D__SSE2__=1" | sse2 || sse4_2 ] ++
-          [ "-D__SSE4_2__=1" | sse4_2 ]
+    let sse_defs =
+          [ "-D__SSE__=1"    | isSseEnabled    dflags ] ++
+          [ "-D__SSE2__=1"   | isSse2Enabled   dflags ] ++
+          [ "-D__SSE4_2__=1" | isSse4_2Enabled dflags ]
+
+    let avx_defs =
+          [ "-D__AVX__=1"  | isAvxEnabled  dflags ] ++
+          [ "-D__AVX2__=1" | isAvx2Enabled dflags ] ++
+          [ "-D__AVX512CD__=1" | isAvx512cdEnabled dflags ] ++
+          [ "-D__AVX512ER__=1" | isAvx512erEnabled dflags ] ++
+          [ "-D__AVX512F__=1"  | isAvx512fEnabled  dflags ] ++
+          [ "-D__AVX512PF__=1" | isAvx512pfEnabled dflags ]
 
     backend_defs <- getBackendDefs dflags
 
@@ -2103,6 +2056,7 @@ doCpp dflags raw input_fn output_fn = do
                     ++ map SysTools.Option backend_defs
                     ++ map SysTools.Option hscpp_opts
                     ++ map SysTools.Option sse_defs
+                    ++ map SysTools.Option avx_defs
         -- Set the language mode to assembler-with-cpp when preprocessing. This
         -- alleviates some of the C99 macro rules relating to whitespace and the hash
         -- operator, which we tend to abuse. Clang in particular is not very happy

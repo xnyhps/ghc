@@ -7,7 +7,8 @@ Type checking of type signatures in interface files
 
 \begin{code}
 module TcIface ( 
-        tcImportDecl, importDecl, checkWiredInTyCon, tcHiBootIface, typecheckIface, 
+        tcLookupImported_maybe, 
+        importDecl, checkWiredInTyCon, tcHiBootIface, typecheckIface, 
         tcIfaceDecl, tcIfaceInst, tcIfaceFamInst, tcIfaceRules,
         tcIfaceVectInfo, tcIfaceAnnotations, 
         tcIfaceExpr,    -- Desired by HERMIT (Trac #7683)
@@ -69,6 +70,7 @@ import FastString
 
 import Control.Monad
 import qualified Data.Map as Map
+import Data.Traversable ( traverse )
 \end{code}
 
 This module takes
@@ -115,20 +117,25 @@ where the code that e1 expands to might import some defns that
 also turn out to be needed by the code that e2 expands to.
 
 \begin{code}
-tcImportDecl :: Name -> TcM TyThing
+tcLookupImported_maybe :: Name -> TcM (MaybeErr MsgDoc TyThing)
+-- Returns (Failed err) if we can't find the interface file for the thing
+tcLookupImported_maybe name
+  = do  { hsc_env <- getTopEnv
+        ; mb_thing <- liftIO (lookupTypeHscEnv hsc_env name)
+        ; case mb_thing of  
+            Just thing -> return (Succeeded thing)
+            Nothing    -> tcImportDecl_maybe name }
+
+tcImportDecl_maybe :: Name -> TcM (MaybeErr MsgDoc TyThing)
 -- Entry point for *source-code* uses of importDecl
-tcImportDecl name 
+tcImportDecl_maybe name 
   | Just thing <- wiredInNameTyThing_maybe name
   = do  { when (needWiredInHomeIface thing)
                (initIfaceTcRn (loadWiredInHomeIface name))
                 -- See Note [Loading instances for wired-in things]
-        ; return thing }
+        ; return (Succeeded thing) }
   | otherwise
-  = do  { traceIf (text "tcImportDecl" <+> ppr name)
-        ; mb_thing <- initIfaceTcRn (importDecl name)
-        ; case mb_thing of
-            Succeeded thing -> return thing
-            Failed err      -> failWithTc err }
+  = initIfaceTcRn (importDecl name)
 
 importDecl :: Name -> IfM lcl (MaybeErr MsgDoc TyThing)
 -- Get the TyThing for this Name from an interface file
@@ -505,7 +512,7 @@ tc_iface_decl _parent ignore_prags
             (IfaceClass {ifCtxt = rdr_ctxt, ifName = tc_occ,
                          ifTyVars = tv_bndrs, ifRoles = roles, ifFDs = rdr_fds, 
                          ifATs = rdr_ats, ifSigs = rdr_sigs, 
-                         ifRec = tc_isrec })
+                         ifMinDef = mindef_occ, ifRec = tc_isrec })
 -- ToDo: in hs-boot files we should really treat abstract classes specially,
 --       as we do abstract tycons
   = bindIfaceTyVars tv_bndrs $ \ tyvars -> do
@@ -516,10 +523,11 @@ tc_iface_decl _parent ignore_prags
     ; sigs <- mapM tc_sig rdr_sigs
     ; fds  <- mapM tc_fd rdr_fds
     ; traceIf (text "tc-iface-class3" <+> ppr tc_occ)
+    ; mindef <- traverse lookupIfaceTop mindef_occ
     ; cls  <- fixM $ \ cls -> do
               { ats  <- mapM (tc_at cls) rdr_ats
               ; traceIf (text "tc-iface-class4" <+> ppr tc_occ)
-              ; buildClass ignore_prags tc_name tyvars roles ctxt fds ats sigs tc_isrec }
+              ; buildClass ignore_prags tc_name tyvars roles ctxt fds ats sigs mindef tc_isrec }
     ; return (ATyCon (classTyCon cls)) }
   where
    tc_sc pred = forkM (mk_sc_doc pred) (tcIfaceType pred)

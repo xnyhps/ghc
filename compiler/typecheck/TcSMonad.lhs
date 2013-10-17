@@ -3,7 +3,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 -- Type definitions for the constraint solver
@@ -237,7 +237,7 @@ workListSize (WorkList { wl_eqs = eqs, wl_funeqs = funeqs, wl_rest = rest })
 extendWorkListEq :: Ct -> WorkList -> WorkList
 -- Extension by equality
 extendWorkListEq ct wl 
-  | Just {} <- isCFunEqCan_Maybe ct
+  | Just {} <- isCFunEqCan_maybe ct
   = extendWorkListFunEq ct wl
   | otherwise
   = wl { wl_eqs = ct : wl_eqs wl }
@@ -419,10 +419,10 @@ lookupFamHead :: FamHeadMap a -> TcType -> Maybe a
 lookupFamHead (FamHeadMap m) key = lookupTM key m
 
 insertFamHead :: FamHeadMap a -> TcType -> a -> FamHeadMap a
-insertFamHead (FamHeadMap m) key value = FamHeadMap (alterTM key (const (Just value)) m)
+insertFamHead (FamHeadMap m) key value = FamHeadMap (insertTM key value m)
 
 delFamHead :: FamHeadMap a -> TcType -> FamHeadMap a
-delFamHead (FamHeadMap m) key = FamHeadMap (alterTM key (const Nothing) m)
+delFamHead (FamHeadMap m) key = FamHeadMap (deleteTM key m)
 
 anyFamHeadMap :: (Ct -> Bool) -> CtFamHeadMap -> Bool
 anyFamHeadMap f ctmap = foldTM ((||) . f) (unFamHeadMap ctmap) False
@@ -430,22 +430,24 @@ anyFamHeadMap f ctmap = foldTM ((||) . f) (unFamHeadMap ctmap) False
 partCtFamHeadMap :: (Ct -> Bool) 
                  -> CtFamHeadMap 
                  -> (Cts, CtFamHeadMap)
-partCtFamHeadMap f ctmap
-  = let (cts,tymap_final) = foldTM upd_acc tymap_inside (emptyBag, tymap_inside)
+partCtFamHeadMap f (FamHeadMap ctmap)
+  = let (cts, tymap_final) = foldTM upd_acc ctmap (emptyBag, ctmap)
     in (cts, FamHeadMap tymap_final)
   where
-    tymap_inside = unFamHeadMap ctmap 
     upd_acc ct (cts,acc_map)
-         | f ct      = (extendCts cts ct, alterTM ct_key (\_ -> Nothing) acc_map)
+         | f ct      = (extendCts cts ct, deleteTM fam_head acc_map)
          | otherwise = (cts,acc_map)
-         where ct_key | EqPred ty1 _ <- classifyPredType (ctPred ct)
-                      = ty1 
-                      | otherwise 
-                      = panic "partCtFamHeadMap, encountered non equality!"
+         where 
+           fam_head = funEqHead ct
+
+funEqHead :: Ct -> Type
+funEqHead ct = case isCFunEqCan_maybe ct of 
+                 Just (tc,tys) -> mkTyConApp tc tys
+                 Nothing       -> pprPanic "funEqHead" (ppr ct)
 
 filterSolved :: (CtEvidence -> Bool) -> PredMap CtEvidence -> PredMap CtEvidence
 filterSolved p (PredMap mp) = PredMap (foldTM upd mp emptyTM)
-  where upd a m = if p a then alterTM (ctEvPred a) (\_ -> Just a) m
+  where upd a m = if p a then insertTM (ctEvPred a) a m
                          else m
 \end{code}
 
@@ -662,8 +664,8 @@ insertInertItem item is
           | Just cls <- isCDictCan_Maybe item   -- Dictionary 
           = ics { inert_dicts = updCCanMap (cls,item) (inert_dicts ics) }
 
-          | Just _tc <- isCFunEqCan_Maybe item  -- Function equality
-          = let fam_head = mkTyConApp (cc_fun item) (cc_tyargs item)
+          | Just (tc,tys) <- isCFunEqCan_maybe item  -- Function equality
+          = let fam_head = mkTyConApp tc tys
                 upd_funeqs Nothing = Just item
                 upd_funeqs (Just _already_there) 
                   = panic "insertInertItem: item already there!"
@@ -698,10 +700,9 @@ addSolvedDict item
        ; updInertTcS upd_solved_dicts }
   where
     upd_solved_dicts is 
-      = is { inert_solved_dicts = PredMap $ alterTM pred upd_solved $ 
+      = is { inert_solved_dicts = PredMap $ insertTM pred item $ 
                                   unPredMap $ inert_solved_dicts is }
     pred = ctEvPred item
-    upd_solved _ = Just item
 
 addSolvedFunEq :: TcType -> CtEvidence -> TcType -> TcS ()
 addSolvedFunEq fam_ty ev rhs_ty
@@ -738,20 +739,26 @@ prepareInertsForImplications is
                   , inert_funeqs = FamHeadMap funeqs
                   , inert_dicts  = dicts })
       = IC { inert_eqs    = filterVarEnv_Directly (\_ ct -> isGivenCt ct) eqs 
-           , inert_funeqs = FamHeadMap (mapTM given_from_wanted funeqs)
+           , inert_funeqs = FamHeadMap (foldTM given_from_wanted funeqs emptyTM)
            , inert_irreds = Bag.filterBag isGivenCt irreds
            , inert_dicts  = keepGivenCMap dicts
            , inert_insols = emptyCts
            , inert_appeqs = emptyCts }
 
-    given_from_wanted funeq   -- This is where the magic processing happens 
-      | isGiven ev = funeq    -- for type-function equalities
-                              -- See Note [Preparing inert set for implications]
-      | otherwise  = funeq { cc_ev = given_ev }
+    given_from_wanted :: Ct -> TypeMap Ct -> TypeMap Ct
+    given_from_wanted funeq fhm   -- This is where the magic processing happens 
+                                  -- for type-function equalities
+                                  -- See Note [Preparing inert set for implications]
+      | isWanted ev  = insert_one (funeq { cc_ev = given_ev }) fhm
+      | isGiven ev   = insert_one funeq fhm   
+      | otherwise    = fhm  -- Drop derived constraints
       where
         ev = ctEvidence funeq
         given_ev = CtGiven { ctev_evtm = EvId (ctev_evar ev)
                            , ctev_pred = ctev_pred ev }
+
+    insert_one :: Ct -> TypeMap Ct -> TypeMap Ct
+    insert_one funeq fhm = insertTM (funEqHead funeq) funeq fhm 
 \end{code}
 
 Note [Preparing inert set for implications]
@@ -796,6 +803,8 @@ fundep (alpha~a) and this can float out again and be used to fix
 alpha.  (In general we can't float class constraints out just in case
 (C d blah) might help to solve (C Int a).)  But we ignore this possiblity.
 
+For Derived constraints we don't have evidence, so we do not turn
+them into Givens.  There can *be* deriving CFunEqCans; see Trac #8129.
 
 \begin{code}
 getInertEqs :: TcS (TyVarEnv Ct)
@@ -870,13 +879,11 @@ extractRelevantInerts wi
             let (cts,dict_map) = getRelevantCts cl (inert_dicts ics) 
             in pprTrace "extract_ics_relevants" ((ppr tys) <+> (ppr (filterBag isCNonCanonical $ inert_insols ics))) $ (cts, ics { inert_dicts = dict_map })
 
-        extract_ics_relevants ct@(CFunEqCan {}) ics@(IC { inert_funeqs = funeq_map })
-            | Just ct <- lookupFamHead funeq_map fam_head
+        extract_ics_relevants (CFunEqCan { cc_fun = tc, cc_tyargs = tys }) 
+                              ics@(IC { inert_funeqs = funeq_map })
+            | let fam_head = mkTyConApp tc tys
+            , Just ct <- lookupFamHead funeq_map fam_head
             = (singleCt ct, ics { inert_funeqs = delFamHead funeq_map fam_head })
-            | otherwise
-            = (emptyCts, ics)
-            where
-              fam_head = mkTyConApp (cc_fun ct) (cc_tyargs ct)
 
         extract_ics_relevants (CHoleCan {}) ics
             = pprPanic "extractRelevantInerts" (ppr wi)

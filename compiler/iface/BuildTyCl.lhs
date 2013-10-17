@@ -8,7 +8,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module BuildTyCl (
@@ -192,10 +192,11 @@ buildClass :: Bool		-- True <=> do not include unfoldings
 	   -> [FunDep TyVar]		   -- Functional dependencies
 	   -> [ClassATItem]		   -- Associated types
 	   -> [TcMethInfo]                 -- Method info
+	   -> ClassMinimalDef              -- Minimal complete definition
 	   -> RecFlag			   -- Info for type constructor
 	   -> TcRnIf m n Class
 
-buildClass no_unf tycon_name tvs roles sc_theta fds at_items sig_stuff tc_isrec
+buildClass no_unf tycon_name tvs roles sc_theta fds at_items sig_stuff mindef tc_isrec
   = fixM  $ \ rec_clas -> 	-- Only name generation inside loop
     do	{ traceIf (text "buildClass")
         ; dflags <- getDynFlags
@@ -271,7 +272,7 @@ buildClass no_unf tycon_name tvs roles sc_theta fds at_items sig_stuff tc_isrec
 
 	      ; result = mkClass tvs fds 
 			         sc_theta sc_sel_ids at_items
-				 op_items tycon
+				 op_items mindef tycon
 	      }
 	; traceIf (text "buildClass" <+> ppr tycon) 
 	; return result }

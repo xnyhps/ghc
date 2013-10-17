@@ -16,7 +16,7 @@ have a standard form, namely:
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module MkId (
@@ -35,7 +35,7 @@ module MkId (
         wiredInIds, ghcPrimIds,
         unsafeCoerceName, unsafeCoerceId, realWorldPrimId, 
         voidArgId, nullAddrId, seqId, lazyId, lazyIdKey,
-        coercionTokenId, magicSingIId,
+        coercionTokenId, magicDictId,
 
 	-- Re-export error Ids
 	module PrelRules
@@ -137,8 +137,9 @@ ghcPrimIds
     unsafeCoerceId,
     nullAddrId,
     seqId,
-    magicSingIId,
-    coerceId
+    magicDictId,
+    coerceId,
+    proxyHashId
     ]
 \end{code}
 
@@ -1037,18 +1038,33 @@ they can unify with both unlifted and lifted types.  Hence we provide
 another gun with which to shoot yourself in the foot.
 
 \begin{code}
-lazyIdName, unsafeCoerceName, nullAddrName, seqName, realWorldName, coercionTokenName, magicSingIName, coerceName :: Name
+lazyIdName, unsafeCoerceName, nullAddrName, seqName, realWorldName, coercionTokenName, magicDictName, coerceName, proxyName :: Name
 unsafeCoerceName  = mkWiredInIdName gHC_PRIM (fsLit "unsafeCoerce#") unsafeCoerceIdKey  unsafeCoerceId
 nullAddrName      = mkWiredInIdName gHC_PRIM (fsLit "nullAddr#")     nullAddrIdKey      nullAddrId
 seqName           = mkWiredInIdName gHC_PRIM (fsLit "seq")           seqIdKey           seqId
 realWorldName     = mkWiredInIdName gHC_PRIM (fsLit "realWorld#")    realWorldPrimIdKey realWorldPrimId
 lazyIdName        = mkWiredInIdName gHC_MAGIC (fsLit "lazy")         lazyIdKey           lazyId
 coercionTokenName = mkWiredInIdName gHC_PRIM (fsLit "coercionToken#") coercionTokenIdKey coercionTokenId
-magicSingIName    = mkWiredInIdName gHC_PRIM (fsLit "magicSingI")    magicSingIKey magicSingIId
+magicDictName     = mkWiredInIdName gHC_PRIM (fsLit "magicDict")     magicDictKey magicDictId
 coerceName        = mkWiredInIdName gHC_PRIM (fsLit "coerce")        coerceKey          coerceId
+proxyName         = mkWiredInIdName gHC_PRIM (fsLit "proxy#")        proxyHashKey       proxyHashId
 \end{code}
 
 \begin{code}
+
+------------------------------------------------
+-- proxy# :: forall a. Proxy# a
+proxyHashId :: Id
+proxyHashId
+  = pcMiscPrelId proxyName ty
+       (noCafIdInfo `setUnfoldingInfo` evaldUnfolding) -- Note [evaldUnfoldings]
+  where
+    ty      = mkForAllTys [kv, tv] (mkProxyPrimTy k t)
+    kv      = kKiVar
+    k       = mkTyVarTy kv
+    tv:_    = tyVarList k
+    t       = mkTyVarTy tv
+
 ------------------------------------------------
 -- unsafeCoerce# :: forall a b. a -> b
 unsafeCoerceId :: Id
@@ -1114,8 +1130,8 @@ lazyId = pcMiscPrelId lazyIdName ty info
 
 
 --------------------------------------------------------------------------------
-magicSingIId :: Id  -- See Note [magicSingIId magic]
-magicSingIId = pcMiscPrelId magicSingIName ty info
+magicDictId :: Id  -- See Note [magicDictId magic]
+magicDictId = pcMiscPrelId magicDictName ty info
   where
   info = noCafIdInfo `setInlinePragInfo` neverInlinePragma
   ty   = mkForAllTys [alphaTyVar] alphaTy
@@ -1229,42 +1245,49 @@ lazyId is defined in GHC.Base, so we don't *have* to inline it.  If it
 appears un-applied, we'll end up just calling it.
 
 
-Note [magicSingIId magic]
+Note [magicDictId magic]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The identifier `magicSIngI` is just a place-holder, which is used to
+The identifier `magicDict` is just a place-holder, which is used to
 implement a primitve that we cannot define in Haskell but we can write
 in Core.  It is declared with a place-holder type:
 
-    magicSingI :: forall a. a
+    magicDict :: forall a. a
 
 The intention is that the identifier will be used in a very specific way,
-namely we add the following to the library:
+to create dictionaries for classes with a single method.  Consider a class
+like this:
 
-    withSingI :: Sing n -> (SingI n => a) -> a
-    withSingI x = magicSingI x ((\f -> f) :: () -> ())
+   class C a where
+     f :: T a
 
-The actual primitive is `withSingI`, and it uses its first argument
-(of type `Sing n`) as the evidece/dictionary in the second argument.
-This is done by adding a built-in rule to `prelude/PrelRules.hs`
-(see `match_magicSingI`), which works as follows:
+We are going to use `magicDict`, in conjunction with a built-in Prelude
+rule, to cast values of type `T a` into dictionaries for `C a`.  To do
+this, we define a function like this in the library:
 
-magicSingI @ (Sing n -> (() -> ()) -> (SingI n -> a) -> a)
-             x
-             (\f -> _)
+  data WrapC a b = WrapC (C a => Proxy a -> b)
 
+  withT :: (C a => Proxy a -> b)
+        ->  T a -> Proxy a -> b
+  withT f x y = magicDict (WrapC f) x y
+
+The purpose of `WrapC` is to avoid having `f` instantiated.
+Also, it avoids impredicativity, because `magicDict`'s type
+cannot be instantiated with a forall.  The field of `WrapC` contains
+a `Proxy` parameter which is used to link the type of the constraint,
+`C a`, with the type of the `Wrap` value being made.
+
+Next, we add a built-in Prelude rule (see prelude/PrelRules.hs),
+which will replace the RHS of this definition with the appropriate
+definition in Core.  The rewrite rule works as follows:
+
+magicDict@t (wrap@a@b f) x y
 ---->
+f (x `cast` co a) y
 
-\(f :: (SingI n -> a) -> a) -> f (cast x (newtypeCo n))
+The `co` coercion is the newtype-coercion extracted from the type-class.
+The type class is obtain by looking at the type of wrap.
 
-The `newtypeCo` coercion is extracted from the `SingI` type constructor,
-which is available in the instantiation.  We are casting `Sing n` into `SingI n`,
-which is OK because `SingI` is a class with a single methid,
-and thus it is implemented as newtype.
-
-The `(\f -> f)` parameter is there just so that we can avoid
-having to make up a new name for the lambda, it is completely
-changed by the rewrite.
 
 
 -------------------------------------------------------------
@@ -1282,11 +1305,15 @@ This comes up in strictness analysis
 realWorldPrimId :: Id
 realWorldPrimId -- :: State# RealWorld
   = pcMiscPrelId realWorldName realWorldStatePrimTy
-                 (noCafIdInfo `setUnfoldingInfo` evaldUnfolding)
-        -- The evaldUnfolding makes it look that realWorld# is evaluated
-        -- which in turn makes Simplify.interestingArg return True,
-        -- which in turn makes INLINE things applied to realWorld# likely
-        -- to be inlined
+      (noCafIdInfo `setUnfoldingInfo` evaldUnfolding)  -- Note [evaldUnfoldings]
+
+{- Note [evaldUnfoldings]
+~~~~~~~~~~~~~~~~~~~~~~~~~
+The evaldUnfolding makes it look that some primitive value is
+evaluated, which in turn makes Simplify.interestingArg return True,
+which in turn makes INLINE things applied to said value likely to be
+inlined.
+-}
 
 voidArgId :: Id
 voidArgId       -- :: State# RealWorld

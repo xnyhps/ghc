@@ -255,7 +255,7 @@ basicKnownKeyNames
         -- FFI primitive types that are not wired-in.
         stablePtrTyConName, ptrTyConName, funPtrTyConName,
         int8TyConName, int16TyConName, int32TyConName, int64TyConName,
-        wordTyConName, word8TyConName, word16TyConName, word32TyConName, word64TyConName,
+        word8TyConName, word16TyConName, word32TyConName, word64TyConName,
 
         -- Others
         otherwiseIdName, inlineIdName,
@@ -294,7 +294,7 @@ basicKnownKeyNames
         randomClassName, randomGenClassName, monadPlusClassName,
 
         -- Type-level naturals
-        singIClassName,
+        knownNatClassName, knownSymbolClassName,
 
         -- Implicit parameters
         ipClassName,
@@ -352,7 +352,7 @@ genericTyConNames = [
 pRELUDE :: Module
 pRELUDE         = mkBaseModule_ pRELUDE_NAME
 
-gHC_PRIM, gHC_PRIMWRAPPERS, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE,
+gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE,
     gHC_CLASSES, gHC_BASE, gHC_ENUM, gHC_GHCI, gHC_CSTRING,
     gHC_SHOW, gHC_READ, gHC_NUM, gHC_INTEGER_TYPE, gHC_LIST,
     gHC_TUPLE, dATA_TUPLE, dATA_EITHER, dATA_STRING, dATA_FOLDABLE, dATA_TRAVERSABLE, dATA_MONOID,
@@ -365,7 +365,6 @@ gHC_PRIM, gHC_PRIMWRAPPERS, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE,
     cONTROL_EXCEPTION_BASE, gHC_TYPELITS, gHC_IP :: Module
 
 gHC_PRIM        = mkPrimModule (fsLit "GHC.Prim")   -- Primitive types and values
-gHC_PRIMWRAPPERS = mkPrimModule (fsLit "GHC.PrimWrappers")
 gHC_TYPES       = mkPrimModule (fsLit "GHC.Types")
 gHC_MAGIC       = mkPrimModule (fsLit "GHC.Magic")
 gHC_CSTRING     = mkPrimModule (fsLit "GHC.CString")
@@ -637,7 +636,7 @@ showParen_RDR           = varQual_RDR gHC_SHOW (fsLit "showParen")
 
 typeRep_RDR, mkTyCon_RDR, mkTyConApp_RDR,
     oldTypeOf_RDR, oldMkTyCon_RDR, oldMkTyConApp_RDR :: RdrName
-typeRep_RDR       = varQual_RDR tYPEABLE_INTERNAL    (fsLit "typeRep")
+typeRep_RDR       = varQual_RDR tYPEABLE_INTERNAL    (fsLit "typeRep#")
 mkTyCon_RDR       = varQual_RDR tYPEABLE_INTERNAL    (fsLit "mkTyCon")
 mkTyConApp_RDR    = varQual_RDR tYPEABLE_INTERNAL    (fsLit "mkTyConApp")
 oldTypeOf_RDR     = varQual_RDR oLDTYPEABLE_INTERNAL (fsLit "typeOf")
@@ -1084,14 +1083,11 @@ int32TyConName    = tcQual gHC_INT  (fsLit "Int32") int32TyConKey
 int64TyConName    = tcQual gHC_INT  (fsLit "Int64") int64TyConKey
 
 -- Word module
-word8TyConName, word16TyConName, word32TyConName, word64TyConName,
-    wordTyConName, wordDataConName :: Name
+word8TyConName, word16TyConName, word32TyConName, word64TyConName :: Name
 word8TyConName    = tcQual  gHC_WORD (fsLit "Word8")  word8TyConKey
 word16TyConName   = tcQual  gHC_WORD (fsLit "Word16") word16TyConKey
 word32TyConName   = tcQual  gHC_WORD (fsLit "Word32") word32TyConKey
 word64TyConName   = tcQual  gHC_WORD (fsLit "Word64") word64TyConKey
-wordTyConName     = tcQual  gHC_TYPES (fsLit "Word")   wordTyConKey
-wordDataConName   = conName gHC_TYPES (fsLit "W#") wordDataConKey
 
 -- PrelPtr module
 ptrTyConName, funPtrTyConName :: Name
@@ -1141,8 +1137,10 @@ randomGenClassName  = clsQual rANDOM (fsLit "RandomGen") randomGenClassKey
 isStringClassName   = clsQual dATA_STRING (fsLit "IsString") isStringClassKey
 
 -- Type-level naturals
-singIClassName :: Name
-singIClassName      = clsQual gHC_TYPELITS (fsLit "SingI") singIClassNameKey
+knownNatClassName :: Name
+knownNatClassName     = clsQual gHC_TYPELITS (fsLit "KnownNat") knownNatClassNameKey
+knownSymbolClassName :: Name
+knownSymbolClassName  = clsQual gHC_TYPELITS (fsLit "KnownSymbol") knownSymbolClassNameKey
 
 -- Implicit parameters
 ipClassName :: Name
@@ -1264,9 +1262,13 @@ datatypeClassKey    = mkPreludeClassUnique 39
 constructorClassKey = mkPreludeClassUnique 40
 selectorClassKey    = mkPreludeClassUnique 41
 
--- SingI: see Note [SingI and EvLit] in TcEvidence
-singIClassNameKey :: Unique
-singIClassNameKey       = mkPreludeClassUnique 42
+-- KnownNat: see Note [KnowNat & KnownSymbol and EvLit] in TcEvidence
+knownNatClassNameKey :: Unique
+knownNatClassNameKey = mkPreludeClassUnique 42
+
+-- KnownSymbol: see Note [KnownNat & KnownSymbol and EvLit] in TcEvidence
+knownSymbolClassNameKey :: Unique
+knownSymbolClassNameKey = mkPreludeClassUnique 43
 
 ghciIoClassKey :: Unique
 ghciIoClassKey = mkPreludeClassUnique 44
@@ -1469,7 +1471,7 @@ rep1TyConKey = mkPreludeTyConUnique 156
 -- Type-level naturals
 typeNatKindConNameKey, typeSymbolKindConNameKey,
   typeNatAddTyFamNameKey, typeNatMulTyFamNameKey, typeNatExpTyFamNameKey,
-  typeNatLeqTyFamNameKey
+  typeNatLeqTyFamNameKey, typeNatSubTyFamNameKey
   :: Unique
 typeNatKindConNameKey     = mkPreludeTyConUnique 160
 typeSymbolKindConNameKey  = mkPreludeTyConUnique 161
@@ -1477,24 +1479,25 @@ typeNatAddTyFamNameKey    = mkPreludeTyConUnique 162
 typeNatMulTyFamNameKey    = mkPreludeTyConUnique 163
 typeNatExpTyFamNameKey    = mkPreludeTyConUnique 164
 typeNatLeqTyFamNameKey    = mkPreludeTyConUnique 165
-
--- SIMD vector types (Unique keys)
-floatX4PrimTyConKey, doubleX2PrimTyConKey, int32X4PrimTyConKey,
-  int64X2PrimTyConKey :: Unique
-
-floatX4PrimTyConKey  = mkPreludeTyConUnique 170
-doubleX2PrimTyConKey = mkPreludeTyConUnique 171
-int32X4PrimTyConKey  = mkPreludeTyConUnique 172
-int64X2PrimTyConKey  = mkPreludeTyConUnique 173
+typeNatSubTyFamNameKey    = mkPreludeTyConUnique 166
 
 ntTyConKey:: Unique
 ntTyConKey = mkPreludeTyConUnique 174
 coercibleTyConKey :: Unique
 coercibleTyConKey = mkPreludeTyConUnique 175
 
+proxyPrimTyConKey :: Unique
+proxyPrimTyConKey = mkPreludeTyConUnique 176
+
 ---------------- Template Haskell -------------------
 --      USES TyConUniques 200-299
 -----------------------------------------------------
+
+----------------------- SIMD ------------------------
+--      USES TyConUniques 300-399
+-----------------------------------------------------
+
+#include "primop-vector-uniques.hs-incl"
 
 unitTyConKey :: Unique
 unitTyConKey = mkTupleTyConUnique BoxedTuple 0
@@ -1716,8 +1719,8 @@ checkDotnetResNameIdKey       = mkPreludeMiscIdUnique 154
 undefinedKey :: Unique
 undefinedKey                  = mkPreludeMiscIdUnique 155
 
-magicSingIKey :: Unique
-magicSingIKey              = mkPreludeMiscIdUnique 156
+magicDictKey :: Unique
+magicDictKey                  = mkPreludeMiscIdUnique 156
 
 coerceKey :: Unique
 coerceKey                     = mkPreludeMiscIdUnique 157
@@ -1798,6 +1801,9 @@ isListClassKey = mkPreludeMiscIdUnique 198
 fromListClassOpKey = mkPreludeMiscIdUnique 199
 fromListNClassOpKey = mkPreludeMiscIdUnique 500
 toListClassOpKey = mkPreludeMiscIdUnique 501
+
+proxyHashKey :: Unique
+proxyHashKey = mkPreludeMiscIdUnique 502
 
 ---------------- Template Haskell -------------------
 --      USES IdUniques 200-499

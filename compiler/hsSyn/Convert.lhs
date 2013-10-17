@@ -267,6 +267,11 @@ cvtDec (ClosedTypeFamilyD tc tyvars mkind eqns)
        ; returnL $ TyClD (FamDecl (FamilyDecl (ClosedTypeFamily eqns') tc' tvs' mkind')) }
   | otherwise
   = failWith (ptext (sLit "Illegal empty closed type family"))
+
+cvtDec (TH.RoleAnnotD tc roles)
+  = do { tc' <- tconNameL tc
+       ; let roles' = map (noLoc . cvtRole) roles
+       ; return $ noLoc $ Hs.RoleAnnotD (RoleAnnotDecl tc' roles') }
 ----------------
 cvtTySynEqn :: Located RdrName -> TySynEqn -> CvtM (LTyFamInstEqn RdrName)
 cvtTySynEqn tc (TySynEqn lhs rhs)
@@ -473,6 +478,19 @@ cvtPragmaD (RuleP nm bndrs lhs rhs phases)
        ; returnL $ Hs.RuleD $ HsRule nm' act bndrs'
                                      lhs' placeHolderNames
                                      rhs' placeHolderNames
+       }
+
+cvtPragmaD (AnnP target exp)
+  = do { exp' <- cvtl exp
+       ; target' <- case target of
+         ModuleAnnotation  -> return ModuleAnnProvenance
+         TypeAnnotation n  -> do
+           n' <- tconName n
+           return (TypeAnnProvenance  n')
+         ValueAnnotation n -> do
+           n' <- if isVarName n then vName n else cName n
+           return (ValueAnnProvenance n')
+       ; returnL $ Hs.AnnD $ HsAnnotation target' exp'
        }
 
 dfltActivation :: TH.Inline -> Activation
@@ -856,25 +874,17 @@ cvtTvs tvs = do { tvs' <- mapM cvt_tv tvs; return (mkHsQTvs tvs') }
 cvt_tv :: TH.TyVarBndr -> CvtM (LHsTyVarBndr RdrName)
 cvt_tv (TH.PlainTV nm)
   = do { nm' <- tName nm
-       ; returnL $ HsTyVarBndr nm' Nothing Nothing }
+       ; returnL $ UserTyVar nm' }
 cvt_tv (TH.KindedTV nm ki)
   = do { nm' <- tName nm
        ; ki' <- cvtKind ki
-       ; returnL $ HsTyVarBndr nm' (Just ki') Nothing }
-cvt_tv (TH.RoledTV nm r)
-  = do { nm' <- tName nm
-       ; r'  <- cvtRole r
-       ; returnL $ HsTyVarBndr nm' Nothing (Just r') }
-cvt_tv (TH.KindedRoledTV nm k r)
-  = do { nm' <- tName nm
-       ; k'  <- cvtKind k
-       ; r'  <- cvtRole r
-       ; returnL $ HsTyVarBndr nm' (Just k') (Just r') }
+       ; returnL $ KindedTyVar nm' ki' }
 
-cvtRole :: TH.Role -> CvtM Coercion.Role
-cvtRole TH.Nominal          = return Coercion.Nominal
-cvtRole TH.Representational = return Coercion.Representational
-cvtRole TH.Phantom          = return Coercion.Phantom
+cvtRole :: TH.Role -> Maybe Coercion.Role
+cvtRole TH.NominalR          = Just Coercion.Nominal
+cvtRole TH.RepresentationalR = Just Coercion.Representational
+cvtRole TH.PhantomR          = Just Coercion.Phantom
+cvtRole TH.InferR            = Nothing
 
 cvtContext :: TH.Cxt -> CvtM (LHsContext RdrName)
 cvtContext tys = do { preds' <- mapM cvtPred tys; returnL preds' }
@@ -1043,22 +1053,15 @@ tName n = cvtName OccName.tvName n
 tconNameL n = wrapL (tconName n)
 tconName n = cvtName OccName.tcClsName n
 
+-- See Note [Checking name spaces]
 cvtName :: OccName.NameSpace -> TH.Name -> CvtM RdrName
 cvtName ctxt_ns (TH.Name occ flavour)
-  | not (okOcc ctxt_ns occ_str) = failWith (badOcc ctxt_ns occ_str)
-  | otherwise
   = do { loc <- getL
        ; let rdr_name = thRdrName loc ctxt_ns occ_str flavour
        ; force rdr_name
        ; return rdr_name }
   where
     occ_str = TH.occString occ
-
-okOcc :: OccName.NameSpace -> String -> Bool
-okOcc _  []      = False
-okOcc ns str@(c:_)
-  | OccName.isVarNameSpace ns = startsVarId c || startsVarSym c
-  | otherwise                 = startsConId c || startsConSym c || str == "[]"
 
 -- Determine the name space of a name in a type
 --
@@ -1067,11 +1070,6 @@ isVarName (TH.Name occ _)
   = case TH.occString occ of
       ""    -> False
       (c:_) -> startsVarId c || startsVarSym c
-
-badOcc :: OccName.NameSpace -> String -> SDoc
-badOcc ctxt_ns occ
-  = ptext (sLit "Illegal") <+> pprNameSpace ctxt_ns
-        <+> ptext (sLit "name:") <+> quotes (text occ)
 
 thRdrName :: SrcSpan -> OccName.NameSpace -> String -> TH.NameFlavour -> RdrName
 -- This turns a TH Name into a RdrName; used for both binders and occurrences
@@ -1206,3 +1204,15 @@ the way System Names are printed.
 
 There's a small complication of course; see Note [Looking up Exact
 RdrNames] in RnEnv.
+
+Note [Checking name spaces]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In cvtName, it's possible that the name we are converting doesn't
+match the namespace requested. For example, we might have a data
+constructor "foo" or a variable "Bar". We could check for these cases,
+but it seems difficult to guarantee identical behavior to the parser.
+Furthermore, a TH user might (somewhat dirtily) want to violate Haskell's
+naming expectations, and to use a name that couldn't be used in source
+code. So, according to the discussion in #7667, we just don't check.
+If you're thinking of changing this behavior, also please do see #7484,
+which is closely related.

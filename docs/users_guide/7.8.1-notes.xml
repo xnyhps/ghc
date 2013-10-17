@@ -32,7 +32,7 @@
             <para>
                 GHC can now perform simple evaluation of type-level
                 natural numbers, when using the
-                <literal>TypeNats</literal> extension. For example,
+                <literal>DataKinds</literal> extension. For example,
                 given a type-level constraint such as <literal>(x + 3)
                 ~ 5</literal>, GHC is able to infer that
                 <literal>x</literal> is 2. Similarly, GHC can now
@@ -154,24 +154,21 @@
             <para>
                 PrimOps for comparing unboxed values now return
                 <literal>Int#</literal> instead of <literal>Bool</literal>.
-                New PrimOps' names end with <literal>$#</literal> for operators and
-                <literal>I#</literal> for ordinary names, e.g. <literal>==$#</literal>
-                compares <literal>Int#</literal>s for equality and
-                <literal>eqCharI#</literal> does the same for <literal>Char#</literal>s.
-                Old PrimOps have been removed and turned into wrappers. See
+                This change is backwards incompatible. See
                 <ulink url="http://ghc.haskell.org/trac/ghc/wiki/NewPrimopsInGHC7.8">
                 this GHC wiki page</ulink> for instructions how to update your
-                existing code.
+                existing code. See <ulink url="http://ghc.haskell.org/trac/ghc/wiki/PrimBool">
+                here</ulink> for motivation and discussion of implementation details.
            </para>
        </listitem>
 
         <listitem>
-            <para> 
+            <para>
                 New PrimOps for atomic memory operations.
                 The <literal>casMutVar#</literal> PrimOp was introduced in
-                GHC 7.2 (debugged in 7.4).  This release also includes additional 
-                PrimOps for compare-and-swap (<literal>casArray#</literal> and 
-                <literal>casIntArray#</literal>) and one for fetch-and-add 
+                GHC 7.2 (debugged in 7.4).  This release also includes additional
+                PrimOps for compare-and-swap (<literal>casArray#</literal> and
+                <literal>casIntArray#</literal>) and one for fetch-and-add
                 (<literal>fetchAddIntArray#</literal>).
            </para>
        </listitem>
@@ -208,6 +205,16 @@
 
         <listitem>
             <para>
+                GHC now has support for a new pragma,
+                <literal>{-# MINIMAL #-}</literal>, allowing you to
+                explicitly declare the minimal complete definition of
+                a class. Should an instance not provide the minimal
+                required definitions, a warning will be emitted.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
                 GHC now generates warnings when definitions conflict with the
                 Applicative-Monad Proposal (AMP).
 
@@ -228,6 +235,21 @@
             <para>
                 The warnings are enabled by default, and can be controlled
                 using the new flag <literal>-f[no-]warn-amp</literal>.
+           </para>
+       </listitem>
+        <listitem>
+            <para>
+                GHC's internal compiler pipeline is now exposed
+                through a <literal>Hooks</literal> module inside the
+                GHC API. These hooks allow you to control most of the
+                internal compiler phase machinery, including compiling
+                expressions, phase control, and linking.
+           </para>
+
+            <para>
+                Note: this interface will likely see continuous
+                refinement and API changes in future releases, so it
+                should be considered a preview.
            </para>
        </listitem>
    </itemizedlist>
@@ -278,6 +300,17 @@
         <itemizedlist>
             <listitem>
                 <para>
+                    There is a new extension,
+                    <literal>EmptyCase</literal>, which allows
+                    to write a case expression with no alternatives
+                    <literal>case ... of {}</literal>.
+               </para>
+           </listitem>
+       </itemizedlist>
+
+        <itemizedlist>
+            <listitem>
+                <para>
                      The <literal>IncoherentInstances</literal>
                      extension has seen a behavioral change, and is
                      now 'liberated' and less conservative during
@@ -313,7 +346,21 @@
            </listitem>
        </itemizedlist>
 
+        <itemizedlist>
+            <listitem>
+                <para>
+                     The new pragma, <literal>{-# MINIMAL #-}</literal>,
+                     allows to explicitly declare the minimal complete
+                     definition of a class. Should an instance not provide
+                     the minimal required definitions, a warning will be
+                     emitted.
+               </para>
 
+                <para>
+                     See <xref linkend="minimal-pragma"/> for more details.
+               </para>
+           </listitem>
+       </itemizedlist>
     </sect3>
 
     <sect3>
@@ -371,6 +418,24 @@
                     in the future.
                </para>
            </listitem>
+            <listitem>
+                <para>
+                    GHC now detects annotation changes during
+                    recompilation, and correctly persists new
+                    annotations.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                    There is a new set of primops for utilizing
+                    hardware-based prefetch instructions, to help
+                    guide the processor's caching decisions.
+               </para>
+                <para>
+                    Currently, these are only supported with the LLVM
+                    backend and x86/amd64 backends.
+               </para>
+           </listitem>
        </itemizedlist>
     </sect3>
 
@@ -393,6 +458,20 @@
                     current search path for Haskell modules.
                </para>
            </listitem>
+
+            <listitem>
+                <para>
+                    The GHCi linker now runs constructors for linked
+                    libraries. This means for example that C code
+                    using
+                    <literal>__attribute__((constructor))</literal>
+                    can now properly be loaded into GHCi.
+               </para>
+
+                <para>
+                    Note: destructors are not supported.
+               </para>
+           </listitem>
        </itemizedlist>
     </sect3>
 
@@ -401,7 +480,12 @@
         <itemizedlist>
             <listitem>
                 <para>
-                    TODO FIXME
+                    Template Haskell now supports Roles (TODO FIXME: elaborate?)
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                    Template Haskell now supports annotation pragmas.
                </para>
            </listitem>
        </itemizedlist>
@@ -521,12 +605,25 @@
             <listitem>
                 <para>
                     There are now <literal>Foldable</literal> and <literal>Traversable</literal>
-                    instances for <literal>Either a</literal> and <literal>(,) a</literal>
+                    instances for <literal>Either a</literal>, <literal>Const r</literal>, and <literal>(,) a</literal>
                </para>
            </listitem>
             <listitem>
                 <para>
+                    There is now a <literal>Monoid</literal> instance for <literal>Const</literal>
+               </para>
+           </listitem>
+             <listitem>
+                <para>
                     There is now a <literal>Data</literal> instance for <literal>Data.Version</literal>
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                    A zero-width unboxed poly-kinded <literal>Proxy#</literal>
+                    was added to <literal>GHC.Prim</literal>. It can be used to make it so
+                    that there is no the operational overhead for passing around proxy
+                    arguments to model type application.
                </para>
            </listitem>
              <listitem>
@@ -550,6 +647,49 @@
                     use optimized machine instructions when available.
                </para>
            </listitem>
+            <listitem>
+                <para>
+                    <literal>Data.Bool</literal> now exports
+                    <literal>bool :: a -> a -> Bool -> a</literal>, analogously
+                    to <literal>maybe</literal> and <literal>either</literal>
+                    in their respective modules.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     Rewrote portions of <literal>Text.Printf</literal>, and
+                     made changes to <literal>Numeric</literal> (added
+                     <literal>Numeric.showFFloatAlt</literal> and
+                     <literal>Numeric.showGFloatAlt</literal>) and
+                     <literal>GHC.Float</literal> (added
+                     <literal>formatRealFloatAlt</literal>) to support it.
+                     The rewritten version is extensible to user types, adds a
+                     "generic" format specifier "<literal>%v</literal>",
+                     extends the <literal>printf</literal> spec
+                     to support much of C's <literal>printf(3)</literal>
+                     functionality, and fixes the spurious warnings about
+                     using <literal>Text.Printf.printf</literal> at
+                     <literal>(IO a)</literal> while ignoring the return value.
+                     These changes were contributed by Bart Massey.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     The minimal complete definitions for all
+                     type-classes with cyclic default implementations
+                     have been explicitly annotated with the new
+                     <literal>{-# MINIMAL #-}</literal> pragma.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     <literal>Control.Applicative.WrappedMonad</literal>,
+                     which can be used to convert a <literal>Monad</literal>
+                     to an <literal>Applicative</literal>, has now
+                     a <literal>Monad m => Monad (WrappedMonad m)</literal>
+                     instance.
+               </para>
+           </listitem>
        </itemizedlist>
     </sect3>
 
@@ -569,7 +709,7 @@
         <itemizedlist>
             <listitem>
                 <para>
-                    Version number XXXX (was XXXX)
+                    Version number 0.7.1.0 (was 0.5.1.1)
                </para>
            </listitem>
        </itemizedlist>
@@ -580,7 +720,7 @@
         <itemizedlist>
             <listitem>
                 <para>
-                    Version number XXXX (was XXXX)
+                    Version number 0.10.3.0 (was 0.10.0.0)
                </para>
            </listitem>
        </itemizedlist>
@@ -591,7 +731,7 @@
         <itemizedlist>
             <listitem>
                 <para>
-                    Version number XXXX (was XXXX)
+                    Version number 1.18.1 (was 1.16.0)
               </para>
           </listitem>
       </itemizedlist>
@@ -647,6 +787,14 @@
             <listitem>
                 <para>
                     Version number XXXX (was XXXX)
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     The type-classes <literal>Eq</literal> and
+                     <literal>Ord</literal> have been annotated with
+                     the new <literal>{-# MINIMAL #-}</literal>
+                     pragma.
                </para>
            </listitem>
        </itemizedlist>
@@ -737,6 +885,13 @@
                     Version number XXXX (was XXXX)
                </para>
            </listitem>
+            <listitem>
+                <para>
+                    Several bugs have been fixed, including deadlocks
+                    in <literal>readProcess</literal> and
+                    <literal>readProcessWithExitCode</literal>.
+               </para>
+           </listitem>
        </itemizedlist>
     </sect3>
 
@@ -757,6 +912,11 @@
             <listitem>
                 <para>
                     Version number XXXX (was XXXX)
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                    There is now support for annotation pragmas.
                </para>
            </listitem>
        </itemizedlist>

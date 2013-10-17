@@ -7,7 +7,7 @@
  * Documentation on the architecture of the Storage Manager can be
  * found in the online commentary:
  * 
- *   http://hackage.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage
+ *   http://ghc.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage
  *
  * ---------------------------------------------------------------------------*/
 
@@ -181,7 +181,9 @@ initStorage (void)
 
 #ifdef THREADED_RTS
   initSpinLock(&gc_alloc_block_sync);
+#ifdef PROF_SPIN
   whitehole_spin = 0;
+#endif
 #endif
 
   N = 0;
@@ -704,6 +706,28 @@ allocate (Capability *cap, W_ n)
             // we have a block in the nursery: take it and put
             // it at the *front* of the nursery list, and use it
             // to allocate() from.
+            //
+            // Previously the nursery looked like this:
+            //
+            //           CurrentNursery
+            //                  /
+            //                +-+    +-+
+            // nursery -> ... |A| -> |B| -> ...
+            //                +-+    +-+
+            //
+            // After doing this, it looks like this:
+            //
+            //                      CurrentNursery
+            //                            /
+            //            +-+           +-+
+            // nursery -> |B| -> ... -> |A| -> ...
+            //            +-+           +-+
+            //             |
+            //             CurrentAlloc
+            //
+            // The point is to get the block out of the way of the
+            // advancing CurrentNursery pointer, while keeping it
+            // on the nursery list so we don't lose track of it.
             cap->r.rCurrentNursery->link = bd->link;
             if (bd->link != NULL) {
                 bd->link->u.back = cap->r.rCurrentNursery;

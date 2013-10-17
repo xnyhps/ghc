@@ -10,7 +10,7 @@ TcInstDecls: Typechecking instance declarations
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module TcInstDcls ( tcInstDecls1, tcInstDecls2 ) where
@@ -37,6 +37,8 @@ import TcDeriv
 import TcEnv
 import TcHsType
 import TcUnify
+import Unify      ( tcMatchTy )
+import TcTyDecls  ( emptyRoleAnnots )
 import MkCore     ( nO_METHOD_BINDING_ERROR_ID )
 import Type
 import TcEvidence
@@ -62,13 +64,13 @@ import Id
 import MkId
 import Name
 import NameSet
-import NameEnv
 import Outputable
 import SrcLoc
 import Util
+import BooleanFormula ( isUnsatisfied, pprBooleanFormulaNice )
 
 import Control.Monad
-import Maybes     ( orElse, isNothing )
+import Maybes     ( orElse, isNothing, isJust, whenIsJust )
 \end{code}
 
 Typechecking instance declarations is done in two passes. The first
@@ -709,8 +711,8 @@ tcDataFamInstDecl mb_clsinfo
               ; return (rep_tc, fam_inst) }
 
          -- Remember to check validity; no recursion to worry about here
-       ; let role_annots = unitNameEnv rep_tc_name (repeat Nothing)
-       ; checkValidTyCon rep_tc role_annots
+       ; checkNoErrs $ mapM_ (check_valid_data_con fam_tc rep_tc pats') (tyConDataCons rep_tc)
+       ; checkValidTyCon rep_tc emptyRoleAnnots
        ; return fam_inst } }
   where
     -- See Note [Eta reduction for data family axioms]
@@ -722,6 +724,24 @@ tcDataFamInstDecl mb_clsinfo
       , not (tv `elemVarSet` tyVarsOfTypes pats)
       = go tvs pats
     go tvs pats = (reverse tvs, reverse pats)
+
+    -- This checks for validity of GADT-like return types. The check for normal
+    -- (i.e., not data instance) datatypes is done in tcConRes. But, this check
+    -- just checks the *head* of the return type, because that is all that is
+    -- necessary there. Here, we check to make sure that the whole return type
+    -- is an instance of the header, even when the header contains some patterns.
+    -- It is quite inconvenient to do this elsewhere. See also Note
+    -- [Checking GADT return types] in TcTyClsDecls and Trac #8368.
+    check_valid_data_con fam_tc rep_tc pats datacon
+      = setSrcSpan (srcLocSpan (getSrcLoc datacon)) $
+        addErrCtxt (dataConCtxt datacon) $
+        let tmpl_vars = mkVarSet $ tyConTyVars rep_tc
+            tmpl_ty   = mkTyConApp fam_tc pats
+            res_ty    = dataConOrigResTy datacon
+            dc_name   = dataConName datacon in
+        checkTc (isJust (tcMatchTy tmpl_vars tmpl_ty res_ty))
+                (badDataConTyCon dc_name (ppr tmpl_ty) (ppr res_ty))
+      
 \end{code}
 
 Note [Eta reduction for data family axioms]
@@ -1175,6 +1195,7 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
                   op_items (VanillaInst binds sigs standalone_deriv)
   = do { traceTc "tcInstMeth" (ppr sigs $$ ppr binds)
        ; let hs_sig_fn = mkHsSigFun sigs
+       ; checkMinimalDefinition
        ; mapAndUnzipM (tc_item hs_sig_fn) op_items }
   where
     ----------------------
@@ -1215,7 +1236,6 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
 
     tc_default sig_fn sel_id NoDefMeth     -- No default method at all
       = do { traceTc "tc_def: warn" (ppr sel_id)
-           ; warnMissingMethodOrAT "method" (idName sel_id)
            ; (meth_id, _) <- mkMethIds sig_fn clas tyvars dfun_ev_vars
                                        inst_tys sel_id
            ; dflags <- getDynFlags
@@ -1299,6 +1319,15 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
     add_meth_ctxt sel_id generated_code rn_bind thing
       | generated_code = addLandmarkErrCtxt (derivBindCtxt sel_id clas inst_tys rn_bind) thing
       | otherwise      = thing
+
+    ----------------------
+
+    -- check if one of the minimal complete definitions is satisfied
+    checkMinimalDefinition
+      = whenIsJust (isUnsatisfied methodExists (classMinimalDef clas)) $
+          warnUnsatisifiedMinimalDefinition
+      where
+      methodExists meth = isJust (findMethodBind meth binds)
 
 
 tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
@@ -1410,6 +1439,16 @@ warnMissingMethodOrAT what name
                                         -- Don't warn about _foo methods
                 (ptext (sLit "No explicit") <+> text what <+> ptext (sLit "or default declaration for")
                  <+> quotes (ppr name)) }
+
+warnUnsatisifiedMinimalDefinition :: ClassMinimalDef -> TcM ()
+warnUnsatisifiedMinimalDefinition mindef
+  = do { warn <- woptM Opt_WarnMissingMethods
+       ; warnTc warn message
+       }
+  where
+    message = vcat [ptext (sLit "No explicit implementation for")
+                   ,nest 2 $ pprBooleanFormulaNice mindef
+                   ]
 \end{code}
 
 Note [Export helper functions]
@@ -1532,7 +1571,8 @@ instDeclCtxt2 dfun_ty
     (_,_,cls,tys) = tcSplitDFunTy dfun_ty
 
 inst_decl_ctxt :: SDoc -> SDoc
-inst_decl_ctxt doc = ptext (sLit "In the instance declaration for") <+> quotes doc
+inst_decl_ctxt doc = hang (ptext (sLit "In the instance declaration for"))
+                        2 (quotes doc)
 
 badBootFamInstDeclErr :: SDoc
 badBootFamInstDeclErr

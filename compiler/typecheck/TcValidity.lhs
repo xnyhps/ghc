@@ -18,7 +18,7 @@ module TcValidity (
 
 -- friends:
 import TcUnify    ( tcSubType )
-import TcSimplify ( simplifyTop )
+import TcSimplify ( simplifyAmbiguityCheck )
 import TypeRep
 import TcType
 import TcMType
@@ -69,32 +69,31 @@ checkAmbiguity ctxt ty
                         -- (T k) is ambiguous!
 
   | otherwise
-  = do { allow_ambiguous <- xoptM Opt_AllowAmbiguousTypes
-       ; unless allow_ambiguous $ 
-    do { traceTc "Ambiguity check for" (ppr ty)
+  = do { traceTc "Ambiguity check for" (ppr ty)
        ; (subst, _tvs) <- tcInstSkolTyVars (varSetElems (tyVarsOfType ty))
-       ; let ty' = substTy subst ty  
+       ; let ty' = substTy subst ty
               -- The type might have free TyVars,
               -- so we skolemise them as TcTyVars
               -- Tiresome; but the type inference engine expects TcTyVars
 
          -- Solve the constraints eagerly because an ambiguous type
-         -- can cause a cascade of further errors.  Since the free 
+         -- can cause a cascade of further errors.  Since the free
          -- tyvars are skolemised, we can safely use tcSimplifyTop
-       ; addErrCtxtM (mk_msg ty') $
-         do { (_wrap, wanted) <- captureConstraints $
-                                 tcSubType (AmbigOrigin ctxt) ctxt ty' ty'
-            ; _ev_binds <- simplifyTop wanted
-            ; return () }
+       ; (_wrap, wanted) <- addErrCtxtM (mk_msg ty') $
+                            captureConstraints $
+                            tcSubType (AmbigOrigin ctxt) ctxt ty' ty'
+       ; simplifyAmbiguityCheck ty wanted
 
-       ; traceTc "Done ambiguity check for" (ppr ty) } }
+       ; traceTc "Done ambiguity check for" (ppr ty) }
  where
-   mk_msg ty tidy_env 
-     = return (tidy_env', msg)
+   mk_msg ty tidy_env
+     = do { allow_ambiguous <- xoptM Opt_AllowAmbiguousTypes
+          ; return (tidy_env', msg $$ ppWhen (not allow_ambiguous) ambig_msg) }
      where
        (tidy_env', tidy_ty) = tidyOpenType tidy_env ty
        msg = hang (ptext (sLit "In the ambiguity check for:"))
                 2 (ppr tidy_ty)
+       ambig_msg = ptext (sLit "To defer the ambiguity check to use sites, enable AllowAmbiguousTypes")
 \end{code}
 
 
@@ -810,8 +809,8 @@ abstractClasses = [ coercibleClass ]
 
 instTypeErr :: Class -> [Type] -> SDoc -> SDoc
 instTypeErr cls tys msg
-  = hang (ptext (sLit "Illegal instance declaration for") 
-          <+> quotes (pprClassPred cls tys))
+  = hang (hang (ptext (sLit "Illegal instance declaration for"))
+             2 (quotes (pprClassPred cls tys)))
        2 msg
 \end{code}
 
@@ -868,12 +867,12 @@ checkValidInstance ctxt hs_type ty
         --   in the constraint than in the head
         ; undecidable_ok <- xoptM Opt_UndecidableInstances
         ; if undecidable_ok 
-          then do checkAmbiguity ctxt ty
-                  checkTc (checkInstLiberalCoverage clas theta inst_tys)
-                          (instTypeErr clas inst_tys liberal_msg)
-          else do { checkInstTermination inst_tys theta
-                  ; checkTc (checkInstCoverage clas inst_tys)
-                            (instTypeErr clas inst_tys msg) }
+          then checkAmbiguity ctxt ty
+          else checkInstTermination inst_tys theta
+
+        ; case (checkInstCoverage undecidable_ok clas theta inst_tys) of
+            Nothing  -> return ()   -- Check succeeded
+            Just msg -> addErrTc (instTypeErr clas inst_tys msg)
                   
         ; return (tvs, theta, clas, inst_tys) } 
 
@@ -881,13 +880,7 @@ checkValidInstance ctxt hs_type ty
   = failWithTc (ptext (sLit "Malformed instance head:") <+> ppr tau)
   where
     (tvs, theta, tau) = tcSplitSigmaTy ty
-    msg  = parens (vcat [ptext (sLit "the Coverage Condition fails for one of the functional dependencies;"),
-                         undecidableMsg])
 
-    liberal_msg = vcat
-      [ ptext $ sLit "Multiple uses of this instance may be inconsistent"
-      , ptext $ sLit "with the functional dependencies of the class."
-      ]
         -- The location of the "head" of the instance
     head_loc = case hs_type of
                  L _ (HsForAllTy _ _ _ (L loc _)) -> loc
@@ -917,18 +910,28 @@ The underlying idea is that
 checkInstTermination :: [TcType] -> ThetaType -> TcM ()
 -- See Note [Paterson conditions]
 checkInstTermination tys theta
-  = mapM_ check theta
+  = check_preds theta
   where
    fvs  = fvTypes tys
    size = sizeTypes tys
+
+   check_preds :: [PredType] -> TcM ()
+   check_preds preds = mapM_ check preds
+
+   check :: PredType -> TcM ()
    check pred 
-      | not (null bad_tvs)
-      = addErrTc (predUndecErr pred (nomoreMsg bad_tvs) $$ parens undecidableMsg)
-      | sizePred pred >= size
-      = addErrTc (predUndecErr pred smallerMsg $$ parens undecidableMsg)
-      | otherwise
-      = return ()
-      where
+     = case classifyPredType pred of
+         TuplePred preds -> check_preds preds  -- Look inside tuple predicates; Trac #8359
+         EqPred {}       -> return ()          -- You can't get from equalities
+                                               -- to class predicates, so this is safe
+         _other      -- ClassPred, IrredPred
+           | not (null bad_tvs)
+           -> addErrTc (predUndecErr pred (nomoreMsg bad_tvs) $$ parens undecidableMsg)
+           | sizePred pred >= size
+           -> addErrTc (predUndecErr pred smallerMsg $$ parens undecidableMsg)
+           | otherwise
+           -> return ()
+     where
         bad_tvs = filterOut isKindVar (fvType pred \\ fvs)
              -- Rightly or wrongly, we only check for
              -- excessive occurrences of *type* variables.
@@ -967,7 +970,7 @@ Note that
   c) There are several type instance decls for T in the instance
 
 All this is fine.  Of course, you can't give any *more* instances
-for (T ty Int) elsewhere, becuase it's an *associated* type.
+for (T ty Int) elsewhere, because it's an *associated* type.
 
 Note [Checking consistent instantiation]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1052,7 +1055,7 @@ checkConsistentFamInst (Just (clas, mini_env)) fam_tc at_tvs at_tys
       = case tcMatchTyX at_tv_set subst at_ty inst_ty of
            Just subst | all_distinct subst -> return subst
            _ -> failWithTc $ wrongATArgErr at_ty inst_ty
-                -- No need to instantiate here, becuase the axiom
+                -- No need to instantiate here, because the axiom
                 -- uses the same type variables as the assocated class
       | otherwise
       = return subst   -- Allow non-type-variable instantiation

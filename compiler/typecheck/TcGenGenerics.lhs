@@ -11,7 +11,7 @@ The deriving code for the Generic class
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 
@@ -23,6 +23,7 @@ module TcGenGenerics (canDoGenerics, canDoGenerics1,
 import DynFlags
 import HsSyn
 import Type
+import Kind             ( isKind )
 import TcType
 import TcGenDeriv
 import DataCon
@@ -204,7 +205,7 @@ canDoGenerics tc tc_args
           -- The type arguments should not be instantiated (see #5939)
           -- Data family indices can be instantiated; the `tc_args` here are the
           -- representation tycon args
-              (if (all isTyVarTy (filterOut isKindTy tc_args))
+              (if (all isTyVarTy (filterOut isKind tc_args))
                 then Nothing
                 else Just (tc_name <+> text "must not be instantiated;" <+>
                            text "try deriving `" <> tc_name <+> tc_tys <>

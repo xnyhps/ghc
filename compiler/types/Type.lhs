@@ -63,7 +63,7 @@ module Type (
 
         -- ** Predicates on types
         isTypeVar, isKindVar,
-        isTyVarTy, isFunTy, isDictTy, isPredTy, isKindTy,
+        isTyVarTy, isFunTy, isDictTy, isPredTy, 
 
         -- (Lifting and boxity)
         isUnLiftedType, isUnboxedTupleType, isAlgType, isClosedAlgType,
@@ -581,7 +581,7 @@ newTyConInstRhs tycon tys
 Notes on type synonyms
 ~~~~~~~~~~~~~~~~~~~~~~
 The various "split" functions (splitFunTy, splitRhoTy, splitForAllTy) try
-to return type synonyms whereever possible. Thus
+to return type synonyms wherever possible. Thus
 
         type Foo a = a -> a
 
@@ -855,9 +855,6 @@ isPredTy ty = go ty []
     go_k (FunTy _ k1)     (_ :args) = go_k k1 args
     go_k (ForAllTy kv k1) (k2:args) = go_k (substKiWith [kv] [k2] k1) args
     go_k _ _ = False                  -- Typeable * Int :: Constraint
-
-isKindTy :: Type -> Bool
-isKindTy = isSuperKind . typeKind
 
 isClassPred, isEqPred, isIPPred :: PredType -> Bool
 isClassPred ty = case tyConAppTyCon_maybe ty of
@@ -1607,7 +1604,7 @@ Kinds
 ~~~~~
 
 For the description of subkinding in GHC, see
-  http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/TypeType#Kinds
+  http://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/TypeType#Kinds
 
 \begin{code}
 type MetaKindVar = TyVar  -- invariant: MetaKindVar will always be a

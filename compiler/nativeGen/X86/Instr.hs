@@ -9,7 +9,7 @@
 #include "HsVersions.h"
 #include "nativeGen/NCG.h"
 
-module X86.Instr (Instr(..), Operand(..), JumpDest,
+module X86.Instr (Instr(..), Operand(..), PrefetchVariant(..), JumpDest,
                   getJumpDestBlockId, canShortcut, shortcutStatics,
                   shortcutJump, i386_insert_ffrees, allocMoreStack,
                   maxSpillSlots, archWordSize)
@@ -319,7 +319,14 @@ data Instr
                                  -- 1:    popl %reg
 
     -- SSE4.2
-    | POPCNT      Size Operand Reg -- src, dst
+        | POPCNT      Size Operand Reg -- src, dst
+
+    -- prefetch
+        | PREFETCH  PrefetchVariant Size Operand -- prefetch Variant, addr size, address to prefetch
+                                        -- variant can be NTA, Lvl0, Lvl1, or Lvl2
+
+data PrefetchVariant = NTA | Lvl0 | Lvl1 | Lvl2
+
 
 data Operand
         = OpReg  Reg            -- register
@@ -416,6 +423,9 @@ x86_regUsageOfInstr platform instr
     DELTA   _           -> noUsage
 
     POPCNT _ src dst -> mkRU (use_R src []) [dst]
+
+    -- note: might be a better way to do this
+    PREFETCH _  _ src -> mkRU (use_R src []) []
 
     _other              -> panic "regUsage: unrecognised instr"
 
@@ -556,6 +566,8 @@ x86_patchRegsOfInstr instr env
     CLTD _              -> instr
 
     POPCNT sz src dst -> POPCNT sz (patchOp src) (env dst)
+
+    PREFETCH lvl size src -> PREFETCH lvl size (patchOp src)
 
     _other              -> panic "patchRegs: unrecognised instr"
 
@@ -871,14 +883,8 @@ allocMoreStack
   -> UniqSM (NatCmmDecl statics X86.Instr.Instr)
 
 allocMoreStack _ _ top@(CmmData _ _) = return top
-allocMoreStack platform slots (CmmProc info lbl live (ListGraph code)) = do
-    let
-        infos = mapKeys info
-        entries = case code of
-                    [] -> infos
-                    BasicBlock entry _ : _ -- first block is the entry point
-                       | entry `elem` infos -> infos
-                       | otherwise          -> entry : infos
+allocMoreStack platform slots proc@(CmmProc info lbl live (ListGraph code)) = do
+    let entries = entryBlocks proc
 
     uniqs <- replicateM (length entries) getUniqueUs
 

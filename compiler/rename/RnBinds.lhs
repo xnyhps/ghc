@@ -13,7 +13,7 @@ they may be affected by renaming (which isn't fully worked out yet).
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module RnBinds (
@@ -54,6 +54,7 @@ import FastString
 import Data.List	( partition, sort )
 import Maybes		( orElse )
 import Control.Monad
+import Data.Traversable ( traverse )
 \end{code}
 
 -- ToDo: Put the annotations into the monad, so that they arrive in the proper
@@ -655,7 +656,9 @@ renameSigs :: HsSigCtxt
 -- Renames the signatures and performs error checks
 renameSigs ctxt sigs 
   = do	{ mapM_ dupSigDeclErr (findDupSigs sigs)
-		
+
+	; checkDupMinimalSigs sigs
+
 	; (sigs', sig_fvs) <- mapFvRn (wrapLocFstM (renameSig ctxt)) sigs
 
 	; let (good_sigs, bad_sigs) = partition (okHsSig ctxt) sigs'
@@ -713,6 +716,10 @@ renameSig ctxt sig@(FixSig (FixitySig v f))
   = do	{ new_v <- lookupSigOccRn ctxt sig v
 	; return (FixSig (FixitySig new_v f), emptyFVs) }
 
+renameSig ctxt sig@(MinimalSig bf)
+  = do new_bf <- traverse (lookupSigOccRn ctxt sig) bf
+       return (MinimalSig new_bf, emptyFVs)
+
 ppr_sig_bndrs :: [Located RdrName] -> SDoc
 ppr_sig_bndrs bs = quotes (pprWithCommas ppr bs)
 
@@ -742,6 +749,9 @@ okHsSig ctxt (L _ sig)
      (SpecInstSig {}, InstDeclCtxt {}) -> True
      (SpecInstSig {}, _)               -> False
 
+     (MinimalSig {}, ClsDeclCtxt {}) -> True
+     (MinimalSig {}, _)              -> False
+
 -------------------
 findDupSigs :: [LSig RdrName] -> [[(Located RdrName, Sig RdrName)]]
 -- Check for duplicates on RdrName version, 
@@ -767,6 +777,13 @@ findDupSigs sigs
     mtch (TypeSig {})    (TypeSig {})    = True
     mtch (GenericSig {}) (GenericSig {}) = True
     mtch _ _ = False
+
+-- Warn about multiple MINIMAL signatures
+checkDupMinimalSigs :: [LSig RdrName] -> RnM ()
+checkDupMinimalSigs sigs
+  = case filter isMinimalLSig sigs of
+      minSigs@(_:_:_) -> dupMinimalSigErr minSigs
+      _ -> return ()
 \end{code}
 
 
@@ -811,7 +828,7 @@ rnMatch' ctxt rnBody match@(Match pats maybe_rhs_sig grhss)
 	; return (Match pats' Nothing grhss', grhss_fvs) }}
 
 emptyCaseErr :: HsMatchContext Name -> SDoc
-emptyCaseErr ctxt = hang (ptext (sLit "Empty list of alterantives in") <+> pp_ctxt)
+emptyCaseErr ctxt = hang (ptext (sLit "Empty list of alternatives in") <+> pp_ctxt)
                        2 (ptext (sLit "Use EmptyCase to allow this"))
   where
     pp_ctxt = case ctxt of
@@ -919,4 +936,12 @@ unusedPatBindWarn :: HsBind Name -> SDoc
 unusedPatBindWarn bind
   = hang (ptext (sLit "This pattern-binding binds no variables:"))
        2 (ppr bind)
+
+dupMinimalSigErr :: [LSig RdrName] -> RnM ()
+dupMinimalSigErr sigs@(L loc _ : _)
+  = addErrAt loc $
+    vcat [ ptext (sLit "Multiple minimal complete definitions")
+         , ptext (sLit "at") <+> vcat (map ppr $ sort $ map getLoc sigs)
+         , ptext (sLit "Combine alternative minimal complete definitions with `|'") ]
+dupMinimalSigErr [] = panic "dupMinimalSigErr"
 \end{code}

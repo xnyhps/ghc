@@ -22,7 +22,8 @@ module TcRnDriver (
     ) where
 
 #ifdef GHCI
-import {-# SOURCE #-} TcSplice ( tcSpliceDecls )
+import {-# SOURCE #-} TcSplice ( tcSpliceDecls, runQuasi )
+import RnSplice ( rnSplice )
 #endif
 
 import DynFlags
@@ -34,7 +35,8 @@ import TcHsSyn
 import TcExpr
 import TcRnMonad
 import TcEvidence
-import Coercion( pprCoAxiom, pprCoAxBranch )
+import PprTyThing( pprTyThing )
+import Coercion( pprCoAxiom )
 import FamInst
 import InstEnv
 import FamInstEnv
@@ -76,6 +78,7 @@ import Type
 import Class
 import CoAxiom
 import Inst     ( tcGetInstEnvs, tcGetInsts )
+import Annotations
 import Data.List ( sortBy )
 import Data.IORef ( readIORef )
 import Data.Ord
@@ -87,7 +90,7 @@ import TcMatches
 import RnTypes
 import RnExpr
 import MkId
-import BasicTypes
+import BasicTypes hiding( SuccessFlag(..) )
 import TidyPgm    ( globaliseAndTidyId )
 import TysWiredIn ( unitTy, mkListTy )
 #endif
@@ -239,23 +242,18 @@ implicitPreludeWarn
 tcRnImports :: HscEnv -> Module
             -> [LImportDecl RdrName] -> TcM TcGblEnv
 tcRnImports hsc_env this_mod import_decls
-  = do  { (rn_imports, rdr_env, imports,hpc_info) <- rnImports import_decls ;
+  = do  { (rn_imports, rdr_env, imports, hpc_info) <- rnImports import_decls ;
 
         ; let { dep_mods :: ModuleNameEnv (ModuleName, IsBootInterface)
-                -- Make sure we record the dependencies from the DynFlags in the EPS or we
-                -- end up hitting the sanity check in LoadIface.loadInterface that
-                -- checks for unknown home-package modules being loaded. We put
-                -- these dependencies on the left so their (non-source) imports
-                -- take precedence over the (possibly-source) imports on the right.
-                -- We don't add them to any other field (e.g. the imp_dep_mods of
-                -- imports) because we don't want to load their instances etc.
-              ; dep_mods = listToUFM [(mod_nm, (mod_nm, False)) | mod_nm <- dynFlagDependencies (hsc_dflags hsc_env)]
-                                `plusUFM` imp_dep_mods imports
+              ; dep_mods = imp_dep_mods imports
 
                 -- We want instance declarations from all home-package
                 -- modules below this one, including boot modules, except
                 -- ourselves.  The 'except ourselves' is so that we don't
-                -- get the instances from this module's hs-boot file
+                -- get the instances from this module's hs-boot file.  This
+                -- filtering also ensures that we don't see instances from
+                -- modules batch (@--make@) compiled before this one, but
+                -- which are not below this one.
               ; want_instances :: ModuleName -> Bool
               ; want_instances mod = mod `elemUFM` dep_mods
                                    && mod /= moduleName this_mod
@@ -335,7 +333,7 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
                                               (mkFakeGroup ldecls) ;
    setEnvs tc_envs $ do {
 
-   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls [] [ldecls] ;
+   (rn_decls, _fvs) <- checkNoErrs $ rnTyClDecls [] [mkTyClGroup ldecls] ;
    -- The empty list is for extra dependencies coming from .hs-boot files
    -- See Note [Extra dependencies from .hs-boot files] in RnSource
 
@@ -400,7 +398,7 @@ tcRnExtCore hsc_env (HsExtCore this_mod decls src_binds)
 
 mkFakeGroup :: [LTyClDecl a] -> HsGroup a
 mkFakeGroup decls -- Rather clumsy; lots of unused fields
-  = emptyRdrGroup { hs_tyclds = [decls] }
+  = emptyRdrGroup { hs_tyclds = [mkTyClGroup decls] }
 \end{code}
 
 
@@ -473,55 +471,96 @@ tcRnSrcDecls boot_iface decls
    } }
 
 tc_rn_src_decls :: ModDetails
-                    -> [LHsDecl RdrName]
-                    -> TcM (TcGblEnv, TcLclEnv)
+                -> [LHsDecl RdrName]
+                -> TcM (TcGblEnv, TcLclEnv)
 -- Loops around dealing with each top level inter-splice group
 -- in turn, until it's dealt with the entire module
 tc_rn_src_decls boot_details ds
  = {-# SCC "tc_rn_src_decls" #-}
-   do { (first_group, group_tail) <- findSplice ds  ;
+   do { (first_group, group_tail) <- findSplice ds
                 -- If ds is [] we get ([], Nothing)
 
         -- The extra_deps are needed while renaming type and class declarations
         -- See Note [Extra dependencies from .hs-boot files] in RnSource
-        let { extra_deps = map tyConName (typeEnvTyCons (md_types boot_details)) } ;
+      ; let { extra_deps = map tyConName (typeEnvTyCons (md_types boot_details)) }
         -- Deal with decls up to, but not including, the first splice
-        (tcg_env, rn_decls) <- rnTopSrcDecls extra_deps first_group ;
+      ; (tcg_env, rn_decls) <- rnTopSrcDecls extra_deps first_group
                 -- rnTopSrcDecls fails if there are any errors
 
-        (tcg_env, tcl_env) <- setGblEnv tcg_env $
-                              tcTopSrcDecls boot_details rn_decls ;
+#ifdef GHCI
+        -- Get TH-generated top-level declarations and make sure they don't
+        -- contain any splices since we don't handle that at the moment
+      ; th_topdecls_var <- fmap tcg_th_topdecls getGblEnv
+      ; th_ds <- readTcRef th_topdecls_var
+      ; writeTcRef th_topdecls_var []
+
+      ; (tcg_env, rn_decls) <-
+            if null th_ds
+            then return (tcg_env, rn_decls)
+            else do { (th_group, th_group_tail) <- findSplice th_ds
+                    ; case th_group_tail of
+                        { Nothing -> return () ;
+                        ; Just (SpliceDecl (L loc _) _, _)
+                            -> setSrcSpan loc $
+                               addErr (ptext (sLit "Declaration splices are not permitted inside top-level declarations added with addTopDecls"))
+                        } ;
+                                         
+                    -- Rename TH-generated top-level declarations
+                    ; (tcg_env, th_rn_decls) <- setGblEnv tcg_env $
+                      rnTopSrcDecls extra_deps th_group
+
+                    -- Dump generated top-level declarations
+                    ; loc <- getSrcSpanM
+                    ; traceSplice (vcat [ppr loc <> colon <+> text "Splicing top-level declarations added with addTopDecls ",
+                                   nest 2 (nest 2 (ppr th_rn_decls))])
+
+                    ; return (tcg_env, appendGroups rn_decls th_rn_decls)
+                    }
+#endif /* GHCI */
+
+      -- Type check all declarations
+      ; (tcg_env, tcl_env) <- setGblEnv tcg_env $
+                              tcTopSrcDecls boot_details rn_decls
 
         -- If there is no splice, we're nearly done
-        setEnvs (tcg_env, tcl_env) $
-        case group_tail of {
-           Nothing -> do { tcg_env <- checkMain ;       -- Check for `main'
-                           traceTc "returning from tc_rn_src_decls: " $
-                             ppr $ nameEnvElts $ tcg_type_env tcg_env ;
-                           return (tcg_env, tcl_env)
-                      } ;
+      ; setEnvs (tcg_env, tcl_env) $
+        case group_tail of
+          { Nothing -> do { tcg_env <- checkMain       -- Check for `main'
+                          ; traceTc "returning from tc_rn_src_decls: " $
+                            ppr $ nameEnvElts $ tcg_type_env tcg_env -- RAE
+#ifdef GHCI
+                            -- Run all module finalizers
+                          ; th_modfinalizers_var <- fmap tcg_th_modfinalizers getGblEnv
+                          ; modfinalizers <- readTcRef th_modfinalizers_var
+                          ; writeTcRef th_modfinalizers_var []
+                          ; mapM_ runQuasi modfinalizers
+#endif /* GHCI */
+                          ; return (tcg_env, tcl_env)
+                          }
 
 #ifndef GHCI
-        -- There shouldn't be a splice
-           Just (SpliceDecl {}, _) -> do {
-        failWithTc (text "Can't do a top-level splice; need a bootstrapped compiler")
+            -- There shouldn't be a splice
+          ; Just (SpliceDecl {}, _) ->
+            failWithTc (text "Can't do a top-level splice; need a bootstrapped compiler")
+          }
 #else
-        -- If there's a splice, we must carry on
-           Just (SpliceDecl splice_expr _, rest_ds) -> do {
+            -- If there's a splice, we must carry on
+          ; Just (SpliceDecl (L _ splice) _, rest_ds) ->
+            do { -- Rename the splice expression, and get its supporting decls
+                 (rn_splice, splice_fvs) <- checkNoErrs (rnSplice splice)
+                 -- checkNoErrs: don't typecheck if renaming failed
+               ; rnDump (ppr rn_splice)
 
-        -- Rename the splice expression, and get its supporting decls
-        (rn_splice_expr, splice_fvs) <- checkNoErrs (rnLExpr splice_expr) ;
-                -- checkNoErrs: don't typecheck if renaming failed
-        rnDump (ppr rn_splice_expr) ;
+                 -- Execute the splice
+               ; spliced_decls <- tcSpliceDecls rn_splice
 
-        -- Execute the splice
-        spliced_decls <- tcSpliceDecls rn_splice_expr ;
-
-        -- Glue them on the front of the remaining decls and loop
-        setGblEnv (tcg_env `addTcgDUs` usesOnly splice_fvs) $
-        tc_rn_src_decls boot_details (spliced_decls ++ rest_ds)
+                 -- Glue them on the front of the remaining decls and loop
+               ; setGblEnv (tcg_env `addTcgDUs` usesOnly splice_fvs) $
+                 tc_rn_src_decls boot_details (spliced_decls ++ rest_ds)
+               }
+          }
 #endif /* GHCI */
-    } } }
+      }
 \end{code}
 
 %************************************************************************
@@ -850,20 +889,8 @@ bootMisMatch real_thing boot_thing
   = vcat [ppr real_thing <+>
           ptext (sLit "has conflicting definitions in the module"),
           ptext (sLit "and its hs-boot file"),
-          ptext (sLit "Main module:") <+> ppr_mismatch real_thing,
-          ptext (sLit "Boot file:  ") <+> ppr_mismatch boot_thing]
-  where
-      -- closed type families need special treatment, because they might differ
-      -- in their equations, which are not stored in the corresponding IfaceDecl
-    ppr_mismatch thing
-      | ATyCon tc <- thing
-      , Just (ClosedSynFamilyTyCon ax) <- synTyConRhs_maybe tc
-      = hang (ppr iface_decl <+> ptext (sLit "where"))
-           2 (vcat $ brListMap (pprCoAxBranch tc) (coAxiomBranches ax))
-      
-      | otherwise
-      = ppr iface_decl
-      where iface_decl = tyThingToIfaceDecl thing
+          ptext (sLit "Main module:") <+> PprTyThing.pprTyThing real_thing,
+          ptext (sLit "Boot file:  ") <+> PprTyThing.pprTyThing boot_thing]
 
 instMisMatch :: ClsInst -> SDoc
 instMisMatch inst
@@ -911,14 +938,18 @@ rnTopSrcDecls extra_deps group
 
         return (tcg_env', rn_decls)
    }
+\end{code}
 
 
+%************************************************************************
+%*                                                                      *
+                AMP warnings
+     The functions defined here issue warnings according to 
+     the 2013 Applicative-Monad proposal. (Trac #8004)
+%*                                                                      *
+%************************************************************************
 
--- ########## BEGIN AMP WARNINGS ###############################################
---
--- The functions defined here issue warnings according to the 2013
--- Applicative-Monad proposal. (#8004)
-
+\begin{code}
 -- | Main entry point for generating AMP warnings
 tcAmpWarn :: TcM ()
 tcAmpWarn =
@@ -941,16 +972,26 @@ tcAmpWarn =
 
 -- | Warn on local definitions of names that would clash with Prelude versions,
 --   i.e. join/pure/<*>
+--
+--   A name clashes if the following criteria are met:
+--       1. It would is imported (unqualified) from Prelude
+--       2. It is locally defined in the current module
+--       3. It has the same literal name as the reference function
+--       4. It is not identical to the reference function
 tcAmpFunctionWarn :: Name -- ^ Name to check, e.g. joinMName for join
                   -> TcM ()
 tcAmpFunctionWarn name = do
+    { traceTc "tcAmpFunctionWarn/wouldBeImported" empty
+    -- Is the name imported (unqualified) from Prelude? (Point 4 above)
+    ; rnImports <- fmap (map unLoc . tcg_rn_imports) getGblEnv
+    -- (Note that this automatically handles -XNoImplicitPrelude, as Prelude
+    -- will not appear in rnImports automatically if it is set.)
+
+    -- Continue only the name is imported from Prelude
+    ; when (tcAmpImportViaPrelude name rnImports) $ do
+      -- Handle 2.-4.
     { rdrElts <- fmap (concat . occEnvElts . tcg_rdr_env) getGblEnv
 
-      -- Finds *other* elements having the same literal name. A name clashes
-      -- iff:
-      --   1. It is locally defined in the current module
-      --   2. It has the same literal name as the reference function
-      --   3. It is not identical to the reference function
     ; let clashes :: GlobalRdrElt -> Bool
           clashes x = and [ gre_prov x == LocalDef
                           , nameOccName (gre_name x) == nameOccName name
@@ -972,7 +1013,57 @@ tcAmpFunctionWarn name = do
               , ptext (sLit "under the Applicative-Monad Proposal.")
               ]
     ; mapM_ warn_msg clashingElts
-    }
+    }}
+
+-- | Is the given name imported via Prelude?
+--
+--   This function makes sure that e.g. "import Prelude (map)" should silence
+--   AMP warnings about "join" even when they are locally defined.
+--
+--   Possible scenarios:
+--     a) Prelude is imported implicitly, issue warnings.
+--     b) Prelude is imported explicitly, but without mentioning the name in
+--        question. Issue no warnings.
+--     c) Prelude is imported hiding the name in question. Issue no warnings.
+--     d) Qualified import of Prelude, no warnings.
+tcAmpImportViaPrelude :: Name
+                      -> [ImportDecl Name]
+                      -> Bool
+tcAmpImportViaPrelude name = any importViaPrelude
+  where
+    isPrelude :: ImportDecl Name -> Bool
+    isPrelude imp = unLoc (ideclName imp) == pRELUDE_NAME
+
+    -- Implicit (Prelude) import?
+    isImplicit :: ImportDecl Name -> Bool
+    isImplicit = ideclImplicit
+
+    -- Unqualified import?
+    isUnqualified :: ImportDecl Name -> Bool
+    isUnqualified = not . ideclQualified
+
+    second :: (a -> b) -> (x, a) -> (x, b)
+    second f (x, y) = (x, f y)
+
+    -- List of explicitly imported (or hidden) Names from a single import.
+    --   Nothing -> No explicit imports
+    --   Just (False, <names>) -> Explicit import list of <names>
+    --   Just (True , <names>) -> Explicit hiding of <names>
+    importList :: ImportDecl Name -> Maybe (Bool, [Name])
+    importList = fmap (second (map (ieName . unLoc))) . ideclHiding
+
+    -- Check whether the given name would be imported (unqualified) from
+    -- an import declaration.
+    importViaPrelude :: ImportDecl Name -> Bool
+    importViaPrelude x = isPrelude x && isUnqualified x && or [
+        -- Whole Prelude imported -> potential clash
+          isImplicit x
+        -- Explicit import/hiding list, if applicable
+        , case importList x of
+            Just (False, explicit) -> nameOccName name `elem`    map nameOccName explicit
+            Just (True , hidden  ) -> nameOccName name `notElem` map nameOccName hidden
+            Nothing                -> False
+        ]
 
 -- | Issue a warning for instance definitions lacking a should-be parent class.
 --   Used for Monad without Applicative and MonadPlus without Alternative.
@@ -986,8 +1077,8 @@ tcAmpMissingParentClassWarn :: Name -- ^ Class instance is defined for
 --           Example: in case of Applicative/Monad: is = Monad,
 --                                                  should = Applicative
 tcAmpMissingParentClassWarn isName shouldName
-  = do { isClass'     <- tcLookupClassMaybe isName     -- Note [tryTc oddity] 
-       ; shouldClass' <- tcLookupClassMaybe shouldName -- Note [tryTc oddity]
+  = do { isClass'     <- tcLookupClass_maybe isName
+       ; shouldClass' <- tcLookupClass_maybe shouldName
        ; case (isClass', shouldClass') of
               (Just isClass, Just shouldClass) -> do
                   { localInstances <- tcGetInsts
@@ -1031,28 +1122,31 @@ tcAmpMissingParentClassWarn isName shouldName
                   warnMsg (is_tcs isInst)
            }
 
-{-
-Note [tryTc oddity]
-~~~~~~~~~~~~~~~~~~~
-tcLookupClass in tcLookupClassMaybe should fail all on its own if the
-given name doesn't exist, and the names we're looking for in the AMP
-check should always exist. However, under some mysterious
-circumstances, base apparently fails to compile without catching the
-errors via tryTc. So tcLookupClassMaybe wraps all this behavior
-together.
--}
 
 -- | Looks up a class, returning Nothing on failure. Similar to
 --   TcEnv.tcLookupClass, but does not issue any error messages.
-tcLookupClassMaybe :: Name -> TcM (Maybe Class)
-tcLookupClassMaybe = fmap toMaybe . tryTc . tcLookupClass
-    where toMaybe (_, Just cls) = Just cls
-          toMaybe _             = Nothing
+--
+-- In particular, it may be called by the AMP check on, say, 
+-- Control.Applicative.Applicative, well before Control.Applicative 
+-- has been compiled.  In this case we just return Nothing, and the
+-- AMP test is silently dropped.
+tcLookupClass_maybe :: Name -> TcM (Maybe Class)
+tcLookupClass_maybe name
+  = do { mb_thing <- tcLookupImported_maybe name
+       ; case mb_thing of
+            Succeeded (ATyCon tc) | Just cls <- tyConClass_maybe tc -> return (Just cls)
+            _ -> return Nothing }
+\end{code}
 
--- ########## END AMP WARNINGS #################################################
+
+%************************************************************************
+%*                                                                      *
+                tcTopSrcDecls
+%*                                                                      *
+%************************************************************************
 
 
-
+\begin{code}
 tcTopSrcDecls :: ModDetails -> HsGroup Name -> TcM (TcGblEnv, TcLclEnv)
 tcTopSrcDecls boot_details
         (HsGroup { hs_tyclds = tycl_decls,
@@ -1104,7 +1198,7 @@ tcTopSrcDecls boot_details
                 -- Second pass over class and instance declarations,
                 -- now using the kind-checked decls
         traceTc "Tc6" empty ;
-        inst_binds <- tcInstDecls2 (concat tycl_decls) inst_infos ;
+        inst_binds <- tcInstDecls2 (tyClGroupConcat tycl_decls) inst_infos ;
 
                 -- Foreign exports
         traceTc "Tc7" empty ;
@@ -1135,13 +1229,14 @@ tcTopSrcDecls boot_details
 
                 -- Extend the GblEnv with the (as yet un-zonked)
                 -- bindings, rules, foreign decls
-            ; tcg_env' = tcg_env { tcg_binds = tcg_binds tcg_env `unionBags` all_binds
-                                 , tcg_sigs  = tcg_sigs tcg_env `unionNameSets` sig_names
-                                 , tcg_rules = tcg_rules tcg_env ++ rules
-                                 , tcg_vects = tcg_vects tcg_env ++ vects
-                                 , tcg_anns  = tcg_anns tcg_env ++ annotations
-                                 , tcg_fords = tcg_fords tcg_env ++ foe_decls ++ fi_decls
-                                 , tcg_dus   = tcg_dus tcg_env `plusDU` usesOnly fo_fvs } } ;
+            ; tcg_env' = tcg_env { tcg_binds   = tcg_binds tcg_env `unionBags` all_binds
+                                 , tcg_sigs    = tcg_sigs tcg_env `unionNameSets` sig_names
+                                 , tcg_rules   = tcg_rules tcg_env ++ rules
+                                 , tcg_vects   = tcg_vects tcg_env ++ vects
+                                 , tcg_anns    = tcg_anns tcg_env ++ annotations
+                                 , tcg_ann_env = extendAnnEnvList (tcg_ann_env tcg_env) annotations
+                                 , tcg_fords   = tcg_fords tcg_env ++ foe_decls ++ fi_decls
+                                 , tcg_dus     = tcg_dus tcg_env `plusDU` usesOnly fo_fvs } } ;
                                  -- tcg_dus: see Note [Newtype constructor usage in foreign declarations]
 
         addUsedRdrNames fo_rdr_names ;
@@ -1177,7 +1272,7 @@ tcTyClsInstDecls boot_details tycl_decls inst_decls deriv_decls
       -- Note [AFamDataCon: not promoting data family constructors]
    do { tcg_env <- tcTyAndClassDecls boot_details tycl_decls ;
       ; setGblEnv tcg_env $
-        tcInstDecls1 (concat tycl_decls) inst_decls deriv_decls }
+        tcInstDecls1 (tyClGroupConcat tycl_decls) inst_decls deriv_decls }
   where
     -- get_cons extracts the *constructor* bindings of the declaration
     get_cons :: LInstDecl Name -> [Name]
@@ -1686,7 +1781,7 @@ getGhciStepIO = do
 
         stepTy :: LHsType Name    -- Renamed, so needs all binders in place
         stepTy = noLoc $ HsForAllTy Implicit
-                            (HsQTvs { hsq_tvs = [noLoc (HsTyVarBndr a_tv Nothing Nothing)]
+                            (HsQTvs { hsq_tvs = [noLoc (UserTyVar a_tv)]
                                     , hsq_kvs = [] })
                             (noLoc [])
                             (nlHsFunTy ghciM ioM)

@@ -8,7 +8,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module IfaceSyn (
@@ -31,7 +31,7 @@ module IfaceSyn (
         freeNamesIfDecl, freeNamesIfRule, freeNamesIfFamInst,
 
         -- Pretty printing
-        pprIfaceExpr, pprIfaceDeclHead
+        pprIfaceExpr
     ) where
 
 #include "HsVersions.h"
@@ -39,7 +39,6 @@ module IfaceSyn (
 import IfaceType
 import PprCore()            -- Printing DFunArgs
 import Demand
-import Annotations
 import Class
 import NameSet
 import CoAxiom ( BranchIndex, Role )
@@ -47,7 +46,7 @@ import Name
 import CostCentre
 import Literal
 import ForeignCall
-import Serialized
+import Annotations( AnnPayload, AnnTarget )
 import BasicTypes
 import Outputable
 import FastString
@@ -55,6 +54,7 @@ import Module
 import TysWiredIn ( eqTyConName )
 import Fingerprint
 import Binary
+import BooleanFormula ( BooleanFormula )
 
 import Control.Monad
 import System.IO.Unsafe
@@ -103,6 +103,7 @@ data IfaceDecl
                  ifFDs     :: [FunDep FastString], -- Functional dependencies
                  ifATs     :: [IfaceAT],      -- Associated type families
                  ifSigs    :: [IfaceClassOp],   -- Method signatures
+                 ifMinDef  :: BooleanFormula OccName, -- Minimal complete definition
                  ifRec     :: RecFlag           -- Is newtype/datatype associated
                                                 --   with the class recursive?
     }
@@ -155,7 +156,7 @@ instance Binary IfaceDecl where
         put_ bh a4
         put_ bh a5
 
-    put_ bh (IfaceClass a1 a2 a3 a4 a5 a6 a7 a8) = do
+    put_ bh (IfaceClass a1 a2 a3 a4 a5 a6 a7 a8 a9) = do
         putByte bh 4
         put_ bh a1
         put_ bh (occNameFS a2)
@@ -165,6 +166,7 @@ instance Binary IfaceDecl where
         put_ bh a6
         put_ bh a7
         put_ bh a8
+        put_ bh a9
 
     put_ bh (IfaceAxiom a1 a2 a3 a4) = do
         putByte bh 5
@@ -210,8 +212,9 @@ instance Binary IfaceDecl where
                     a6 <- get bh
                     a7 <- get bh
                     a8 <- get bh
+                    a9 <- get bh
                     occ <- return $! mkOccNameFS clsName a2
-                    return (IfaceClass a1 occ a3 a4 a5 a6 a7 a8)
+                    return (IfaceClass a1 occ a3 a4 a5 a6 a7 a8 a9)
             _ -> do a1 <- get bh
                     a2 <- get bh
                     a3 <- get bh
@@ -279,7 +282,7 @@ pprAxBranch mtycon (IfaceAxBranch { ifaxbTyVars = tvs
                                   , ifaxbRHS = ty
                                   , ifaxbIncomps = incomps })
   = ppr tvs <+> ppr_lhs <+> char '=' <+> ppr ty $+$
-    nest 4 maybe_incomps
+    nest 2 maybe_incomps
       where
         ppr_lhs
           | Just tycon <- mtycon
@@ -484,8 +487,11 @@ instance Binary IfaceRule where
 data IfaceAnnotation
   = IfaceAnnotation {
         ifAnnotatedTarget :: IfaceAnnTarget,
-        ifAnnotatedValue :: Serialized
+        ifAnnotatedValue  :: AnnPayload
   }
+
+instance Outputable IfaceAnnotation where
+  ppr (IfaceAnnotation target value) = ppr target <+> colon <+> ppr value
 
 instance Binary IfaceAnnotation where
     put_ bh (IfaceAnnotation a1 a2) = do
@@ -906,7 +912,7 @@ defined.)
 
 Note [Versioning of instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-See [http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/RecompilationAvoidance#Instances]
+See [http://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/RecompilationAvoidance#Instances]
 
 \begin{code}
 -- -----------------------------------------------------------------------------
@@ -1010,30 +1016,29 @@ pprIfaceDecl (IfaceForeign {ifName = tycon})
 
 pprIfaceDecl (IfaceSyn {ifName = tycon,
                         ifTyVars = tyvars,
-                        ifRoles = roles,
                         ifSynRhs = IfaceSynonymTyCon mono_ty})
-  = hang (ptext (sLit "type") <+> pprIfaceDeclHead [] tycon tyvars roles)
-       4 (vcat [equals <+> ppr mono_ty])
+  = hang (ptext (sLit "type") <+> pprIfaceDeclHead [] tycon tyvars)
+       2 (vcat [equals <+> ppr mono_ty])
 
-pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars, ifRoles = roles,
-                        ifSynRhs = IfaceOpenSynFamilyTyCon, ifSynKind = kind })
-  = hang (ptext (sLit "type family") <+> pprIfaceDeclHead [] tycon tyvars roles)
-       4 (dcolon <+> ppr kind)
-
--- this case handles both abstract and instantiated closed family tycons
-pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars, ifRoles = roles,
-                        ifSynRhs = _closedSynFamilyTyCon, ifSynKind = kind })
-  = hang (ptext (sLit "closed type family") <+> pprIfaceDeclHead [] tycon tyvars roles)
-       4 (dcolon <+> ppr kind)
+pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
+                        ifSynRhs = rhs, ifSynKind = kind })
+  = hang (ptext (sLit "type family") <+> pprIfaceDeclHead [] tycon tyvars)
+       2 (sep [dcolon <+> ppr kind, parens (pp_rhs rhs)])
+  where
+    pp_rhs IfaceOpenSynFamilyTyCon           = ptext (sLit "open")
+    pp_rhs (IfaceClosedSynFamilyTyCon ax)    = ptext (sLit "closed, axiom") <+> ppr ax
+    pp_rhs IfaceAbstractClosedSynFamilyTyCon = ptext (sLit "closed, abstract")
+    pp_rhs _ = panic "pprIfaceDecl syn"
 
 pprIfaceDecl (IfaceData {ifName = tycon, ifCType = cType,
                          ifCtxt = context,
                          ifTyVars = tyvars, ifRoles = roles, ifCons = condecls,
                          ifRec = isrec, ifPromotable = is_prom,
                          ifAxiom = mbAxiom})
-  = hang (pp_nd <+> pprIfaceDeclHead context tycon tyvars roles)
-       4 (vcat [ pprCType cType
-               , pprRec isrec <> comma <+> pp_prom 
+  = hang (pp_nd <+> pprIfaceDeclHead context tycon tyvars)
+       2 (vcat [ pprCType cType
+               , pprRoles roles
+               , pprRec isrec <> comma <+> pp_prom
                , pp_condecls tycon condecls
                , pprAxiom mbAxiom])
   where
@@ -1048,8 +1053,9 @@ pprIfaceDecl (IfaceData {ifName = tycon, ifCType = cType,
 pprIfaceDecl (IfaceClass {ifCtxt = context, ifName = clas, ifTyVars = tyvars,
                           ifRoles = roles, ifFDs = fds, ifATs = ats, ifSigs = sigs,
                           ifRec = isrec})
-  = hang (ptext (sLit "class") <+> pprIfaceDeclHead context clas tyvars roles <+> pprFundeps fds)
-       4 (vcat [pprRec isrec,
+  = hang (ptext (sLit "class") <+> pprIfaceDeclHead context clas tyvars <+> pprFundeps fds)
+       2 (vcat [pprRoles roles,
+                pprRec isrec,
                 sep (map ppr ats),
                 sep (map ppr sigs)])
 
@@ -1060,6 +1066,10 @@ pprIfaceDecl (IfaceAxiom {ifName = name, ifTyCon = tycon, ifAxBranches = branche
 pprCType :: Maybe CType -> SDoc
 pprCType Nothing = ptext (sLit "No C type associated")
 pprCType (Just cType) = ptext (sLit "C type:") <+> ppr cType
+
+pprRoles :: [Role] -> SDoc
+pprRoles []    = empty
+pprRoles roles = text "Roles:" <+> ppr roles
 
 pprRec :: RecFlag -> SDoc
 pprRec isrec = ptext (sLit "RecFlag") <+> ppr isrec
@@ -1074,10 +1084,10 @@ instance Outputable IfaceClassOp where
 instance Outputable IfaceAT where
    ppr (IfaceAT d defs) = hang (ppr d) 2 (vcat (map ppr defs))
 
-pprIfaceDeclHead :: IfaceContext -> OccName -> [IfaceTvBndr] -> [Role] -> SDoc
-pprIfaceDeclHead context thing tyvars roles
+pprIfaceDeclHead :: IfaceContext -> OccName -> [IfaceTvBndr] -> SDoc
+pprIfaceDeclHead context thing tyvars
   = hsep [pprIfaceContext context, parenSymOcc thing (ppr thing),
-          pprIfaceTvBndrsRoles tyvars roles]
+          pprIfaceTvBndrs tyvars]
 
 pp_condecls :: OccName -> IfaceConDecls -> SDoc
 pp_condecls _  (IfAbstractTyCon {}) = empty
@@ -1100,9 +1110,9 @@ pprIfaceConDecl tc
          if is_infix then ptext (sLit "Infix") else empty,
          if has_wrap then ptext (sLit "HasWrapper") else empty,
          ppUnless (null strs) $
-            nest 4 (ptext (sLit "Stricts:") <+> hsep (map ppr_bang strs)),
+            nest 2 (ptext (sLit "Stricts:") <+> hsep (map ppr_bang strs)),
          ppUnless (null fields) $
-            nest 4 (ptext (sLit "Fields:") <+> hsep (map ppr fields))]
+            nest 2 (ptext (sLit "Fields:") <+> hsep (map ppr fields))]
   where
     ppr_bang IfNoBang = char '_'        -- Want to see these
     ppr_bang IfStrict = char '!'

@@ -48,7 +48,6 @@ import Name( Name )
 import RdrName( RdrName )
 import DataCon( HsBang(..) )
 import Type
-import TyCon ( Role(..) )
 import HsDoc
 import BasicTypes
 import SrcLoc
@@ -182,12 +181,12 @@ instance OutputableBndr HsIPName where
     pprPrefixOcc n = ppr n
 
 data HsTyVarBndr name
-  = HsTyVarBndr name
-                (Maybe (LHsKind name)) -- See Note [Printing KindedTyVars]
-                (Maybe Role)
-      --  *** NOTA BENE *** A "monotype" in a pragma can have
-      -- for-alls in it, (mostly to do with dictionaries).  These
-      -- must be explicitly Kinded.
+  = UserTyVar        -- no explicit kinding
+         name
+
+  | KindedTyVar
+         name
+         (LHsKind name)  -- The user-supplied kind signature
   deriving (Data, Typeable)
 
 data HsType name
@@ -228,9 +227,6 @@ data HsType name
 
   | HsKindSig           (LHsType name)  -- (ty :: kind)
                         (LHsKind name)  -- A type with a kind signature
-
-  | HsRoleAnnot         (LHsType name)  -- ty@role, seen only right after parsing
-                        Role
 
   | HsQuasiQuoteTy      (HsQuasiQuote name)
 
@@ -426,7 +422,8 @@ mkBigLambdaTy tvs ty = HsBigLambda (mkHsQTvs tvs) ty
 
 ---------------------
 hsTyVarName :: HsTyVarBndr name -> name
-hsTyVarName (HsTyVarBndr n _ _) = n
+hsTyVarName (UserTyVar n)     = n
+hsTyVarName (KindedTyVar n _) = n
 
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
@@ -547,10 +544,8 @@ instance (OutputableBndr name) => Outputable (LHsTyVarBndrs name) where
       = sep [ ifPprDebug $ braces (interppSP kvs), interppSP tvs ]
 
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
-    ppr (HsTyVarBndr n Nothing  Nothing)  = ppr n
-    ppr (HsTyVarBndr n (Just k) Nothing)  = parens $ hsep [ppr n, dcolon, ppr k]
-    ppr (HsTyVarBndr n Nothing  (Just r)) = ppr n <> char '@' <> ppr r
-    ppr (HsTyVarBndr n (Just k) (Just r)) = parens $ hsep [ppr n, dcolon, ppr k] <> char '@' <> ppr r
+    ppr (UserTyVar n)     = ppr n
+    ppr (KindedTyVar n k) = parens $ hsep [ppr n, dcolon, ppr k]
 
 instance (Outputable thing) => Outputable (HsWithBndrs thing) where
     ppr (HsWB { hswb_cts = ty }) = ppr ty
@@ -642,7 +637,6 @@ ppr_mono_ty _    (HsTupleTy con tys) = tupleParens std_con (interpp'SP tys)
                     HsUnboxedTuple -> UnboxedTuple
                     _              -> BoxedTuple
 ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> ppr kind)
-ppr_mono_ty _    (HsRoleAnnot ty r)  = ppr ty <> char '@' <> ppr r
 ppr_mono_ty _    (HsListTy ty)       = brackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsPArrTy ty)       = paBrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty prec (HsIParamTy n ty)   = maybeParen prec pREC_FUN (ppr n <+> dcolon <+> ppr_mono_lty pREC_TOP ty)

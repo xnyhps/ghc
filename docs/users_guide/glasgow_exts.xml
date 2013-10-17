@@ -272,7 +272,7 @@ If the types of <literal>p</literal> and <literal>q</literal> are not unboxed,
 the resulting binding is lazy like any other Haskell pattern binding.  The
 above example desugars like this:
 <programlisting>
-  f x = let t = case h x o f{ (# p,q #) -> (p,q)
+  f x = let t = case h x of { (# p,q #) -> (p,q) }
             p = fst t
             q = snd t
         in ..body..
@@ -423,14 +423,18 @@ Indeed, the bindings can even be recursive.
 	import <literal>GHC.Prim</literal> (see <xref linkend="primitives"/>);
 	the <option>-XMagicHash</option> extension
 	then allows you to <emphasis>refer</emphasis> to the <literal>Int&num;</literal>
-	that is now in scope.</para>
+	that is now in scope. Note that with this option, the meaning of <literal>x&num;y = 0</literal>
+	is changed: it defines a function <literal>x&num;</literal> taking a single argument <literal>y</literal>;
+        to define the operator <literal>&num;</literal>, put a space: <literal>x &num; y = 0</literal>.
+
+</para>
       <para> The <option>-XMagicHash</option> also enables some new forms of literals (see <xref linkend="glasgow-unboxed"/>):
 	<itemizedlist>
 	  <listitem><para> <literal>'x'&num;</literal> has type <literal>Char&num;</literal></para> </listitem>
 	  <listitem><para> <literal>&quot;foo&quot;&num;</literal> has type <literal>Addr&num;</literal></para> </listitem>
 	  <listitem><para> <literal>3&num;</literal> has type <literal>Int&num;</literal>. In general,
 	  any Haskell integer lexeme followed by a <literal>&num;</literal> is an <literal>Int&num;</literal> literal, e.g.
-            <literal>-0x3A&num;</literal> as well as <literal>32&num;</literal></para>.</listitem>
+            <literal>-0x3A&num;</literal> as well as <literal>32&num;</literal>.</para></listitem>
 	  <listitem><para> <literal>3&num;&num;</literal> has type <literal>Word&num;</literal>. In general,
 	  any non-negative Haskell integer lexeme followed by <literal>&num;&num;</literal>
 	      is a <literal>Word&num;</literal>. </para> </listitem>
@@ -441,14 +445,14 @@ Indeed, the bindings can even be recursive.
    </sect2>
 
     <sect2 id="negative-literals">
-      <title>Negative Literals</title>
+      <title>Negative literals</title>
       <para>
           The literal <literal>-123</literal> is, according to
           Haskell98 and Haskell 2010, desugared as
           <literal>negate (fromInteger 123)</literal>.
          The language extension <option>-XNegativeLiterals</option>
          means that it is instead desugared as
-         <literal>fromInteger (-123)</literal>. 
+         <literal>fromInteger (-123)</literal>.
       </para>
 
       <para>
@@ -465,11 +469,11 @@ Indeed, the bindings can even be recursive.
       <para>
           Haskell 2010 and Haskell 98 define floating literals with
           the syntax <literal>1.2e6</literal>. These literals have the
-          type <literal>Fractional a => Fractional</literal>.
+          type <literal>Fractional a => a</literal>.
       </para>
 
       <para>
-         The language extension <option>-XNumLiterals</option> allows
+         The language extension <option>-XNumDecimals</option> allows
          you to also use the floating literal syntax for instances of
          <literal>Integral</literal>, and have values like
          <literal>(1.2e6 :: Num a => a)</literal>
@@ -660,7 +664,7 @@ qualifier list has just one element, a boolean expression.
 <para>
 View patterns are enabled by the flag <literal>-XViewPatterns</literal>.
 More information and examples of view patterns can be found on the
-<ulink url="http://hackage.haskell.org/trac/ghc/wiki/ViewPatterns">Wiki
+<ulink url="http://ghc.haskell.org/trac/ghc/wiki/ViewPatterns">Wiki
 page</ulink>.
 </para>
 
@@ -778,7 +782,7 @@ let {(x -> y) = e1 ;
 </programlisting>
 
 (For some amplification on this design choice see
-<ulink url="http://hackage.haskell.org/trac/ghc/ticket/4061">Trac #4061</ulink>.)
+<ulink url="http://ghc.haskell.org/trac/ghc/ticket/4061">Trac #4061</ulink>.)
 
 </para>
 </listitem>
@@ -1730,7 +1734,7 @@ has no non-bottom values.  For example:
   f x = case x of { }
 </programlisting>
 With dependently-typed features it is more useful
-(see <ulink url="http://hackage.haskell.org/trac/ghc/ticket/2431">Trac</ulink>).
+(see <ulink url="http://ghc.haskell.org/trac/ghc/ticket/2431">Trac</ulink>).
 For example, consider these two candidate definitions of <literal>absurd</literal>:
 <programlisting>
 data a :==: b where
@@ -1743,7 +1747,7 @@ absurd x = case x of {}      -- (B)
 We much prefer (B). Why? Because GHC can figure out that <literal>(True :~: False)</literal>
 is an empty type. So (B) has no partiality and GHC should be able to compile with
 <option>-fwarn-incomplete-patterns</option>.  (Though the pattern match checking is not
-yet clever enough to do that.
+yet clever enough to do that.)
 On the other hand (A) looks dangerous, and GHC doesn't check to make
 sure that, in fact, the function can never get called.
 </para>
@@ -1766,7 +1770,35 @@ which is roughly equivalent to
     ...
     _ | guardN -> exprN
 </programlisting>
-except that multi-way if-expressions do not alter the layout.
+</para>
+
+<para>Multi-way if expressions introduce a new layout context.  So the
+example above is equivalent to:
+<programlisting>
+  if { | guard1 -> expr1
+     ; | ...
+     ; | guardN -> exprN
+     }
+</programlisting>
+The following behaves as expected:
+<programlisting>
+  if | guard1 -> if | guard2 -> expr2
+                    | guard3 -> expr3
+     | guard4 -> expr4
+</programlisting>
+because layout translates it as
+<programlisting>
+  if { | guard1 -> if { | guard2 -> expr2
+                      ; | guard3 -> expr3
+                      }
+     ; | guard4 -> expr4
+     }
+</programlisting>
+Layout with multi-way if works in the same way as other layout
+contexts, except that the semi-colons between guards in a multi-way if
+are optional.  So it is not necessary to line up all the guards at the
+same column; this is consistent with the way guards work in function
+definitions and case expressions.
 </para>
 </sect2>
 
@@ -2268,11 +2300,28 @@ The following syntax is stolen:
 	      <replaceable>string</replaceable><literal>&num;</literal>,
 	      <replaceable>integer</replaceable><literal>&num;</literal>,
 	      <replaceable>float</replaceable><literal>&num;</literal>,
-	      <replaceable>float</replaceable><literal>&num;&num;</literal>,
-	      <literal>(&num;</literal>, <literal>&num;)</literal>
+	      <replaceable>float</replaceable><literal>&num;&num;</literal>
 	</term>
 	<listitem><para>
 	Stolen by: <option>-XMagicHash</option>
+	  </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>
+	      <literal>(&num;</literal>, <literal>&num;)</literal>
+	</term>
+	<listitem><para>
+	Stolen by: <option>-XUnboxedTuples</option>
+	  </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>
+	      <replaceable>varid</replaceable><literal>!</literal><replaceable>varid</replaceable>
+	</term>
+	<listitem><para>
+	Stolen by: <option>-XBangPatterns</option>
 	  </para></listitem>
       </varlistentry>
     </variablelist>
@@ -2507,24 +2556,21 @@ After expanding type synonyms, GHC does validity checking on types, looking for
 the following mal-formedness which isn't detected simply by kind checking:
 <itemizedlist>
 <listitem><para>
-Type constructor applied to a type involving for-alls.
-</para></listitem>
-<listitem><para>
-Unboxed tuple on left of an arrow.
+Type constructor applied to a type involving for-alls (if <literal>XImpredicativeTypes</literal>
+is off)
 </para></listitem>
 <listitem><para>
 Partially-applied type synonym.
 </para></listitem>
 </itemizedlist>
-So, for example,
-this will be rejected:
+So, for example, this will be rejected:
 <programlisting>
-  type Pr = (# Int, Int #)
+  type Pr = forall a. a
 
-  h :: Pr -> Int
-  h x = ...
+  h :: [Pr]
+  h = ...
 </programlisting>
-because GHC does not allow  unboxed tuples on the left of a function arrow.
+because GHC does not allow type constructors applied to for-all types.
 </para>
 </sect2>
 
@@ -3701,7 +3747,7 @@ where
 		via this new mechanism.
 </para></listitem>
 <listitem><para>
-  The role of the last parameter of each of the <literal>ci</literal> is <emphasis>not</emphasis> <literal>N</literal>. (See <xref linkend="roles"/>.)</para></listitem>
+  The role of the last parameter of each of the <literal>ci</literal> is <emphasis>not</emphasis> <literal>nominal</literal>. (See <xref linkend="roles"/>.)</para></listitem>
 </itemizedlist>
 Then, for each <literal>ci</literal>, the derived instance
 declaration is:
@@ -6248,7 +6294,7 @@ existential, and the above code is valid.
 </para>
 
 <para>
-See also <ulink url="http://hackage.haskell.org/trac/ghc/ticket/7347">Trac #7347</ulink>.
+See also <ulink url="http://ghc.haskell.org/trac/ghc/ticket/7347">Trac #7347</ulink>.
 </para>
 </sect2>
 
@@ -6445,9 +6491,7 @@ The ambiguity check rejects functions that can never be called; for example:
 </programlisting>
 The idea is there can be no legal calls to <literal>f</literal> because every call will
 give rise to an ambiguous constraint.  
-</para>
-<para>
-The <emphasis>only</emphasis> purpose of the
+Indeed, the <emphasis>only</emphasis> purpose of the
 ambiguity check is to report functions that cannot possibly be called.
 We could soundly omit the
 ambiguity check on type signatures entirely, at the expense of
@@ -6492,18 +6536,48 @@ After all <literal>f</literal> has exactly the same type, and <literal>g=f</lite
 But in fact <literal>f</literal>'s type
 is instantiated and the instantiated constraints are solved against
 the constraints bound by <literal>g</literal>'s signature.  So, in the case an ambiguous type, solving will fail.
-For example, consider the earlier definition <literal>f :: C a => Int</literal>.  Then in <literal>g</literal>'s definition,
-we'll instantiate to <literal>(C alpha)</literal> and try to 
+For example, consider the earlier definition <literal>f :: C a => Int</literal>:
+<programlisting>
+  f :: C a => Int
+  f = ...blah...
+
+  g :: C a => Int
+  g = f
+</programlisting>
+In <literal>g</literal>'s definition,
+we'll instantiate to <literal>(C alpha)</literal> and try to
 deduce <literal>(C alpha)</literal> from <literal>(C a)</literal>,
-and fail.  
+and fail.
 </para>
 <para>
-So in fact we use this as our <emphasis>definition</emphasis> of ambiguity: a type 
+So in fact we use this as our <emphasis>definition</emphasis> of ambiguity: a type
 <literal><replaceable>ty</replaceable></literal> is
-ambiguious if and only if <literal>((undefined :: <replaceable>ty</replaceable>) 
+ambiguious if and only if <literal>((undefined :: <replaceable>ty</replaceable>)
 :: <replaceable>ty</replaceable>)</literal> would fail to typecheck.  We use a
 very similar test for <emphasis>inferred</emphasis> types, to ensure that they too are
-unambiguous. 
+unambiguous.
+</para>
+<para><emphasis>Switching off the ambiguity check.</emphasis>
+Even if a function is has an ambiguous type according the "guiding principle",
+it is possible that the function is callable.  For example:
+<programlisting>
+  class D a b where ...
+  instance D Bool b where ...
+
+  strange :: D a b => a -> a
+  strange = ...blah...
+
+  foo = strange True
+</programlisting>
+Here <literal>strange</literal>'s type is ambiguous, but the call in <literal>foo</literal>
+is OK because it gives rise to a constraint <literal>(D Bool beta)</literal>, which is
+soluble by the <literal>(D Bool b)</literal> instance.  So the language extension
+<option>-XAllowAmbiguousTypes</option> allows you to switch off the ambiguity check.
+But even with ambiguity checking switched off, GHC will complain about a function
+that can <emphasis>never</emphasis> be called, such as this one:
+<programlisting>
+  f :: (Int ~ Bool) => a -> a
+</programlisting>
 </para>
 
 <para>
@@ -6920,7 +6994,11 @@ explicit context.  For example in the first argument of the
 constructor <function>MkSwizzle</function>, an implicit "<literal>forall a.</literal>" is
 prefixed to the argument type.  The implicit <literal>forall</literal>
 quantifies all type variables that are not already in scope, and are
-mentioned in the type quantified over.
+mentioned in the type quantified over. (Arguably, it would be better
+to <emphasis>require</emphasis> explicit quantification on constructor arguments
+where that is what is wanted.
+See <ulink url="http://ghc.haskell.org/trac/ghc/ticket/4426">Trac #4426</ulink>.)
+
 </para>
 
 <para>
@@ -6928,19 +7006,17 @@ As for type signatures, implicit quantification happens for non-overloaded
 types too.  So if you write this:
 
 <programlisting>
-  data T a = MkT (Either a b) (b -> b)
+  f :: (a -> a) -> a
 </programlisting>
 
 it's just as if you had written this:
 
 <programlisting>
-  data T a = MkT (forall b. Either a b) (forall b. b -> b)
+  f :: forall a. (a -> a) -> a
 </programlisting>
 
-That is, since the type variable <literal>b</literal> isn't in scope, it's
-implicitly universally quantified.  (Arguably, it would be better
-to <emphasis>require</emphasis> explicit quantification on constructor arguments
-where that is what is wanted.  Feedback welcomed.)
+That is, since the type variable <literal>a</literal> isn't in scope, it's
+implicitly universally quantified.
 </para>
 
 <para>
@@ -7529,7 +7605,7 @@ infer its type.  If you supply a type signature, then that fixes type of the bin
 </para><para>
 The rationale for this more conservative strategy is given in
 <ulink url="http://research.microsoft.com/~simonpj/papers/constraints/index.htm">the papers</ulink> "Let should not be generalised" and "Modular type inference with local assumptions", and
-a related <ulink url="http://hackage.haskell.org/trac/ghc/blog/LetGeneralisationInGhc7">blog post</ulink>.
+a related <ulink url="http://ghc.haskell.org/trac/ghc/blog/LetGeneralisationInGhc7">blog post</ulink>.
 </para><para>
 The flag <option>-XMonoLocalBinds</option> is implied by <option>-XTypeFamilies</option> and <option>-XGADTs</option>.  You can switch it off again
 with <option>-XNoMonoLocalBinds</option> but type inference becomes less predicatable if you do so. (Read the papers!)
@@ -7666,7 +7742,7 @@ main = print "b"
   </para>
   <para>
     For more motivation and details please refer to the <ulink
-      url="http://hackage.haskell.org/trac/ghc/wiki/DeferErrorsToRuntime">HaskellWiki</ulink>
+      url="http://ghc.haskell.org/trac/ghc/wiki/DeferErrorsToRuntime">HaskellWiki</ulink>
     page or the <ulink
       url="http://research.microsoft.com/en-us/um/people/simonpj/papers/ext-f/">original
       paper</ulink>.
@@ -8074,7 +8150,7 @@ as, say, using the string <literal>"|~]"</literal> instead), and make your
 quoter function interpret <literal>"|~]"</literal> as <literal>"|]"</literal>.
 One way to implement this is to compose your quoter with a pre-processing pass to
 perform your escape conversion.  See the
-<ulink url="http://hackage.haskell.org/trac/ghc/ticket/5348">
+<ulink url="http://ghc.haskell.org/trac/ghc/ticket/5348">
 discussion in Trac</ulink> for details.
 </para></listitem>
 </itemizedlist>
@@ -9181,6 +9257,43 @@ Assertion failures can be caught, see the documentation for the
       <option>-fno-warn-warnings-deprecations</option>.</para>
     </sect2>
 
+    <sect2 id="minimal-pragma">
+      <title>MINIMAL pragma</title>
+      <indexterm><primary>MINIMAL</primary></indexterm>
+      <para>The MINIMAL pragma is used to specify the minimal complete definition of a class. I.e. specify which methods must be implemented by all instances. If an instance does not satisfy the minimal complete definition, then a warning is generated.
+      This can be useful when a class has methods with circular defaults. For example
+      </para>
+<programlisting>
+class Eq a where
+    (==) :: a -> a -> Bool
+    (/=) :: a -> a -> Bool
+    x == y = not (x /= y)
+    x /= y = not (x == y)
+    {-# MINIMAL (==) | (/=) #-}
+</programlisting>
+      <para>Without the MINIMAL pragma no warning would be generated for an instance that implements neither method.
+      </para>
+      <para>The syntax for minimal complete definition is:</para>
+<screen>
+mindef ::= name
+        |  '(' mindef ')'
+        |  mindef '|' mindef
+        |  mindef ',' mindef
+</screen>
+      <para>A vertical bar denotes disjunction, i.e. one of the two sides is required.
+      A comma denotes conjunction, i.e. both sides are required.
+      Conjunction binds stronger than disjunction.</para>
+      <para>
+      If no MINIMAL pragma is given in the class declaration, it is just as if 
+      a pragma <literal>{-# MINIMAL op1, op2, ..., opn #-}</literal> was given, where
+      the <literal>opi</literal> are the methods 
+      (a) that lack a default method in the class declaration, and 
+      (b) whose name that does not start with an underscore  
+      (c.f. <option>-fwarn-missing-methods</option>, <xref linkend="options-sanity"/>).
+      </para>
+      <para>This warning can be turned off with the flag <option>-fno-warn-missing-methods</option>.</para>
+    </sect2>
+
     <sect2 id="inline-noinline-pragma">
       <title>INLINE and NOINLINE pragmas</title>
 
@@ -9191,13 +9304,32 @@ Assertion failures can be caught, see the documentation for the
 	<title>INLINE pragma</title>
 	<indexterm><primary>INLINE</primary></indexterm>
 
-	<para>GHC (with <option>-O</option>, as always) tries to
-        inline (or &ldquo;unfold&rdquo;) functions/values that are
-        &ldquo;small enough,&rdquo; thus avoiding the call overhead
-        and possibly exposing other more-wonderful optimisations.
-        Normally, if GHC decides a function is &ldquo;too
-        expensive&rdquo; to inline, it will not do so, nor will it
-        export that unfolding for other modules to use.</para>
+        <para>
+          GHC (with <option>-O</option>, as always) tries to inline
+          (or &ldquo;unfold&rdquo;) functions/values that are
+          &ldquo;small enough,&rdquo; thus avoiding the call overhead
+          and possibly exposing other more-wonderful optimisations.
+          GHC has a set of heuristics, tuned over a long period of
+          time using many benchmarks, that decide when it is
+          beneficial to inline a function at its call site.  The
+          heuristics are designed to inline functions when it appears
+          to be beneficial to do so, but without incurring excessive
+          code bloat.  If a function looks too big, it won't be
+          inlined, and functions larger than a certain size will not
+          even have their definition exported in the interface file.
+          Some of the thresholds that govern these heuristic decisions
+          can be changed using flags, see <xref linkend="options-f"
+          />.
+        </para>
+
+        <para>
+          Normally GHC will do a reasonable job of deciding by itself
+          when it is a good idea to inline a function.  However,
+          sometimes you might want to override the default behaviour.
+          For example, if you have a key function that is important to
+          inline because it leads to further optimisations, but GHC
+          judges it to be too big to inline.
+        </para>
 
         <para>The sledgehammer you can bring to bear is the
         <literal>INLINE</literal><indexterm><primary>INLINE
@@ -9307,11 +9439,6 @@ itself, so an INLINE pragma is always ignored.</para>
 	<para>See also the <literal>NOINLINE</literal> (<xref linkend="noinline-pragma"/>)
         and <literal>INLINABLE</literal> (<xref linkend="inlinable-pragma"/>)
         pragmas.</para>
-
-	<para>Note: the HBC compiler doesn't like <literal>INLINE</literal> pragmas,
-	  so if you want your code to be HBC-compatible you'll have to surround
-	  the pragma with C pre-processor directives
-	  <literal>#ifdef __GLASGOW_HASKELL__</literal>...<literal>#endif</literal>.</para>
 
       </sect3>
 
@@ -9718,10 +9845,6 @@ instance (Eq a) => Eq (Foo a) where {
 The pragma must occur inside the <literal>where</literal> part
 of the instance declaration.
 </para>
-<para>
-Compatible with HBC, by the way, except perhaps in the placement
-of the pragma.
-</para>
 
 </sect2>
 
@@ -9751,7 +9874,7 @@ data T = T {-# UNPACK #-} !Float
       conjunction with <option>-O</option><footnote>in fact, UNPACK
           has no effect without <option>-O</option>, for technical
           reasons
-      (see <ulink url="http://hackage.haskell.org/trac/ghc/ticket/5252">tick
+      (see <ulink url="http://ghc.haskell.org/trac/ghc/ticket/5252">tick
             5252</ulink>)</footnote>, in order to expose
       unfoldings to the compiler so the reboxing can be removed as
       often as possible.  For example:</para>
@@ -10845,35 +10968,36 @@ about <literal>Age</literal> and <literal>Int</literal> in order to show that
 T Int Bool c</literal>).</para>
 
 <para>GHC supports three different roles for type parameters: nominal,
-representational, and phantom. If a type parameter has a nominal (N) role,
-then the two types that differ must not actually differ at all: they must be
+representational, and phantom. If a type parameter has a nominal role, then
+the two types that differ must not actually differ at all: they must be
 identical (after type family reduction). If a type parameter has a
-representational (R) role, then the two types must have the same
-representation. (If <literal>T</literal>'s first parameter's role is R, then
+representational role, then the two types must have the same representation.
+(If <literal>T</literal>'s first parameter's role is representational, then
 <literal>T Age Bool c</literal> and <literal>T Int Bool c</literal> would have
-the same representation, because <literal>Age</literal> and <literal>Int</literal>
-have the same representation.) If a type parameter has a phantom (P) role,
-then we need no further information.</para>
+the same representation, because <literal>Age</literal> and
+<literal>Int</literal> have the same representation.) If a type parameter has
+a phantom role, then we need no further information.</para>
 
 <para>Here are some examples:</para>
 
 <programlisting>
-  data Simple a = MkSimple a          -- a has role R
+  data Simple a = MkSimple a          -- a has role representational
 
   type family F
   type instance F Int = Bool
   type instance F Age = Char
 
-  data Complex a = MkComplex (F a)    -- a has role N
+  data Complex a = MkComplex (F a)    -- a has role nominal
 
-  data Phant a = MkPhant Bool         -- a has role P
+  data Phant a = MkPhant Bool         -- a has role phantom
 </programlisting>
 
-<para>The type <literal>Simple</literal> has its parameter at role R, which is
-generally the most common case. <literal>Simple Age</literal> would have the same
-representation as <literal>Simple Int</literal>. The type <literal>Complex</literal>,
-on the other hand, has its parameter at role N, because <literal>Simple Age</literal>
-and <literal>Simple Int</literal> are <emphasis>not</emphasis> the same. Lastly,
+<para>The type <literal>Simple</literal> has its parameter at role
+representational, which is generally the most common case. <literal>Simple
+Age</literal> would have the same representation as <literal>Simple
+Int</literal>. The type <literal>Complex</literal>, on the other hand, has its
+parameter at role nominal, because <literal>Simple Age</literal> and
+<literal>Simple Int</literal> are <emphasis>not</emphasis> the same. Lastly,
 <literal>Phant Age</literal> and <literal>Phant Bool</literal> have the same
 representation, even though <literal>Age</literal> and <literal>Bool</literal>
 are unrelated.</para>
@@ -10886,17 +11010,19 @@ are unrelated.</para>
 <para>
 What role should a given type parameter should have? GHC performs role
 inference to determine the correct role for every parameter. It starts with a
-few base facts: <literal>(->)</literal> has two R parameters;
-<literal>(~)</literal> has two N parameters; all type families' parameters are
-N; and all GADT-like parameters are N. Then, these facts are propagated to all
-places where these types are used. By defaulting parameters to role P, any
-parameters unused in the right-hand side (or used only in other types in P
-positions) will be P. Whenever a parameter is used in an R position (that is,
-used as a type argument to a constructor whose corresponding variable is at
-role R), we raise its role from P to R. Similarly, when a parameter is used in
-an N position, its role is upgraded to N. We never downgrade a role from N to
-P or R, or from R to P. In this way, we infer the most-general role for each
-parameter.
+few base facts: <literal>(->)</literal> has two representational parameters;
+<literal>(~)</literal> has two nominal parameters; all type families'
+parameters are nominal; and all GADT-like parameters are nominal. Then, these
+facts are propagated to all places where these types are used. By defaulting
+parameters to role phnatom, any parameters unused in the right-hand side (or
+used only in other types in phantom positions) will be phantom. Whenever a
+parameter is used in a representational position (that is, used as a type
+argument to a constructor whose corresponding variable is at role
+representational), we raise its role from phantom to representational.
+Similarly, when a parameter is used in a nominal position, its role is
+upgraded to nominal. We never downgrade a role from nominal to phantom or
+representational, or from representational to phantom. In this way, we infer
+the most-general role for each parameter.
 </para>
 
 <para>There is one particularly tricky case that should be explained:</para>
@@ -10905,20 +11031,22 @@ parameter.
   data Tricky a b = MkTricky (a b)
 </programlisting>
 
-<para>What should <literal>Tricky</literal>'s roles be? At first blush, it would
-seem that both <literal>a</literal> and <literal>b</literal> should be at role R,
-since both are used in the right-hand side and neither is involved in a type family.
-However, this would be wrong, as the following example shows:</para>
+<para>What should <literal>Tricky</literal>'s roles be? At first blush, it
+would seem that both <literal>a</literal> and <literal>b</literal> should be
+at role representational, since both are used in the right-hand side and
+neither is involved in a type family. However, this would be wrong, as the
+following example shows:</para>
 
 <programlisting>
   data Nom a = MkNom (F a)   -- type family F from example above
 </programlisting>
 
 <para>Is <literal>Tricky Nom Age</literal> representationally equal to
-<literal>Tricky Nom Int</literal>? No! The former stores a <literal>Char</literal>
-and the latter stores a <literal>Bool</literal>. The solution to this is
-to require all parameters to type variables to have role N. Thus, GHC would
-infer role R for <literal>a</literal> but role N for <literal>b</literal>.</para>
+<literal>Tricky Nom Int</literal>? No! The former stores a
+<literal>Char</literal> and the latter stores a <literal>Bool</literal>. The
+solution to this is to require all parameters to type variables to have role
+nominal. Thus, GHC would infer role representational for <literal>a</literal>
+but role nominal for <literal>b</literal>.</para>
 
 </sect2>
 
@@ -10937,35 +11065,38 @@ example, the base library contains the following definition:
 </programlisting>
 
 <para>
-The idea is that <literal>a</literal> should really be an R parameter, but
-role inference assigns it to P. This makes some level of sense: a pointer to
-an <literal>Int</literal> really is representationally the same as a pointer
-to a <literal>Bool</literal>. But, that's not at all how we want to use
-<literal>Ptr</literal>s! So, we want to be able to say</para>
+The idea is that <literal>a</literal> should really be a representational
+parameter, but role inference assigns it to phantom. This makes some level of
+sense: a pointer to an <literal>Int</literal> really is representationally the
+same as a pointer to a <literal>Bool</literal>. But, that's not at all how we
+want to use <literal>Ptr</literal>s! So, we want to be able to say</para>
 
 <programlisting>
-  data Ptr a@R = Ptr Addr#
+  type role Ptr representational
+  data Ptr a = Ptr Addr#
 </programlisting>
 
 <para>
-The <literal>@R</literal> (enabled with <option>-XRoleAnnotations</option>) annotation forces the
-parameter a to be at role R, not role P. GHC then checks
-the user-supplied roles to make sure they don't break any promises. It would
-be bad, for example, if the user could make <literal>BadIdea</literal>'s role be R.
+The <literal>type role</literal> (enabled with
+<option>-XRoleAnnotations</option>) declaration forces the parameter
+<literal>a</literal> to be at role representational, not role phantom. GHC
+then checks the user-supplied roles to make sure they don't break any
+promises. It would be bad, for example, if the user could make
+<literal>BadIdea</literal>'s role be representational.
 </para>
 
 <para>As another example, we can consider a type <literal>Set a</literal> that
 represents a set of data, ordered according to <literal>a</literal>'s
 <literal>Ord</literal> instance. While it would generally be type-safe to
-consider <literal>a</literal> to be at role R, it is possible that a
-<literal>newtype</literal> and its base type have
+consider <literal>a</literal> to be at role representational, it is possible
+that a <literal>newtype</literal> and its base type have
 <emphasis>different</emphasis> orderings encoded in their respective
 <literal>Ord</literal> instances. This would lead to misbehavior at runtime.
 So, the author of the <literal>Set</literal> datatype would like its parameter
-to be at role N. This would be done with a declaration</para>
+to be at role nominal. This would be done with a declaration</para>
 
 <programlisting>
-  data Set a@N = ...
+  type role Set nominal
 </programlisting>
 
 <para>The other place where role annotations may be necessary are in
@@ -10973,27 +11104,40 @@ to be at role N. This would be done with a declaration</para>
 the right-hand sides of definitions can be omitted. As usual, the
 types/classes declared in an <literal>hs-boot</literal> file must match up
 with the definitions in the <literal>hs</literal> file, including down to the
-roles. The default role is R in <literal>hs-boot</literal> files,
+roles. The default role is representational in <literal>hs-boot</literal> files,
 corresponding to the common use case.</para>
 
 <para>
-Role annotations are allowed on type variables in data, newtype, class,
-and type declarations. They are not allowed on type/data family
-declarations or in explicit foralls in function type signatures.
-The syntax for a role annotation is an <literal>@</literal> sign followed
-by one of <literal>N</literal>, <literal>R</literal>, or <literal>P</literal>,
-directly following a type variable. If the type variable has an explicit
-kind annotation, the role annotation goes after the kind annotation, outside
-the parentheses. Here are some examples:</para>
+Role annotations are allowed on data, newtype, and class declarations. A role
+annotation declaration starts with <literal>type role</literal> and is
+followed by one role listing for each parameter of the type. (This parameter
+count includes parameters implicitly specified by a kind signature in a
+GADT-style data or newtype declaration.) Each role listing is a role
+(<literal>nominal</literal>, <literal>representational</literal>, or
+<literal>phantom</literal>) or a <literal>_</literal>. Using a
+<literal>_</literal> says that GHC should infer that role. The role annotation
+may go anywhere in the same module as the datatype or class definition
+(much like a value-level type signature).
+Here are some examples:</para>
 
 <programlisting>
-  data T1 a b@P = MkT1 a     -- b is not used; annotation is fine but unnecessary
-  data T2 a b@P = MkT2 b     -- ERROR: b is used and cannot be P
-  data T3 a b@N = MkT3 a     -- OK: N is higher than necessary, but safe
-  data T4 (a :: * -> *)@N = MkT4 (a Int)    -- OK, but N is higher than necessary
-  class C a@R b where ...    -- OK
-  type X a@N = ...           -- OK
-  type family F a@R          -- ERROR: annotations not allowed on family declarations
+  type role T1 _ phantom
+  data T1 a b = MkT1 a     -- b is not used; annotation is fine but unnecessary
+
+  type role T2 _ phantom
+  data T2 a b = MkT2 b     -- ERROR: b is used and cannot be phantom
+
+  type role T3 _ nominal
+  data T3 a b = MkT3 a     -- OK: nominal is higher than necessary, but safe
+
+  type role T4 nominal
+  data T4 a = MkT4 (a Int) -- OK, but N is higher than necessary
+
+  type role C representational _
+  class C a b where ...    -- OK
+
+  type role X nominal
+  type X a = ...           -- ERROR: role annotations not allowed for type synonyms
 </programlisting>
 
 </sect2>

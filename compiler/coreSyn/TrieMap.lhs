@@ -8,7 +8,7 @@
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 {-# LANGUAGE TypeFamilies #-}
@@ -18,7 +18,7 @@ module TrieMap(
    CoercionMap, 
    MaybeMap, 
    ListMap,
-   TrieMap(..),
+   TrieMap(..), insertTM, deleteTM,
    lookupTypeMapTyCon
  ) where
 
@@ -71,6 +71,12 @@ class TrieMap m where
       -- The unusual argument order here makes 
       -- it easy to compose calls to foldTM; 
       -- see for example fdE below
+
+insertTM :: TrieMap m => Key m -> a -> m a -> m a
+insertTM k v m = alterTM k (\_ -> Just v) m
+
+deleteTM :: TrieMap m => Key m -> m a -> m a
+deleteTM k m = alterTM k (\_ -> Nothing) m
 
 ----------------------
 -- Recall that 

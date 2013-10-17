@@ -13,7 +13,7 @@
  * Do not #include this file directly: #include "Rts.h" instead.
  *
  * To understand the structure of the RTS headers, see the wiki:
- *   http://hackage.haskell.org/trac/ghc/wiki/Commentary/SourceTree/Includes
+ *   http://ghc.haskell.org/trac/ghc/wiki/Commentary/SourceTree/Includes
  *
  * --------------------------------------------------------------------------*/
 
@@ -225,6 +225,8 @@ RTS_RET(stg_ap_f);
 RTS_RET(stg_ap_d);
 RTS_RET(stg_ap_l);
 RTS_RET(stg_ap_v16);
+RTS_RET(stg_ap_v32);
+RTS_RET(stg_ap_v64);
 RTS_RET(stg_ap_n);
 RTS_RET(stg_ap_p);
 RTS_RET(stg_ap_pv);
@@ -242,6 +244,8 @@ RTS_FUN_DECL(stg_ap_f_fast);
 RTS_FUN_DECL(stg_ap_d_fast);
 RTS_FUN_DECL(stg_ap_l_fast);
 RTS_FUN_DECL(stg_ap_v16_fast);
+RTS_FUN_DECL(stg_ap_v32_fast);
+RTS_FUN_DECL(stg_ap_v64_fast);
 RTS_FUN_DECL(stg_ap_n_fast);
 RTS_FUN_DECL(stg_ap_p_fast);
 RTS_FUN_DECL(stg_ap_pv_fast);
@@ -271,6 +275,9 @@ RTS_FUN_DECL(stg_gc_prim);
 RTS_FUN_DECL(stg_gc_prim_p);
 RTS_FUN_DECL(stg_gc_prim_pp);
 RTS_FUN_DECL(stg_gc_prim_n);
+
+RTS_RET(stg_gc_prim_p_ll_ret);
+RTS_FUN_DECL(stg_gc_prim_p_ll);
 
 RTS_RET(stg_enter);
 RTS_FUN_DECL(__stg_gc_enter_1);

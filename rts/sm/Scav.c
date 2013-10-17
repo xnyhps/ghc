@@ -7,7 +7,7 @@
  * Documentation on the architecture of the Garbage Collector can be
  * found in the online commentary:
  * 
- *   http://hackage.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage/GC
+ *   http://ghc.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage/GC
  *
  * ---------------------------------------------------------------------------*/
 
@@ -53,7 +53,7 @@ scavengeTSO (StgTSO *tso)
 
     debugTrace(DEBUG_gc,"scavenging thread %d",(int)tso->id);
 
-    // update the pointer from the Task.
+    // update the pointer from the InCall.
     if (tso->bound != NULL) {
         tso->bound->tso = tso;
     }

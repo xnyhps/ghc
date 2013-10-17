@@ -163,19 +163,20 @@ sub getrepo {
         my $git_dir = $bare_flag ? "ghc.git" : ".";
         my $branch = &readgit($git_dir, "rev-parse", "--abbrev-ref", "HEAD");
         die "Bad branch: $branch"
-            unless $branch =~ /^[a-zA-Z][a-zA-Z0-9.-]*$/;
+            unless $branch =~ m!^[a-zA-Z][a-zA-Z0-9.-/]*$!;
         my $remote = &readgit($git_dir, "config", "branch.$branch.remote");
         if ($remote eq "") {
             # remotes are not mandatory for branches (e.g. not recorded by default for bare repos)
             $remote = "origin";
         }
         die "Bad remote: $remote"
-            unless $remote =~ /^[a-zA-Z][a-zA-Z0-9.-]*$/;
+            unless $remote =~ m!^[a-zA-Z][a-zA-Z0-9.-/]*$!;
         $repo = &readgit($git_dir, "config", "remote.$remote.url");
     }
 
     my $repo_base;
     my $checked_out_tree;
+    my $repo_local = 0;
 
     if ($repo =~ /^...*:/) {
         # HTTP or SSH
@@ -206,6 +207,7 @@ sub getrepo {
     }
     elsif ($repo =~ /^\/|\.\.\/|.:(\/|\\)/) {
         # Local filesystem, either absolute (C:/ or /) or relative (../) path
+        $repo_local = 1;
         $repo_base = $repo;
         if (-f "$repo/HEAD") {
             # assume a local mirror:
@@ -223,7 +225,7 @@ sub getrepo {
         die "Couldn't work out repo";
     }
 
-    return $repo_base, $checked_out_tree;
+    return $repo_base, $checked_out_tree, $repo_local;
 }
 
 sub gitall {
@@ -244,7 +246,7 @@ sub gitall {
     my $doing;
     my $start_repo;
 
-    my ($repo_base, $checked_out_tree) = getrepo();
+    my ($repo_base, $checked_out_tree, $repo_local) = getrepo();
 
     my $is_github_repo = $repo_base =~ m/(git@|git:\/\/|https:\/\/)github.com/;
 
@@ -403,7 +405,7 @@ sub gitall {
                 my $myhead = &readgit('.', 'rev-parse', '--verify', 'HEAD');
 
                 if (not defined($remote_heads{$myhead})) {
-                    die "Sub module $localpath needs to be pushed; see http://hackage.haskell.org/trac/ghc/wiki/Repositories/Upstream";
+                    die "Sub module $localpath needs to be pushed; see http://ghc.haskell.org/trac/ghc/wiki/Repositories/Upstream";
                 }
                 
                 chdir($initial_working_directory);
@@ -413,7 +415,7 @@ sub gitall {
             # We don't automatically push to the submodules. If you want
             # to push to them then you need to use a special command, as
             # described on
-            # http://hackage.haskell.org/trac/ghc/wiki/Repositories/Upstream
+            # http://ghc.haskell.org/trac/ghc/wiki/Repositories/Upstream
             if ($remotepath ne "-") {
                 &git($localpath, "push", @args);
             }
@@ -539,7 +541,7 @@ sub gitall {
             print (' ' x (40 - length($localpath)));
             my $branch = &readgit($localpath, "rev-parse", "--abbrev-ref", "HEAD");
             die "Bad branch: $branch"
-                unless $branch =~ /^[a-zA-Z][a-zA-Z0-9.-]*$/;
+                unless $branch =~ m!^[a-zA-Z][a-zA-Z0-9.-/]*$!;
             my $us   = &readgit(".", "ls-remote", $localpath, "refs/heads/$branch");
             my $them = &readgit(".", "ls-remote", $compareto, "refs/heads/$branch");
             $us   =~ s/[[:space:]].*//;
@@ -561,13 +563,29 @@ sub gitall {
     unlink "resume";
 }
 
+sub gitInitSubmodules {
+    &git(".", "submodule", "init", @_);
+
+    my ($repo_base, $checked_out_tree, $repo_local) = getrepo();
+    # if we came from a local repository, grab our submodules from their
+    # checkouts over there, if they exist.
+    if ($repo_local) {
+        my $gitConfig = &tryReadFile(".git/config");
+        foreach $_ (split /^/, $gitConfig) {
+            if ($_ =~ /^\[submodule "(.*)"\]$/ and -e "$repo_base/$1/.git") {
+                &git(".", "config", "submodule.$1.url", "$repo_base/$1");
+            }
+        }
+    }
+}
+
 sub checkCurrentBranchIsMaster {
     my $branch = `git symbolic-ref HEAD`;
     $branch =~ s/refs\/heads\///;
     $branch =~ s/\n//;
 
     if ($branch !~ /master/) {
-        print "\nWarning: You trying to 'pull' while on branch '$branch'.\n"
+        print "\nWarning: You are trying to 'pull' while on branch '$branch'.\n"
             . "Updates to this script will happen on the master branch which\n"
             . "means the version on this branch may be out of date.\n\n";
     }
@@ -892,18 +910,19 @@ sub main {
         my @submodule_args = grep(/^-q/,@_);
 
         if ($command eq "get") {
-            &git(".", "submodule", "init", @submodule_args);
+            &gitInitSubmodules(@submodule_args);
         }
+
         if ($command eq "pull") {
             my $gitConfig = &tryReadFile(".git/config");
             if ($gitConfig !~ /submodule/) {
-                &git(".", "submodule", "init", @submodule_args);
+                &gitInitSubmodules(@submodule_args);
             }
         }
         if ($command eq "get" or $command eq "pull") {
             my $gitConfig = &tryReadFile(".git/config");
             if ($gitConfig !~ /submodule/) {
-                &git(".", "submodule", "init", @submodule_args);
+                &gitInitSubmodules(@submodule_args);
             }
             &git(".", "submodule", "update", @submodule_args);
         }

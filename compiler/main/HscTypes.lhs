@@ -12,6 +12,10 @@ module HscTypes (
         FinderCache, FindResult(..), ModLocationCache,
         Target(..), TargetId(..), pprTarget, pprTargetId,
         ModuleGraph, emptyMG,
+        HscStatus(..),
+
+        -- * Hsc monad
+        Hsc(..), runHsc, runInteractiveHsc,
 
         -- * Information about modules
         ModDetails(..), emptyModDetails,
@@ -52,7 +56,7 @@ module HscTypes (
 
         -- * Interfaces
         ModIface(..), mkIfaceWarnCache, mkIfaceHashCache, mkIfaceFixCache,
-        emptyIfaceWarnCache,
+        emptyIfaceWarnCache, 
 
         -- * Fixity
         FixityEnv, FixItem(..), lookupFixity, emptyFixityEnv,
@@ -135,7 +139,7 @@ import Id
 import IdInfo           ( IdDetails(..) )
 import Type
 
-import Annotations
+import Annotations      ( Annotation, AnnEnv, mkAnnEnv, plusAnnEnv )
 import Class
 import TyCon
 import CoAxiom
@@ -143,7 +147,7 @@ import DataCon
 import PrelNames        ( gHC_PRIM, ioTyConName, printName )
 import Packages hiding  ( Version(..) )
 import DynFlags
-import DriverPhases
+import DriverPhases     ( Phase, HscSource(..), isHsBoot, hscSourceString )
 import BasicTypes
 import IfaceSyn
 import CoreSyn          ( CoreRule, CoreVect )
@@ -164,7 +168,7 @@ import ErrUtils
 import Platform
 import Util
 
-import Control.Monad    ( mplus, guard, liftM, when )
+import Control.Monad    ( mplus, guard, liftM, when, ap )
 import Data.Array       ( Array, array )
 import Data.IORef
 import Data.Time
@@ -172,6 +176,54 @@ import Data.Word
 import Data.Typeable    ( Typeable )
 import Exception
 import System.FilePath
+
+-- -----------------------------------------------------------------------------
+-- Compilation state
+-- -----------------------------------------------------------------------------
+
+-- | Status of a compilation to hard-code
+data HscStatus
+    = HscNotGeneratingCode
+    | HscUpToDate
+    | HscUpdateBoot
+    | HscRecomp CgGuts ModSummary
+
+-- -----------------------------------------------------------------------------
+-- The Hsc monad: Passing an environment and warning state
+
+newtype Hsc a = Hsc (HscEnv -> WarningMessages -> IO (a, WarningMessages))
+
+instance Functor Hsc where
+    fmap = liftM
+
+instance Applicative Hsc where
+    pure = return
+    (<*>) = ap
+
+instance Monad Hsc where
+    return a    = Hsc $ \_ w -> return (a, w)
+    Hsc m >>= k = Hsc $ \e w -> do (a, w1) <- m e w
+                                   case k a of
+                                       Hsc k' -> k' e w1
+
+instance MonadIO Hsc where
+    liftIO io = Hsc $ \_ w -> do a <- io; return (a, w)
+
+instance HasDynFlags Hsc where
+    getDynFlags = Hsc $ \e w -> return (hsc_dflags e, w)
+
+runHsc :: HscEnv -> Hsc a -> IO a
+runHsc hsc_env (Hsc hsc) = do
+    (a, w) <- hsc hsc_env emptyBag
+    printOrThrowWarnings (hsc_dflags hsc_env) w
+    return a
+
+-- A variant of runHsc that switches in the DynFlags from the
+-- InteractiveContext before running the Hsc computation.
+--
+runInteractiveHsc :: HscEnv -> Hsc a -> IO a
+runInteractiveHsc hsc_env =
+  runHsc (hsc_env { hsc_dflags = ic_dflags (hsc_IC hsc_env) })
 
 -- -----------------------------------------------------------------------------
 -- Source Errors
@@ -453,10 +505,10 @@ lookupIfaceByModule dflags hpt pit mod
 -- of its own, but it doesn't seem worth the bother.
 
 
--- | Find all the instance declarations (of classes and families) that are in
--- modules imported by this one, directly or indirectly, and are in the Home
--- Package Table.  This ensures that we don't see instances from modules @--make@
--- compiled before this one, but which are not below this one.
+-- | Find all the instance declarations (of classes and families) from
+-- the Home Package Table filtered by the provided predicate function.
+-- Used in @tcRnImports@, to select the instances that are in the
+-- transitive closure of imports from the currently compiled module.
 hptInstances :: HscEnv -> (ModuleName -> Bool) -> ([ClsInst], [FamInst])
 hptInstances hsc_env want_this_module
   = let (insts, famInsts) = unzip $ flip hptAllThings hsc_env $ \mod_info -> do
@@ -695,7 +747,7 @@ data ModIface
                 -- These are computed (lazily) from other fields
                 -- and are not put into the interface file
         mi_warn_fn   :: Name -> Maybe WarningTxt,        -- ^ Cached lookup for 'mi_warns'
-        mi_fix_fn    :: OccName -> Fixity,                -- ^ Cached lookup for 'mi_fixities'
+        mi_fix_fn    :: OccName -> Fixity,               -- ^ Cached lookup for 'mi_fixities'
         mi_hash_fn   :: OccName -> Maybe (OccName, Fingerprint),
                 -- ^ Cached lookup for 'mi_decls'.
                 -- The @Nothing@ in 'mi_hash_fn' means that the thing
@@ -954,7 +1006,7 @@ data ModGuts
         -- ^ Class instance environment from /home-package/ modules (including
         -- this one); c.f. 'tcg_inst_env'
         mg_fam_inst_env :: FamInstEnv,
-        -- ^ Type-family instance enviroment for /home-package/ modules
+        -- ^ Type-family instance environment for /home-package/ modules
         -- (including this one); c.f. 'tcg_fam_inst_env'
         mg_safe_haskell :: SafeHaskellMode,
         -- ^ Safe Haskell mode
@@ -1699,7 +1751,6 @@ lookupFixity env n = case lookupNameEnv env n of
                         Just (FixItem _ fix) -> fix
                         Nothing         -> defaultFixity
 \end{code}
-
 
 %************************************************************************
 %*                                                                      *

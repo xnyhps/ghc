@@ -49,7 +49,7 @@ Library
                    bytestring >= 0.9 && < 0.11,
                    time                 < 1.5,
                    containers >= 0.1 && < 0.6,
-                   array      >= 0.1 && < 0.5,
+                   array      >= 0.1 && < 0.6,
                    filepath   >= 1   && < 1.4,
                    Cabal,
                    hpc,
@@ -134,6 +134,7 @@ Library
         Demand
         Exception
         GhcMonad
+        Hooks
         Id
         IdInfo
         Literal
@@ -276,6 +277,7 @@ Library
         Constants
         DriverMkDepend
         DriverPhases
+        PipelineMonad
         DriverPipeline
         DynFlags
         ErrUtils
@@ -323,6 +325,7 @@ Library
         RnNames
         RnPat
         RnSource
+        RnSplice
         RnTypes
         CoreMonad
         CSE
@@ -397,6 +400,7 @@ Library
         Unify
         Bag
         Binary
+        BooleanFormula
         BufWrite
         Digraph
         Encoding
@@ -427,6 +431,8 @@ Library
         UniqFM
         UniqSet
         Util
+        ExtsCompat46
+--      ^^^  a temporary module necessary to bootstrap with GHC <= 7.6
         Vectorise.Builtins.Base
         Vectorise.Builtins.Initialise
         Vectorise.Builtins
@@ -458,7 +464,6 @@ Library
         Vectorise
         Hoopl.Dataflow
         Hoopl
-
 --        CgInfoTbls used in ghci/DebuggerUtils
 --        CgHeapery  mkVirtHeapOffsets used in ghci
 

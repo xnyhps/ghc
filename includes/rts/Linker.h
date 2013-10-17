@@ -7,7 +7,7 @@
  * Do not #include this file directly: #include "Rts.h" instead.
  *
  * To understand the structure of the RTS headers, see the wiki:
- *   http://hackage.haskell.org/trac/ghc/wiki/Commentary/SourceTree/Includes
+ *   http://ghc.haskell.org/trac/ghc/wiki/Commentary/SourceTree/Includes
  *
  * ---------------------------------------------------------------------------*/
 
@@ -48,5 +48,8 @@ HsInt resolveObjs( void );
 
 /* load a dynamic library */
 const char *addDLL( pathchar* dll_name );
+
+/* called by the initialization code for a module, not a user API */
+StgStablePtr foreignExportStablePtr (StgPtr p);
 
 #endif /* RTS_LINKER_H */

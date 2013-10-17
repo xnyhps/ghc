@@ -44,7 +44,7 @@ module TcRnTypes(
         -- Canonical constraints
         Xi, Ct(..), Cts, emptyCts, andCts, andManyCts, dropDerivedWC,
         singleCt, extendCts, isEmptyCts, isCTyEqCan, isCFunEqCan,
-        isCDictCan_Maybe, isCFunEqCan_Maybe, isCTyAppEqCan,
+        isCDictCan_maybe, isCFunEqCan_maybe, isCTyAppEqCan,
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt,
         isGivenCt, isHoleCt,
         ctEvidence,
@@ -114,6 +114,14 @@ import ListSetOps
 import FastString
 
 import Data.Set (Set)
+
+#ifdef GHCI
+import Data.Map      ( Map )
+import Data.Dynamic  ( Dynamic )
+import Data.Typeable ( TypeRep )
+
+import qualified Language.Haskell.TH as TH
+#endif
 \end{code}
 
 
@@ -224,6 +232,7 @@ data TcGblEnv
           -- ^ Instance envt for all /home-package/ modules;
           -- Includes the dfuns in tcg_insts
         tcg_fam_inst_env :: FamInstEnv, -- ^ Ditto for family instances
+        tcg_ann_env      :: AnnEnv,     -- ^ And for annotations
 
                 -- Now a bunch of things about this module that are simply
                 -- accumulated, but never consulted until the end.
@@ -289,6 +298,20 @@ data TcGblEnv
           -- decls.
 
         tcg_dependent_files :: TcRef [FilePath], -- ^ dependencies from addDependentFile
+
+#ifdef GHCI
+        tcg_th_topdecls :: TcRef [LHsDecl RdrName],
+        -- ^ Top-level declarations from addTopDecls
+
+        tcg_th_topnames :: TcRef NameSet,
+        -- ^ Exact names bound in top-level declarations in tcg_th_topdecls
+
+        tcg_th_modfinalizers :: TcRef [TH.Q ()],
+        -- ^ Template Haskell module finalizers
+
+        tcg_th_state :: TcRef (Map TypeRep Dynamic),
+        -- ^ Template Haskell state
+#endif /* GHCI */
 
         tcg_ev_binds  :: Bag EvBind,        -- Top-level evidence bindings
         tcg_binds     :: LHsBinds Id,       -- Value bindings in this module
@@ -491,24 +514,26 @@ data ThStage    -- See Note [Template Haskell state diagram] in TcSplice
                 -- This code will be run *at compile time*;
                 --   the result replaces the splice
                 -- Binding level = 0
+      Bool      -- True if in a typed splice, False otherwise
 
   | Comp        -- Ordinary Haskell code
                 -- Binding level = 1
 
   | Brack                       -- Inside brackets
+      Bool                      --   True if inside a typed bracket, False otherwise
       ThStage                   --   Binding level = level(stage) + 1
       (TcRef [PendingSplice])   --   Accumulate pending splices here
       (TcRef WantedConstraints) --     and type constraints here
 
 topStage, topAnnStage, topSpliceStage :: ThStage
 topStage       = Comp
-topAnnStage    = Splice
-topSpliceStage = Splice
+topAnnStage    = Splice False
+topSpliceStage = Splice False
 
 instance Outputable ThStage where
-   ppr Splice        = text "Splice"
-   ppr Comp          = text "Comp"
-   ppr (Brack s _ _) = text "Brack" <> parens (ppr s)
+   ppr (Splice _)      = text "Splice"
+   ppr Comp            = text "Comp"
+   ppr (Brack _ s _ _) = text "Brack" <> parens (ppr s)
 
 type ThLevel = Int
         -- See Note [Template Haskell levels] in TcSplice
@@ -529,9 +554,9 @@ outerLevel = 1  -- Things defined outside brackets
 --      g2 = $(f ...)           is not OK; because we havn't compiled f yet
 
 thLevel :: ThStage -> ThLevel
-thLevel Splice        = 0
-thLevel Comp          = 1
-thLevel (Brack s _ _) = thLevel s + 1
+thLevel (Splice _)      = 0
+thLevel Comp            = 1
+thLevel (Brack _ s _ _) = thLevel s + 1
 
 ---------------------------
 -- Arrow-notation context
@@ -947,7 +972,7 @@ Note [Kind orientation for CTyEqCan]
 Given an equality  (t:* ~ s:Open), we absolutely want to re-orient it.
 We can't solve it by updating t:=s, ragardless of how touchable 't' is,
 because the kinds don't work.  Indeed we don't want to leave it with
-the orientation (t ~ s), becuase if that gets into the inert set we'll
+the orientation (t ~ s), because if that gets into the inert set we'll
 start replacing t's by s's, and that too is the wrong way round.
 
 Hence in a CTyEqCan, (t:k1 ~ xi:k2) we require that k2 is a subkind of k1.
@@ -1091,9 +1116,9 @@ isCTyAppEqCan :: Ct -> Bool
 isCTyAppEqCan (CTyAppEqCan {}) = True
 isCTyAppEqCan _ = False
 
-isCFunEqCan_Maybe :: Ct -> Maybe TyCon
-isCFunEqCan_Maybe (CFunEqCan { cc_fun = tc }) = Just tc
-isCFunEqCan_Maybe _ = Nothing
+isCFunEqCan_maybe :: Ct -> Maybe (TyCon, [Type])
+isCFunEqCan_maybe (CFunEqCan { cc_fun = tc, cc_tyargs = xis }) = Just (tc, xis)
+isCFunEqCan_maybe _ = Nothing
 
 isCFunEqCan :: Ct -> Bool
 isCFunEqCan (CFunEqCan {}) = True

@@ -3,14 +3,14 @@
 % (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 %
 
-	Arity and ete expansion
+	Arity and eta expansion
 
 \begin{code}
 {-# OPTIONS -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+--     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 -- | Arit and eta expansion
@@ -178,7 +178,7 @@ in exprArity.  That is a less local change, so I'm going to leave it for today!
 
 Note [Newtype classes and eta expansion]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    NB: this nasty special case is no longer required, becuase
+    NB: this nasty special case is no longer required, because
     for newtype classes we don't use the class-op rule mechanism
     at all.  See Note [Single-method classes] in TcInstDcls. SLPJ May 2013
 
