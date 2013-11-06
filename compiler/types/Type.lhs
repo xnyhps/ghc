@@ -176,8 +176,6 @@ import Maybes           ( orElse )
 import Data.Maybe       ( isJust )
 import Control.Monad    ( guard )
 
-import Debug.Trace
-
 infixr 3 `mkFunTy`      -- Associates to the right
 \end{code}
 
@@ -287,11 +285,12 @@ expandTypeSynonyms ty
       = go (mkAppTys (substTy (mkTopTvSubst tenv) rhs) tys')
       | otherwise
       = TyConApp tc (map go tys)
-    go (LitTy l)       = LitTy l
-    go (TyVarTy tv)    = TyVarTy tv
-    go (AppTy t1 t2)   = mkAppTy (go t1) (go t2)
-    go (FunTy t1 t2)   = FunTy (go t1) (go t2)
-    go (ForAllTy tv t) = ForAllTy tv (go t)
+    go (LitTy l)        = LitTy l
+    go (TyVarTy tv)     = TyVarTy tv
+    go (AppTy t1 t2)    = mkAppTy (go t1) (go t2)
+    go (FunTy t1 t2)    = FunTy (go t1) (go t2)
+    go (ForAllTy tv t)  = ForAllTy tv (go t)
+    go (BigLambda tv t) = BigLambda tv (go t)
 \end{code}
 
 
@@ -666,6 +665,7 @@ tyConsOfType ty
      go (AppTy a b)                = go a `plusNameEnv` go b
      go (FunTy a b)                = go a `plusNameEnv` go b
      go (ForAllTy _ ty)            = go ty
+     go (BigLambda _ ty)           = go ty
 
      go_tc tc tys = extendNameEnv (go_s tys) (tyConName tc) tc
      go_s tys = foldr (plusNameEnv . go) emptyNameEnv tys
@@ -1016,6 +1016,7 @@ typeSize (AppTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (FunTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (ForAllTy _ t)  = 1 + typeSize t
 typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
+typeSize (BigLambda _ t) = 1 + typeSize t
 \end{code}
 
 

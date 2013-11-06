@@ -530,7 +530,7 @@ tcTyFamInsts (LitTy {})         = []
 tcTyFamInsts (FunTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (AppTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (ForAllTy _ ty)    = tcTyFamInsts ty
-tcTyFamInsts (BigLambda tv ty)  = tcTyFamInsts ty
+tcTyFamInsts (BigLambda _ ty)  = tcTyFamInsts ty
 \end{code}
 
 %************************************************************************
@@ -581,6 +581,7 @@ exactTyVarsOfType ty
     go (FunTy arg res)      = go arg `unionVarSet` go res
     go (AppTy fun arg)      = go fun `unionVarSet` go arg
     go (ForAllTy tyvar ty)  = delVarSet (go ty) tyvar
+    go (BigLambda tyvar ty) = delVarSet (go ty) tyvar
 
 exactTyVarsOfTypes :: [Type] -> TyVarSet
 exactTyVarsOfTypes tys = foldr (unionVarSet . exactTyVarsOfType) emptyVarSet tys
@@ -761,6 +762,7 @@ isTauTy (TyConApp tc tys) = all isTauTy tys && isTauTyCon tc
 isTauTy (AppTy a b)	  = isTauTy a && isTauTy b
 isTauTy (FunTy a b)	  = isTauTy a && isTauTy b
 isTauTy (ForAllTy {})     = False
+isTauTy (BigLambda {})    = False
 
 isTauTyCon :: TyCon -> Bool
 -- Returns False for type synonyms whose expansion is a polytype
@@ -1305,6 +1307,7 @@ tcTyVarsOfType (LitTy {})           = emptyVarSet
 tcTyVarsOfType (FunTy arg res)	    = tcTyVarsOfType arg `unionVarSet` tcTyVarsOfType res
 tcTyVarsOfType (AppTy fun arg)	    = tcTyVarsOfType fun `unionVarSet` tcTyVarsOfType arg
 tcTyVarsOfType (ForAllTy tyvar ty)  = tcTyVarsOfType ty `delVarSet` tyvar
+tcTyVarsOfType (BigLambda tyvar ty) = tcTyVarsOfType ty `delVarSet` tyvar
 	-- We do sometimes quantify over skolem TcTyVars
 
 tcTyVarsOfTypes :: [Type] -> TyVarSet

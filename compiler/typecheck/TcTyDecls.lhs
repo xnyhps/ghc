@@ -235,6 +235,7 @@ calcClassCycles cls
     expandType seen path (AppTy t1 t2)    = expandType seen path t1 . expandType seen path t2
     expandType seen path (FunTy t1 t2)    = expandType seen path t1 . expandType seen path t2
     expandType seen path (ForAllTy _tv t) = expandType seen path t
+    expandType seen path (BigLambda _ t)  = expandType seen path t
 
     papp :: [TyVar] -> [Type] -> ([(TyVar, Type)], Either [TyVar] [Type])
     papp []       tys      = ([], Right tys)
@@ -750,6 +751,7 @@ irType = go
     go lcls (FunTy t1 t2) = go lcls t1 >> go lcls t2
     go lcls (ForAllTy tv ty) = go (extendVarSet lcls tv) ty
     go _    (LitTy {}) = return ()
+    go lcls (BigLambda tv ty) = go (extendVarSet lcls tv) ty
 
     go_app _ Phantom _ = return ()                 -- nothing to do here
     go_app lcls Nominal ty = mark_nominal lcls ty  -- all vars below here are N

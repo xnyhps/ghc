@@ -687,7 +687,7 @@ ppr_mono_ty ctxt_prec (HsDocTy ty doc)
   -- we pretty print Haddock comments on types as if they were
   -- postfix operators
 
-ppr_mono_ty ctxt_prec (HsBigLambda tvs ty)
+ppr_mono_ty _         (HsBigLambda tvs ty)
   = parens $ text "/\\" <> (ppr tvs) <+> char '.' <+> ppr_mono_lty pREC_FUN ty
 
 --------------------------

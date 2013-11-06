@@ -292,7 +292,7 @@ check_type ctxt rank ty@(TyConApp tc tys)
 
 check_type _ _ (LitTy {}) = return ()
 
-check_type ctxt rank (BigLambda tv ty) = check_type ctxt rank ty
+check_type ctxt rank (BigLambda _ ty) = check_type ctxt rank ty
 
 check_type _ _ ty = pprPanic "check_type" (ppr ty)
 
@@ -1222,12 +1222,13 @@ smallerAppMsg = ptext (sLit "Application is no smaller than the instance head")
 -- Free variables of a type, retaining repetitions, and expanding synonyms
 fvType :: Type -> [TyVar]
 fvType ty | Just exp_ty <- tcView ty = fvType exp_ty
-fvType (TyVarTy tv)        = [tv]
-fvType (TyConApp _ tys)    = fvTypes tys
-fvType (LitTy {})          = []
-fvType (FunTy arg res)     = fvType arg ++ fvType res
-fvType (AppTy fun arg)     = fvType fun ++ fvType arg
-fvType (ForAllTy tyvar ty) = filter (/= tyvar) (fvType ty)
+fvType (TyVarTy tv)         = [tv]
+fvType (TyConApp _ tys)     = fvTypes tys
+fvType (LitTy {})           = []
+fvType (FunTy arg res)      = fvType arg ++ fvType res
+fvType (AppTy fun arg)      = fvType fun ++ fvType arg
+fvType (ForAllTy tyvar ty)  = filter (/= tyvar) (fvType ty)
+fvType (BigLambda tyvar ty) = filter (/= tyvar) (fvType ty)
 
 fvTypes :: [Type] -> [TyVar]
 fvTypes tys                = concat (map fvType tys)
@@ -1241,6 +1242,7 @@ sizeType (LitTy {})        = 1
 sizeType (FunTy arg res)   = sizeType arg + sizeType res + 1
 sizeType (AppTy fun arg)   = sizeType fun + sizeType arg
 sizeType (ForAllTy _ ty)   = sizeType ty
+sizeType (BigLambda _ ty)  = sizeType ty
 
 sizeTypes :: [Type] -> Int
 -- IA0_NOTE: Avoid kinds.

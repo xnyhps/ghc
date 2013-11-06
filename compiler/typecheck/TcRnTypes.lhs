@@ -1104,9 +1104,9 @@ isCTyEqCan (CTyEqCan {})  = True
 isCTyEqCan (CFunEqCan {}) = False
 isCTyEqCan _              = False
 
-isCDictCan_Maybe :: Ct -> Maybe Class
-isCDictCan_Maybe (CDictCan {cc_class = cls })  = Just cls
-isCDictCan_Maybe _              = Nothing
+isCDictCan_maybe :: Ct -> Maybe Class
+isCDictCan_maybe (CDictCan {cc_class = cls })  = Just cls
+isCDictCan_maybe _              = Nothing
 
 isCIrredEvCan :: Ct -> Bool
 isCIrredEvCan (CIrredEvCan {}) = True

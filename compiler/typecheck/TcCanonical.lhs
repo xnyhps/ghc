@@ -196,7 +196,7 @@ canonicalize (CIrredEvCan { cc_ev = ev
 canonicalize (CHoleCan { cc_ev = ev, cc_loc = d, cc_occ = occ })
   = canHole d ev occ
 
-canonicalize ct@(CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc }) = do
+canonicalize (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc }) = do
   { (xi1, co1) <- flattenTyVar loc FMFullFlatten (ctEvFlavour ev) tv1
   ; (xi2, co2) <- flatten loc FMFullFlatten (ctEvFlavour ev) ty2
   ; (xis3, co3) <- flattenMany loc FMFullFlatten (ctEvFlavour ev) s1
@@ -205,6 +205,7 @@ canonicalize ct@(CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rh
   ; case (getTyVar_maybe xi1, mb) of
       (_, Nothing) -> return Stop
       (Just new_tv, Just new_ev) -> continueWith $ CTyAppEqCan { cc_ev = new_ev, cc_tyvar = new_tv, cc_tyargs = s1, cc_rhs = xi2, cc_loc = loc }
+      _ -> pprPanic "canonicalize CTyAppEqCan" (ppr xi1)
   }
 
 canEvNC :: CtLoc -> CtEvidence -> TcS StopOrContinue
@@ -587,7 +588,7 @@ flatten loc _f ctxt ty@(ForAllTy {})
                          -- Substitute only under a forall
                          -- See Note [Flattening under a forall]
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
-flatten loc f ctxt (BigLambda tv ty)
+flatten loc _f ctxt (BigLambda tv ty)
   = do { (ty', co) <- flatten loc FMSubstOnly ctxt ty
        ; pprTrace "flatten BigLambda" ((ppr tv) <+> (ppr co)) $ return ()
        ; return (BigLambda tv ty', co) }
@@ -827,11 +828,11 @@ canEqNC loc ev ty1 ty2
       -}
 
       | (t1,s1) <- tcSplitAppTys ty1
-      , (t2,s2) <- tcSplitAppTys ty2
+      , (_t2,_s2) <- tcSplitAppTys ty2
       , Just tv1 <- tcGetTyVar_maybe t1
       -- , Just tv2 <- tcGetTyVar_maybe t2
       = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc })
-      | (t1,s1) <- tcSplitAppTys ty1
+      | (_t1,_s1) <- tcSplitAppTys ty1
       , (t2,s2) <- tcSplitAppTys ty2
       , Just tv2 <- tcGetTyVar_maybe t2
       = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv2, cc_tyargs = s2, cc_rhs = ty1, cc_loc = loc })

@@ -159,6 +159,7 @@ normaliseFfiType' env ty0 = go initRecTc ty0
       = do (coi,nty1,gres1) <- go rec_nts ty1
            return (mkForAllCo tyvar coi, ForAllTy tyvar nty1, gres1)
 
+    go _ ty@(BigLambda {}) = return (Refl Representational ty, ty, emptyBag)
     go _ ty@(TyVarTy {}) = return (Refl Representational ty, ty, emptyBag)
     go _ ty@(LitTy {})   = return (Refl Representational ty, ty, emptyBag)
     go _ ty@(AppTy {})   = return (Refl Representational ty, ty, emptyBag)

@@ -661,7 +661,7 @@ insertInertItem item is
           | isCIrredEvCan item                  -- Presently-irreducible evidence
           = ics { inert_irreds = inert_irreds ics `Bag.snocBag` item }
 
-          | Just cls <- isCDictCan_Maybe item   -- Dictionary 
+          | Just cls <- isCDictCan_maybe item   -- Dictionary 
           = ics { inert_dicts = updCCanMap (cls,item) (inert_dicts ics) }
 
           | Just (tc,tys) <- isCFunEqCan_maybe item  -- Function equality

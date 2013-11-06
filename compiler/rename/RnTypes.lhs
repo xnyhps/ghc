@@ -295,7 +295,7 @@ rnHsTyKi isType doc ty@(HsExplicitTupleTy kis tys)
        ; (tys', fvs) <- rnLHsTypes doc tys
        ; return (HsExplicitTupleTy kis tys', fvs) }
 
-rnHsTyKi isType doc (HsBigLambda tvs ty)
+rnHsTyKi _ doc (HsBigLambda tvs ty)
   = bindHsTyVars doc Nothing (fst $ extractHsTyRdrTyVars ty) tvs $ \tvs' ->
     do { (new_ty, fvs) <- rnLHsType doc ty
        ; return (HsBigLambda tvs' new_ty, fvs) }
@@ -400,7 +400,7 @@ bindHsTyVars doc mb_assoc kv_bndrs tv_bndrs thing_inside
        ; return (res, fvs1 `plusFV` fvs2) } }
 
 rn_tv_bndr :: Maybe a -> LocalRdrEnv -> HsDocContext -> LHsTyVarBndr RdrName -> RnM (LHsTyVarBndr Name, FreeVars)
-rn_tv_bndr mb_assoc rdr_env doc (L loc (UserTyVar rdr))
+rn_tv_bndr mb_assoc rdr_env _ (L loc (UserTyVar rdr))
   = do { nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
        ; return (L loc (UserTyVar nm), emptyFVs) }
 rn_tv_bndr mb_assoc rdr_env doc (L loc (KindedTyVar rdr kind))

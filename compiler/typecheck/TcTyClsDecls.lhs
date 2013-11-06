@@ -1568,6 +1568,9 @@ checkValidRoles tc
 
     check_ty_roles _   _    (LitTy {}) = return ()
 
+    check_ty_roles env role (BigLambda tv ty)
+      = check_ty_roles (extendVarEnv env tv Nominal) role ty
+
     maybe_check_ty_roles env role ty
       = when (role == Nominal || role == Representational) $
         check_ty_roles env role ty

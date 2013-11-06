@@ -930,6 +930,8 @@ normaliseType env role (ForAllTy tyvar ty1)
     in  (mkForAllCo tyvar coi, ForAllTy tyvar nty1)
 normaliseType _  role ty@(TyVarTy _)
   = (Refl role ty,ty)
+normaliseType _ _ ty@(BigLambda {})
+  = pprPanic "normaliseType BigLambda" (ppr ty)
 \end{code}
 
 %************************************************************************
@@ -998,6 +1000,8 @@ coreFlattenTy in_scope = go
                             (m', ForAllTy tv ty')
 
     go m ty@(LitTy {}) = (m, ty)
+    go m (BigLambda tv ty) = let (m', ty') = go m ty in
+                             (m', BigLambda tv ty')
 
 coreFlattenTyFamApp :: InScopeSet -> FlattenMap
                     -> TyCon         -- type family tycon
@@ -1031,5 +1035,8 @@ allTyVarsInTy = go
                            unitVarSet tv `unionVarSet`
                            (go ty) -- don't remove tv
     go (LitTy {})        = emptyVarSet
+    go (BigLambda tv ty) = (go (tyVarKind tv)) `unionVarSet`
+                           unitVarSet tv `unionVarSet`
+                           (go ty)
 
 \end{code}

@@ -303,6 +303,7 @@ liftTcCoSubstWith tvs cos ty
     go ty@(LitTy {})     = mkTcReflCo ty
     go (ForAllTy tv ty)  = mkTcForAllCo tv (go ty)
     go (FunTy t1 t2)     = mkTcFunCo (go t1) (go t2)
+    go ty@(BigLambda {}) = pprPanic "liftTcCoSubstWith BigLambda" (ppr ty)
 \end{code}
 
 Pretty printing
