@@ -234,9 +234,13 @@ thePipeline :: [(String,SimplifierStage)]
 thePipeline = [ ("canonicalization",        TcCanonical.canonicalize)
               , ("spontaneous solve",       spontaneousSolveStage)
               , ("interact with inerts",    interactWithInertsStage)
+              , ("applied type equalities", appliedTypeEqualitiesStage)
               , ("top-level reactions",     topReactionsStage) ]
-\end{code}
 
+appliedTypeEqualitiesStage :: SimplifierStage
+appliedTypeEqualitiesStage workItem = continueWith workItem
+
+\end{code}
 
 *********************************************************************************
 *                                                                               * 
@@ -326,9 +330,9 @@ kickOutRewritable new_flav new_tv
                             , inert_funeqs = feqs_in
                             , inert_irreds = irs_in
                             , inert_insols = insols_in
-                            , inert_appeqs = appeqs_in }
+                            , inert_appeqs = appeqs }
 
-         kicked_out = WorkList { wl_eqs    = (varEnvElts tv_eqs_out) ++ (bagToList appeqs_out)
+         kicked_out = WorkList { wl_eqs    = (varEnvElts tv_eqs_out) -- ++ (bagToList appeqs_out)
                                , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
                                , wl_rest   = bagToList (dicts_out `andCts` irs_out 
                                                         `andCts` insols_out) }
@@ -338,7 +342,7 @@ kickOutRewritable new_flav new_tv
          (dicts_out,  dicts_in)   = partitionCCanMap kick_out_ct dictmap
          (irs_out,    irs_in)     = partitionBag     kick_out_ct irreds
          (insols_out, insols_in)  = partitionBag     kick_out_ct insols
-         (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct appeqs
+         -- (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct appeqs
            -- Kick out even insolubles; see Note [Kick out insolubles]
 
     kick_out_ct inert_ct = new_flav `canRewrite` (ctFlavour inert_ct) &&
@@ -434,6 +438,13 @@ trySpontaneousSolve workItem@(CTyEqCan { cc_ev = gw
   = do { tch1 <- isTouchableMetaTyVarTcS tv1
        ; if tch1 then trySpontaneousEqOneWay d gw tv1 xi
                  else return SPCantSolve }
+
+trySpontaneousSolve (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs }) | (_, _) <- splitAppTys rhs
+  = do { traceTcS "Spont: CTyAppEqCan" (ppr tyvar)
+       ; mty <- isFilledMetaTyVar_maybe tyvar
+       ; traceTcS "Spont: CTyAppEqCan" (ppr mty)
+       -- ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar `eqType` ty'))
+       ; return SPCantSolve }
 
   -- No need for 
   --      trySpontaneousSolve (CFunEqCan ...) = ...
@@ -575,12 +586,12 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
                    ; traceTcS "findSolvableApplication: " (ppr tyvar <+> ppr appeqs)
 
                    ; (new_constraints, removed, stay) <- foldrBagM (\ct (cts, r, s) ->
-                        do { ml <- has_other_dict ct
-                           ; case (ml, isCTyAppEqCan ct && (zonk $ cc_tyvar ct) == (zonk $ tyvar)) of
+                        do { ml <- has_other_dict tyvar ct
+                           ; return $ case (ml, isCTyAppEqCan ct) of
 
-                                (Just (vars, lambda), True) -> return (split ct vars lambda `unionBags` cts, consBag ct r, s)
+                                (Just (vars, lambda), True) -> (split ct vars lambda `unionBags` cts, consBag ct r, s)
 
-                                _ -> return (cts, r, extendCts s ct)
+                                _ -> (cts, r, extendCts s ct)
 
                            }) (emptyBag, emptyBag, emptyCts) appeqs
                    
@@ -593,17 +604,22 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
         zonk tv = case do { (_,ty) <- lookupVarEnv ty_env tv ; getTyVar_maybe ty } of
             Nothing -> tv
             Just tv' -> tv'
-        has_other_dict :: Ct -> TcS (Maybe ([TcType], TcType))
-        has_other_dict ct
+        has_other_dict :: TyVar -> Ct -> TcS (Maybe ([TcType], TcType))
+        has_other_dict tyvar ct
+          | (ty, tyargs@(_:_)) <- splitAppTys $ cc_rhs ct, Just tv <- tcGetTyVar_maybe ty, zonk tv == zonk tyvar
+            = do { traceTcS "fingSolvableApplication: has_other_dict shortcut" (ppr (ty_env, zonk $ cc_tyvar ct, zonk tyvar, isCTyAppEqCan ct))
+                 ; return $ Just (tyargs, ty)
+                 }
+        has_other_dict tv ct
           | (ty, tyargs@(_:_)) <- splitAppTys $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
             = let
                  dicts = concatMap bagToList (given ++ wanted)
                  given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
                  wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
-              in do { traceTcS "findSolvableApplication: has_other_dict 0" (ppr (tyvar, zonk tyvar))
-                    ; case filter (match cls $ zonk tyvar) dicts of
-                        (_:_) -> return (Just (tyargs, ty))
-                        [] -> return Nothing
+              in do { traceTcS "findSolvableApplication: has_other_dict 0" (ppr (tyvar, zonk tyvar, tv, zonk tv))
+                    ; return $ case filter (match cls $ zonk tyvar) dicts of
+                        (_:_) -> (Just (tyargs, ty))
+                        [] -> Nothing
                     }
           | Just (tycon, tyargs) <- tcSplitTyConApp_maybe (cc_rhs ct)
             = do { let
@@ -664,7 +680,7 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
                                    loc = cc_loc ct
                                    lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) lambda) ev)
                                    vcts = zipWith (\v arg -> mkNonCanonical loc (CtWanted (mkTcEqPred arg v) ev)) vars $ cc_tyargs ct
-                               in listToBag (lct:vcts)
+                               in pprTrace "findSolvableApplication: split" (ppr (lct:vcts)) $ listToBag (lct:vcts)
 
 findSolvableApplication _ _ inerts = return (emptyCts, inerts)
 
