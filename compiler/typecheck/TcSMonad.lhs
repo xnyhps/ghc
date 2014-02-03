@@ -287,7 +287,7 @@ workListFromCt ct | isEqPred (ctPred ct) = workListFromEq ct
 
 selectWorkItem :: WorkList -> (Maybe Ct, WorkList)
 selectWorkItem wl@(WorkList { wl_eqs = eqs, wl_funeqs = feqs, wl_rest = rest })
-  = pprTrace "selectWorkItem" (ppr wl) $ case (eqs,feqs,rest) of
+  = case (eqs,feqs,rest) of
       (ct:cts,_,_)     -> (Just ct, wl { wl_eqs    = cts })
       (_,fun_eqs,_)    | Just (fun_eqs', ct) <- extractDeque fun_eqs
                        -> (Just ct, wl { wl_funeqs = fun_eqs' })
@@ -822,9 +822,11 @@ getInertUnsolved
             unsolved_dicts  = extractUnsolvedCMap (inert_dicts icans)
             (unsolved_funeqs,_) = partCtFamHeadMap is_unsolved (inert_funeqs icans)
             unsolved_eqs = foldVarEnv add_if_unsolved emptyCts (inert_eqs icans)
+            unsolved_app_eqs = Bag.filterBag is_unsolved (inert_appeqs icans)
 
             unsolved_flats = unsolved_eqs `unionBags` unsolved_irreds `unionBags` 
-                             unsolved_dicts `unionBags` unsolved_funeqs
+                             unsolved_dicts `unionBags` unsolved_funeqs `unionBags`
+                             unsolved_app_eqs
 
       ; return (unsolved_flats, inert_insols icans) }
   where
@@ -845,9 +847,10 @@ checkAllSolved
             unsolved_dicts  = not (isNullUFM (cts_wanted (inert_dicts icans)))
             unsolved_funeqs = anyFamHeadMap isWantedCt (inert_funeqs icans)
             unsolved_eqs    = foldVarEnv ((||) . isWantedCt) False (inert_eqs icans)
+            unsolved_app_eqs = Bag.anyBag isWantedCt (inert_appeqs icans)
 
       ; return (not (unsolved_eqs || unsolved_irreds
-                     || unsolved_dicts || unsolved_funeqs
+                     || unsolved_dicts || unsolved_funeqs || unsolved_app_eqs
                      || not (isEmptyBag (inert_insols icans)))) }
 
 
@@ -877,7 +880,7 @@ extractRelevantInerts wi
         extract_ics_relevants :: Ct -> InertCans -> (Cts, InertCans)
         extract_ics_relevants (CDictCan {cc_class = cl, cc_tyargs = tys}) ics = 
             let (cts,dict_map) = getRelevantCts cl (inert_dicts ics) 
-            in pprTrace "extract_ics_relevants" ((ppr tys) <+> (ppr (filterBag isCNonCanonical $ inert_insols ics))) $ (cts, ics { inert_dicts = dict_map })
+            in (cts, ics { inert_dicts = dict_map })
 
         extract_ics_relevants (CFunEqCan { cc_fun = tc, cc_tyargs = tys }) 
                               ics@(IC { inert_funeqs = funeq_map })

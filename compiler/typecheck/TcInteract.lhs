@@ -234,11 +234,7 @@ thePipeline :: [(String,SimplifierStage)]
 thePipeline = [ ("canonicalization",        TcCanonical.canonicalize)
               , ("spontaneous solve",       spontaneousSolveStage)
               , ("interact with inerts",    interactWithInertsStage)
-              , ("applied type equalities", appliedTypeEqualitiesStage)
               , ("top-level reactions",     topReactionsStage) ]
-
-appliedTypeEqualitiesStage :: SimplifierStage
-appliedTypeEqualitiesStage workItem = continueWith workItem
 
 \end{code}
 
@@ -268,6 +264,32 @@ spontaneousSolveStage workItem
                       <+> ppr workItem
                     ; insertInertItemTcS workItem
                     ; return Stop }
+              | (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs, cc_ev = ev, cc_loc = loc, cc_tyargs = args }) <- workItem, (ty', vars) <- splitAppTys rhs, Just tyvar' <- getTyVar_maybe ty', tyvar == tyvar'
+              -> do { traceTcS "Spontaneously solved" (ppr workItem)
+                    ; let f x a b = case ev of
+                              CtWanted { ctev_evar = evar } -> CtWanted x evar
+                              CtGiven { ctev_evtm = _evtm } -> CtGiven x (EvCoercion ((mkTcReflCo a) `mkTcTransCo` (mkTcReflCo b))) -- is this correct?
+                              CtDerived {} -> CtDerived x
+                          vcts = zipWith (\v arg -> mkNonCanonical loc (f (mkTcEqPred arg v) arg v)) vars args
+                    ; mapM_ (updWorkListTcS . extendWorkListCt) vcts
+                    ; traceTcS "Spontaneously solved: now adding " (ppr vcts)
+                    ; return Stop
+                    }
+              | (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs, cc_ev = ev, cc_loc = loc, cc_tyargs = [arg] }) <- workItem, (ty', [var]) <- splitAppTys rhs, Nothing <- getTyVar_maybe ty'
+              -> do { traceTcS "Spontaneously solved" (ppr workItem)
+                    ; let f x a b = case ev of
+                              CtWanted { ctev_evar = evar } -> CtWanted x evar
+                              CtGiven { ctev_evtm = _evtm } -> CtGiven x (EvCoercion ((mkTcReflCo a) `mkTcTransCo` (mkTcReflCo b)))
+                              CtDerived {} -> CtDerived x
+                          vcts = [mkNonCanonical loc (f (mkTcEqPred arg var) arg var), mkNonCanonical loc (f (mkTcEqPred (mkTyVarTy tyvar) ty') (mkTyVarTy tyvar) ty')]
+                    ; mapM_ (updWorkListTcS . extendWorkListCt) vcts
+                    ; traceTcS "Spontaneously solved: now adding " (ppr vcts)
+                    ; return Stop
+                    }
+              | (CTyAppEqCan { cc_tyvar = _tyvar, cc_rhs = rhs, cc_tyargs = _args }) <- workItem
+              -> do { traceTcS "Spontaneously not solved" ((ppr workItem) <+> (ppr $ splitAppTys rhs))
+                    ; continueWith workItem
+                    }
               | otherwise
               -> continueWith workItem
 
@@ -439,12 +461,11 @@ trySpontaneousSolve workItem@(CTyEqCan { cc_ev = gw
        ; if tch1 then trySpontaneousEqOneWay d gw tv1 xi
                  else return SPCantSolve }
 
-trySpontaneousSolve (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs }) | (_, _) <- splitAppTys rhs
-  = do { traceTcS "Spont: CTyAppEqCan" (ppr tyvar)
-       ; mty <- isFilledMetaTyVar_maybe tyvar
-       ; traceTcS "Spont: CTyAppEqCan" (ppr mty)
-       -- ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar `eqType` ty'))
-       ; return SPCantSolve }
+--trySpontaneousSolve (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs }) | (ty', _) <- splitAppTys rhs, Just tyvar' <- getTyVar_maybe ty'
+--  = do { traceTcS "Spont: CTyAppEqCan" (ppr tyvar)
+--       ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar == tyvar'))
+--       -- ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar `eqType` ty'))
+--       ; return (SPSolved ) }
 
   -- No need for 
   --      trySpontaneousSolve (CFunEqCan ...) = ...
@@ -587,11 +608,11 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
 
                    ; (new_constraints, removed, stay) <- foldrBagM (\ct (cts, r, s) ->
                         do { ml <- has_other_dict tyvar ct
-                           ; return $ case (ml, isCTyAppEqCan ct) of
+                           ; case (ml, isCTyAppEqCan ct) of
 
-                                (Just (vars, lambda), True) -> (split ct vars lambda `unionBags` cts, consBag ct r, s)
+                                (Just (vars, lambda), True) -> do { traceTcS "findSolvableApplication.split" (ppr $ split ct vars lambda) ; return (split ct vars lambda `unionBags` cts, consBag ct r, s) }
 
-                                _ -> (cts, r, extendCts s ct)
+                                _ -> return (cts, r, extendCts s ct)
 
                            }) (emptyBag, emptyBag, emptyCts) appeqs
                    
@@ -678,9 +699,11 @@ findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env 
         split ct vars lambda = let
                                    ev = ctev_evar (cc_ev ct)
                                    loc = cc_loc ct
-                                   lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkTyVarTy $ cc_tyvar ct) lambda) ev)
-                                   vcts = zipWith (\v arg -> mkNonCanonical loc (CtWanted (mkTcEqPred arg v) ev)) vars $ cc_tyargs ct
-                               in pprTrace "findSolvableApplication: split" (ppr (lct:vcts)) $ listToBag (lct:vcts)
+                                   residual_args = reverse $ drop (length vars) (reverse $ cc_tyargs ct)
+                                   residual_vars = reverse $ drop (length (cc_tyargs ct)) $ reverse vars
+                                   lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkAppTys (mkTyVarTy $ cc_tyvar ct) residual_args) (mkAppTys lambda residual_vars)) ev)
+                                   vcts = zipWith (\v arg -> mkNonCanonical loc (CtWanted (mkTcEqPred arg v) ev)) (reverse vars) $ (reverse $ cc_tyargs ct)
+                               in listToBag (lct:vcts)
 
 findSolvableApplication _ _ inerts = return (emptyCts, inerts)
 

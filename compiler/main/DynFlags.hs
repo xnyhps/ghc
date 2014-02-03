@@ -581,6 +581,7 @@ data ExtensionFlag
    | Opt_TypeHoles
    | Opt_NegativeLiterals
    | Opt_EmptyCase
+   | Opt_LambdaInstances
    deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'GeneralFlag's but also a plethora of
@@ -2845,7 +2846,8 @@ xFlags = [
   ( "PackageImports",                   Opt_PackageImports, nop ),
   ( "TypeHoles",                        Opt_TypeHoles, nop ),
   ( "NegativeLiterals",                 Opt_NegativeLiterals, nop ),
-  ( "EmptyCase",                        Opt_EmptyCase, nop )
+  ( "EmptyCase",                        Opt_EmptyCase, nop ),
+  ( "LambdaInstances",                  Opt_LambdaInstances, nop )
   ]
 
 defaultFlags :: Settings -> [GeneralFlag]

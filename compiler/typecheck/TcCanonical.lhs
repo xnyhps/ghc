@@ -27,7 +27,7 @@ import OccName( OccName )
 import Outputable
 import Control.Monad    ( when )
 import TysWiredIn ( eqTyCon )
-import DynFlags( DynFlags )
+import DynFlags( DynFlags, xopt, ExtensionFlag(..) )
 import VarSet
 import TcSMonad
 import FastString
@@ -593,7 +593,6 @@ flatten loc _f ctxt ty@(ForAllTy {})
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
 flatten loc _f ctxt (BigLambda tv ty)
   = do { (ty', co) <- flatten loc FMSubstOnly ctxt ty
-       ; pprTrace "flatten BigLambda" ((ppr tv) <+> (ppr co)) $ return ()
        ; return (BigLambda tv ty', co) }
 \end{code}
 
@@ -800,11 +799,12 @@ canEqNC loc ev ty1 ty2
        ; (s1, co1) <- flatten loc FMSubstOnly flav ty1
        ; (s2, co2) <- flatten loc FMSubstOnly flav ty2
        ; mb_ct <- rewriteCtFlavor ev (mkTcEqPred s1 s2) (mkHdEqPred s2 co1 co2)
+       ; dflags <- getDynFlags
        ; case mb_ct of
            Nothing     -> return Stop
-           Just new_ev -> last_chance new_ev s1 s2 }
+           Just new_ev -> last_chance new_ev s1 s2 dflags }
   where
-    last_chance ev ty1 ty2
+    last_chance ev ty1 ty2 dflags
       | Just (tc1,tys1) <- tcSplitTyConApp_maybe ty1
       , Just (tc2,tys2) <- tcSplitTyConApp_maybe ty2
       , isDecomposableTyCon tc1 && isDecomposableTyCon tc2
@@ -818,17 +818,17 @@ canEqNC loc ev ty1 ty2
                                in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
            ; ctevs <- xCtFlavor ev [mkTcEqPred s1 (mkTyConApp s2 []), mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
            ; canEvVarsCreated loc ctevs }
-      
-      {-
-      | Just (s1,[t1]) <- tcSplitTyConApp_maybe ty1
+
+      | Just (s1,t1) <- tcSplitAppTy_maybe ty1
       , Just (s2,t2) <- tcSplitAppTy_maybe ty2
+      , not (xopt Opt_LambdaInstances dflags)
       = do { let xevcomp [x,y] = EvCoercion (mkTcAppCo (evTermCoercion x) (evTermCoercion y))
                  xevcomp _ = error "canEqAppTy: can't happen" -- Can't happen
-                 xevdecomp x = let xco = evTermCoercion x 
-                               in [EvCoercion (mkTcLRCo CLeft xco), EvCoercion (mkTcLRCo CRight xco)]
-           ; ctevs <- xCtFlavor ev [mkTcEqPred (mkTyConApp s1 []) s2, mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
+                 xevdecomp x = let xco = evTermCoercion x
+                               in [ EvCoercion (mkTcLRCo CLeft xco)
+                                  , EvCoercion (mkTcLRCo CRight xco)]
+           ; ctevs <- xCtFlavor ev [mkTcEqPred s1 s2, mkTcEqPred t1 t2] (XEvTerm xevcomp xevdecomp)
            ; canEvVarsCreated loc ctevs }
-      -}
 
       | (t1,s1) <- tcSplitAppTys ty1
       , (_t2,_s2) <- tcSplitAppTys ty2
@@ -836,6 +836,7 @@ canEqNC loc ev ty1 ty2
       -- , Just tv2 <- tcGetTyVar_maybe t2
       = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc })
       | (_t1,_s1) <- tcSplitAppTys ty1
+
       , (t2,s2) <- tcSplitAppTys ty2
       , Just tv2 <- tcGetTyVar_maybe t2
       = continueWith (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv2, cc_tyargs = s2, cc_rhs = ty1, cc_loc = loc })

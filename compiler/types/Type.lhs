@@ -1230,7 +1230,7 @@ cmpTypeX env (AppTy s1 t1)       (AppTy s2 t2)       = cmpTypeX env s1 s2 `thenC
 cmpTypeX env (FunTy s1 t1)       (FunTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
 cmpTypeX env (TyConApp tc1 tys1) (TyConApp tc2 tys2) = (tc1 `cmpTc` tc2) `thenCmp` cmpTypesX env tys1 tys2
 cmpTypeX _   (LitTy l1)          (LitTy l2)          = compare l1 l2
-cmpTypeX env (BigLambda tv1 t1)  (BigLambda tv2 t2)  = pprTrace "cmpTypeX" ((ppr $ rnInScopeSet env) <+> (ppr $ tyVarKind tv1) <+> (ppr $ tyVarKind tv2)) $ cmpTypeX env (tyVarKind tv1) (tyVarKind tv2)
+cmpTypeX env (BigLambda tv1 t1)  (BigLambda tv2 t2)  = cmpTypeX env (tyVarKind tv1) (tyVarKind tv2)
                                                        `thenCmp` cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
 
     -- Deal with the rest: TyVarTy < AppTy < FunTy < LitTy < TyConApp < ForAllTy < PredTy < BigLambda
