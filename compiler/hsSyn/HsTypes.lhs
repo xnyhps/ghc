@@ -27,6 +27,7 @@ module HsTypes (
         
         mkHsQTvs, hsQTvBndrs,
         mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
+        mkBigLambdaTy,
         hsTyVarName, mkHsWithBndrs, hsLKiTyVarNames,
         hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
         splitLHsInstDeclTy_maybe,
@@ -250,6 +251,8 @@ data HsType name
   | HsTyLit HsTyLit      -- A promoted numeric literal.
 
   | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
+  | HsBigLambda          (LHsTyVarBndrs name)
+                         (LHsType name)
   deriving (Data, Typeable)
 
 
@@ -411,6 +414,9 @@ hsExplicitTvs :: LHsType Name -> [Name]
 -- The explicitly-given forall'd type variables of a HsType
 hsExplicitTvs (L _ (HsForAllTy Explicit tvs _ _)) = hsLKiTyVarNames tvs
 hsExplicitTvs _                                   = []
+
+mkBigLambdaTy :: [LHsTyVarBndr RdrName] -> LHsType RdrName -> HsType RdrName
+mkBigLambdaTy tvs ty = HsBigLambda (mkHsQTvs tvs) ty
 
 ---------------------
 hsTyVarName :: HsTyVarBndr name -> name
@@ -682,6 +688,9 @@ ppr_mono_ty ctxt_prec (HsDocTy ty doc)
     ppr_mono_lty pREC_OP ty <+> ppr (unLoc doc)
   -- we pretty print Haddock comments on types as if they were
   -- postfix operators
+
+ppr_mono_ty _         (HsBigLambda tvs ty)
+  = parens $ text "/\\" <> (ppr tvs) <+> char '.' <+> ppr_mono_lty pREC_FUN ty
 
 --------------------------
 ppr_fun_ty :: (OutputableBndr name) => Int -> LHsType name -> LHsType name -> SDoc

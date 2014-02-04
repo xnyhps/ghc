@@ -81,11 +81,12 @@ identityConv (TyConApp tycon tys)
   = do { mapM_ identityConv tys
        ; identityConvTyCon tycon
        }
-identityConv (LitTy {})    = noV $ text "identityConv: not sure about literal types under vectorisation"
-identityConv (TyVarTy {})  = noV $ text "identityConv: type variable changes under vectorisation"
-identityConv (AppTy {})    = noV $ text "identityConv: type appl. changes under vectorisation"
-identityConv (FunTy {})    = noV $ text "identityConv: function type changes under vectorisation"
-identityConv (ForAllTy {}) = noV $ text "identityConv: quantified type changes under vectorisation"
+identityConv (LitTy {})     = noV $ text "identityConv: not sure about literal types under vectorisation"
+identityConv (TyVarTy {})   = noV $ text "identityConv: type variable changes under vectorisation"
+identityConv (AppTy {})     = noV $ text "identityConv: type appl. changes under vectorisation"
+identityConv (FunTy {})     = noV $ text "identityConv: function type changes under vectorisation"
+identityConv (ForAllTy {})  = noV $ text "identityConv: quantified type changes under vectorisation"
+identityConv (BigLambda {}) = noV $ text "identityConv: quantified type changes under vectorisation"
 
 -- |Check that this type constructor is not changed by vectorisation — i.e., it does not embed any
 -- parallel arrays.

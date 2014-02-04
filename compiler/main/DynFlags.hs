@@ -582,6 +582,7 @@ data ExtensionFlag
    | Opt_NegativeLiterals
    | Opt_EmptyCase
    | Opt_PatternSynonyms
+   | Opt_LambdaInstances
    deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'GeneralFlag's but also a plethora of
@@ -2863,7 +2864,8 @@ xFlags = [
   ( "PackageImports",                   Opt_PackageImports, nop ),
   ( "NegativeLiterals",                 Opt_NegativeLiterals, nop ),
   ( "EmptyCase",                        Opt_EmptyCase, nop ),
-  ( "PatternSynonyms",                  Opt_PatternSynonyms, nop )
+  ( "PatternSynonyms",                  Opt_PatternSynonyms, nop ),
+  ( "LambdaInstances",                  Opt_LambdaInstances, nop )
   ]
 
 defaultFlags :: Settings -> [GeneralFlag]

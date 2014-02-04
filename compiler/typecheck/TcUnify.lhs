@@ -625,18 +625,18 @@ uType origin orig_ty1 orig_ty2
 	-- See Note [Care with type applications]
         -- Do not decompose FunTy against App; 
         -- it's often a type error, so leave it for the constraint solver
-    go (AppTy s1 t1) (AppTy s2 t2)
-      = go_app s1 t1 s2 t2
+    --go (AppTy s1 t1) (AppTy s2 t2)
+    --  = go_app s1 t1 s2 t2
 
-    go (AppTy s1 t1) (TyConApp tc2 ts2)
-      | Just (ts2', t2') <- snocView ts2
-      = ASSERT( isDecomposableTyCon tc2 ) 
-        go_app s1 t1 (TyConApp tc2 ts2') t2'
+    --go (AppTy s1 t1) (TyConApp tc2 ts2)
+    --  | Just (ts2', t2') <- snocView ts2
+    --  = ASSERT( isDecomposableTyCon tc2 ) 
+    --    go_app s1 t1 (TyConApp tc2 ts2') t2'
 
-    go (TyConApp tc1 ts1) (AppTy s2 t2) 
-      | Just (ts1', t1') <- snocView ts1
-      = ASSERT( isDecomposableTyCon tc1 ) 
-        go_app (TyConApp tc1 ts1') t1' s2 t2 
+    --go (TyConApp tc1 ts1) (AppTy s2 t2) 
+    --  | Just (ts1', t1') <- snocView ts1
+    --  = ASSERT( isDecomposableTyCon tc1 ) 
+    --    go_app (TyConApp tc1 ts1') t1' s2 t2 
 
     go ty1 ty2
       | tcIsForAllTy ty1 || tcIsForAllTy ty2 
@@ -646,10 +646,11 @@ uType origin orig_ty1 orig_ty2
     go ty1 ty2 = uType_defer origin ty1 ty2 -- failWithMisMatch origin
 
     ------------------
-    go_app s1 t1 s2 t2
-      = do { co_s <- uType origin s1 s2  -- See Note [Unifying AppTy]
-           ; co_t <- uType origin t1 t2        
-           ; return $ mkTcAppCo co_s co_t }
+    --go_app s1 t1 s2 t2
+    --  = do { co_s <- uType origin s1 s2  -- See Note [Unifying AppTy]
+    --       ; co_t <- uType origin t1 t2    
+    --       ; traceTc "go_app" (ppr s1 <+> ppr t1 <+> ppr s2 <+> ppr t2 <+> ppr co_s <+> ppr co_t)    
+    --       ; return $ mkTcAppCo co_s co_t }
 
 unifySigmaTy :: CtOrigin -> TcType -> TcType -> TcM TcCoercion
 unifySigmaTy origin ty1 ty2
@@ -903,6 +904,7 @@ checkTauTvUpdate dflags tv ty
     defer_me (FunTy arg res)   = defer_me arg || defer_me res
     defer_me (AppTy fun arg)   = defer_me fun || defer_me arg
     defer_me (ForAllTy _ ty)   = not impredicative || defer_me ty
+    defer_me (BigLambda _ ty)  = defer_me ty
 \end{code}
 
 Note [OpenTypeKind accepts foralls]

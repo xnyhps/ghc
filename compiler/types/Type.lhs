@@ -286,11 +286,12 @@ expandTypeSynonyms ty
       = go (mkAppTys (substTy (mkTopTvSubst tenv) rhs) tys')
       | otherwise
       = TyConApp tc (map go tys)
-    go (LitTy l)       = LitTy l
-    go (TyVarTy tv)    = TyVarTy tv
-    go (AppTy t1 t2)   = mkAppTy (go t1) (go t2)
-    go (FunTy t1 t2)   = FunTy (go t1) (go t2)
-    go (ForAllTy tv t) = ForAllTy tv (go t)
+    go (LitTy l)        = LitTy l
+    go (TyVarTy tv)     = TyVarTy tv
+    go (AppTy t1 t2)    = mkAppTy (go t1) (go t2)
+    go (FunTy t1 t2)    = FunTy (go t1) (go t2)
+    go (ForAllTy tv t)  = ForAllTy tv (go t)
+    go (BigLambda tv t) = BigLambda tv (go t)
 \end{code}
 
 
@@ -335,6 +336,7 @@ invariant: use it.
 -- | Applies a type to another, as in e.g. @k a@
 mkAppTy :: Type -> Type -> Type
 mkAppTy (TyConApp tc tys) ty2 = mkTyConApp tc (tys ++ [ty2])
+mkAppTy (BigLambda tv ty) ty2 = substTy (mkTopTvSubst [(tv, ty2)]) ty
 mkAppTy ty1               ty2 = AppTy ty1 ty2
         -- Note that the TyConApp could be an
         -- under-saturated type synonym.  GHC allows that; e.g.
@@ -348,6 +350,7 @@ mkAppTy ty1               ty2 = AppTy ty1 ty2
 mkAppTys :: Type -> [Type] -> Type
 mkAppTys ty1                []   = ty1
 mkAppTys (TyConApp tc tys1) tys2 = mkTyConApp tc (tys1 ++ tys2)
+mkAppTys (BigLambda tv ty) (x:xs) = mkAppTys (substTy (mkTopTvSubst [(tv, x)]) ty) xs
 mkAppTys ty1                tys2 = foldl AppTy ty1 tys2
 
 -------------
@@ -664,6 +667,7 @@ tyConsOfType ty
      go (AppTy a b)                = go a `plusNameEnv` go b
      go (FunTy a b)                = go a `plusNameEnv` go b
      go (ForAllTy _ ty)            = go ty
+     go (BigLambda _ ty)           = go ty
 
      go_tc tc tys = extendNameEnv (go_s tys) (tyConName tc) tc
      go_s tys = foldr (plusNameEnv . go) emptyNameEnv tys
@@ -1039,6 +1043,7 @@ typeSize (AppTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (FunTy t1 t2)   = typeSize t1 + typeSize t2
 typeSize (ForAllTy _ t)  = 1 + typeSize t
 typeSize (TyConApp _ ts) = 1 + sum (map typeSize ts)
+typeSize (BigLambda _ t) = 1 + typeSize t
 \end{code}
 
 
@@ -1170,6 +1175,7 @@ seqType (AppTy t1 t2)     = seqType t1 `seq` seqType t2
 seqType (FunTy t1 t2)     = seqType t1 `seq` seqType t2
 seqType (TyConApp tc tys) = tc `seq` seqTypes tys
 seqType (ForAllTy tv ty)  = seqType (tyVarKind tv) `seq` seqType ty
+seqType (BigLambda tv ty) = seqType (tyVarKind tv) `seq` seqType ty
 
 seqTypes :: [Type] -> ()
 seqTypes []       = ()
@@ -1254,8 +1260,10 @@ cmpTypeX env (AppTy s1 t1)       (AppTy s2 t2)       = cmpTypeX env s1 s2 `thenC
 cmpTypeX env (FunTy s1 t1)       (FunTy s2 t2)       = cmpTypeX env s1 s2 `thenCmp` cmpTypeX env t1 t2
 cmpTypeX env (TyConApp tc1 tys1) (TyConApp tc2 tys2) = (tc1 `cmpTc` tc2) `thenCmp` cmpTypesX env tys1 tys2
 cmpTypeX _   (LitTy l1)          (LitTy l2)          = compare l1 l2
+cmpTypeX env (BigLambda tv1 t1)  (BigLambda tv2 t2)  = cmpTypeX env (tyVarKind tv1) (tyVarKind tv2)
+                                                       `thenCmp` cmpTypeX (rnBndr2 env tv1 tv2) t1 t2
 
-    -- Deal with the rest: TyVarTy < AppTy < FunTy < LitTy < TyConApp < ForAllTy < PredTy
+    -- Deal with the rest: TyVarTy < AppTy < FunTy < LitTy < TyConApp < ForAllTy < PredTy < BigLambda
 cmpTypeX _ (AppTy _ _)    (TyVarTy _)    = GT
 
 cmpTypeX _ (FunTy _ _)    (TyVarTy _)    = GT
@@ -1275,6 +1283,13 @@ cmpTypeX _ (ForAllTy _ _) (AppTy _ _)    = GT
 cmpTypeX _ (ForAllTy _ _) (FunTy _ _)    = GT
 cmpTypeX _ (ForAllTy _ _) (LitTy _)      = GT
 cmpTypeX _ (ForAllTy _ _) (TyConApp _ _) = GT
+
+cmpTypeX _ (BigLambda _ _) (TyVarTy _)    = GT
+cmpTypeX _ (BigLambda _ _) (AppTy _ _)    = GT
+cmpTypeX _ (BigLambda _ _) (FunTy _ _)    = GT
+cmpTypeX _ (BigLambda _ _) (LitTy _)      = GT
+cmpTypeX _ (BigLambda _ _) (TyConApp _ _) = GT
+cmpTypeX _ (BigLambda _ _) (ForAllTy _ _) = GT
 
 cmpTypeX _ _              _              = LT
 
@@ -1555,6 +1570,9 @@ subst_ty subst ty
     go (ForAllTy tv ty)  = case substTyVarBndr subst tv of
                               (subst', tv') ->
                                  ForAllTy tv' $! (subst_ty subst' ty)
+    go (BigLambda tv ty) = case substTyVarBndr subst tv of
+                              (subst', tv') ->
+                                 BigLambda tv' $! (subst_ty subst' ty)
 
 substTyVar :: TvSubst -> TyVar  -> Type
 substTyVar (TvSubst _ tenv) tv
@@ -1655,6 +1673,7 @@ typeKind _ty@(FunTy _arg res)
     | otherwise             = ASSERT2( isSubOpenTypeKind k, ppr _ty $$ ppr k ) liftedTypeKind
     where
       k = typeKind res
+typeKind (BigLambda tv ty)   = mkArrowKind (tyVarKind tv) (typeKind ty)
 
 typeLiteralKind :: TyLit -> Kind
 typeLiteralKind l =

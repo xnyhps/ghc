@@ -739,6 +739,10 @@ lintType (ForAllTy tv ty)
 
 lintType ty@(LitTy l) = lintTyLit l >> return (typeKind ty)
 
+lintType (BigLambda tv ty)
+  = do { lintTyBndrKind tv
+       ; addInScopeVar tv (lintType ty) }
+
 \end{code}
 
 

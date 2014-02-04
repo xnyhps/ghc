@@ -255,6 +255,7 @@ extendWorkListNonEq ct wl
 extendWorkListCt :: Ct -> WorkList -> WorkList
 -- Agnostic
 extendWorkListCt ct wl
+ | isCTyAppEqCan ct = extendWorkListNonEq ct wl
  | isEqPred (ctPred ct) = extendWorkListEq ct wl
  | otherwise = extendWorkListNonEq ct wl
 
@@ -426,6 +427,7 @@ data InertCans
               -- whose evidence is not a constant
               -- See Note [When does an implication have given equalities?]
               -- in TcSimplify
+       , inert_appeqs :: Cts
        }
 
 type EqualCtList = [Ct]
@@ -488,6 +490,8 @@ instance Outputable InertCans where
                    <+> vcat (map ppr (Bag.bagToList $ inert_irreds ics))
                  , text "Insolubles =" <+> -- Clearly print frozen errors
                     braces (vcat (map ppr (Bag.bagToList $ inert_insols ics)))
+                 , ptext (sLit "Application equalities:")
+                   <+> braces (vcat (map ppr (Bag.bagToList $ inert_appeqs ics)))
                  ]
 
 instance Outputable InertSet where
@@ -497,17 +501,18 @@ instance Outputable InertSet where
 
 emptyInert :: InertSet
 emptyInert
-  = IS { inert_cans = IC { inert_eqs     = emptyVarEnv
-                         , inert_dicts   = emptyDicts
-                         , inert_funeqs  = emptyFunEqs
-                         , inert_irreds  = emptyCts
-                         , inert_insols  = emptyCts
-                         , inert_no_eqs  = True
-                         }
+  = IS { inert_cans = IC { inert_eqs    = emptyVarEnv
+                         , inert_dicts  = emptyCCanMap
+                         , inert_funeqs = emptyFamHeadMap
+                         , inert_irreds = emptyCts
+                         , inert_insols = emptyCts
+                         , inert_no_eqs = False
+                         , inert_appeqs = emptyCts }
        , inert_fsks          = []
-       , inert_flat_cache    = emptyFunEqs
-       , inert_solved_funeqs = emptyFunEqs
-       , inert_solved_dicts  = emptyDictMap }
+       , inert_flat_cache    = emptyFamHeadMap
+       , inert_solved_dicts  = PredMap emptyTM 
+       , inert_solved_funeqs = emptyFamHeadMap }
+
 
 ---------------
 addInertCan :: InertCans -> Ct -> InertCans
@@ -598,6 +603,7 @@ prepareInertsForImplications is
            , inert_dicts   = filterDicts isGivenCt dicts
            , inert_insols  = emptyCts
            , inert_no_eqs  = True  -- Ready for each implication
+           , inert_appeqs  = emptyCts
            }
 
     is_given_eq :: [Ct] -> Bool
@@ -688,8 +694,11 @@ getInertUnsolved
             unsolved_funeqs = foldFunEqs add_if_unsolveds (inert_funeqs icans) emptyCts
             unsolved_eqs    = foldVarEnv add_if_unsolveds emptyCts (inert_eqs icans)
 
-            unsolved_flats = unsolved_eqs `unionBags` unsolved_irreds `unionBags`
-                             unsolved_dicts `unionBags` unsolved_funeqs
+            unsolved_app_eqs = Bag.filterBag is_unsolved (inert_appeqs icans)
+
+            unsolved_flats = unsolved_eqs `unionBags` unsolved_irreds `unionBags` 
+                             unsolved_dicts `unionBags` unsolved_funeqs `unionBags`
+                             unsolved_app_eqs
 
       ; return (unsolved_flats, inert_insols icans) }
   where
@@ -713,9 +722,10 @@ checkAllSolved
             unsolved_dicts  = foldDicts ((||)  . isWantedCt)     (inert_dicts icans)  False
             unsolved_funeqs = foldFunEqs ((||) . any isWantedCt) (inert_funeqs icans) False
             unsolved_eqs    = foldVarEnv ((||) . any isWantedCt) False (inert_eqs icans)
+            unsolved_app_eqs = Bag.anyBag isWantedCt (inert_appeqs icans)
 
       ; return (not (unsolved_eqs || unsolved_irreds
-                     || unsolved_dicts || unsolved_funeqs
+                     || unsolved_dicts || unsolved_funeqs || unsolved_app_eqs
                      || not (isEmptyBag (inert_insols icans)))) }
 
 lookupFlatEqn :: TyCon -> [Type] -> TcS (Maybe (CtEvidence, TcType))

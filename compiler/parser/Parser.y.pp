@@ -292,6 +292,7 @@ incorrect.
  '-<<'          { L _ ITLarrowtail }            -- for arrow notation
  '>>-'          { L _ ITRarrowtail }            -- for arrow notation
  '.'            { L _ ITdot }
+ '/\\'          { L _ ITbiglam }
 
  '{'            { L _ ITocurly }                        -- special symbols
  '}'            { L _ ITccurly }
@@ -1065,6 +1066,7 @@ strict_mark :: { Located HsBang }
 ctype   :: { LHsType RdrName }
         : 'forall' tv_bndrs '.' ctype   {% hintExplicitForall (getLoc $1) >>
                                             return (LL $ mkExplicitHsForAllTy $2 (noLoc []) $4) }
+        | '/\\' tv_bndrs '.' ctype      { LL $ mkBigLambdaTy $2 $4 }
         | context '=>' ctype            { LL $ mkImplicitHsForAllTy   $1 $3 }
         -- A type of form (context => type) is an *implicit* HsForAllTy
         | ipvar '::' type               { LL (HsIParamTy (unLoc $1) $3) }
@@ -1084,6 +1086,7 @@ ctype   :: { LHsType RdrName }
 ctypedoc :: { LHsType RdrName }
         : 'forall' tv_bndrs '.' ctypedoc {% hintExplicitForall (getLoc $1) >>
                                             return (LL $ mkExplicitHsForAllTy $2 (noLoc []) $4) }
+        | '/\\' tv_bndrs '.' ctypedoc       { LL $ mkBigLambdaTy $2 $4 }
         | context '=>' ctypedoc         { LL $ mkImplicitHsForAllTy   $1 $3 }
         -- A type of form (context => type) is an *implicit* HsForAllTy
         | ipvar '::' type               { LL (HsIParamTy (unLoc $1) $3) }

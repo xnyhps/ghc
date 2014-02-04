@@ -46,6 +46,9 @@ module TcRnTypes(
         singleCt, listToCts, ctsElts, extendCts, extendCtsList,
         isEmptyCts, isCTyEqCan, isCFunEqCan,
         isCDictCan_Maybe, isCFunEqCan_maybe,
+        singleCt, listToCts, ctsElts, extendCts, extendCtsList,
+        isEmptyCts, isCTyEqCan, isCFunEqCan,
+        isCDictCan_maybe, isCFunEqCan_maybe, isCTyAppEqCan,
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt,
         isGivenCt, isHoleCt,
         ctEvidence, ctLoc, ctPred,
@@ -972,6 +975,13 @@ data Ct
       cc_ev  :: CtEvidence,
       cc_occ :: OccName    -- The name of this hole
     }
+  | CTyAppEqCan { -- tv xis ~ xi
+      cc_ev     :: CtEvidence,
+      cc_tyvar :: TcTyVar,
+      cc_tyargs :: [Xi],
+      cc_rhs    :: Xi,
+      cc_loc    :: CtLoc
+    }
 \end{code}
 
 Note [Kind orientation for CTyEqCan]
@@ -1119,13 +1129,17 @@ isCTyEqCan (CTyEqCan {})  = True
 isCTyEqCan (CFunEqCan {}) = False
 isCTyEqCan _              = False
 
-isCDictCan_Maybe :: Ct -> Maybe Class
-isCDictCan_Maybe (CDictCan {cc_class = cls })  = Just cls
-isCDictCan_Maybe _              = Nothing
+isCDictCan_maybe :: Ct -> Maybe Class
+isCDictCan_maybe (CDictCan {cc_class = cls })  = Just cls
+isCDictCan_maybe _              = Nothing
 
 isCIrredEvCan :: Ct -> Bool
 isCIrredEvCan (CIrredEvCan {}) = True
 isCIrredEvCan _                = False
+
+isCTyAppEqCan :: Ct -> Bool
+isCTyAppEqCan (CTyAppEqCan {}) = True
+isCTyAppEqCan _ = False
 
 isCFunEqCan_maybe :: Ct -> Maybe (TyCon, [Type])
 isCFunEqCan_maybe (CFunEqCan { cc_fun = tc, cc_tyargs = xis }) = Just (tc, xis)
@@ -1155,6 +1169,7 @@ instance Outputable Ct where
                            CDictCan {}      -> "CDictCan"
                            CIrredEvCan {}   -> "CIrredEvCan"
                            CHoleCan {}      -> "CHoleCan"
+                           CTyAppEqCan {}   -> "CTyAppEqCan"
 \end{code}
 
 \begin{code}

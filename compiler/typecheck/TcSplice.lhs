@@ -1336,6 +1336,7 @@ reifyType (AppTy t1 t2)     = do { [r1,r2] <- reifyTypes [t1,t2] ; return (r1 `T
 reifyType ty@(FunTy t1 t2)
   | isPredTy t1 = reify_for_all ty  -- Types like ((?x::Int) => Char -> Char)
   | otherwise   = do { [r1,r2] <- reifyTypes [t1,t2] ; return (TH.ArrowT `TH.AppT` r1 `TH.AppT` r2) }
+reifyType ty@(BigLambda _ _) = pprPanic "reifyType" (ppr ty)
 
 reify_for_all :: TypeRep.Type -> TcM TH.Type
 reify_for_all ty

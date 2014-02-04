@@ -1223,9 +1223,10 @@ ppr_insts insts
 quickFlattenTy :: TcType -> TcM TcType
 -- See Note [Flattening in error message generation]
 quickFlattenTy ty | Just ty' <- tcView ty = quickFlattenTy ty'
-quickFlattenTy ty@(TyVarTy {})  = return ty
-quickFlattenTy ty@(ForAllTy {}) = return ty     -- See
-quickFlattenTy ty@(LitTy {})    = return ty
+quickFlattenTy ty@(TyVarTy {})   = return ty
+quickFlattenTy ty@(ForAllTy {})  = return ty     -- See
+quickFlattenTy ty@(BigLambda {}) = return ty
+quickFlattenTy ty@(LitTy {})     = return ty
   -- Don't flatten because of the danger or removing a bound variable
 quickFlattenTy (AppTy ty1 ty2) = do { fy1 <- quickFlattenTy ty1
                                     ; fy2 <- quickFlattenTy ty2

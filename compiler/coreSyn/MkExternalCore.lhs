@@ -251,6 +251,7 @@ make_ty' dflags (FunTy t1 t2)     = make_ty dflags (TyConApp funTyCon [t1,t2])
 make_ty' dflags (ForAllTy tv t)  = C.Tforall (make_tbind tv) (make_ty dflags t)
 make_ty' dflags (TyConApp tc ts) = make_tyConApp dflags tc ts
 make_ty' _      (LitTy {})       = panic "MkExernalCore can't do literal types yet"
+make_ty' _      (BigLambda {}) = panic "MkExernalCore can't big lambdas yet"
 
 -- Newtypes are treated just like any other type constructor; not expanded
 -- Reason: predTypeRep does substitution and, while substitution deals

@@ -1381,6 +1381,10 @@ zonkTcTypeToType env ty
                           do { (env', tv') <- zonkTyBndrX env tv
                              ; ty' <- zonkTcTypeToType env' ty
                              ; return (ForAllTy tv' ty') }
+    go (BigLambda tv ty) = do { (env', tv') <- zonkTyBndrX env tv
+                              ; traceTc "zonkBigLambda" (ppr tv')
+                              ; ty' <- zonkTcTypeToType env' ty
+                              ; return (BigLambda tv' ty') }
 
 zonkTcTypeToTypes :: ZonkEnv -> [TcType] -> TcM [Type]
 zonkTcTypeToTypes env tys = mapM (zonkTcTypeToType env) tys
