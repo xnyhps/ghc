@@ -501,17 +501,17 @@ instance Outputable InertSet where
 
 emptyInert :: InertSet
 emptyInert
-  = IS { inert_cans = IC { inert_eqs    = emptyVarEnv
-                         , inert_dicts  = emptyCCanMap
-                         , inert_funeqs = emptyFamHeadMap
-                         , inert_irreds = emptyCts
-                         , inert_insols = emptyCts
-                         , inert_no_eqs = False
+  = IS { inert_cans = IC { inert_eqs     = emptyVarEnv
+                         , inert_dicts   = emptyDicts
+                         , inert_funeqs  = emptyFunEqs
+                         , inert_irreds  = emptyCts
+                         , inert_insols  = emptyCts
+                         , inert_no_eqs  = True
                          , inert_appeqs = emptyCts }
        , inert_fsks          = []
-       , inert_flat_cache    = emptyFamHeadMap
-       , inert_solved_dicts  = PredMap emptyTM 
-       , inert_solved_funeqs = emptyFamHeadMap }
+       , inert_flat_cache    = emptyFunEqs
+       , inert_solved_funeqs = emptyFunEqs
+       , inert_solved_dicts  = emptyDictMap }
 
 
 ---------------

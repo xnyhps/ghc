@@ -31,30 +31,22 @@ import FamInstEnv ( FamInstEnvs, instNewTyConTF_maybe )
 import TcEvidence
 import Outputable
 
-import TcMType ( zonkTcPredType )
-import qualified TcRnMonad as TcM
-import qualified TcMType as TcM
-import FastString ( fsLit )
-
 import TcRnTypes
 import TcErrors
 import TcSMonad
 import Bag
 
-import Control.Monad ( foldM )
 import Data.Maybe ( catMaybes )
 import Data.List( partition )
 
 import VarEnv
 
-import Control.Monad( when, unless, filterM, forM )
+import Control.Monad( when, unless, forM, foldM )
 import Pair (Pair(..))
 import Unique( hasKey )
 import FastString ( sLit, fsLit )
 import DynFlags
 import Util
-
-import TypeRep
 \end{code}
 
 **********************************************************************
@@ -240,64 +232,10 @@ thePipeline = [ ("canonicalization",        TcCanonical.canonicalize)
 *                                                                               *
 *********************************************************************************
 
-\begin{code}
-spontaneousSolveStage :: SimplifierStage 
--- CTyEqCans are always consumed, returning Stop
-spontaneousSolveStage workItem
-  = do { mb_solved <- trySpontaneousSolve workItem
-       ; case mb_solved of
-           SPCantSolve
-              | CTyEqCan { cc_tyvar = tv, cc_rhs = rhs, cc_ev = fl } <- workItem
-              -- Unsolved equality
-              -> do { untch <- getUntouchables
-                    ; traceTcS "Can't solve tyvar equality" 
-                          (vcat [ text "LHS:" <+> ppr tv <+> dcolon <+> ppr (tyVarKind tv)
-                                , text "RHS:" <+> ppr rhs <+> dcolon <+> ppr (typeKind rhs)
-                                , text "Untouchables =" <+> ppr untch ])
-                    ; n_kicked <- kickOutRewritable (ctEvFlavour fl) tv
-                    ; traceFireTcS workItem $
-                      ptext (sLit "Kept as inert") <+> ppr_kicked n_kicked <> colon 
-                      <+> ppr workItem
-                    ; insertInertItemTcS workItem
-                    ; return Stop }
-              | (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs, cc_ev = ev, cc_loc = loc, cc_tyargs = args }) <- workItem, (ty', vars) <- splitAppTys rhs, Just tyvar' <- getTyVar_maybe ty', tyvar == tyvar'
-              -> do { traceTcS "Spontaneously solved" (ppr workItem)
-                    ; let f x a b = case ev of
-                              CtWanted { ctev_evar = evar } -> CtWanted x evar
-                              CtGiven { ctev_evtm = _evtm } -> CtGiven x (EvCoercion ((mkTcReflCo a) `mkTcTransCo` (mkTcReflCo b))) -- is this correct?
-                              CtDerived {} -> CtDerived x
-                          vcts = zipWith (\v arg -> mkNonCanonical loc (f (mkTcEqPred arg v) arg v)) vars args
-                    ; mapM_ (updWorkListTcS . extendWorkListCt) vcts
-                    ; traceTcS "Spontaneously solved: now adding " (ppr vcts)
-                    ; return Stop
-                    }
-              | (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs, cc_ev = ev, cc_loc = loc, cc_tyargs = [arg] }) <- workItem, (ty', [var]) <- splitAppTys rhs, Nothing <- getTyVar_maybe ty'
-              -> do { traceTcS "Spontaneously solved" (ppr workItem)
-                    ; let f x a b = case ev of
-                              CtWanted { ctev_evar = evar } -> CtWanted x evar
-                              CtGiven { ctev_evtm = _evtm } -> CtGiven x (EvCoercion ((mkTcReflCo a) `mkTcTransCo` (mkTcReflCo b)))
-                              CtDerived {} -> CtDerived x
-                          vcts = [mkNonCanonical loc (f (mkTcEqPred arg var) arg var), mkNonCanonical loc (f (mkTcEqPred (mkTyVarTy tyvar) ty') (mkTyVarTy tyvar) ty')]
-                    ; mapM_ (updWorkListTcS . extendWorkListCt) vcts
-                    ; traceTcS "Spontaneously solved: now adding " (ppr vcts)
-                    ; return Stop
-                    }
-              | (CTyAppEqCan { cc_tyvar = _tyvar, cc_rhs = rhs, cc_tyargs = _args }) <- workItem
-              -> do { traceTcS "Spontaneously not solved" ((ppr workItem) <+> (ppr $ splitAppTys rhs))
-                    ; continueWith workItem
-                    }
-              | otherwise
-              -> continueWith workItem
-
-           SPSolved new_tv
-              -- Post: tv ~ xi is now in TyBinds, no need to put in inerts as well
-              -- see Note [Spontaneously solved in TyBinds]
-              -> do { n_kicked <- kickOutRewritable Given new_tv
-                    ; traceFireTcS workItem $
-                      ptext (sLit "Spontaneously solved") <+> ppr_kicked n_kicked <> colon 
-                      <+> ppr workItem
-                    ; return Stop } }
-
+Note [The Solver Invariant]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We always add Givens first.  So you might think that the solver has
+the invariant
    If the work-item is Given,
    then the inert item must Given
 
@@ -319,72 +257,7 @@ or, equivalently,
    then there is no reaction
 
 \begin{code}
-kickOutRewritable :: CtFlavour    -- Flavour of the equality that is 
-                                  -- being added to the inert set
-                  -> TcTyVar      -- The new equality is tv ~ ty
-                  -> TcS Int
-kickOutRewritable new_flav new_tv
-  = do { wl <- modifyInertTcS kick_out
-       ; traceTcS "kickOutRewritable" $ 
-            vcat [ text "tv = " <+> ppr new_tv  
-                 , ptext (sLit "Kicked out =") <+> ppr wl]
-       ; updWorkListTcS (appendWorkList wl)
-       ; return (workListSize wl)  }
-  where
-    kick_out :: InertSet -> (WorkList, InertSet)
-    kick_out (is@(IS { inert_cans = IC { inert_eqs = tv_eqs
-                     , inert_dicts  = dictmap
-                     , inert_funeqs = funeqmap
-                     , inert_irreds = irreds
-                     , inert_insols = insols
-                     , inert_appeqs = appeqs } }))
-       = (kicked_out, is { inert_cans = inert_cans_in })
-                -- NB: Notice that don't rewrite 
-                -- inert_solved_dicts, and inert_solved_funeqs
-                -- optimistically. But when we lookup we have to take the 
-                -- subsitution into account
-       where
-         inert_cans_in = IC { inert_eqs = tv_eqs_in
-                            , inert_dicts = dicts_in
-                            , inert_funeqs = feqs_in
-                            , inert_irreds = irs_in
-                            , inert_insols = insols_in
-                            , inert_appeqs = appeqs }
-
-         kicked_out = WorkList { wl_eqs    = (varEnvElts tv_eqs_out) -- ++ (bagToList appeqs_out)
-                               , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
-                               , wl_rest   = bagToList (dicts_out `andCts` irs_out 
-                                                        `andCts` insols_out) }
-  
-         (tv_eqs_out,  tv_eqs_in) = partitionVarEnv  kick_out_eq tv_eqs
-         (feqs_out,   feqs_in)    = partCtFamHeadMap kick_out_ct funeqmap
-         (dicts_out,  dicts_in)   = partitionCCanMap kick_out_ct dictmap
-         (irs_out,    irs_in)     = partitionBag     kick_out_ct irreds
-         (insols_out, insols_in)  = partitionBag     kick_out_ct insols
-         -- (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct appeqs
-           -- Kick out even insolubles; see Note [Kick out insolubles]
-
-    kick_out_ct inert_ct = new_flav `canRewrite` (ctFlavour inert_ct) &&
-                          (new_tv `elemVarSet` tyVarsOfCt inert_ct) 
-                    -- NB: tyVarsOfCt will return the type 
-                    --     variables /and the kind variables/ that are 
-                    --     directly visible in the type. Hence we will
-                    --     have exposed all the rewriting we care about
-                    --     to make the most precise kinds visible for 
-                    --     matching classes etc. No need to kick out 
-                    --     constraints that mention type variables whose
-                    --     kinds could contain this variable!
-
-    kick_out_eq (CTyEqCan { cc_tyvar = tv, cc_rhs = rhs, cc_ev = ev })
-      =  (new_flav `canRewrite` inert_flav)  -- See Note [Delicate equality kick-out]
-      && (new_tv `elemVarSet` kind_vars ||              -- (1)
-          (not (inert_flav `canRewrite` new_flav) &&    -- (2)
-           new_tv `elemVarSet` (extendVarSet (tyVarsOfType rhs) tv)))
-      where
-        inert_flav = ctEvFlavour ev
-        kind_vars = tyVarsOfType (tyVarKind tv) `unionVarSet`
-                    tyVarsOfType (typeKind rhs)
-
+-- Interaction result of  WorkItem <~> Ct
 type StopNowFlag = Bool    -- True <=> stop after this interaction
 
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue
@@ -478,17 +351,8 @@ interactIrred inerts workItem@(CIrredEvCan { cc_ev = ev_w })
   | otherwise
   = return (Nothing, False)
 
---trySpontaneousSolve (CTyAppEqCan { cc_tyvar = tyvar, cc_rhs = rhs }) | (ty', _) <- splitAppTys rhs, Just tyvar' <- getTyVar_maybe ty'
---  = do { traceTcS "Spont: CTyAppEqCan" (ppr tyvar)
---       ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar == tyvar'))
---       -- ; traceTcS "Spont: CTyAppEqCan" (ppr (tyvar `eqType` ty'))
---       ; return (SPSolved ) }
-
-  -- No need for 
-  --      trySpontaneousSolve (CFunEqCan ...) = ...
-  -- See Note [No touchables as FunEq RHS] in TcSMonad
-trySpontaneousSolve item = do { traceTcS "Spont: no tyvar on lhs" (ppr item)
-                              ; return SPCantSolve }
+interactIrred _ wi = pprPanic "interactIrred" (ppr wi)
+\end{code}
 
 *********************************************************************************
 *                                                                               *
@@ -832,7 +696,6 @@ interactFunEq inerts workItem@(CFunEqCan { cc_ev = ev, cc_fun = tc
 
 interactFunEq _ wi = pprPanic "interactFunEq" (ppr wi)
 
-
 solveFunEq :: CtEvidence    -- From this  :: F tys ~ xi1
            -> Type
            -> CtEvidence    -- Solve this :: F tys ~ xi2
@@ -853,20 +716,10 @@ solveFunEq from_this xi1 solve_this xi2
     xcomp [x] = EvCoercion (from_this_co `mkTcTransCo` mk_sym_co x)
     xcomp _   = panic "No more goals!"
 
-{-
-doInteractWithInert ii@(CDictCan {}) wi@(CTyAppEqCan {}) =
-    do { traceTcS "interact with inerts: TyApp/Dict" (ppr ii <+> ppr wi)
-       ; return (IRKeepGoing "?")
-       }
--}
+    -- xdecomp : (F tys ~ xi2) -> [(xi2 ~ xi1)]
+    xdecomp x = [EvCoercion (mk_sym_co x `mkTcTransCo` from_this_co)]
 
-doInteractWithInert ii@(CTyEqCan {}) wi@(CTyAppEqCan {})
-    | cc_tyvar ii == cc_tyvar wi
-    = do { traceTcS "interact with inerts: TyEq/TyAppEq" (ppr ii <+> ppr wi)
-         ; return (IRKeepGoing "??")
-         }
-
-doInteractWithInert _ _ = return (IRKeepGoing "NOP")
+    mk_sym_co x = mkTcSymCo (evTermCoercion x)
 \end{code}
 
 Note [Cache-caused loops]
@@ -1049,7 +902,8 @@ kickOutRewritable new_ev new_tv
                       , inert_funeqs = funeqmap
                       , inert_irreds = irreds
                       , inert_insols = insols
-                      , inert_no_eqs = no_eqs })
+                      , inert_no_eqs = no_eqs
+                      , inert_appeqs = appeqs })
   = do { traceTcS "kickOutRewritable" $
             vcat [ text "tv = " <+> ppr new_tv
                  , ptext (sLit "Kicked out =") <+> ppr kicked_out]
@@ -1065,18 +919,20 @@ kickOutRewritable new_ev new_tv
                        , inert_funeqs = feqs_in
                        , inert_irreds = irs_in
                        , inert_insols = insols_in
-                       , inert_no_eqs = no_eqs }
+                       , inert_no_eqs = no_eqs
+                       , inert_appeqs = appeqs_in }
 
     kicked_out = WorkList { wl_eqs    = tv_eqs_out
                           , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
                           , wl_rest   = bagToList (dicts_out `andCts` irs_out
-                                                   `andCts` insols_out) }
+                                                   `andCts` insols_out `andCts` appeqs_out) }
 
     (tv_eqs_out,  tv_eqs_in) = foldVarEnv kick_out_eqs ([], emptyVarEnv) tv_eqs
     (feqs_out,   feqs_in)    = partitionFunEqs  kick_out_ct    funeqmap
     (dicts_out,  dicts_in)   = partitionDicts   kick_out_ct    dictmap
     (irs_out,    irs_in)     = partitionBag     kick_out_irred irreds
     (insols_out, insols_in)  = partitionBag     kick_out_ct    insols
+    (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct    appeqs
       -- Kick out even insolubles; see Note [Kick out insolubles]
 
     kick_out_ct :: Ct -> Bool
