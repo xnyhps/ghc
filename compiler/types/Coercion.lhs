@@ -1536,6 +1536,7 @@ ty_co_subst subst role ty
                            (subst', v') = liftCoSubstTyVarBndr subst v
     go role ty@(LitTy {})     = ASSERT( role == Nominal )
                                 mkReflCo role ty
+    go _ ty@(BigLambda {})  = pprPanic "role BigLambda" (ppr ty)
 
     lift_phantom ty = mkUnivCo Phantom (liftCoSubstLeft  subst ty)
                                        (liftCoSubstRight subst ty)
@@ -1609,6 +1610,9 @@ subst_kind subst@(LCS _ cenv) kind
     go (ForAllTy tv ty)  = case liftCoSubstTyVarBndr subst tv of
                               (subst', tv') ->
                                  ForAllTy tv' $! (subst_kind subst' ty)
+    go (BigLambda tv ty) = case liftCoSubstTyVarBndr subst tv of
+                              (subst', tv') ->
+                                 BigLambda tv' $! (subst_kind subst' ty)
 
     subst_kv kv
       | Just co <- lookupVarEnv cenv kv

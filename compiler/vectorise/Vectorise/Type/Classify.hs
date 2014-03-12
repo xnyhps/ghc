@@ -135,3 +135,4 @@ tyConsOfType (FunTy a b)       = (tyConsOfType a `unionUniqSets` tyConsOfType b)
                                  `addOneToUniqSet` funTyCon
 tyConsOfType (LitTy _)         = emptyUniqSet
 tyConsOfType (ForAllTy _ ty)   = tyConsOfType ty
+tyConsOfType (BigLambda _ ty)  = tyConsOfType ty

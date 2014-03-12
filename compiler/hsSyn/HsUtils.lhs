@@ -425,6 +425,7 @@ toHsType ty
     to_hs_type t@(ForAllTy {}) = pprPanic "toHsType" (ppr t)
     to_hs_type (LitTy (NumTyLit n)) = noLoc $ HsTyLit (HsNumTy n)
     to_hs_type (LitTy (StrTyLit s)) = noLoc $ HsTyLit (HsStrTy s)
+    to_hs_type t@(BigLambda {}) = pprPanic "toHsType" (ppr t)
 
     mk_hs_tvb tv = noLoc $ KindedTyVar (getRdrName tv) (toHsKind (tyVarKind tv))
 

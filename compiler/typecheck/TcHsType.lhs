@@ -51,8 +51,8 @@ import TcUnify
 import TcIface
 import TcType
 import Type
-import TypeRep( Type(..) )  -- For the mkNakedXXX stuff
 import Kind
+import TypeRep( Type(..) )
 import Var
 import VarSet
 import TyCon
@@ -527,6 +527,14 @@ tc_hs_type hs_ty@(HsTyLit (HsStrTy s)) exp_kind
        ; checkWiredInTyCon typeSymbolKindCon
        ; return (mkStrLitTy s) }
 
+tc_hs_type hs_ty@(HsBigLambda tvs ty) exp_kind
+  = tcHsTyVarBndrs tvs $ \tvs' -> do
+       { (ty', k') <- tc_infer_lhs_type ty
+       ; let k = mkArrowKinds (map tyVarKind tvs') k'
+       ; traceTc "tc_hs_type" (ppr k)
+       ; checkExpectedKind hs_ty k exp_kind
+       ; return (foldr BigLambda ty' tvs') }
+
 ---------------------------
 tupKindSort_maybe :: TcKind -> Maybe TupleSort
 tupKindSort_maybe k
@@ -757,6 +765,9 @@ zonkSigType ty
     go (ForAllTy tv ty) = do { tv' <- zonkTcTyVarBndr tv
                              ; ty' <- go ty
                              ; return (ForAllTy tv' ty') }
+    go (BigLambda tv ty) = do { tv' <- zonkTcTyVarBndr tv
+                              ; ty' <- go ty
+                              ; return (BigLambda tv' ty') }
 \end{code}
 
 Note [Body kind of a forall]

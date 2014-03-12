@@ -75,6 +75,7 @@ vectType ty@(ForAllTy _ _)
           -- add the PA dictionaries after the foralls
       ; return $ abstractType tyvars dictsPA vtyBody
       }
+vectType ty@(BigLambda {}) = return ty
 
 -- |Add quantified vars and dictionary parameters to the front of a type.
 --

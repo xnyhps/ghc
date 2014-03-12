@@ -904,6 +904,7 @@ getTyDescription ty
       TyConApp tycon _              -> getOccString tycon
       ForAllTy _ ty          -> getTyDescription ty
       LitTy n                -> getTyLitDescription n
+      BigLambda _ ty         -> getTyDescription ty
     }
   where
     fun_result (FunTy _ res) = '>' : fun_result res

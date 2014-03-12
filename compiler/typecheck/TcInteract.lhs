@@ -36,13 +36,12 @@ import TcErrors
 import TcSMonad
 import Bag
 
-import Control.Monad ( foldM )
 import Data.Maybe ( catMaybes )
 import Data.List( partition )
 
 import VarEnv
 
-import Control.Monad( when, unless, forM )
+import Control.Monad( when, unless, forM, foldM )
 import Pair (Pair(..))
 import Unique( hasKey )
 import FastString ( sLit, fsLit )
@@ -224,8 +223,8 @@ thePipeline :: [(String,SimplifierStage)]
 thePipeline = [ ("canonicalization",        TcCanonical.canonicalize)
               , ("interact with inerts",    interactWithInertsStage)
               , ("top-level reactions",     topReactionsStage) ]
-\end{code}
 
+\end{code}
 
 *********************************************************************************
 *                                                                               *
@@ -237,7 +236,6 @@ Note [The Solver Invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We always add Givens first.  So you might think that the solver has
 the invariant
-
    If the work-item is Given,
    then the inert item must Given
 
@@ -260,7 +258,6 @@ or, equivalently,
 
 \begin{code}
 -- Interaction result of  WorkItem <~> Ct
-
 type StopNowFlag = Bool    -- True <=> stop after this interaction
 
 interactWithInertsStage :: WorkItem -> TcS StopOrContinue
@@ -479,11 +476,162 @@ I can think of two ways to fix this:
      error if we get multiple givens for the same implicit parameter.
 
 
-*********************************************************************************
-*                                                                               *
-                   interactFunEq
-*                                                                               *
-*********************************************************************************
+data InteractResult 
+    = IRWorkItemConsumed { ir_fire :: String }    -- Work item discharged by interaction; stop
+    | IRReplace          { ir_fire :: String }    -- Inert item replaced by work item; stop
+    | IRInertConsumed    { ir_fire :: String }    -- Inert item consumed, keep going with work item 
+    | IRKeepGoing        { ir_fire :: String }    -- Inert item remains, keep going with work item
+
+findSolvableApplication :: WorkItem -> (TyVarEnv (TcTyVar, TcType)) -> InertSet -> TcS (Cts, InertSet)
+findSolvableApplication wi@(CDictCan { cc_tyargs = xi, cc_class = cls }) ty_env inerts
+ | Just tyvar <- tcGetTyVar_maybe $ head xi
+              = do { let appeqs = inert_appeqs $ inert_cans inerts
+                   
+                   ; traceTcS "findSolvableApplication: " (ppr tyvar <+> ppr appeqs)
+
+                   ; (new_constraints, removed, stay) <- foldrBagM (\ct (cts, r, s) ->
+                        do { ml <- has_other_dict tyvar ct
+                           ; case (ml, isCTyAppEqCan ct) of
+
+                                (Just (vars, lambda), True) -> do { traceTcS "findSolvableApplication.split" (ppr $ split ct vars lambda) ; return (split ct vars lambda `unionBags` cts, consBag ct r, s) }
+
+                                _ -> return (cts, r, extendCts s ct)
+
+                           }) (emptyBag, emptyBag, emptyCts) appeqs
+                   
+                   ; traceTcS "findSolvableApplication: emitted" (ppr (new_constraints, removed))
+                   
+                   ; return (new_constraints, inerts { inert_cans = (inert_cans inerts) { inert_appeqs = stay } })
+                   }
+  where
+        zonk :: TyVar -> TyVar
+        zonk tv = case do { (_,ty) <- lookupVarEnv ty_env tv ; getTyVar_maybe ty } of
+            Nothing -> tv
+            Just tv' -> tv'
+        has_other_dict :: TyVar -> Ct -> TcS (Maybe ([TcType], TcType))
+        has_other_dict tyvar ct
+          | (ty, tyargs@(_:_)) <- splitAppTys $ cc_rhs ct, Just tv <- tcGetTyVar_maybe ty, zonk tv == zonk tyvar
+            = do { traceTcS "fingSolvableApplication: has_other_dict shortcut" (ppr (ty_env, zonk $ cc_tyvar ct, zonk tyvar, isCTyAppEqCan ct))
+                 ; return $ Just (tyargs, ty)
+                 }
+        has_other_dict tv ct
+          | (ty, tyargs@(_:_)) <- splitAppTys $ cc_rhs ct, Just tyvar <- tcGetTyVar_maybe ty
+            = let
+                 dicts = concatMap bagToList (given ++ wanted)
+                 given = eltsUFM $ cts_given $ inert_dicts $ inert_cans inerts
+                 wanted = eltsUFM $ cts_wanted $ inert_dicts $ inert_cans inerts
+              in do { traceTcS "findSolvableApplication: has_other_dict 0" (ppr (tyvar, zonk tyvar, tv, zonk tv))
+                    ; return $ case filter (match cls $ zonk tyvar) dicts of
+                        (_:_) -> (Just (tyargs, ty))
+                        [] -> Nothing
+                    }
+          | Just (tycon, tyargs) <- tcSplitTyConApp_maybe (cc_rhs ct)
+            = do { let
+                       args = fst (splitFunTys $ tyVarKind $ head $ classTyVars cls)
+                       count = length args
+                 ; uniqs <- sequence (take count $ repeat (wrapErrTcS TcM.newUnique))
+                 ; let
+                       names = fmap (\uniq -> TcM.mkTcTyVarName uniq (fsLit "x")) uniqs
+
+                       fromEither :: Either a a -> a
+                       fromEither (Left x) = x
+                       fromEither (Right x) = x
+
+                       insert_everywhere :: [a -> a] -> [a] -> [([a], [a], [a])]
+                       insert_everywhere fs xs = fmap (\(x,y,z) -> (x, y, map fromEither z)) $ foldr (\f y -> concatMap (insert_everywhere' f) y) [([], [], map Left xs)] fs
+
+                       insert_everywhere' :: (a -> a) -> ([a], [a], [Either a a]) -> [([a], [a], [Either a a])]
+                       insert_everywhere' _ (_, _, []) = []
+                       insert_everywhere' f (as, bs, ((Left x):xs)) = [(x : as, (f x):bs, (Right $ f x):xs)] ++ (map (\(a,b,c) -> (a, b, (Left x):c)) $ insert_everywhere' f (as, bs, xs))
+                       insert_everywhere' f (as, bs, ((Right x):xs)) = map (\(a,b,c) -> (a, b, (Right x):c)) $ insert_everywhere' f (as, bs, xs)
+
+                       lambda_options = insert_everywhere (map (\name tyarg -> mkTyVarTy $ mkTcTyVar name (typeKind tyarg) vanillaSkolemTv) names) tyargs
+
+                       eta_reduced = let 
+                                         (rest, vars) = tcSplitAppTys (cc_rhs ct)
+                                         c = length vars
+                                     in (drop (c - count) vars, mkAppTys rest $ take (c - count) vars)
+
+                       options = eta_reduced : (if count == 0
+                                                then []
+                                                else map (\(var, largs, args) -> (var, foldr BigLambda (mkTyConApp tycon args) $ map (getTyVar "findSolvableApplication") largs)) lambda_options)
+                       
+                       isGenInstance (GenInst {}) = True
+                       isGenInstance _ = False
+
+                 ; traceTcS "findSolvableApplication: has_other_dict 1" (vcat [ppr options])
+                 
+                 ; result <- filterM (\opt -> fmap isGenInstance (matchClassInst inerts cls [snd opt] $ cc_loc wi)) options
+
+                 ; traceTcS "findSolvableApplication: has_other_dict 2" (ppr result)
+
+                 ; case result of
+                    [x] -> return (Just x)
+                    [] -> return Nothing
+                    _ -> error "More than one instance for lambda"
+                 }
+          | otherwise = return Nothing
+
+        match :: Class -> TcTyVar -> Ct -> Bool
+        match cl tyvar (CDictCan { cc_class = cl2, cc_tyargs = [ty] })
+          | Just tyvar2 <- tcGetTyVar_maybe ty
+            = cl == cl2 && zonk tyvar == zonk tyvar2
+        match _ _ _ = False
+
+        split :: Ct -> [TcType] -> TcType -> Cts
+        split ct vars lambda = let
+                                   ev = ctev_evar (cc_ev ct)
+                                   loc = cc_loc ct
+                                   residual_args = reverse $ drop (length vars) (reverse $ cc_tyargs ct)
+                                   residual_vars = reverse $ drop (length (cc_tyargs ct)) $ reverse vars
+                                   lct = mkNonCanonical loc (CtWanted (mkTcEqPred (mkAppTys (mkTyVarTy $ cc_tyvar ct) residual_args) (mkAppTys lambda residual_vars)) ev)
+                                   vcts = zipWith (\v arg -> mkNonCanonical loc (CtWanted (mkTcEqPred arg v) ev)) (reverse vars) $ (reverse $ cc_tyargs ct)
+                               in listToBag (lct:vcts)
+
+findSolvableApplication _ _ inerts = return (emptyCts, inerts)
+
+interactWithInertsStage :: WorkItem -> TcS StopOrContinue 
+-- Precondition: if the workitem is a CTyEqCan then it will not be able to 
+-- react with anything at this stage. 
+interactWithInertsStage wi 
+  = do { inerts <- getTcSInerts 
+       ; traceTcS "interactWithInerts" $ vcat [text "workitem = " <+> ppr wi, text "inerts = " <+> ppr inerts]
+       ; ty_map <- getTcSTyBindsMap
+       ; curr_inert <- getTcSInerts
+       ; (split_cts, new_inert) <- findSolvableApplication wi ty_map curr_inert
+       ; modifyInertTcS (const ((), new_inert))
+       ; mapBagM_ (updWorkListTcS . extendWorkListCt) split_cts
+       ; rels <- extractRelevantInerts wi
+       ; traceTcS "relevant inerts are:" $ ppr rels
+       ; builtInInteractions
+       ; foldlBagM interact_next (ContinueWith wi) rels }
+
+  where interact_next Stop atomic_inert 
+          = do { insertInertItemTcS atomic_inert; return Stop }
+        interact_next (ContinueWith wi) atomic_inert 
+          = do { ir <- doInteractWithInert atomic_inert wi
+               ; let mk_msg rule keep_doc 
+                       = vcat [ text rule <+> keep_doc
+                              , ptext (sLit "InertItem =") <+> ppr atomic_inert
+                              , ptext (sLit "WorkItem  =") <+> ppr wi ]
+               ; case ir of 
+                   IRWorkItemConsumed { ir_fire = rule } 
+                       -> do { traceFireTcS wi (mk_msg rule (text "WorkItemConsumed"))
+                             ; insertInertItemTcS atomic_inert
+                             ; return Stop } 
+                   IRReplace { ir_fire = rule }
+                       -> do { traceFireTcS atomic_inert 
+                                            (mk_msg rule (text "InertReplace"))
+                             ; insertInertItemTcS wi
+                             ; return Stop } 
+                   IRInertConsumed { ir_fire = rule }
+                       -> do { traceFireTcS atomic_inert 
+                                            (mk_msg rule (text "InertItemConsumed"))
+                             ; return (ContinueWith wi) }
+                   IRKeepGoing {}
+                       -> do { insertInertItemTcS atomic_inert
+                             ; return (ContinueWith wi) }
+               }
 
 \begin{code}
 interactFunEq :: InertCans -> Ct -> TcS (Maybe InertCans, StopNowFlag)
@@ -547,7 +695,6 @@ interactFunEq inerts workItem@(CFunEqCan { cc_ev = ev, cc_fun = tc
     loc = ctev_loc ev
 
 interactFunEq _ wi = pprPanic "interactFunEq" (ppr wi)
-
 
 solveFunEq :: CtEvidence    -- From this  :: F tys ~ xi1
            -> Type
@@ -755,7 +902,8 @@ kickOutRewritable new_ev new_tv
                       , inert_funeqs = funeqmap
                       , inert_irreds = irreds
                       , inert_insols = insols
-                      , inert_no_eqs = no_eqs })
+                      , inert_no_eqs = no_eqs
+                      , inert_appeqs = appeqs })
   = do { traceTcS "kickOutRewritable" $
             vcat [ text "tv = " <+> ppr new_tv
                  , ptext (sLit "Kicked out =") <+> ppr kicked_out]
@@ -771,18 +919,20 @@ kickOutRewritable new_ev new_tv
                        , inert_funeqs = feqs_in
                        , inert_irreds = irs_in
                        , inert_insols = insols_in
-                       , inert_no_eqs = no_eqs }
+                       , inert_no_eqs = no_eqs
+                       , inert_appeqs = appeqs_in }
 
     kicked_out = WorkList { wl_eqs    = tv_eqs_out
                           , wl_funeqs = foldrBag insertDeque emptyDeque feqs_out
                           , wl_rest   = bagToList (dicts_out `andCts` irs_out
-                                                   `andCts` insols_out) }
+                                                   `andCts` insols_out `andCts` appeqs_out) }
 
     (tv_eqs_out,  tv_eqs_in) = foldVarEnv kick_out_eqs ([], emptyVarEnv) tv_eqs
     (feqs_out,   feqs_in)    = partitionFunEqs  kick_out_ct    funeqmap
     (dicts_out,  dicts_in)   = partitionDicts   kick_out_ct    dictmap
     (irs_out,    irs_in)     = partitionBag     kick_out_irred irreds
     (insols_out, insols_in)  = partitionBag     kick_out_ct    insols
+    (appeqs_out, appeqs_in)  = partitionBag     kick_out_ct    appeqs
       -- Kick out even insolubles; see Note [Kick out insolubles]
 
     kick_out_ct :: Ct -> Bool
@@ -1071,7 +1221,7 @@ are really setting
 which is FINE because the use of d3 is protected by the instance function
 applications.
 
-So, our strategy is to try to put solved wanted dictionaries into the
+So, our strategy is to try to put solved wanted 
 inert set along with their superclasses (when this is meaningful,
 i.e. when new wanted goals are generated) but solve a wanted dictionary
 from a given only in the case where the evidence variable of the
@@ -1788,7 +1938,6 @@ data LookupInstResult
 instance Outputable LookupInstResult where
   ppr NoInstance = text "NoInstance"
   ppr (GenInst ev t) = text "GenInst" <+> ppr ev <+> ppr t
-
 
 matchClassInst :: InertSet -> Class -> [Type] -> CtLoc -> TcS LookupInstResult
 

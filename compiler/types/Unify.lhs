@@ -40,6 +40,7 @@ import TyCon
 import TypeRep
 import Util
 
+import Outputable
 import Control.Monad (liftM, ap)
 import Control.Applicative (Applicative(..))
 \end{code}
@@ -202,6 +203,16 @@ match menv subst (AppTy ty1a ty1b) ty2
 
 match _ subst (LitTy x) (LitTy y) | x == y  = return subst
 
+
+match menv subst (BigLambda tv1 ty1) (BigLambda tv2 ty2)
+  = do { subst' <- match_kind menv subst (tyVarKind tv1) (tyVarKind tv2)
+       ; res <- pprTrace "match BigLambda" (ppr (me_tmpls menv, me_tmpls menv')) $ match menv' subst' ty1 ty2
+       ; return res
+       }
+  where
+    menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
+
+
 match _ _ _ _
   = Nothing
 
@@ -235,7 +246,7 @@ match_tys :: MatchEnv -> TvSubstEnv -> [Type] -> [Type] -> Maybe TvSubstEnv
 match_tys menv subst tys1 tys2 = matchList (match menv) subst tys1 tys2
 
 --------------
-matchList :: (env -> a -> b -> Maybe env)
+matchList :: (Outputable env, Outputable a, Outputable b) => (env -> a -> b -> Maybe env)
 	   -> env -> [a] -> [b] -> Maybe env
 matchList _  subst []     []     = Just subst
 matchList fn subst (a:as) (b:bs) = do { subst' <- fn subst a b

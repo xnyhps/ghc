@@ -185,6 +185,17 @@ canonicalize (CIrredEvCan { cc_ev = ev })
 canonicalize (CHoleCan { cc_ev = ev, cc_occ = occ })
   = canHole ev occ
 
+canonicalize (CTyAppEqCan { cc_ev = ev, cc_tyvar = tv1, cc_tyargs = s1, cc_rhs = ty2, cc_loc = loc }) = do
+  { (xi1, co1) <- flattenTyVar FMFullFlatten ev tv1
+  ; (xi2, co2) <- flatten FMFullFlatten ev ty2
+  ; (xis3, co3) <- flattenMany FMFullFlatten ev s1
+  ; mb <- rewriteEvidence ev (mkTcEqPred (mkAppTys xi1 xis3) xi2) (mkTcAppCo (mkTcAppCos co1 co3) co2)
+  ; case (getTyVar_maybe xi1, mb) of
+      (_, Nothing) -> return Stop
+      (Just new_tv, Just new_ev) -> continueWith $ CTyAppEqCan { cc_ev = new_ev, cc_tyvar = new_tv, cc_tyargs = s1, cc_rhs = xi2, cc_loc = loc }
+      _ -> pprPanic "canonicalize CTyAppEqCan" (ppr xi1)
+  }
+
 canEvNC :: CtEvidence -> TcS StopOrContinue
 -- Called only for non-canonical EvVars
 canEvNC ev
@@ -549,6 +560,10 @@ flatten _f ctxt ty@(ForAllTy {})
                          -- Substitute only under a forall
                          -- See Note [Flattening under a forall]
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
+
+flatten _f ctxt (BigLambda tv ty)
+  = do { (ty', co) <- flatten FMSubstOnly ctxt ty
+       ; return (BigLambda tv ty', co) }
 \end{code}
 
 Note [Flattening under a forall]

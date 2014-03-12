@@ -519,6 +519,7 @@ tcTyFamInsts (LitTy {})         = []
 tcTyFamInsts (FunTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (AppTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (ForAllTy _ ty)    = tcTyFamInsts ty
+tcTyFamInsts (BigLambda _ ty)  = tcTyFamInsts ty
 \end{code}
 
 %************************************************************************
@@ -569,6 +570,7 @@ exactTyVarsOfType ty
     go (FunTy arg res)      = go arg `unionVarSet` go res
     go (AppTy fun arg)      = go fun `unionVarSet` go arg
     go (ForAllTy tyvar ty)  = delVarSet (go ty) tyvar
+    go (BigLambda tyvar ty) = delVarSet (go ty) tyvar
 
 exactTyVarsOfTypes :: [Type] -> TyVarSet
 exactTyVarsOfTypes tys = foldr (unionVarSet . exactTyVarsOfType) emptyVarSet tys
@@ -749,6 +751,7 @@ isTauTy (TyConApp tc tys) = all isTauTy tys && isTauTyCon tc
 isTauTy (AppTy a b)       = isTauTy a && isTauTy b
 isTauTy (FunTy a b)       = isTauTy a && isTauTy b
 isTauTy (ForAllTy {})     = False
+isTauTy (BigLambda {})    = False
 
 isTauTyCon :: TyCon -> Bool
 -- Returns False for type synonyms whose expansion is a polytype
@@ -766,6 +769,7 @@ getDFunTyKey (LitTy x)       = getDFunTyLitKey x
 getDFunTyKey (AppTy fun _)   = getDFunTyKey fun
 getDFunTyKey (FunTy _ _)     = getOccName funTyCon
 getDFunTyKey (ForAllTy _ t)  = getDFunTyKey t
+getDFunTyKey (BigLambda _ t) = getDFunTyKey t
 
 getDFunTyLitKey :: TyLit -> OccName
 getDFunTyLitKey (NumTyLit n) = mkOccName Name.varName (show n)
@@ -1130,6 +1134,9 @@ occurCheckExpand dflags tv ty
     fast_check (ForAllTy tv' ty) = impredicative
                                 && fast_check (tyVarKind tv')
                                 && (tv == tv' || fast_check ty)
+    fast_check (BigLambda tv' ty) = impredicative
+                                && fast_check (tyVarKind tv')
+                                && (tv == tv' || fast_check ty)
 
     go t@(TyVarTy tv') | tv == tv' = OC_Occurs
                        | otherwise = return t
@@ -1151,6 +1158,11 @@ occurCheckExpand dflags tv ty
        | tv == tv' = return ty
        | otherwise = do { body' <- go body_ty
                         ; return (ForAllTy tv' body') }
+
+    go ty@(BigLambda tv' body_ty)
+       | tv == tv' = return ty
+       | otherwise = do { body' <- go body_ty
+                        ; return (BigLambda tv' body') }
 
     -- For a type constructor application, first try expanding away the
     -- offending variable from the arguments.  If that doesn't work, next
@@ -1314,6 +1326,7 @@ tcTyVarsOfType (LitTy {})           = emptyVarSet
 tcTyVarsOfType (FunTy arg res)      = tcTyVarsOfType arg `unionVarSet` tcTyVarsOfType res
 tcTyVarsOfType (AppTy fun arg)      = tcTyVarsOfType fun `unionVarSet` tcTyVarsOfType arg
 tcTyVarsOfType (ForAllTy tyvar ty)  = tcTyVarsOfType ty `delVarSet` tyvar
+tcTyVarsOfType (BigLambda tyvar ty) = tcTyVarsOfType ty `delVarSet` tyvar
         -- We do sometimes quantify over skolem TcTyVars
 
 tcTyVarsOfTypes :: [Type] -> TyVarSet
@@ -1341,6 +1354,7 @@ orphNamesOfType (FunTy arg res)      = orphNamesOfTyCon funTyCon   -- NB!  See T
                                        `unionNameSets` orphNamesOfType res
 orphNamesOfType (AppTy fun arg)      = orphNamesOfType fun `unionNameSets` orphNamesOfType arg
 orphNamesOfType (ForAllTy _ ty)      = orphNamesOfType ty
+orphNamesOfType (BigLambda _ ty)     = orphNamesOfType ty
 
 orphNamesOfThings :: (a -> NameSet) -> [a] -> NameSet
 orphNamesOfThings f = foldr (unionNameSets . f) emptyNameSet
